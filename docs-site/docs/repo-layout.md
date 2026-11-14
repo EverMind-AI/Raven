@@ -42,7 +42,7 @@ repository's commit conventions.
 | `cli` | Command-line entry points, setup, and service launchers |
 | `config` | Configuration schemas, loading, migrations, admission, and controlled updates |
 | `contracts` | Papers: declared interfaces and data shapes shared across runtime components |
-| `context_engine` | Context assembly, token budgets, and conversation compaction |
+| `context_engine` | Context assembly, token budgets, and session compaction |
 | `core` | Assembly Root: runtime Generations and component assembly |
 | `eval_engine` | Evaluation hooks for task completion, iteration feedback, and tool auditing |
 | `gateway` | Channel lifecycle, runtime generation swaps, event delivery, and process coordination |
@@ -67,7 +67,7 @@ repository's commit conventions.
 | `rpc` | Shared typed RPC methods, streaming events, and the gateway control interface |
 | `sandbox` | Isolated execution, VM lifecycle, and debugging tools |
 | `security` | Outbound address policy and prompt-injection fences |
-| `session` | Conversation storage, session resolution, titles, and transcript export |
+| `session` | Session storage, session resolution, titles, and transcript export |
 | `skill_hub` | SkillHub search, skill retrieval, bundle installation, and install policy |
 | `spine` | Turn scheduling, concurrency lanes, cancellation, and event delivery |
 | `stint` | What one multi-round run needs: the record, its checkout, ownership grades, the journal window and the checks |

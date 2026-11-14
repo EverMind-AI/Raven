@@ -55,12 +55,11 @@ class TestDefaults:
         assert c.dedup_by == "name"
         assert c.top_k == 2
         assert c.rrf_k == 10
-        # Hub is the remote source (replaces the retired Mass source);
-        # disabled until an endpoint is set, and the switch can turn it off
-        # while keeping the URL.
+        # Hub is the remote source (replaces the retired Mass source). Its URL
+        # is the shared marketplace by default; ``enabled`` is the only switch.
         assert isinstance(c.hub, HubSourceConfig)
         assert c.hub.enabled is True
-        assert c.hub.endpoint is None
+        assert c.hub.endpoint == "https://skillhub.evermind.ai"
         assert c.hub.api_key is None
         assert c.hub.timeout_s == pytest.approx(2.0)
         assert c.hub.min_safety == pytest.approx(0.7)

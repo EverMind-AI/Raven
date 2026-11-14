@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -1045,11 +1046,14 @@ class _Binding:
         self.tag = tag
 
 
-def _loop_with(runtime, *, workdir_path=None, binding=None, workdir_raises=False):
-    """A stand-in loop offering the three things this handler asks a loop for."""
+def _loop_with(runtime, *, workdir_path=None, binding=None, workdir_raises=False, sessions=None):
+    """A stand-in loop offering the state this handler asks a loop for."""
 
     class _Loop:
         _playbooks = runtime
+
+        def __init__(self):
+            self.sessions = sessions if sessions is not None else SimpleNamespace(peek=lambda key: None)
 
         def session_workdir(self, session_key):
             if workdir_raises:
@@ -1261,6 +1265,138 @@ async def test_the_contexts_are_gone_once_the_call_is_over(library: PlaybookStor
     )
     assert workdir.current() is None
     assert active_binding() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("session_state", ["persisted", "cached", "ownerless"])
+@pytest.mark.parametrize("ambient", [False, True])
+async def test_background_run_usage_belongs_to_the_requested_session(
+    library: PlaybookStore, tmp_path: Path, session_state: str, ambient: bool
+) -> None:
+    """The dispatch binds the requested key, with the session's owner when it has one.
+
+    ``session_workdir`` is stubbed here, so these are the states the real gateway
+    can present at the dispatch point; the unknown-key case is pinned one level
+    down by ``test_the_usage_helper_does_not_create_a_session``.
+    """
+    import asyncio
+    from contextlib import nullcontext
+
+    from raven.contracts.token_strategy import UsageSnapshot
+    from raven.session.manager import SessionManager
+    from raven.token_wise import usage_context
+    from raven.token_wise.usage_tracker import UsageTracker, read_usage_rows
+
+    library.save(_spec())
+    key = "tui:playbook-run"
+    sessions = SessionManager(tmp_path / "agent-home")
+    telemetry = tmp_path / "telemetry"
+    owner = {"root_session_key": "tui:delegating-parent", "telemetry_dir": str(tmp_path / "owner-telemetry")}
+    owned = session_state in {"persisted", "cached"}
+    session = sessions.get_or_create(key)
+    if owned:
+        session.metadata["usage_owner"] = owner
+    if session_state == "persisted":
+        sessions.save(session)
+        sessions = SessionManager(tmp_path / "agent-home")
+
+    tracker = UsageTracker(telemetry_dir=telemetry, flush_every=1)
+    release = asyncio.Event()
+
+    async def record_usage():
+        await release.wait()
+        await tracker.after_llm_call(
+            {}, UsageSnapshot(model="test-model", input_tokens=21, output_tokens=8, cost_usd=0.01)
+        )
+
+    class BackgroundRuntime(_Runtime):
+        async def load(self, *args, **kwargs):
+            plan = await super().load(*args, **kwargs)
+            self.task = asyncio.create_task(record_usage())
+            return plan
+
+    runtime = BackgroundRuntime()
+    ambient_owner = {"root_session_key": "tui:unrelated-root", "telemetry_dir": str(tmp_path / "unrelated-telemetry")}
+    scope = usage_context.bind("tui:unrelated", ambient_owner) if ambient else nullcontext()
+    with scope:
+        await mod.playbooks_run(
+            {"name": "competitor-scan", "session_key": key},
+            agent_loop_factory=_loop_with(runtime, workdir_path=tmp_path, sessions=sessions),
+        )
+        try:
+            assert usage_context.session_key() == ("tui:unrelated" if ambient else None)
+            assert usage_context.telemetry_dir() == (ambient_owner["telemetry_dir"] if ambient else None)
+        finally:
+            release.set()
+            await runtime.task
+
+    assert tracker.snapshot(key).input_tokens == 21
+    assert tracker.snapshot(key).output_tokens == 8
+    assert tracker.snapshot(key).cost_usd == pytest.approx(0.01)
+    destination = Path(owner["telemetry_dir"]) if owned else telemetry
+    rows = [row for path in destination.glob("usage-*.jsonl") for row in read_usage_rows(path)]
+    assert len(rows) == 1
+    assert rows[0]["session_key"] == key
+    assert rows[0]["root_session_key"] == (owner["root_session_key"] if owned else key)
+    assert not (tmp_path / "unrelated-telemetry").exists()
+    assert sessions.exists(key) == (session_state == "persisted")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ambient", [False, True])
+async def test_the_usage_helper_does_not_create_a_session(tmp_path: Path, ambient: bool) -> None:
+    """Pin the lookup's own no-create contract, not the whole RPC path.
+
+    ``playbooks_run`` resolves the working directory before it binds usage, and
+    the real resolver's read-only path reaches ``get_or_create``, so a key
+    arriving at that point is already in memory. Here the helper is called on
+    its own: an unknown key must come back through ``peek`` without being
+    materialized, bind the requested key, and carry no delegation owner.
+    """
+    from contextlib import nullcontext
+
+    from raven.session.manager import SessionManager
+    from raven.token_wise import usage_context
+
+    sessions = SessionManager(tmp_path / "agent-home")
+    loop = _loop_with(_Runtime(), sessions=sessions)()
+    key = "tui:never-seen"
+    ambient_owner = {"root_session_key": "tui:unrelated-root"}
+    scope = usage_context.bind("tui:unrelated", ambient_owner) if ambient else nullcontext()
+    with scope:
+        with mod._session_usage(loop, key):
+            assert usage_context.session_key() == key
+            assert usage_context.root_session_key() == key
+            assert usage_context.telemetry_dir() is None
+    assert sessions.peek(key) is None
+    assert not sessions.exists(key)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_a_failed_dispatch_restores_usage_ownership(library: PlaybookStore, cancelled: bool) -> None:
+    import asyncio
+
+    from raven.token_wise import usage_context
+
+    library.save(_spec())
+    failure = asyncio.CancelledError if cancelled else RuntimeError
+
+    class FailingRuntime(_Runtime):
+        async def load(self, *args, **kwargs):
+            assert usage_context.session_key() == "tui:failed-run"
+            assert usage_context.root_session_key() == "tui:failed-run"
+            raise failure()
+
+    owner = {"root_session_key": "tui:outer-root"}
+    with usage_context.bind("tui:outer", owner):
+        with pytest.raises(failure):
+            await mod.playbooks_run(
+                {"name": "competitor-scan", "session_key": "tui:failed-run"},
+                agent_loop_factory=_loop_with(FailingRuntime()),
+            )
+        assert usage_context.session_key() == "tui:outer"
+        assert usage_context.root_session_key() == "tui:outer-root"
 
 
 @pytest.mark.asyncio
@@ -1876,6 +2012,7 @@ class TestStints:
 
         class Loop:
             _playbooks = Runtime()
+            sessions = SimpleNamespace(peek=lambda key: None)
 
             def session_workdir(self, _key):
                 return None
@@ -1899,6 +2036,53 @@ class TestStints:
                 return f"Stint {stint_id} may now run {rounds} more."
 
         return Driver()
+
+    @pytest.mark.parametrize("verb", ["resume", "extend"])
+    @pytest.mark.parametrize("has_session", [False, True])
+    @pytest.mark.parametrize("workdir_raises", [False, True])
+    async def test_taken_up_rounds_keep_their_usage_owner(
+        self, stints, tmp_path: Path, verb: str, has_session: bool, workdir_raises: bool
+    ) -> None:
+        import asyncio
+
+        from raven.session.manager import SessionManager
+        from raven.token_wise import usage_context
+
+        key = "tui:stint-session" if has_session else None
+        record = stints.read("stint-a")
+        record.origin = {"session_key": key} if key else {}
+        stints.write(record)
+        sessions = SessionManager(tmp_path / "agent-home")
+        if key:
+            sessions.get_or_create(key).metadata["usage_owner"] = {"root_session_key": "tui:parent"}
+        release = asyncio.Event()
+
+        async def usage_after_return():
+            await release.wait()
+            return usage_context.session_key(), usage_context.root_session_key()
+
+        class Driver:
+            async def resume(self, *args):
+                self.task = asyncio.create_task(usage_after_return())
+                return "round accepted"
+
+            extend = resume
+
+        driver = Driver()
+        factory = _loop_with(
+            SimpleNamespace(rounds=driver), sessions=sessions, workdir_path=tmp_path, workdir_raises=workdir_raises
+        )
+        with usage_context.bind("tui:unrelated", {"root_session_key": "tui:unrelated-root"}):
+            await getattr(mod, f"playbooks_stints_{verb}")(
+                {"stint_id": "stint-a", "rounds": 2}, agent_loop_factory=factory
+            )
+            try:
+                assert usage_context.session_key() == "tui:unrelated"
+                assert usage_context.root_session_key() == "tui:unrelated-root"
+            finally:
+                release.set()
+                observed = await driver.task
+        assert observed == (key, "tui:parent" if key else None)
 
     async def test_resume_takes_the_stint_up_in_the_engine_answering_the_call(self, stints) -> None:
         """A round runs in the process that opens it. A terminal running its own

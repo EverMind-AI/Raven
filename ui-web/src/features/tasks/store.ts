@@ -41,15 +41,6 @@ export interface TasksState {
      is the parent turn's `run_subagent_dag` call, not a step of the node's
      own); the steps between transitions reach the panel on the beat. */
   nodeVersions: Record<string, number>
-  /* Every fold inside a node's own record -- the dispatch's "show all", the
-     process fold, a thought, a step's calls, one call's own card -- keyed by
-     the node (never the pane), so switching tabs and back, or switching to a
-     different node and back, neither resets a fold nor carries one node's
-     open folds onto another's (contract's own module state does the same:
-     DESK.wide / DESK.proc / DESK.think / DESK.wk / DESK.call, all keyed by
-     node id). A fold absent here has not been touched: the caller's own
-     default still applies until the reader picks one. */
-  folds: Record<string, Record<string, boolean>>
   /* The host's Task Board for the conversation on screen, read whole and
      replaced whole -- a board is small, and the post-turn update rewrites it in
      one go. `lineage` maps each run that continued a placed run (a replan's
@@ -69,7 +60,7 @@ export interface TasksState {
 export interface MoveOn { sessionKey: string; groupId: string; title: string; summary: string }
 
 const initial: TasksState = {
-  rows: [], loaded: false, nodes: {}, tabByPane: {}, nodeVersions: {}, folds: {},
+  rows: [], loaded: false, nodes: {}, tabByPane: {}, nodeVersions: {},
   board: null, lineage: {}, boardLoaded: false, focus: null, moveOn: null,
 }
 
@@ -224,12 +215,16 @@ export function clearMoveOn(): void {
 /* Lent to the send (src/app/install.ts): the message about the group is going
    -- out at once, or into the queue behind a running turn -- and carries it, so
    the bar is put away. The server notes it as the turn the message opens is
-   submitted; one that cannot costs the note, never the message. */
-export function takeMoveOn(sessionKey: string | null): string | null {
+   submitted; one that cannot costs the note, never the message. That note
+   reaches only the turn the message opens, so the message also names the group
+   in its own words, under the heading Answer's draft opens with -- once: a
+   draft that already carries it is left as it was written. */
+export function takeMoveOn(sessionKey: string | null, text: string): { text: string; moveOn: string } | null {
   const held = moveOnFor(sessionKey)
   if (!held) return null
   clearMoveOn()
-  return held.groupId
+  const head = t('gui.tasks.board.answer_head', { title: held.title })
+  return { text: text.includes(head) ? text : `${head}\n${text}`, moveOn: held.groupId }
 }
 
 const newestFirst = (a: TaskGroup, b: TaskGroup): number => b.created_at - a.created_at
@@ -427,15 +422,6 @@ export const nodeVersion = (kind: TaskKind, id: string, nodeId: string): number 
 function bumpNodeVersion(kind: TaskKind, id: string, nodeId: string): void {
   const key = nodeKeyOf(kind, id, nodeId)
   patch({ nodeVersions: { ...store.get().nodeVersions, [key]: (store.get().nodeVersions[key] ?? 0) + 1 } })
-}
-
-/** Whether a fold inside a node's own record is open -- `undefined` when the
-    reader has not touched it yet, so the caller's own default still applies. */
-export const foldOf = (nodeKey: string, fold: string): boolean | undefined => store.get().folds[nodeKey]?.[fold]
-
-/** Records that the reader touched one fold, keyed by the node it belongs to. */
-export function setFold(nodeKey: string, fold: string, open: boolean): void {
-  patch({ folds: { ...store.get().folds, [nodeKey]: { ...store.get().folds[nodeKey], [fold]: open } } })
 }
 
 /* The server's own read for one row, folded back over whatever a live event

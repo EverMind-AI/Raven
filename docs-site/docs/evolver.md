@@ -2,7 +2,7 @@
 
 Evolver is a standalone, benchmark-driven tool for improving an agent harness:
 diagnose failed tasks, design candidate edits, evaluate them, and retain useful
-changes as Git commits. It runs separately from the agent's conversation loop
+changes as Git commits. It runs separately from the agent's session loop
 and uses Raven as a library during harness development.
 
 This is the onboarding and operations guide. [Design and implementation](self-evolution-map.md)

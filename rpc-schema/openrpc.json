@@ -30,7 +30,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Session channels to include; defaults to tui. 'imported' adds the Imported Conversations to a list of live sessions (never to the archived one)."
+            "description": "Session channels to include; defaults to tui. 'imported' adds the Imported Sessions to a list of live sessions (never to the archived one)."
           }
         },
         {
@@ -1887,7 +1887,7 @@
         },
         {
           "name": "session_id",
-          "summary": "With it, permissions.mode answers the mode this conversation runs in; without it, the default.",
+          "summary": "With it, permissions.mode answers the mode this session runs in; without it, the default.",
           "required": false,
           "schema": {
             "type": "string"
@@ -1934,7 +1934,7 @@
         },
         {
           "name": "session_id",
-          "summary": "Scopes a model or permissions.mode switch to one conversation.",
+          "summary": "Scopes a model or permissions.mode switch to one session.",
           "required": false,
           "schema": {
             "type": "string"
@@ -1950,7 +1950,7 @@
         },
         {
           "name": "scope",
-          "summary": "How far a model or permissions.mode switch reaches: this conversation, what new ones start on, or (model only) both at once.",
+          "summary": "How far a model or permissions.mode switch reaches: this session, what new ones start on, or (model only) both at once.",
           "required": false,
           "schema": {
             "type": "string",
@@ -2070,7 +2070,7 @@
     },
     {
       "name": "subagent.list",
-      "summary": "List the background calls one conversation handed off, newest first.",
+      "summary": "List the background calls one session handed off, newest first.",
       "params": [
         {
           "name": "session_id",
@@ -2121,7 +2121,7 @@
           "required": true,
           "schema": {
             "type": "string",
-            "description": "A call is addressed by conversation and call, never by call alone."
+            "description": "A call is addressed by session and call, never by call alone."
           }
         }
       ],
@@ -4496,7 +4496,7 @@
           "schema": {
             "type": "string"
           },
-          "description": "Which conversation's run to read, as dag.get already takes. A run directory lives inside its session."
+          "description": "Which session's run to read, as dag.get already takes. A run directory lives inside its session."
         }
       ],
       "result": {
@@ -5626,11 +5626,7 @@
               "type": "string"
             },
             "skill_hub_on": {
-              "description": "Whether conversational Skill Hub retrieval is on, read the way the runtime reads the config: an endpoint is required, and enabled=false turns it off.",
-              "type": "boolean"
-            },
-            "skill_hub_awaiting_reload": {
-              "description": "skill_hub_on, while the agent loop serving now was built without a Hub client: retrieval starts after a reload.",
+              "description": "Whether conversational Skill Hub retrieval is on, read the way the runtime reads the config: enabled=false turns it off, and the default is on.",
               "type": "boolean"
             }
           },
@@ -5638,8 +5634,7 @@
             "settings",
             "config_path",
             "raven_version",
-            "skill_hub_on",
-            "skill_hub_awaiting_reload"
+            "skill_hub_on"
           ],
           "type": "object"
         }
@@ -6433,11 +6428,11 @@
           "additionalProperties": false,
           "properties": {
             "path": {
-              "description": "The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the conversation's own working directory first, so a same-named file there answers for it; uploads never return bytes.",
+              "description": "The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the session's own working directory first, so a same-named file there answers for it; uploads never return bytes.",
               "type": "string"
             },
             "abs_path": {
-              "description": "The file the upload wrote, and the path to hand turn.send: it names the upload whatever the conversation's own directory holds.",
+              "description": "The file the upload wrote, and the path to hand turn.send: it names the upload whatever the session's own directory holds.",
               "type": "string"
             },
             "size": {
@@ -6562,11 +6557,11 @@
           "additionalProperties": false,
           "properties": {
             "path": {
-              "description": "The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the conversation's own working directory first, so a same-named file there answers for it; uploads never return bytes.",
+              "description": "The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the session's own working directory first, so a same-named file there answers for it; uploads never return bytes.",
               "type": "string"
             },
             "abs_path": {
-              "description": "The file the upload wrote, and the path to hand turn.send: it names the upload whatever the conversation's own directory holds.",
+              "description": "The file the upload wrote, and the path to hand turn.send: it names the upload whatever the session's own directory holds.",
               "type": "string"
             },
             "size": {
@@ -6682,7 +6677,7 @@
     },
     {
       "name": "deliverables.list",
-      "summary": "Every file this conversation handed over through deliver_files.",
+      "summary": "Every file this session handed over through deliver_files.",
       "params": [
         {
           "name": "session_key",
@@ -7451,7 +7446,7 @@
     },
     {
       "name": "playbooks.run",
-      "summary": "Run one playbook, through the same entry the model's tool and `raven playbook run` use. A `dag` playbook dispatches in the background and the reply is the receipt carrying the run id; a `prompt` one answers composition guidance. `gaps` means nothing was dispatched and the reply names what is still needed. The call can block while the graph-level `confirm` gate puts the run to the conversation named by `session_key`, and a conversation still busy at that deadline is a \"not now\" -- the graph does not run unseen.",
+      "summary": "Run one playbook, through the same entry the model's tool and `raven playbook run` use. A `dag` playbook dispatches in the background and the reply is the receipt carrying the run id; a `prompt` one answers composition guidance. `gaps` means nothing was dispatched and the reply names what is still needed. The call can block while the graph-level `confirm` gate puts the run to the session named by `session_key`, and a session still busy at that deadline is a \"not now\" -- the graph does not run unseen.",
       "params": [
         {
           "name": "name",
@@ -7467,7 +7462,7 @@
           "required": true,
           "schema": {
             "type": "string",
-            "description": "The conversation this run reports to, as its own `channel:chat_id`. Required because a run's progress and completion announce are addressed to a conversation, and an RPC call is an origin nothing else sets one for."
+            "description": "The session this run reports to, as its own `channel:chat_id`. Required because a run's progress and completion announce are addressed to a session, and an RPC call is an origin nothing else sets one for."
           }
         },
         {
@@ -7632,7 +7627,7 @@
           "required": true,
           "schema": {
             "type": "string",
-            "description": "The conversation whose generated Persona this is. A draft belongs to the session that asked for it."
+            "description": "The session whose generated Persona this is. A draft belongs to the session that asked for it."
           }
         }
       ],
@@ -7660,7 +7655,7 @@
           "required": true,
           "schema": {
             "type": "string",
-            "description": "The conversation whose generated Persona this is. A draft belongs to the session that asked for it."
+            "description": "The session whose generated Persona this is. A draft belongs to the session that asked for it."
           }
         },
         {
@@ -7704,7 +7699,7 @@
           "required": true,
           "schema": {
             "type": "string",
-            "description": "The conversation whose generated Persona this is. A draft belongs to the session that asked for it."
+            "description": "The session whose generated Persona this is. A draft belongs to the session that asked for it."
           }
         }
       ],
@@ -7831,7 +7826,7 @@
           "required": false,
           "schema": {
             "type": "string",
-            "description": "One conversation's requests; every conversation's when absent."
+            "description": "One session's requests; every session's when absent."
           }
         },
         {
@@ -7974,7 +7969,7 @@
           "required": false,
           "schema": {
             "type": "string",
-            "description": "One conversation's requests; every conversation's when absent."
+            "description": "One session's requests; every session's when absent."
           }
         },
         {
@@ -8376,7 +8371,7 @@
     },
     {
       "name": "session.usage",
-      "summary": "What this conversation has spent, its delegations included.",
+      "summary": "What this session has spent, its delegations included.",
       "description": "Read from the recorder's telemetry, over the days this session has existed: every call recorded under the session's root key is summed, so the calls a sub-agent made for it count here while a worker asking about itself sees zeros. Token counters are a flow over the whole session; context_* is a gauge, how full the window is now. cost_usd is null when no call reported a price (a plan-billed model), and cost_status says whether the sum is the whole bill (exact) or part of it (estimated).",
       "params": [
         {
@@ -10941,7 +10936,7 @@
     },
     {
       "name": "tasks.list",
-      "summary": "Every unit of delegated work one conversation started, as run-level rows with their nodes inline.",
+      "summary": "Every unit of delegated work one session started, as run-level rows with their nodes inline.",
       "description": "A spawn is one row with one node; a run_subagent_dag run (a playbook run included) is one row carrying its graph. Built off disk from the run dir, the session node registry and the instance registry, so no live graph tool is needed and a reload answers the same as a live page. Bodies -- a node's messages, output and rendered prompt -- stay on dag.node and subagent.context. Newest first.",
       "params": [
         {
@@ -10991,7 +10986,7 @@
     },
     {
       "name": "tasks.board",
-      "summary": "One conversation's Task Board: its matters, each turn's advance on them, and the Tasks each advance started.",
+      "summary": "One session's Task Board: its matters, each turn's advance on them, and the Tasks each advance started.",
       "description": "Read off disk, so a reloaded page draws it with no agent loop up. lineage maps each run that continued a placed run to that run, so a client can show it under the same step. An empty or unknown key answers with an empty board, not an error.",
       "params": [
         {
@@ -11030,7 +11025,7 @@
     },
     {
       "name": "tasks.boards",
-      "summary": "Every host conversation's Task Groups as cards, sorted for the Task Board page.",
+      "summary": "Every host session's Task Groups as cards, sorted for the Task Board page.",
       "description": "Read off disk, newest first. A card's category is decided here, once: a group marked needs_you or completed reads as marked; every other group is running while a run it links still runs, read as tasks.list reads it (what this process executes included), and idle otherwise. Completed cards come only with include_completed; completed_count and needs_you_count always count every card. Step summaries are never sent.",
       "params": [
         {
@@ -11073,7 +11068,7 @@
     {
       "name": "tasks.set_group_status",
       "summary": "The reader's two actions on a Task Group: mark it completed, or reopen it.",
-      "description": "Takes the same per-conversation lock as the post-turn update and announces the write as tasks.board_updated. invalid_params for an unknown group, for a status other than completed or idle, and on a runtime that keeps no board.",
+      "description": "Takes the same per-session lock as the post-turn update and announces the write as tasks.board_updated. invalid_params for an unknown group, for a status other than completed or idle, and on a runtime that keeps no board.",
       "params": [
         {
           "name": "session_key",
@@ -11129,7 +11124,7 @@
     {
       "name": "tasks.ignore_question",
       "summary": "The reader sets one of a Progress Step's questions aside.",
-      "description": "The question leaves its step, so it leaves the card and the answer draft; a group that waits on the user goes idle once its latest step asks nothing more. Takes the same per-conversation lock as the post-turn update and announces the write as tasks.board_updated. invalid_params for an unknown group or step, and on a runtime that keeps no board; a question the step no longer lists changes nothing.",
+      "description": "The question leaves its step, so it leaves the card and the answer draft; a group that waits on the user goes idle once its latest step asks nothing more. Takes the same per-session lock as the post-turn update and announces the write as tasks.board_updated. invalid_params for an unknown group or step, and on a runtime that keeps no board; a question the step no longer lists changes nothing.",
       "params": [
         {
           "name": "session_key",
@@ -11187,7 +11182,7 @@
     },
     {
       "name": "import.scan",
-      "summary": "Scan the other AI tools on this machine for importable memory files and conversations, per platform, and say whether an import can run at all.",
+      "summary": "Scan the other AI tools on this machine for importable memory files and sessions, per platform, and say whether an import can run at all.",
       "description": "Runs the cold-start scanners (raven.importer.scanners.scan_all) and aggregates the ScanResult counts per platform. Every platform the importer knows is listed; `scannable` is false for one that ships no scanner yet. `ready` is false when no memory backend is configured for the import to feed -- the same gate the CLI wizard's import step applies -- and `reason` then says why.",
       "params": [],
       "result": {
@@ -12803,7 +12798,7 @@
     },
     {
       "name": "imported.upload",
-      "summary": "Import a Trajectory Export, Bug Report Package or Trajectory Report as a read-only Imported Conversation; the same bytes imported before answer with that copy and write nothing, unless force asks for a second one.",
+      "summary": "Import a Trajectory Export, Bug Report Package or Trajectory Report as a read-only Imported Session; the same bytes imported before answer with that copy and write nothing, unless force asks for a second one.",
       "params": [
         {
           "name": "name",
@@ -13040,7 +13035,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Ids of the knowledge bases this session's turns may search, as it was left. Beside `cwd` and for the same reason: a reader reopening a conversation has to see what it is pointed at, or the picker draws it as pointed at nothing."
+            "description": "Ids of the knowledge bases this session's turns may search, as it was left. Beside `cwd` and for the same reason: a reader reopening a session has to see what it is pointed at, or the picker draws it as pointed at nothing."
           },
           "mcp_servers": {
             "items": {
@@ -13090,7 +13085,7 @@
           },
           "read_only": {
             "type": "boolean",
-            "description": "True for an Imported Conversation, which nothing can change; absent on every other session."
+            "description": "True for an Imported Session, which nothing can change; absent on every other session."
           },
           "running_ms": {
             "type": [
@@ -13254,7 +13249,7 @@
       },
       "TranscriptDelegated": {
         "additionalProperties": false,
-        "description": "Which delegated run re-entered the conversation at this entry. The same identity `subagent.delivered` carries, so a replayed transcript and a live stream draw the same row from the same fields.",
+        "description": "Which delegated run re-entered the session at this entry. The same identity `subagent.delivered` carries, so a replayed transcript and a live stream draw the same row from the same fields.",
         "properties": {
           "kind": {
             "enum": [
@@ -14448,7 +14443,7 @@
           },
           "imported": {
             "type": "object",
-            "description": "Present only on an Imported Conversation's row (source 'imported').",
+            "description": "Present only on an Imported Session's row (source 'imported').",
             "additionalProperties": false,
             "required": [
               "kind",
@@ -14728,7 +14723,7 @@
           },
           "stateful": {
             "type": "boolean",
-            "description": "Reusing a handle continues this agent's conversation rather than starting a fresh one (`agent_meta`). What makes a row direct-chattable at all: `chat` refuses a stateless agent, so a picker that offers one is offering a refusal. Absent from a server that predates this, which reads as 'not offered' rather than as an error."
+            "description": "Reusing a handle continues this agent's session rather than starting a fresh one (`agent_meta`). What makes a row direct-chattable at all: `chat` refuses a stateless agent, so a picker that offers one is offering a refusal. Absent from a server that predates this, which reads as 'not offered' rather than as an error."
           },
           "builtin": {
             "type": "boolean",
@@ -15206,7 +15201,7 @@
       "DirectTarget": {
         "type": "object",
         "additionalProperties": false,
-        "description": "One sub-agent instance a turn is addressed to. Null means the main conversation.",
+        "description": "One sub-agent instance a turn is addressed to. Null means the main session.",
         "required": [
           "agent",
           "handle"
@@ -15260,7 +15255,7 @@
             "$ref": "#/components/schemas/DagNotExecutedReason"
           },
           "selectedRoutes": {
-            "description": "The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Present only on the row of a DAG node a branch decided: its dag-node row, or the ordinary row a stateful node is reported on.",
+            "description": "The routes a decision node selected. An empty list is a selection that chose nothing, which a 'many' selection may. Present only on the row of a DAG node a branch decided: its dag-node row, or the ordinary row a stateful node is reported on.",
             "type": "array",
             "items": {
               "type": "string"
@@ -15278,7 +15273,7 @@
           },
           "resumable": {
             "type": "boolean",
-            "description": "Whether a conversation can be opened with this row. False for a dag-node row, whose handle names a node rather than a conversation, and for an agent whose backend is not stateful. Answered by the server because statefulness is a property of the agent's configured backend, which no front end can read off the row."
+            "description": "Whether a session can be opened with this row. False for a dag-node row, whose handle names a node rather than a session, and for an agent whose backend is not stateful. Answered by the server because statefulness is a property of the agent's configured backend, which no front end can read off the row."
           },
           "title": {
             "type": "string",
@@ -15300,7 +15295,7 @@
               "string",
               "null"
             ],
-            "description": "The handle of the node's last attempt -- null when that attempt kept no session. Rides beside attemptAgents because the row's own handle is the node's name, not a conversation."
+            "description": "The handle of the node's last attempt -- null when that attempt kept no session. Rides beside attemptAgents because the row's own handle is the node's name, not a session."
           },
           "nodeInstanceAuto": {
             "type": "boolean",
@@ -15315,7 +15310,7 @@
       "DirectTurn": {
         "type": "object",
         "additionalProperties": false,
-        "description": "One row of one instance's conversation. Preferred source is the instance's own log, which is written turn by turn and holds what the run did on the way; a conversation with no log falls back to its record directories, where a turn is a pair of files.",
+        "description": "One row of one instance's session. Preferred source is the instance's own log, which is written turn by turn and holds what the run did on the way; a session with no log falls back to its record directories, where a turn is a pair of files.",
         "required": [
           "call_id",
           "role",
@@ -15417,7 +15412,7 @@
             "additionalProperties": {
               "type": "integer"
             },
-            "description": "The window divided: tokens by part, keyed system / tools / conversation / memory / skills. Absent when no breakdown was measured for this turn."
+            "description": "The window divided: tokens by part, keyed system / tools / conversation / files / memory / skills. Absent when no breakdown was measured for this turn."
           },
           "cost_missing_calls": {
             "type": "integer",
@@ -15535,7 +15530,7 @@
         }
       },
       "TurnStartedEvent": {
-        "description": "A turn the runtime opened (a delegated result re-entering the conversation) has begun. `turn.send` owns `message.start`, and the spine suppresses it for these turns, so this event is the client's only live signal that a new turn started. It advances the client's live turn bookkeeping (the workspace record's turn number, which the artifact bar reads), enters the busy state, and -- when `delegated` is present -- carries the delivery identity AND the injected text, so the delivery row is drawn at the moment the result is actually visible (its turn started), not when it was submitted. A stored delegated user entry draws the same row on replay, which is what keeps the two views in step.",
+        "description": "A turn the runtime opened (a delegated result re-entering the session) has begun. `turn.send` owns `message.start`, and the spine suppresses it for these turns, so this event is the client's only live signal that a new turn started. It advances the client's live turn bookkeeping (the workspace record's turn number, which the artifact bar reads), enters the busy state, and -- when `delegated` is present -- carries the delivery identity AND the injected text, so the delivery row is drawn at the moment the result is actually visible (its turn started), not when it was submitted. A stored delegated user entry draws the same row on replay, which is what keeps the two views in step.",
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -15594,7 +15589,7 @@
                     "type": "string"
                   },
                   "content": {
-                    "description": "The text that re-entered the conversation, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence, or `output` instead where a node's report carries it.",
+                    "description": "The text that re-entered the session, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence, or `output` instead where a node's report carries it.",
                     "type": "string"
                   },
                   "output": {
@@ -15632,7 +15627,7 @@
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "description": "`target` names the conversation this event belongs to; absent is the main agent.",
+            "description": "`target` names the session this event belongs to; absent is the main agent.",
             "required": [
               "turn_id"
             ],
@@ -15667,7 +15662,7 @@
           "payload": {
             "type": "object",
             "additionalProperties": false,
-            "description": "A message merged into the turn already running on this conversation. `message.start` cannot say this: that event opens a turn, and an inject joins one. `target` names the conversation this event belongs to; absent is the main agent.",
+            "description": "A message merged into the turn already running on this session. `message.start` cannot say this: that event opens a turn, and an inject joins one. `target` names the session this event belongs to; absent is the main agent.",
             "required": [
               "turn_id",
               "content"
@@ -16258,7 +16253,7 @@
         }
       },
       "SessionTitledEvent": {
-        "description": "The model named this session, reading the opening message alongside the turn that carried it. Conversation-scoped, and emitted only when the title actually changed -- a client can replace what it is showing without comparing. A front end that parks a placeholder where the title goes fills it in here instead of showing a truncated first line and rewriting it a moment later.",
+        "description": "The model named this session, reading the opening message alongside the turn that carried it. Session-scoped, and emitted only when the title actually changed -- a client can replace what it is showing without comparing. A front end that parks a placeholder where the title goes fills it in here instead of showing a truncated first line and rewriting it a moment later.",
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -16326,7 +16321,7 @@
         }
       },
       "SubagentDeliveredEvent": {
-        "description": "A delegated run's result re-entered its conversation here. Emitted just after the result is submitted to the main loop, so a client can mark the seam where the sub-agent's answer came back. The turn it opens is submitted through the spine, which emits no `message.start`, so this event is the only live signal that it happened -- and a client REPLAYING the session later reads the same identity off the stored user entry's `delegated` field, which is what keeps the two views agreeing.",
+        "description": "A delegated run's result re-entered its session here. Emitted just after the result is submitted to the main loop, so a client can mark the seam where the sub-agent's answer came back. The turn it opens is submitted through the spine, which emits no `message.start`, so this event is the only live signal that it happened -- and a client REPLAYING the session later reads the same identity off the stored user entry's `delegated` field, which is what keeps the two views agreeing.",
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -16373,7 +16368,7 @@
                 "type": "string"
               },
               "content": {
-                "description": "The text that re-entered the conversation, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence, or `output` instead where a node's report carries it -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.",
+                "description": "The text that re-entered the session, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence, or `output` instead where a node's report carries it -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.",
                 "type": "string"
               },
               "node_id": {
@@ -16396,7 +16391,7 @@
         }
       },
       "SubagentStatusEvent": {
-        "description": "One spawned run's lifecycle transition, as it happens. 'subagent.delivered' marks where a finished result re-entered the conversation; this event is the run itself moving -- queued, started, finished -- so a client can render live delegation without polling the disk-backed lists. Terminal transitions are not replayed: a client that reconnects reconciles against subagent.list instead.",
+        "description": "One spawned run's lifecycle transition, as it happens. 'subagent.delivered' marks where a finished result re-entered the session; this event is the run itself moving -- queued, started, finished -- so a client can render live delegation without polling the disk-backed lists. Terminal transitions are not replayed: a client that reconnects reconciles against subagent.list instead.",
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -16492,7 +16487,7 @@
         ]
       },
       "DagNotExecutedReason": {
-        "description": "Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.",
+        "description": "Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision node that was never executed. 'upstream_not_executed': every dependency of it in the graph was not executed.",
         "type": "string",
         "enum": [
           "when_false",
@@ -16575,7 +16570,7 @@
             "$ref": "#/components/schemas/DagNotExecutedReason"
           },
           "selected_routes": {
-            "description": "The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.",
+            "description": "The routes a decision node selected. An empty list is a selection that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.",
             "type": "array",
             "items": {
               "type": "string"
@@ -16593,7 +16588,7 @@
             }
           },
           "select": {
-            "description": "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.",
+            "description": "How many routes the decision node selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.",
             "type": "string",
             "enum": [
               "one",
@@ -16825,7 +16820,7 @@
                       }
                     },
                     "select": {
-                      "description": "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.",
+                      "description": "How many routes the decision node selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.",
                       "type": "string",
                       "enum": [
                         "one",
@@ -16900,7 +16895,7 @@
                 "$ref": "#/components/schemas/DagNotExecutedReason"
               },
               "selected_routes": {
-                "description": "The routes a decision node selected, on the frame that finishes it. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on every other frame, and when the node failed to decide.",
+                "description": "The routes a decision node selected, on the frame that finishes it. An empty list is a selection that chose nothing, which a 'many' selection may. Absent on every other frame, and when the node failed to decide.",
                 "type": "array",
                 "items": {
                   "type": "string"
@@ -17123,7 +17118,7 @@
                       "$ref": "#/components/schemas/DagNotExecutedReason"
                     },
                     "selected_routes": {
-                      "description": "The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, and on one that failed to decide.",
+                      "description": "The routes a decision node selected. An empty list is a selection that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, and on one that failed to decide.",
                       "type": "array",
                       "items": {
                         "type": "string"
@@ -17893,7 +17888,7 @@
               "type": "string"
             },
             "type": "object",
-            "description": "Makes this node a decision: route name -> the condition, in plain words, under which its answer selects that route. Kept whole, because re-running the graph judges against the conditions."
+            "description": "Makes this node a decision node: route name -> the condition, in plain words, under which its answer selects that route. Kept whole, because re-running the graph judges against the conditions."
           },
           "select": {
             "enum": [
@@ -17901,7 +17896,7 @@
               "many"
             ],
             "type": "string",
-            "description": "How many routes the decision selects, as the author wrote it. Absent means 'one'."
+            "description": "How many routes the decision node selects, as the author wrote it. Absent means 'one'."
           },
           "when": {
             "type": "string",
@@ -18451,7 +18446,7 @@
             "$ref": "#/components/schemas/DagNotExecutedReason"
           },
           "selected_routes": {
-            "description": "The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.",
+            "description": "The routes a decision node selected. An empty list is a selection that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.",
             "type": "array",
             "items": {
               "type": "string"
@@ -18469,7 +18464,7 @@
             }
           },
           "select": {
-            "description": "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.",
+            "description": "How many routes the decision node selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.",
             "type": "string",
             "enum": [
               "one",
@@ -18496,7 +18491,7 @@
         }
       },
       "TaskRow": {
-        "description": "One unit of delegated work a conversation started, with its nodes inline.",
+        "description": "One unit of delegated work a session started, with its nodes inline.",
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -19699,7 +19694,7 @@
         }
       },
       "TaskGroup": {
-        "description": "One matter a conversation is pushing, spanning any number of turns, with its Progress Steps in time order. summary says where the matter stands; any turn may rewrite it.",
+        "description": "One matter a session is pushing, spanning any number of turns, with its Progress Steps in time order. summary says where the matter stands; any turn may rewrite it.",
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -19766,7 +19761,7 @@
         }
       },
       "TaskBoard": {
-        "description": "One host conversation's Task Board: its Task Groups and any dispatch still waiting for a place.",
+        "description": "One host session's Task Board: its Task Groups and any dispatch still waiting for a place.",
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -19882,7 +19877,7 @@
         }
       },
       "TasksBoardUpdatedEvent": {
-        "description": "A conversation's Task Board after a write -- the post-turn update or the reader's own action. Not replayed: a client that reconnects reads tasks.board.",
+        "description": "A session's Task Board after a write -- the post-turn update or the reader's own action. Not replayed: a client that reconnects reads tasks.board.",
         "type": "object",
         "additionalProperties": false,
         "required": [

@@ -139,6 +139,8 @@ def test_the_imported_skill_body_is_readable(env: _Env) -> None:
     assert body is not None
     assert "The demo body." in body
     assert (env.skills_root / PACKAGE_NAME / SKILL_NAME / "SKILL.md").is_file()
+    assert (env.skills_root / PACKAGE_NAME / ".raven-install.json").is_file()
+    assert (env.skills_root / PACKAGE_NAME / SKILL_NAME / ".raven-install.json").is_file()
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +159,9 @@ def test_remove_empties_the_workspace_skills_tree(env: _Env) -> None:
     assert list(env.skills_root.iterdir()) == []
 
     ledger = json.loads(env.ledger.read_text(encoding="utf-8"))
-    assert PACKAGE_NAME not in ledger["packages"]
+    assert ledger["version"] == 2
+    assert ledger["workspaces"] == {}
+    assert ledger["legacy"] == {}
 
 
 def test_the_pool_no_longer_sees_a_removed_package(env: _Env) -> None:

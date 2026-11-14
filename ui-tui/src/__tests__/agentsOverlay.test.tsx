@@ -123,7 +123,7 @@ describe('InstanceConversation', () => {
 
     expect(calls).toEqual(['subagents.instance.history'])
     const frame = stripAnsi(app.lastFrame() ?? '')
-    expect(frame).toContain('Conversation · Coder/h1')
+    expect(frame).toContain('Session · Coder/h1')
     expect(frame).toContain('the task')
     // The rows are the store's: what Direct Chat would show for this instance.
     expect(

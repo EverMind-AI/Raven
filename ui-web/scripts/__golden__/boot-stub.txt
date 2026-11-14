@@ -57,11 +57,19 @@ div.app[data-rail=on]
           path
         span
         span.chrome-nav-badge
-      button#importedBtn.navi
-        svg
-          path
-          path
-        span
+      span.chrome-navfly-anch
+        button#navMoreBtn.navi.chrome-more
+          svg
+            path
+            path
+            path
+          span
+        div#chrome-navfly.chrome-navfly[data-open=false]
+          button#importedBtn.navi
+            svg
+              path
+              path
+            span
     div#findBox.find
       span.ic
         svg
@@ -166,6 +174,7 @@ div.app[data-rail=on]
               span.chrome-anch
                 button#permChip.chip
                   svg.pico
+                    path
                     path
                     path
                     path

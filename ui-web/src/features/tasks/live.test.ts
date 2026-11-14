@@ -199,7 +199,7 @@ describe('applyNodeUpdated', () => {
 /* The two frames that say how a branch came out: a decision node's own finish
    frame carries what it selected, and a node a branch left out is announced
    with the reason it was. Both are copied field by field and only when the frame
-   carries them -- an empty `selected_routes` is a decision that chose nothing,
+   carries them -- an empty `selected_routes` is a selection that chose nothing,
    which is not the same as a node that decided nothing. */
 describe('applyNodeUpdated on a branch', () => {
   const base: TaskRow[] = [{

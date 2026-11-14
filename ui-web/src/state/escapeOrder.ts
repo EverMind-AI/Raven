@@ -31,6 +31,7 @@ import * as extAgents from '../features/extAgents/store'
 import * as detail from './detail'
 import { close as closeImage, isOpen as imageOpen } from './lightbox'
 import * as mentions from './mentions'
+import * as navfly from './navfly'
 import * as page from './page'
 import { byEscape } from './pages'
 import * as perm from './perm'
@@ -76,7 +77,7 @@ const CLOSERS: Record<PageId, () => void> = {
   tasksBoardPage: () => page.show(null),
 }
 
-/* The four layers Escape reaches before any page. Two of them are raised from
+/* The five layers Escape reaches before any page. Two of them are raised from
    inside the settings dialog now -- the shared drawer -- which is why it
    stands above it: the dialog's own layer is in BELOW, so one Escape takes
    back what a section raised and a second takes back the dialog. */
@@ -87,6 +88,11 @@ const ABOVE: readonly EscapeLayer[] = [
      over the details pane it covers. Its own close button is the cancel. */
   { id: '#exportVeil', isOpen: flagged('exportVeil'), close: cancels('exportClose') },
   { id: '#detail', isOpen: flagged('detail'), close: detail.close },
+  /* The rail's More group: a popover standing over the content. It comes before
+     the pages because it is over them -- --z-rail-fly 25 against --z-page 24 --
+     and a reader who opened a popover over a page means to take it back
+     first. */
+  { id: '#chrome-navfly', isOpen: flagged('chrome-navfly'), close: () => navfly.close() },
 ]
 
 /* The desk's own retreat -- fullscreen, then the picked node, then the open
@@ -159,7 +165,7 @@ const BELOW: readonly EscapeLayer[] = [
   { id: 'turn.busy()', isOpen: turnBusy, close: () => ds('composer').stop() },
 ]
 
-/** The fifteen, in the order Escape reaches them. */
+/** The seventeen, in the order Escape reaches them. */
 export const ESCAPE_ORDER: readonly EscapeLayer[] = [
   ...ABOVE,
   ...byEscape().map((page) => ({

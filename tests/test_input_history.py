@@ -74,7 +74,7 @@ def _tui_load(text: str, max_entries: int = MAX_ENTRIES) -> list[str]:
     """
     entries: list[str] = []
     current: list[str] = []
-    for line in re.split(r"\r?\n", text):
+    for line in re.split(r"\r\n|\n|\r", text):
         if line.startswith("+"):
             current.append(line[1:])
         elif current:
@@ -238,6 +238,23 @@ def test_read_entries_replaces_undecodable_bytes(history_home: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"+\xff\n")
     assert read_entries() == ["�"]
+
+
+def test_a_crlf_file_reads_as_its_lf_twin(history_home: Path) -> None:
+    """Both readers drop the \r an external CRLF conversion introduces (#1193).
+
+    The Python reader goes through ``Path.read_text``, whose universal-newline
+    translation folds CRLF; the TUI's ``load()`` splits on ``/\r?\n/``. A file
+    converted by an external editor must therefore yield the same entries in
+    both, which this pins with the TUI's own rules as the second reader.
+    """
+    path = history_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lf = "".join(_block(text) for text in ("first", "second", "line a\nline b"))
+    path.write_bytes(lf.replace("\n", "\r\n").encode("utf-8"))
+
+    assert read_entries() == ["first", "second", "line a\nline b"]
+    assert _tui_load(path.read_bytes().decode("utf-8")) == ["first", "second", "line a\nline b"]
 
 
 def test_the_default_cap_is_the_tui_in_memory_cap_and_the_file_is_not_trimmed(history_home: Path) -> None:
@@ -592,11 +609,10 @@ def test_parse_does_not_normalise_line_endings_but_read_entries_does(history_hom
     ``parse`` leaves ``\\r`` alone, as its docstring says. But ``read_entries``
     (and ``append``'s dedupe read) go through ``Path.read_text``, whose text
     mode translates ``\\r\\n`` and lone ``\\r`` to ``\\n``. The TUI's ``load()``
-    splits on ``/\\r?\\n/``, so it drops the ``\\r`` of a CRLF file too and
-    agrees with ``read_entries`` there; a lone ``\\r`` is where they still
-    differ -- ``read_text`` folds it to ``\\n`` while the TUI's split does not
-    consume it. Both writers emit LF, so this only shows for a history
-    converted by something else or for content pasted with CRLF.
+    splits on ``/\\r\\n|\\n|\\r/``, so it folds the same endings and agrees with
+    ``read_entries`` for a CRLF file and for a file of lone CRs. Both writers
+    emit LF, so this only shows for a history converted by something else or
+    for content pasted with CRLF.
     """
     raw = "+line one\r\n+line two\r\n"
     assert parse(raw) == ["line one\r\nline two\r"]
@@ -605,6 +621,24 @@ def test_parse_does_not_normalise_line_endings_but_read_entries_does(history_hom
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(raw.encode("utf-8"))
     assert read_entries() == ["line one\nline two"]
+
+
+def test_read_entries_reads_a_cr_only_file_like_an_lf_one(history_home: Path) -> None:
+    """A CR-only file yields the entries its LF form yields.
+
+    ``Path.read_text`` applies universal-newline translation, so the host
+    folds lone CRs the way it folds CRLF; this pins the other half of the
+    line-ending parity the TUI test covers.
+    """
+    lf = "# 2026-11-09 00:00:00\n+first command\n# 2026-11-09 00:00:01\n+second command\n"
+    path = history_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    path.write_bytes(lf.replace("\n", "\r").encode("utf-8"))
+    cr_entries = read_entries()
+
+    path.write_bytes(lf.encode("utf-8"))
+    assert cr_entries == read_entries() == ["first command", "second command"]
 
 
 # ---------------------------------------------------------------------------

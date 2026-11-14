@@ -869,6 +869,100 @@ def test_a_host_that_wrote_the_default_vendor_to_the_vendor_slot_is_inherited(gr
     assert data["plugins"]["config"]["research-flow"]["search"]["apiKey"] == "host-serper-key"
 
 
+def test_an_own_legacy_key_is_not_outranked_by_the_hosts_vendor_slot(grounded, tmp_path):
+    """RESEARCH_SERPER_API_KEY lands in the pre-vendor leaf, which trunk reads
+    only after an empty vendor slot. Copying the host's slot beside it made the
+    host's account pay while the product's own key sat unread."""
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(
+        json.dumps({"tools": {"web": {"providers": {"serper": {"apiKey": "host-serper-key"}}}}})
+    )
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+
+    assert "serper" not in data["tools"]["web"].get("providers", {})
+    assert data["tools"]["web"]["search"]["apiKey"] == "serper-key"
+    assert data["plugins"]["config"]["research-flow"]["search"]["apiKey"] == "serper-key"
+
+
+def test_the_hosts_choice_does_not_switch_off_the_products_own_key(grounded, tmp_path):
+    """The host searches through Tavily; this product pays for Serper.
+
+    Following the name alone switched the render to Tavily and sent the host's
+    key, leaving the product's own key dead. The product keeps its vendor.
+    """
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(
+        json.dumps(
+            {
+                "tools": {
+                    "web": {
+                        "providers": {"tavily": {"apiKey": "host-tavily-key"}},
+                        "search": {"provider": "tavily"},
+                        "fetch": {"provider": "tavily"},
+                    }
+                }
+            }
+        )
+    )
+
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    data = json.loads(rendered.read_text())
+    flow = data["plugins"]["config"]["research-flow"]
+
+    from raven.config.loader import load_config
+
+    config = load_config(rendered)
+    assert config.tools.web.search.provider == "serper"
+    assert flow["search"]["provider"] == "serper"
+    assert flow["search"]["apiKey"] == "serper-key"
+
+
+def test_a_non_legacy_own_key_wins_over_the_hosts_vendor_slot(grounded, tmp_path, monkeypatch):
+    """Every vendor without a pre-vendor leaf has its own RESEARCH_* name; the
+    own-key table has to cover those too, not just Serper and Jina."""
+    monkeypatch.setenv("RESEARCH_TAVILY_API_KEY", "own-tavily-key")
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(
+        json.dumps({"tools": {"web": {"providers": {"tavily": {"apiKey": "host-tavily-key"}}}}})
+    )
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+
+    assert data["tools"]["web"]["providers"]["tavily"]["apiKey"] == "own-tavily-key"
+
+
+def test_no_own_key_follows_the_hosts_vendor_and_key(grounded, tmp_path, monkeypatch):
+    """The reason the inheritance exists: a product with nothing configured
+    searches the way the host does, with the host's key."""
+    monkeypatch.delenv("RESEARCH_SERPER_API_KEY", raising=False)
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(
+        json.dumps(
+            {
+                "tools": {
+                    "web": {
+                        "providers": {"tavily": {"apiKey": "host-tavily-key"}},
+                        "search": {"provider": "tavily"},
+                        "fetch": {"provider": "tavily"},
+                    }
+                }
+            }
+        )
+    )
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    flow = data["plugins"]["config"]["research-flow"]
+
+    assert data["tools"]["web"]["search"]["provider"] == "tavily"
+    assert flow["search"]["provider"] == "tavily"
+    assert flow["search"]["apiKey"] == "host-tavily-key"
+
+
 def test_the_selected_vendor_and_its_key_reach_the_slice_together(grounded, monkeypatch):
     """The slice has no vendor table to consult, so the pair must already agree.
 

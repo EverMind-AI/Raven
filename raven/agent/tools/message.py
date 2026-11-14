@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Awaitable, Callable
 
 from raven.contracts.tool import Tool
+from raven.permissions.turn import current_tool_call_id
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,7 @@ class _MsgTurn:
     message_id: str | None
     send_callback: Callable[[str, list[str]], Awaitable[None]] | None
     sent: bool = False
+    answered: frozenset[str] = frozenset()
 
 
 class MessageTool(Tool):
@@ -71,7 +73,7 @@ class MessageTool(Tool):
 
     def start_turn(self) -> None:
         """Reset per-turn send tracking."""
-        self._turn.set(replace(self._cur(), sent=False))
+        self._turn.set(replace(self._cur(), sent=False, answered=frozenset()))
 
     @property
     def sent_in_turn(self) -> bool:
@@ -82,6 +84,15 @@ class MessageTool(Tool):
         turn's reply.
         """
         return self._cur().sent
+
+    @property
+    def answered_calls_in_turn(self) -> frozenset[str]:
+        """The calls of this turn's same-target sends that went out.
+
+        ``sent_in_turn`` answers whether any did; this answers which, for a reader
+        that must not attribute another call's words to this turn's reply.
+        """
+        return self._cur().answered
 
     @property
     def name(self) -> str:
@@ -140,7 +151,9 @@ class MessageTool(Tool):
             if not st.send_callback:
                 return "Error: Message sending not configured"
             await st.send_callback(content, media or [])
-            self._turn.set(replace(st, sent=True))
+            call_id = current_tool_call_id()
+            answered = st.answered | {call_id} if call_id else st.answered
+            self._turn.set(replace(st, sent=True, answered=answered))
             media_info = f" with {len(media)} attachments" if media else ""
             return f"Message sent to {channel}:{chat_id}{media_info}"
         except Exception:

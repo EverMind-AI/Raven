@@ -135,7 +135,7 @@ prompts: |
   Do not edit files or contact external services.
 ```
 
-In a conversation, `load_playbook` returns this filled guidance; the caller
+In a session, `load_playbook` returns this filled guidance; the caller
 composes and submits `run_subagent_dag`. The CLI instead uses its configured
 model to compose the graph, with a limited repair attempt. Both paths use the
 ordinary DAG contract. Prompt mode is assembly guidance, read once to compose
@@ -252,6 +252,12 @@ CLI `run` waits synchronously; conversational DAG loads normally dispatch in
 the background. Missing ordinary parameters or required blanks prevent
 dispatch and return named gaps. A prompt-mode load returns guidance instead
 of dispatching by itself.
+
+Runs started through the page's `playbooks.run` RPC attribute model usage to
+the requested session, including any existing delegation owner. Resuming
+or extending a multi-round stint keeps the original session's attribution.
+This accounting lookup does not create a session: a key with no existing
+session is recorded without a delegation owner.
 
 `confirm` defaults to true on a Playbook and is passed to the graph when the
 executor dispatches it. **Without an ask channel, the current DAG implementation

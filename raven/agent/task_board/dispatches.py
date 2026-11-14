@@ -50,15 +50,28 @@ def _text(content: Any) -> str:
     return ""
 
 
-def _arguments(call: Mapping[str, Any]) -> dict[str, Any]:
-    raw = (call.get("function") or {}).get("arguments")
+def _object(raw: Any) -> dict[str, Any]:
     if isinstance(raw, Mapping):
         return dict(raw)
     try:
         parsed = json.loads(raw or "{}")
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _arguments(call: Mapping[str, Any]) -> dict[str, Any]:
+    return _object((call.get("function") or {}).get("arguments"))
+
+
+def call_target(call: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    """The tool a call reaches -- the tool it forwards to when it goes through
+    ``tool_call`` -- and that call's arguments, parsed from either wire shape."""
+    name = str((call.get("function") or {}).get("name") or "")
+    arguments = _arguments(call)
+    if name != _FORWARDER:
+        return name, arguments
+    return str(arguments.get("name") or ""), _object(arguments.get("arguments"))
 
 
 def delegated_handle(mark: Mapping[str, Any] | None) -> str | None:
@@ -82,11 +95,7 @@ def turn_dispatches(messages: Sequence[Mapping[str, Any]]) -> list[Dispatch]:
     for message in messages:
         if message.get("role") == "assistant":
             for call in message.get("tool_calls") or []:
-                name = (call.get("function") or {}).get("name") or ""
-                args = _arguments(call)
-                if name == _FORWARDER:
-                    forwarded = args.get("arguments")
-                    name, args = str(args.get("name") or ""), forwarded if isinstance(forwarded, dict) else {}
+                name, args = call_target(call)
                 if name == "spawn" or name in _DAG_TOOLS:
                     calls[str(call.get("id"))] = (name, args)
             continue

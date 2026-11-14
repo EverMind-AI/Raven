@@ -14,35 +14,37 @@
      is drawn for a light ground, so the dark theme dims the plate and keeps it
      light rather than recolouring what sits on it. */
   --mark-plate: #f7f7f7; --mark-plate-line: #f0f0f0;
-  --surface:  #f7f7f7;
-  --raised:   #f0f0f0;
-  --line:     #e7e7e7;
-  --line-soft:#f0f0f0;
-  --text:     #1f1f1f;
-  --muted:    #6b6b6b;
-  --faint:    #9d9d9d;
+  --surface:  #f8f5ec;
+  --raised:   #f1f0ec;
+  --line:     #e8e1d2;
+  --line-soft:#f0ebe0;
+  --text:     #2b2620;
+  --muted:    #6f675c;
+  --faint:    #9d9587;
   --link:     #3b6fd4;
-  --amber:    #a8801c;
-  --amber-dp: #eee4c8;
+  --amber:    #b5791c;
+  --amber-dp: #f1e3c4;
   /* The warm yellow this palette speaks in: the ring that marks a selected
      item, and the accent on the data marks. It is a token of its own because
      --amber is also the error colour and the focus ring, and those two want
      the deeper, more legible shade. */
-  --warm: #e8b317;
+  --warm: #e0a63a;
   --moss:     #3f7d2c;
   --clay:     #b4402f;
-  --gold:     #9a7016;
+  --gold:     #9a6516;
   --sky:      #2f6d9e;
 
   /* The context parts' colours, from the Raven palette's mist theme: slate and
      silver for what every request carries (the system prompt, the tools), mist
-     teal for the conversation, and bronze and gold for what this turn recalled
-     -- the memory and the skills, which are what Raven itself added. Neighbours
-     alternate in lightness, so two parts side by side never rest on hue alone. */
+     teal for the conversation, dusty blue for the files riding in it, and
+     bronze and gold for what this turn recalled -- the memory and the skills,
+     which are what Raven itself added. Neighbours alternate in lightness, so
+     two parts side by side never rest on hue alone. */
   --ctx-system: #4f5a63;
   --ctx-tools: #c4cace;
   --ctx-skills: #e8c870;
   --ctx-conversation: #8fa9ab;
+  --ctx-files: #5f7595;
   --ctx-memory: #9c7a38;
   /* The popover's one warm accent, in the palette's ink gold: the percentage
      badge and the room left. Its secondary text and model chip lean to the
@@ -64,15 +66,15 @@
      against a warm workspace reads as two applications. So the whole dark ramp
      is neutral now, which is what moves --ink, --surface, --raised, --line and
      the three text greys below as well as the names introduced here. */
-  --page:     #fafaf8;   /* the ground a module page is read on */
+  --page:     #fbf9f4;   /* the ground a module page is read on */
   /* The chat header's frost ground and the halo its controls sit on. The tint
      is deliberately weak: the transcript underneath has to stay visible as
      colour and shape, the way a title bar shows the window behind it. The halo
      is what keeps the name and the corner icons legible when a dark bubble
      passes under them, so the tint does not have to. */
-  --topbar-tint: rgba(250, 250, 248, .3);
-  --topbar-halo: rgba(255, 255, 255, .75);
-  --topbar-plate: rgba(250, 250, 248, .82);
+  --topbar-tint: rgba(253, 251, 245, .3);
+  --topbar-halo: rgba(255, 253, 248, .75);
+  --topbar-plate: rgba(253, 251, 245, .82);
   /* One height and one radius for a row of controls, and the focus glow that
      goes with the focused edge (the control standard above input[type]). */
   --ctl-h: 32px;
@@ -90,10 +92,10 @@
     radial-gradient(55% 50% at 20% 100%, rgba(244, 230, 200, .80) 0%, rgba(244, 230, 200, 0) 70%),
     radial-gradient(40% 45% at 70% 90%, rgba(239, 226, 200, .55) 0%, rgba(239, 226, 200, 0) 70%),
     linear-gradient(180deg, #f6f5f0 0%, #f1f0ea 100%);
-  --side-bg:  #ffffff;   /* the rail, one step lighter than the page */
+  --side-bg:  rgba(253, 252, 249, .84);   /* the rail: a pale pane the wash barely shows through */
   --paper:    #ffffff;   /* a card laid on the page: an answer, a sheet */
-  --hover:    #ececea;   /* a row the pointer is on */
-  --selected: #eaeae7;   /* a row that is the one open */
+  --hover:    #f1ece0;   /* a row the pointer is on */
+  --selected: #ece5d6;   /* a row that is the one open */
   /* The trajectory's sheet. The column carries the conversation's own wash
      behind it (--wash), so the trace is read on the same light the transcript
      is; the glass is what separates the sheet from the rail. */
@@ -104,17 +106,17 @@
   --traj-hover:  rgba(255, 255, 255, .52);
   --traj-rule:   rgba(31, 35, 40, .12);
   --traj-solid:  #fbfaf8;
-  --text-3:   #8a8a88;   /* a group label: quieter than muted, louder than faint */
+  --text-3:   #8a8275;   /* a group label: quieter than muted, louder than faint */
   /* The rail's own row ramp, from the design (Figma: Raven / AppSidebar): a
      label, the same label on a hovered or open row, the quiet grey of a group
      heading and an idle row action, and the two grounds a row steps through. */
-  --rail-ink:    #333333;
-  --rail-ink-on: #1a1a1a;
-  --rail-quiet:  #999999;
-  --rail-hover:  #f7f7f7;
-  --rail-on:     #f0f0f0;
-  --rail-tip:    #1a1a1a;
-  --rail-tip-ink: #ffffff;
+  --rail-ink:    #3b342a;
+  --rail-ink-on: #2b2620;
+  --rail-quiet:  #9d9587;
+  --rail-hover:  rgba(181, 121, 28, .06);
+  --rail-on:     rgba(255, 255, 253, .95);
+  --rail-tip:    #2b2620;
+  --rail-tip-ink: #fdfbf5;
   /* The settings dialog's nav, and the composer card and its bar (Figma: Raven
      / ChatComposer, SendButton). */
   --snav-bg:        #fafafa;
@@ -123,19 +125,19 @@
   --composer-bg:    rgba(255, 255, 255, .8);
   --composer-line:  #e6e6e6;
   --composer-sh:    rgba(0, 0, 0, .08);
-  --composer-ink:   #1a1a1a;
-  --composer-ph:    #908f8c;
+  --composer-ink:   #2b2620;
+  --composer-ph:    #9d9587;
   --composer-hover: #f7f7f7;
   --att-bg:         #f0f0f0;
-  --send-off:       #bdbbb8;
-  --send-off-ink:   #faf9f5;
-  --send-on:        #1a1a1a;
-  --send-on-ink:    #ffffff;
-  --ph:       #b8b8b8;   /* placeholder text in a field */
+  --send-off:       rgba(160, 150, 130, .45);
+  --send-off-ink:   #fdfbf5;
+  --send-on:        #2b2620;
+  --send-on-ink:    #fdfbf5;
+  --ph:       #bdb5a6;   /* placeholder text in a field */
   /* The one high-contrast pair on the page: the send button, and the message
      the reader wrote. Both invert in dark, which is why they are tokens and
      not literals. */
-  --black:    #111111;
+  --black:    #2b2620;
   --bubble-me:    #333333;
   --bubble-me-fg: #ffffff;
   /* The conversation's own ramp (Figma: Raven / UserMessage, AssistantMessage,
@@ -144,15 +146,15 @@
      the design's danger red, the half-pixel rule and head ground a table or a
      listing is boxed in, the two greys of a delivered file's name and size,
      and the tag a sent file wears inside the bubble. */
-  --chat-ink:       #1a1a1a;
-  --chat-quiet:     #999999;
+  --chat-ink:       #2b2620;
+  --chat-quiet:     #9d9587;
   --chat-shine:     #e6e6e6;
   --chat-danger:    #d84520;
   --chat-rule:      #e0e0e0;
   --chat-head:      #f7f7f7;
-  --chat-head-ink:  #666666;
-  --chat-file-ink:  #333333;
-  --chat-file-meta: #908f8c;
+  --chat-head-ink:  #6f675c;
+  --chat-file-ink:  #3b342a;
+  --chat-file-meta: #9d9587;
   --bubble-att:     rgba(255, 255, 255, .2);
   --bubble-att-on:  rgba(255, 255, 255, .3);
   --bubble-att-ink: #f0f0f0;
@@ -167,19 +169,55 @@
   --code-deleted:   #d84520;
   /* A card is lifted by a shadow in light and by a brighter rim in dark -- the
      same job, two drawings -- so the rule names these and never a colour. */
-  --ring:     rgba(0, 0, 0, .03);
-  --ring-2:   rgba(0, 0, 0, .05);
-  --sh-soft:  rgba(0, 0, 0, .06);
+  --ring:     rgba(60, 50, 30, .05);
+  --ring-2:   rgba(60, 50, 30, .08);
+  --sh-soft:  rgba(60, 45, 20, .07);
   --seg-on:   #ffffff;   /* the selected half of a segmented control */
   --shadow:   0 14px 34px -22px rgba(28, 27, 25, .35);
   /* Card elevation, two steps: resting and lifted. A tight contact shadow
      plus a wide low-alpha bloom -- paper raised off the desk, not a glow. */
-  --elev:     0 1px 2px rgba(28, 27, 25, .05), 0 6px 16px -10px rgba(28, 27, 25, .14);
+  --elev:     0 1px 2px rgba(60, 45, 20, .05), 0 6px 16px -10px rgba(60, 45, 20, .14);
   --elev-up:  0 2px 4px rgba(28, 27, 25, .06), 0 14px 30px -12px rgba(28, 27, 25, .22);
   /* The workspace panel shares the chat's white; this soft spill at its left
      edge is the whole boundary. Two layers: a 4% contact edge where the
      surfaces meet, and a wide low-alpha falloff that fades into the page. */
   --seam:     -1px 0 0 rgba(28, 27, 25, .05), -16px 0 32px -18px rgba(28, 27, 25, .16);
+
+  /* ---- the settings dialog: warm paper --------------------------------
+     The settings dialog is the one place a reader stops to think, so it is
+     solid paper where the page around it is glass. These tokens are its own
+     ground, its own ink and its own accent; the page shares the ink and the
+     gold, so arriving here reads as stepping from a glass room into a paper
+     one of the same house.
+
+     The light set is parchment: a warm off-white sheet, a warmer rail beside
+     it, and a single gold accent that carries every "this is on" and "this
+     is the current one" in the dialog. Rules and separators are hairlines
+     over the sheet rather than boxes around it -- a line drawn on paper, not
+     a panel mounted on a page. */
+  --set-paper:    #fdfbf5;   /* the sheet the pages are written on */
+  --set-paper-2:  #fffdf8;   /* a raised card on that sheet */
+  --set-rail:     #f8f5ec;   /* the section rail beside it */
+  --set-rail-2:   #f1eee4;   /* an icon tile in that rail */
+  --set-ink:      #2b2620;   /* what the reader reads */
+  --set-ink-2:    #3b342a;
+  --set-muted:    #6f675c;
+  --set-faint:    #9d9587;
+  --set-rule:     rgba(60, 50, 30, .10);
+  --set-rule-soft:rgba(60, 50, 30, .05);
+  --set-accent:   #b5791c;   /* the gold: one accent, used sparingly */
+  --set-accent-2: #e0a63a;   /* the same gold, lighter -- a lit switch */
+  --set-accent-wash: rgba(181, 121, 28, .09);
+  --set-glow:     rgba(252, 191, 78, .58);
+  --set-shadow:   0 30px 70px -34px rgba(60, 45, 20, .55), 0 2px 6px rgba(60, 45, 20, .08);
+  /* The rail's own lamp: a warm wash in its top corner, so the eye lands on
+     the section list first. */
+  --set-lamp:     radial-gradient(120% 45% at 0% 0%, rgba(224, 166, 58, .10), rgba(224, 166, 58, 0) 62%);
+  /* The one filled button the dialog has. In the light theme it is ink on
+     paper, the way a printed form's submit is; in the dark one it is the lit
+     amber, because in a room lit by a lamp the accent is what draws the eye. */
+  --set-go:       var(--set-ink);
+  --set-go-ink:   var(--set-paper);
 
   /* Inset of the two panel toggles from their window edge. Both sides read it,
      so the buttons stay put when the panel they control opens or closes. */
@@ -239,6 +277,25 @@
      keep literal colors on purpose (theme-preview swatches, mask gradients,
      structural color-mix) are marked literal-by-design at the rule. */
   --ink-on-accent: #fff;
+
+  /* The page is frosted glass over the wash. The rail and the desk are warm
+     panes, so the gradient reads as the room's light rather than as a picture
+     behind white boxes; what is read and typed -- the answer cards, the
+     composer, your own bubble, and every card or sheet laid on --paper, the
+     context popover among them -- stays neutral white (black in the dark),
+     because a warm pane over a warm wash reads as a yellow film over the
+     words. The ink is the settings dialog's warm one throughout.
+     --ink-on-amber is the text on an amber fill; it is dark in the dark theme,
+     where the lit amber is too light for white. */
+  --ink-on-amber: #fff;
+  --rail-edge: rgba(255, 255, 255, .6);
+  --rail-on-lift: inset 0 0 0 1px rgba(255, 255, 255, .7), 0 4px 12px -8px rgba(60, 45, 20, .25);
+  --card-glass: rgba(255, 255, 255, .8);
+  --card-glass-sh: inset 0 1px 0 rgba(255, 255, 255, .8), 0 0 0 1px rgba(0, 0, 0, .03), 0 12px 30px -24px rgba(0, 0, 0, .22);
+  --desk-glass: rgba(254, 253, 250, .86);
+  --desk-edge: rgba(255, 255, 255, .7);
+  --desk-sh: inset 0 1px 0 rgba(255, 255, 255, .7), 0 30px 70px -34px rgba(60, 45, 20, .45), 0 2px 6px rgba(60, 45, 20, .06);
+  --desk-board: rgba(240, 234, 222, .25);
   --paper: #fff;
   --stage-bg: #fff;
   --scrim-soft: #0006;
@@ -258,6 +315,10 @@
      the width state/rail.ts folds on): over the pages, under the drawers, so
      a drawer opened from the strip of page it leaves visible is drawn over it. */
   --z-rail-fold: 25;
+  /* The rail's own flyout, the More group: over the pages and under the
+     drawers, on the folded rail's own step, because both are the column
+     reaching over what it covers. */
+  --z-rail-fly: 25;
   --z-detail: 26;
   --z-rail-handle: 30;
   /* The floating desk, and a desk pane blown up to fill the window. Both sit
@@ -299,31 +360,57 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --ink:      #1d1d1d;
+    --ink:      #1a1713;
     --mark-plate: #ecebe7; --mark-plate-line: #ecebe7;
-    --surface:  #262626;
-    --raised:   #303030;
-    --line:     #333333;
-    --line-soft:#282828;
-    --text:     #e8e8e6;
-    --muted:    #afafad;
-    --faint:    #8a8a88;
+    --surface:  #211d18;
+    --raised:   #2e2d2a;
+    --line:     #2f2a23;
+    --line-soft:#25211b;
+    --text:     #f1e9da;
+    --muted:    #a2988a;
+    --faint:    #7c7367;
+
+    /* The settings dialog under a lamp: the same warm room the light set is,
+       lit from one corner. The black is a warm near-black rather than the
+       page's, so the dialog is a different room and not a dimmer one, and the
+       accent is the lit amber -- the one thing in it that glows. */
+    --set-paper:    #141210;
+    --set-paper-2:  #1e1a16;
+    --set-rail:     #171410;
+    --set-rail-2:   #241f19;
+    --set-ink:      #f1e9da;
+    --set-ink-2:    #d8cdb8;
+    --set-muted:    #a2988a;
+    --set-faint:    #7c7367;
+    --set-rule:     rgba(255, 225, 180, .09);
+    --set-rule-soft:rgba(255, 225, 180, .05);
+    --set-accent:   #e9b44c;
+    --set-accent-2: #f5c46a;
+    --set-accent-wash: rgba(233, 180, 76, .11);
+    --set-glow:     rgba(233, 180, 76, .58);
+    --set-shadow:   0 40px 90px -36px rgba(0, 0, 0, .9), 0 0 0 1px rgba(255, 200, 130, .04),
+                     0 0 90px -30px rgba(233, 180, 76, .18);
+    --set-lamp:     radial-gradient(55% 42% at 88% -6%, rgba(233, 180, 76, .16), rgba(233, 180, 76, 0) 70%);
+    --set-go:       var(--set-accent);
+    --set-go-ink:   #241b0c;
     --link:     #86abe4;
-    --amber:    #e8cf49;
-    --amber-dp: #6f6114;
-    --warm: #f5c518;
+    --amber:    #e9b44c;
+    --amber-dp: #c99a3c;
+    --warm: #f5c46a;
     --moss:     #7fbf6a;
     --clay:     #d96a5b;
-    --gold:     #e0a030;
+    --gold:     #e9b44c;
     --sky:      #6fa8d6;
 
     /* The context parts' colours in the dark: the same roles with the ladder
        turned over -- the overhead lightest, the conversation a calm mid teal,
-       and the bright gold on the memory, where it lands on the dark card. */
+       the files a lighter blue beside it, and the bright gold on the memory,
+       where it lands on the dark card. */
     --ctx-system: #cdd6dc;
     --ctx-tools: #8796a1;
     --ctx-skills: #9c7a38;
     --ctx-conversation: #5e7678;
+    --ctx-files: #8fa8c9;
     --ctx-memory: #e8c870;
     --ctx-ink: #e8c870;
     --ctx-ink-bg: #4a4538;
@@ -331,15 +418,21 @@
     --ctx-chip: #2c3136;
 
     /* The dark counterparts of the light block's surfaces -- see there. */
-    --page:     #141414;
-    --topbar-tint: rgba(20, 20, 20, .3);
+    --page:     #13110e;
+    --topbar-tint: rgba(20, 17, 13, .3);
     --topbar-halo: rgba(0, 0, 0, .65);
-    --topbar-plate: rgba(20, 20, 20, .8);
-    --wash:     linear-gradient(180deg, #151515, #121212);
-    --side-bg:  #333333;
+    --topbar-plate: rgba(30, 26, 21, .66);
+    /* The light theme's wash, dimmed: a cold blue in the top-right and the
+       lamp's amber in the bottom-left, so the glass has a light to frost. */
+    --wash:
+      radial-gradient(60% 55% at 85% 0%, rgba(62, 84, 122, .42) 0%, rgba(62, 84, 122, 0) 70%),
+      radial-gradient(55% 50% at 20% 100%, rgba(126, 88, 30, .34) 0%, rgba(126, 88, 30, 0) 70%),
+      radial-gradient(40% 45% at 70% 90%, rgba(100, 72, 32, .22) 0%, rgba(100, 72, 32, 0) 70%),
+      linear-gradient(180deg, #16130f 0%, #110f0c 100%);
+    --side-bg:  rgba(22, 19, 15, .6);
     --paper:    #202020;
-    --hover:    #242424;
-    --selected: #2e2e2e;
+    --hover:    #24201a;
+    --selected: #2b261f;
     --traj-glass:  rgba(34, 34, 34, .58);
     --traj-edge:   rgba(255, 255, 255, .07);
     --traj-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 24px 60px -38px #000;
@@ -347,12 +440,12 @@
     --traj-hover:  rgba(255, 255, 255, .05);
     --traj-rule:   rgba(255, 255, 255, .10);
     --traj-solid:  #1c1c1c;
-    --text-3:   #9b9b9b;
-    --rail-ink:    #f7f7f7;
-    --rail-ink-on: #ffffff;
-    --rail-quiet:  #999999;
-    --rail-hover:  #474747;
-    --rail-on:     #474747;
+    --text-3:   #8f8578;
+    --rail-ink:    #e6dccb;
+    --rail-ink-on: #fbf5ea;
+    --rail-quiet:  #8f8578;
+    --rail-hover:  rgba(255, 225, 180, .05);
+    --rail-on:     rgba(255, 235, 200, .08);
     --rail-tip:    #1a1a1a;
     --rail-tip-ink: #ffffff;
     --snav-bg:        #262626;
@@ -361,27 +454,27 @@
     --composer-bg:    rgba(32, 32, 32, .85);
     --composer-line:  #333333;
     --composer-sh:    rgba(0, 0, 0, .45);
-    --composer-ink:   #e8e8e6;
-    --composer-ph:    #7a7a78;
+    --composer-ink:   #f1e9da;
+    --composer-ph:    #7c7367;
     --composer-hover: #2e2e2e;
     --att-bg:         #303030;
-    --send-off:       #4a4a4a;
-    --send-off-ink:   #8a8a88;
-    --send-on:        #e8e8e6;
-    --send-on-ink:    #1a1a1a;
-    --ph:       #6e6e6e;
-    --black:    #e8e8e6;
+    --send-off:       #38322a;
+    --send-off-ink:   #7c7367;
+    --send-on:        #e9b44c;
+    --send-on-ink:    #241b0c;
+    --ph:       #6f675c;
+    --black:    #f1e9da;
     --bubble-me:    #343434;
     --bubble-me-fg: #ededeb;
-    --chat-ink:       #e8e8e6;
-    --chat-quiet:     #8a8a88;
+    --chat-ink:       #f1e9da;
+    --chat-quiet:     #8f8578;
     --chat-shine:     #d6d6d4;
     --chat-danger:    #e0775e;
     --chat-rule:      #333333;
     --chat-head:      #262626;
-    --chat-head-ink:  #afafad;
-    --chat-file-ink:  #e8e8e6;
-    --chat-file-meta: #8a8a88;
+    --chat-head-ink:  #a2988a;
+    --chat-file-ink:  #f1e9da;
+    --chat-file-meta: #8f8578;
     --bubble-att:     rgba(255, 255, 255, .12);
     --bubble-att-on:  rgba(255, 255, 255, .2);
     --bubble-att-ink: #ededeb;
@@ -391,8 +484,8 @@
     --code-tag:       #7fb0f0;
     --code-comment:   #7a7a78;
     --code-deleted:   #e0775e;
-    --ring:     rgba(255, 255, 255, .07);
-    --ring-2:   rgba(255, 255, 255, .14);
+    --ring:     rgba(255, 225, 180, .07);
+    --ring-2:   rgba(255, 225, 180, .12);
     --sh-soft:  rgba(0, 0, 0, .5);
     --seg-on:   #333333;
     --shadow:   0 18px 40px -24px #000c;
@@ -400,6 +493,17 @@
     --elev-up:  0 2px 5px rgba(0, 0, 0, .5), 0 16px 34px -12px rgba(0, 0, 0, .65);
     --seam:     -1px 0 0 rgba(0, 0, 0, .4), -16px 0 32px -16px rgba(0, 0, 0, .5);
     --scrim-detail: rgba(6, 6, 8, .55);
+
+    /* The page's glass, under the lamp: see the base block. */
+    --ink-on-amber: #241b0c;
+    --rail-edge: rgba(255, 225, 180, .06);
+    --rail-on-lift: inset 0 0 0 1px rgba(255, 225, 180, .07);
+    --card-glass: rgba(29, 29, 29, .82);
+    --card-glass-sh: inset 0 1px 0 rgba(255, 255, 255, .04), 0 0 0 1px rgba(255, 255, 255, .07), 0 16px 34px -24px rgba(0, 0, 0, .7);
+    --desk-glass: rgba(28, 24, 19, .74);
+    --desk-edge: rgba(255, 225, 180, .09);
+    --desk-sh: inset 0 1px 0 rgba(255, 235, 200, .05), 0 40px 90px -36px rgba(0, 0, 0, .9), 0 0 90px -30px rgba(233, 180, 76, .12);
+    --desk-board: rgba(44, 39, 32, .45);
   }
 }
 
@@ -407,93 +511,168 @@
 :root[data-theme="dark"] {
   --stage-bg: #0e0e11;
   --mark-plate: #ecebe7; --mark-plate-line: #ecebe7;
-  --ink: #1d1d1d; --surface: #262626; --raised: #303030; --line: #333333;
-  --line-soft: #282828; --text: #e8e8e6; --muted: #afafad; --faint: #8a8a88;
-  --link: #86abe4; --amber: #e8cf49; --amber-dp: #6f6114; --warm: #f5c518; --moss: #7fbf6a;
-  --clay: #d96a5b; --gold: #e0a030; --sky: #6fa8d6; --shadow: 0 18px 40px -24px #000c;
+  --ink: #1a1713; --surface: #211d18; --raised: #2e2d2a; --line: #2f2a23;
+  --line-soft: #25211b; --text: #f1e9da; --muted: #a2988a; --faint: #7c7367;
+  --link: #86abe4; --amber: #e9b44c; --amber-dp: #c99a3c; --warm: #f5c46a; --moss: #7fbf6a;
+  --clay: #d96a5b; --gold: #e9b44c; --sky: #6fa8d6; --shadow: 0 18px 40px -24px #000c;
+
+  /* The settings dialog, same as the media query's: an explicit dark theme
+     has to carry its own copy, because this block outranks that one -- and
+     because a reader who picked dark on a light system never matches that
+     one at all. */
+  --set-paper:    #141210;
+  --set-paper-2:  #1e1a16;
+  --set-rail:     #171410;
+  --set-rail-2:   #241f19;
+  --set-ink:      #f1e9da;
+  --set-ink-2:    #d8cdb8;
+  --set-muted:    #a2988a;
+  --set-faint:    #7c7367;
+  --set-rule:     rgba(255, 225, 180, .09);
+  --set-rule-soft:rgba(255, 225, 180, .05);
+  --set-accent:   #e9b44c;
+  --set-accent-2: #f5c46a;
+  --set-accent-wash: rgba(233, 180, 76, .11);
+  --set-glow:     rgba(233, 180, 76, .58);
+  --set-shadow:   0 40px 90px -36px rgba(0, 0, 0, .9), 0 0 0 1px rgba(255, 200, 130, .04),
+                   0 0 90px -30px rgba(233, 180, 76, .18);
+  --set-lamp:     radial-gradient(55% 42% at 88% -6%, rgba(233, 180, 76, .16), rgba(233, 180, 76, 0) 70%);
+  --set-go:       var(--set-accent);
+  --set-go-ink:   #241b0c;
 
   /* The context parts' colours in the dark -- see the media query above. */
   --ctx-system: #cdd6dc;
   --ctx-tools: #8796a1;
   --ctx-skills: #9c7a38;
   --ctx-conversation: #5e7678;
+  --ctx-files: #8fa8c9;
   --ctx-memory: #e8c870;
   --ctx-ink: #e8c870;
   --ctx-ink-bg: #4a4538;
   --ctx-muted: #cdd6dc;
   --ctx-chip: #2c3136;
-  --page: #141414; --wash: linear-gradient(180deg, #151515, #121212);
-  --topbar-tint: rgba(20, 20, 20, .3); --topbar-halo: rgba(0, 0, 0, .65); --topbar-plate: rgba(20, 20, 20, .8);
-  --side-bg: #333333; --paper: #202020; --hover: #242424;
-  --selected: #2e2e2e; --text-3: #9b9b9b; --ph: #6e6e6e; --black: #e8e8e6;
+  --page: #13110e;
+  --wash:
+    radial-gradient(60% 55% at 85% 0%, rgba(62, 84, 122, .42) 0%, rgba(62, 84, 122, 0) 70%),
+    radial-gradient(55% 50% at 20% 100%, rgba(126, 88, 30, .34) 0%, rgba(126, 88, 30, 0) 70%),
+    radial-gradient(40% 45% at 70% 90%, rgba(100, 72, 32, .22) 0%, rgba(100, 72, 32, 0) 70%),
+    linear-gradient(180deg, #16130f 0%, #110f0c 100%);
+  --topbar-tint: rgba(20, 17, 13, .3); --topbar-halo: rgba(0, 0, 0, .65); --topbar-plate: rgba(30, 26, 21, .66);
+  --side-bg: rgba(22, 19, 15, .6); --paper: #202020; --hover: #24201a;
+  --selected: #2b261f; --text-3: #8f8578; --ph: #6f675c; --black: #f1e9da;
   --traj-glass: rgba(34, 34, 34, .58); --traj-edge: rgba(255, 255, 255, .07);
   --traj-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 24px 60px -38px #000;
   --traj-line: rgba(255, 255, 255, .08);
   --traj-hover: rgba(255, 255, 255, .05);
   --traj-rule: rgba(255, 255, 255, .10); --traj-solid: #1c1c1c;
-  --rail-ink: #f7f7f7; --rail-ink-on: #ffffff; --rail-quiet: #999999;
-  --rail-hover: #474747; --rail-on: #474747; --rail-tip: #1a1a1a; --rail-tip-ink: #ffffff;
+  --rail-ink: #e6dccb; --rail-ink-on: #fbf5ea; --rail-quiet: #8f8578;
+  --rail-hover: rgba(255, 225, 180, .05); --rail-on: rgba(255, 235, 200, .08); --rail-tip: #1a1a1a; --rail-tip-ink: #ffffff;
   --snav-bg: #262626; --settings-nav-on: #333333; --settings-nav-ico: #999999;
   --composer-bg: rgba(32, 32, 32, .85); --composer-line: #333333; --composer-sh: rgba(0, 0, 0, .45);
-  --composer-ink: #e8e8e6; --composer-ph: #7a7a78; --composer-hover: #2e2e2e; --att-bg: #303030;
-  --send-off: #4a4a4a; --send-off-ink: #8a8a88; --send-on: #e8e8e6; --send-on-ink: #1a1a1a;
+  --composer-ink: #f1e9da; --composer-ph: #7c7367; --composer-hover: #2e2e2e; --att-bg: #303030;
+  --send-off: #38322a; --send-off-ink: #7c7367; --send-on: #e9b44c; --send-on-ink: #241b0c;
   --bubble-me: #343434; --bubble-me-fg: #ededeb;
-  --chat-ink: #e8e8e6; --chat-quiet: #8a8a88; --chat-shine: #d6d6d4; --chat-danger: #e0775e;
-  --chat-rule: #333333; --chat-head: #262626; --chat-head-ink: #afafad;
-  --chat-file-ink: #e8e8e6; --chat-file-meta: #8a8a88;
+  --chat-ink: #f1e9da; --chat-quiet: #8f8578; --chat-shine: #d6d6d4; --chat-danger: #e0775e;
+  --chat-rule: #333333; --chat-head: #262626; --chat-head-ink: #a2988a;
+  --chat-file-ink: #f1e9da; --chat-file-meta: #8f8578;
   --bubble-att: rgba(255, 255, 255, .12); --bubble-att-on: rgba(255, 255, 255, .2); --bubble-att-ink: #ededeb;
   --code-keyword: #d68fe0; --code-property: #e2b265; --code-string: #8fcf8a; --code-tag: #7fb0f0;
   --code-comment: #7a7a78; --code-deleted: #e0775e;
-  --ring: rgba(255, 255, 255, .07); --ring-2: rgba(255, 255, 255, .14);
+  --ring: rgba(255, 225, 180, .07); --ring-2: rgba(255, 225, 180, .12);
   --sh-soft: rgba(0, 0, 0, .5); --seg-on: #333333;
   --elev: 0 1px 2px rgba(0, 0, 0, .45), 0 6px 16px -8px rgba(0, 0, 0, .5);
   --elev-up: 0 2px 5px rgba(0, 0, 0, .5), 0 16px 34px -12px rgba(0, 0, 0, .65);
   --seam: -1px 0 0 rgba(0, 0, 0, .4), -16px 0 32px -16px rgba(0, 0, 0, .5);
   --scrim-detail: rgba(6, 6, 8, .55);
+
+  /* The page's glass, same as the media query's. */
+  --ink-on-amber: #241b0c;
+  --rail-edge: rgba(255, 225, 180, .06);
+  --rail-on-lift: inset 0 0 0 1px rgba(255, 225, 180, .07);
+  --card-glass: rgba(29, 29, 29, .82);
+  --card-glass-sh: inset 0 1px 0 rgba(255, 255, 255, .04), 0 0 0 1px rgba(255, 255, 255, .07), 0 16px 34px -24px rgba(0, 0, 0, .7);
+  --desk-glass: rgba(28, 24, 19, .74);
+  --desk-edge: rgba(255, 225, 180, .09);
+  --desk-sh: inset 0 1px 0 rgba(255, 235, 200, .05), 0 40px 90px -36px rgba(0, 0, 0, .9), 0 0 90px -30px rgba(233, 180, 76, .12);
+  --desk-board: rgba(44, 39, 32, .45);
 }
 :root[data-theme="light"] {
   --mark-plate: #f7f7f7; --mark-plate-line: #f0f0f0;
   --bdg-ink: #faf7ee;
-  --ink: #ffffff; --surface: #f7f7f7; --raised: #f0f0f0; --line: #e7e7e7;
-  --line-soft: #f0f0f0; --text: #1f1f1f; --muted: #6b6b6b; --faint: #9d9d9d;
-  --link: #3b6fd4; --amber: #a8801c; --amber-dp: #eee4c8; --warm: #e8b317; --moss: #3f7d2c;
-  --clay: #b4402f; --gold: #9a7016; --sky: #2f6d9e;
-  --page: #fafaf8; --side-bg: #ffffff; --paper: #ffffff; --hover: #ececea;
+  --ink: #ffffff; --surface: #f8f5ec; --raised: #f1f0ec; --line: #e8e1d2;
+  --line-soft: #f0ebe0; --text: #2b2620; --muted: #6f675c; --faint: #9d9587;
+  --link: #3b6fd4; --amber: #b5791c; --amber-dp: #f1e3c4; --warm: #e0a63a; --moss: #3f7d2c;
+  --clay: #b4402f; --gold: #9a6516; --sky: #2f6d9e;
+  --page: #fbf9f4; --side-bg: rgba(253, 252, 249, .84); --paper: #ffffff; --hover: #f1ece0;
   --traj-glass: rgba(255, 255, 255, .85); --traj-edge: rgba(255, 255, 255, .72);
   --traj-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), 0 24px 60px -38px rgba(31, 35, 40, .38);
   --traj-line: rgba(31, 35, 40, .09);
   --traj-hover: rgba(255, 255, 255, .52);
   --traj-rule: rgba(31, 35, 40, .12); --traj-solid: #fbfaf8;
-  --topbar-tint: rgba(250, 250, 248, .3); --topbar-halo: rgba(255, 255, 255, .75); --topbar-plate: rgba(250, 250, 248, .82);
+  --topbar-tint: rgba(253, 251, 245, .3); --topbar-halo: rgba(255, 253, 248, .75); --topbar-plate: rgba(253, 251, 245, .82);
   --wash:
     radial-gradient(60% 55% at 85% 0%, rgba(195, 212, 237, .62) 0%, rgba(195, 212, 237, 0) 70%),
     radial-gradient(55% 50% at 20% 100%, rgba(244, 230, 200, .80) 0%, rgba(244, 230, 200, 0) 70%),
     radial-gradient(40% 45% at 70% 90%, rgba(239, 226, 200, .55) 0%, rgba(239, 226, 200, 0) 70%),
     linear-gradient(180deg, #f6f5f0 0%, #f1f0ea 100%);
-  --selected: #eaeae7; --text-3: #8a8a88; --ph: #b8b8b8; --black: #111111;
-  --rail-ink: #333333; --rail-ink-on: #1a1a1a; --rail-quiet: #999999;
-  --rail-hover: #f7f7f7; --rail-on: #f0f0f0; --rail-tip: #1a1a1a; --rail-tip-ink: #ffffff;
+  --selected: #ece5d6; --text-3: #8a8275; --ph: #bdb5a6; --black: #2b2620;
+  --rail-ink: #3b342a; --rail-ink-on: #2b2620; --rail-quiet: #9d9587;
+  --rail-hover: rgba(181, 121, 28, .06); --rail-on: rgba(255, 255, 253, .95); --rail-tip: #2b2620; --rail-tip-ink: #fdfbf5;
   --snav-bg: #fafafa; --settings-nav-on: #f0f0f0; --settings-nav-ico: #666666;
+  /* The settings dialog, same as the base block's: an explicit light theme
+     has to carry its own copy, because this block outranks the media query's
+     dark one -- a reader who picked light on a dark system still gets paper. */
+  --set-paper:    #fdfbf5;
+  --set-paper-2:  #fffdf8;
+  --set-rail:     #f8f5ec;
+  --set-rail-2:   #f1eee4;
+  --set-ink:      #2b2620;
+  --set-ink-2:    #3b342a;
+  --set-muted:    #6f675c;
+  --set-faint:    #9d9587;
+  --set-rule:     rgba(60, 50, 30, .10);
+  --set-rule-soft:rgba(60, 50, 30, .05);
+  --set-accent:   #b5791c;
+  --set-accent-2: #e0a63a;
+  --set-accent-wash: rgba(181, 121, 28, .09);
+  --set-glow:     rgba(252, 191, 78, .58);
+  --set-shadow:   0 30px 70px -34px rgba(60, 45, 20, .55), 0 2px 6px rgba(60, 45, 20, .08);
+  --set-lamp:     radial-gradient(120% 45% at 0% 0%, rgba(224, 166, 58, .10), rgba(224, 166, 58, 0) 62%);
+  /* The one filled button the dialog has. In the light theme it is ink on
+     paper, the way a printed form's submit is; in the dark one it is the lit
+     amber, because in a room lit by a lamp the accent is what draws the eye. */
+  --set-go:       var(--set-ink);
+  --set-go-ink:   var(--set-paper);
   --composer-bg: rgba(255, 255, 255, .8); --composer-line: #e6e6e6; --composer-sh: rgba(0, 0, 0, .08);
-  --composer-ink: #1a1a1a; --composer-ph: #908f8c; --composer-hover: #f7f7f7; --att-bg: #f0f0f0;
-  --send-off: #bdbbb8; --send-off-ink: #faf9f5; --send-on: #1a1a1a; --send-on-ink: #ffffff;
+  --composer-ink: #2b2620; --composer-ph: #9d9587; --composer-hover: #f7f7f7; --att-bg: #f0f0f0;
+  --send-off: rgba(160, 150, 130, .45); --send-off-ink: #fdfbf5; --send-on: #2b2620; --send-on-ink: #fdfbf5;
   --bubble-me: #333333; --bubble-me-fg: #ffffff;
-  --chat-ink: #1a1a1a; --chat-quiet: #999999; --chat-shine: #e6e6e6; --chat-danger: #d84520;
-  --chat-rule: #e0e0e0; --chat-head: #f7f7f7; --chat-head-ink: #666666;
-  --chat-file-ink: #333333; --chat-file-meta: #908f8c;
+  --chat-ink: #2b2620; --chat-quiet: #9d9587; --chat-shine: #e6e6e6; --chat-danger: #d84520;
+  --chat-rule: #e0e0e0; --chat-head: #f7f7f7; --chat-head-ink: #6f675c;
+  --chat-file-ink: #3b342a; --chat-file-meta: #9d9587;
   --bubble-att: rgba(255, 255, 255, .2); --bubble-att-on: rgba(255, 255, 255, .3); --bubble-att-ink: #f0f0f0;
   --code-keyword: #94129d; --code-property: #b8812c; --code-string: #488c4b; --code-tag: #1b6ed5;
   --code-comment: #8a8a88; --code-deleted: #d84520;
-  --ring: rgba(0, 0, 0, .03); --ring-2: rgba(0, 0, 0, .05);
-  --sh-soft: rgba(0, 0, 0, .06); --seg-on: #ffffff;
+  --ring: rgba(60, 50, 30, .05); --ring-2: rgba(60, 50, 30, .08);
+  --sh-soft: rgba(60, 45, 20, .07); --seg-on: #ffffff;
   --shadow: 0 14px 34px -22px rgba(26,26,26,.35);
-  --elev: 0 1px 2px rgba(28, 27, 25, .05), 0 6px 16px -10px rgba(28, 27, 25, .14);
+  --elev: 0 1px 2px rgba(60, 45, 20, .05), 0 6px 16px -10px rgba(60, 45, 20, .14);
   --elev-up: 0 2px 4px rgba(28, 27, 25, .06), 0 14px 30px -12px rgba(28, 27, 25, .22);
   --seam: -1px 0 0 rgba(28, 27, 25, .05), -16px 0 32px -18px rgba(28, 27, 25, .16);
   --scrim-detail: rgba(26, 24, 20, .4);
   --ctx-system: #4f5a63; --ctx-tools: #c4cace; --ctx-skills: #e8c870;
-  --ctx-conversation: #8fa9ab; --ctx-memory: #9c7a38;
+  --ctx-conversation: #8fa9ab; --ctx-files: #5f7595; --ctx-memory: #9c7a38;
   --ctx-ink: #6c551e; --ctx-ink-bg: #e8dfb0; --ctx-muted: #4f5a63; --ctx-chip: #eef1f3;
+  /* The page's glass, same as the base block's. */
+  --ink-on-amber: #fff;
+  --rail-edge: rgba(255, 255, 255, .6);
+  --rail-on-lift: inset 0 0 0 1px rgba(255, 255, 255, .7), 0 4px 12px -8px rgba(60, 45, 20, .25);
+  --card-glass: rgba(255, 255, 255, .8);
+  --card-glass-sh: inset 0 1px 0 rgba(255, 255, 255, .8), 0 0 0 1px rgba(0, 0, 0, .03), 0 12px 30px -24px rgba(0, 0, 0, .22);
+  --desk-glass: rgba(254, 253, 250, .86);
+  --desk-edge: rgba(255, 255, 255, .7);
+  --desk-sh: inset 0 1px 0 rgba(255, 255, 255, .7), 0 30px 70px -34px rgba(60, 45, 20, .45), 0 2px 6px rgba(60, 45, 20, .06);
+  --desk-board: rgba(240, 234, 222, .25);
 }
 
 * { box-sizing: border-box; }
@@ -539,6 +718,10 @@ body {
      two-track grid would put the main pane in the second track beside an
      empty first one, which is the squeeze this block is for. */
   :root .app { grid-template-columns: 1fr; }
+  /* The main pane keeps the whole window here, standing or collapsed: the rail
+     is an overlay out of the grid's flow either way, so there is no track for
+     it to give back. */
+  :root .app[data-rail="off"] .main { width: 100%; margin-left: 0; }
   .app .rail {
     position: fixed; top: 0; bottom: 0; left: 0; width: min(var(--rail), 86vw);
     z-index: var(--z-rail-fold); box-shadow: var(--shadow);
@@ -594,22 +777,34 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* Measure the viewport directly instead of inheriting a 100% chain: any link
    in that chain resolving to auto leaves the shell short and the page ends in
    a band of empty white. dvh also tracks mobile browser chrome. */
-.app { display: grid; grid-template-columns: var(--rail) 1fr; height: 100vh; height: 100dvh; }
+/* The wash is the window's ground, under the rail as well as the content pane:
+   the rail is a pane of glass over it, so the gradient runs edge to edge. */
+.app { display: grid; grid-template-columns: var(--rail) 1fr; height: 100vh; height: 100dvh;
+  background: var(--wash); }
 
 /* ── rail ──────────────────────────────────────────────────────────── */
-/* No rule at the seam: the rail's grey against the chat's white is the whole
-   boundary, the way the reference renderer does it. The grip hover keeps the
-   seam findable. */
-/* The rail is the lightest surface on the page, not a grey panel beside it:
-   --side-bg sits a step above --page, and the seam between them is a hairline
-   rather than a change of shade. Horizontal padding stays 0 -- the rows inset
-   themselves, and the header toggle has to keep the exact --edge offset its
-   collapsed twin is fixed at (see #railShow). */
+/* The rail is a pale pane over the wash, not a grey panel beside it: --side-bg
+   is nearly opaque, so the gradient only warms it, and the seam is a hairline
+   of light rather than a change of shade; the grip hover keeps that seam
+   findable. It carries no blur -- what is behind
+   it is the wash alone, a gradient a blur would leave unchanged. Horizontal
+   padding stays 0 -- the rows inset themselves, and the header toggle has to
+   keep the exact --edge offset its collapsed twin is fixed at (see #railShow). */
 .rail {
   background: var(--side-bg);
-  border-right: 1px solid var(--line-soft);
+  border-right: 1px solid var(--rail-edge);
   padding: 0 4px;
   display: flex; flex-direction: column; min-height: 0; position: relative;
+  /* The column keeps the width the drag gave it while the content takes its
+     place back, so the collapse is a slide and not a squash: the box keeps
+     its width and leaves by the window's edge. */
+  width: var(--rail);
+  /* The slide is a layout move and not a transform, because the content's
+     width changes on the same main-thread pass and a transform would run
+     ahead of it on the compositor: the column's edge would leave the
+     content's edge behind by however long the transcript's relayout takes.
+     Both on one thread, the two edges stay together. */
+  transition: margin-left .24s ease, visibility .24s;
 }
 
 /* Resize grip: a 6px target straddling the seam, invisible until the pointer is
@@ -659,7 +854,18 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    Skills / Plugins / Memory painted over the way out and left no way to reach
    another module at all. It keeps the exact spot its twin in the rail occupies,
    so the icon never moves under the pointer that just clicked it. */
-#railShow { position: fixed; left: var(--edge); top: 26px; transform: translateY(-50%); z-index: var(--z-rail-handle); }
+#railShow { position: fixed; left: var(--edge); top: 26px; transform: translateY(-50%); z-index: var(--z-rail-handle);
+  /* The twin arrives with the column instead of popping into the corner the
+     column has already left, and leaves the same way. `hidden` is
+     state/rail.ts's; what the stylesheet does with it is the motion, so the
+     button stays on the page while it fades -- which is what `display` in the
+     transition list and `allow-discrete` are for. */
+  transition: opacity .24s ease, display .24s;
+  transition-behavior: allow-discrete; }
+#railShow[hidden] { opacity: 0; pointer-events: none; }
+/* The fade the twin comes in on: a button that was never rendered has no
+   "before" to fade from, so the style it starts from is named here. */
+@starting-style { #railShow { opacity: 0; } }
 :root[data-shell="1"] #railShow { left: var(--tl-pad, 78px); top: calc(var(--tl-row, 38px) / 2); }
 :root[data-shell="1"][data-rail="off"] .top { padding-left: calc(var(--tl-pad, 78px) + 35px); }
 /* Desktop shell hides the OS title bar, so this row shares the traffic-light
@@ -940,8 +1146,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    inset ridge catches light along the top edge, and the three stacked
    shadows give it a near, mid and far penumbra. A flat grey slab with one
    blob shadow is exactly the look this replaces -- panel-specific blocks
-   below keep geometry only, never their own background. */
-.menu, .pop, .mpick, .csheet {
+   below keep geometry only, never their own background. The two cards that
+   are read rather than glanced at are the exception: the context table and
+   the permission list mount solid paper of their own (#ctxPop, #permPop). */
+.menu, .pop, .mpick, .csheet, .chrome-navfly {
   background: linear-gradient(
     color-mix(in oklab, var(--ink) 86%, transparent),
     color-mix(in oklab, var(--ink) 76%, transparent));
@@ -953,46 +1161,48 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
     0 24px 56px -22px rgba(0, 0, 0, .3);
 }
 
-/* The More group opens in place: its three rows are rail rows, indented one
-   step under the button that revealed them, so the group reads as part of the
-   column it belongs to rather than as a floating panel beside it. */
-/* The group unfolds into the list rather than beside it: its rows are .navi
-   rows like the four above them -- same indent, same glyph slot, same lift when
-   current -- so opening it lengthens one list instead of revealing a second,
-   smaller one. Height is what animates; visibility is what keeps the folded
-   rows out of the tab order, and it holds `visible` for the length of the
-   close so the rows do not vanish before they have finished collapsing. */
-/* No extra air and no indent: the fold row keeps the exact rhythm and left
-   edge of the rows above it. One list, one grid -- being quieter is the only
-   thing that sets it apart. */
-.moresub {
-  overflow: hidden; max-height: 0; visibility: hidden;
-  transition: max-height .18s ease, visibility .18s;
+/* The More group: the row that opens it, and the popover it opens.
+   The popover opens beside the column rather than under the row: the group is
+   not part of the list the strip is, and a second list under one row reads as a
+   fold rather than as a group with a door. It hangs off the row's own wrapper,
+   so its top edge is that row's top edge and nothing has to measure it. */
+.chrome-navfly-anch { position: relative; }
+/* 15px past the row: the nav's own right padding, the rail's padding and its
+   border, and the space the grip straddles the seam in -- a popover that covers
+   the grip leaves the reader half a target. */
+.chrome-navfly {
+  position: absolute; left: calc(100% + 15px); top: 0; z-index: var(--z-rail-fly);
+  width: 232px; padding: 6px; border-radius: 12px; display: none;
 }
-.moresub[data-open="true"] { max-height: 120px; visibility: visible; }
-.moresub .navi svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; }
-.moresub .navi .nm { flex: 1; min-width: 0; }
-/* The fold itself: one step quieter than a destination -- between the rows'
-   grey and the timestamps' -- and no smaller. The chevron keeps the 15px box
-   the sibling glyphs sit in (its path is drawn lighter inside), because
-   shrinking the box shifts the label off the shared text edge; alignment is
-   the row's, quietness is the ink's. Hover restated: the compound selector
-   outweighs the shared .navi:hover rule. */
-.rail-nav .navi.more { color: color-mix(in oklab, var(--muted) 55%, var(--faint)); }
-.rail-nav .navi.more:hover { color: var(--text); }
-.navi.more .chev { transition: transform .14s ease; }
-.navi.more[aria-expanded="true"] .chev { transform: rotate(180deg); }
-.navi.more .l-less, .navi.more[aria-expanded="true"] .l-more { display: none; }
-.navi.more[aria-expanded="true"] .l-less { display: inline; }
-@media (prefers-reduced-motion: reduce) {
-  .moresub, .navi.more .chev { transition: none; }
+.chrome-navfly[data-open="true"] { display: block; animation: paneInL .16s ease both; }
+/* The rows in the popover are the strip's rows, a little taller and a little
+   further apart: a popover is read apart from the column that raised it, and
+   the glyph slot and the label are the same as every other row in the rail. */
+.chrome-navfly .navi { height: 40px; padding: 0 10px; gap: 10px; }
+.chrome-navfly .navi svg { width: 18px; height: 18px; }
+/* The row that opened the popover stays lit while it stands, the way a tab
+   does over the sheet it opened. */
+.rail-nav .navi.chrome-more[aria-expanded="true"] { background: var(--rail-hover); color: var(--rail-ink-on); }
+/* Under the fold the rail lies over the page and there is no room outside it
+   for a popover to open into, so the group opens in place instead: the popover
+   becomes a card under its own row, in the column's own width. */
+@media (max-width: 639px) {
+  .chrome-navfly {
+    position: static; width: auto; margin-top: 4px;
+    animation: up .16s ease both;
+  }
 }
 
-/* Collapsed rail: ONE track, not `0 1fr`. A display:none grid item leaves the
-   grid entirely, so with two tracks the main pane fell into the 0px one and
-   the whole right side rendered zero-wide. */
-.app[data-rail="off"] { grid-template-columns: 1fr; }
-.app[data-rail="off"] .rail { display: none; }
+/* Collapsed rail: the column slides out of the window and the content takes
+   its place back. The grid keeps its two tracks -- a rail that left the grid
+   (display:none) would drop the main pane into the empty track and the whole
+   right side would render zero-wide -- so the main pane grows out of the
+   rail's track as the column leaves it, and the two move at one rate: the
+   column's edge rides the content's edge. `visibility` takes the column out
+   of the tab order on the way, since a rail that is only off screen is still
+   a rail the keyboard can walk into. */
+.app[data-rail="off"] .main { width: calc(100% + var(--rail)); margin-left: calc(-1 * var(--rail)); }
+.app[data-rail="off"] .rail { visibility: hidden; margin-left: calc(-1 * var(--rail)); }
 /* One row shape for the whole rail -- the new-task action, the module links and
    every session line -- so the column reads as one list instead of three. */
 .navi, .sess {
@@ -1008,24 +1218,23 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    in the strip, so it takes the accent rather than the row's quiet ink. */
 .chrome-nav-badge {
   margin-left: auto; min-width: 18px; padding: 0 6px; border-radius: 999px;
-  background: var(--amber); color: var(--ink-on-accent);
+  background: var(--amber); color: var(--ink-on-amber);
   font-size: 11px; font-weight: 600; line-height: 17px; text-align: center;
   font-variant-numeric: tabular-nums;
 }
 .navi:hover, .sess:hover { background: var(--rail-hover); color: var(--rail-ink-on); }
-/* Selected and hovered are the same move at two depths -- one flat step of
-   ground, --hover then --selected -- and the weight of the label carries the
-   rest. The lift this row used to have (a ring plus a shadow, and an amber
-   glyph) was a third treatment on a surface that now has only two, and on a
-   white rail the ring had nothing left to separate the row from. */
+/* The current row is a sheet laid on the rail with a gold edge, the same mark
+   the settings dialog gives its current section: on a rail this pale a step of
+   ground alone is too faint to find, so the edge and a soft lift carry it. */
 .navi[aria-current="true"], .sess[aria-current="true"] {
   background: var(--rail-on); color: var(--rail-ink-on); font-weight: 500;
+  box-shadow: inset 3px 0 0 var(--amber), var(--rail-on-lift);
 }
 .navi[aria-current="true"]:hover, .sess[aria-current="true"]:hover { background: var(--rail-on); }
 /* A module page covers the chat, so the page is where you are; the session
    behind it keeps a readable label but drops the lift rather than leaving two
    rows looking selected at once. */
-.app[data-page="on"] .sess[aria-current="true"] { background: none; font-weight: 400; }
+.app[data-page="on"] .sess[aria-current="true"] { background: none; box-shadow: none; font-weight: 400; }
 .navi svg, .sess svg { flex: none; }
 /* The import row names the file it is sending, and a file name can be any length. */
 #importedBtn span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1051,12 +1260,15 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    transcript two pixels away stood on the wash, and the join between them read
    as a seam down the middle of the window. One ground under both: the panes are
    transparent over it (`.desk-ready .ws`) and now share the gradient instead of
-   interrupting it. Where no radial stop reaches, the wash's own last layer
-   shows, a shade warmer than --page; a module page, on flat --page, covers
-   this pane whole rather than meeting it at a seam. */
+   interrupting it. The gradient itself is now painted on .app, so the rail
+   shares it too; this pane is transparent over it. A module page, on flat
+   --page, covers this pane whole rather than meeting it at a seam. */
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0;
-  background: var(--wash);
-  transition: padding-right .24s ease; }
+  /* The main pane's width is stated rather than stretched, so the collapse
+     can grow it out of the rail's track; 100% of the track is what the
+     stretch gave it anyway. */
+  width: 100%;
+  transition: padding-right .24s ease, width .24s ease, margin-left .24s ease; }
 .main[data-shift="true"] { padding-right: 340px; }
 
 /* Nothing under the header -- no rule, and no fade either. It used to hang a
@@ -1121,6 +1333,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
      transparent title bar cannot swallow them; :hover and the pressed toggle
      override it at their own specificity. */
   --ghost-bg: var(--topbar-plate);
+  /* The header keeps room for the collapsed rail's twin, and that room moves
+     with the collapse instead of jumping: the title slides right as the
+     column slides left. */
+  transition: padding-left .24s ease;
 }
 .chat > .top::before {
   content: ''; position: absolute; inset: 0 0 auto 0; height: var(--topbar-h);
@@ -1283,9 +1499,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    cell belongs to.
 
    Solid, where the other popovers are translucent: this one is a table of
-   numbers to be read, and a table read over a blurred conversation is a table
-   nobody can read. The blur goes with it -- there is nothing left to blur
-   behind a card that is not there. */
+   numbers to be read, and the permission list below joins it for the same
+   reason. A table read over a blurred conversation is a table nobody can
+   read. The blur goes with it -- there is nothing left to blur behind a card
+   that is not there. */
 #ctxPop {
   right: 0; left: auto; width: 288px; padding: 14px 16px 12px; border-radius: 14px;
   background: var(--paper);
@@ -1317,6 +1534,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chrome-ctx-cell[data-part="tools"] { background: var(--ctx-tools); }
 .chrome-ctx-cell[data-part="skills"] { background: var(--ctx-skills); }
 .chrome-ctx-cell[data-part="conversation"] { background: var(--ctx-conversation); }
+.chrome-ctx-cell[data-part="files"] { background: var(--ctx-files); }
 .chrome-ctx-cell[data-part="memory"] { background: var(--ctx-memory); }
 .chrome-ctx-rows { list-style: none; margin: 0; padding: 0; }
 .chrome-ctx-row { display: flex; align-items: center; gap: 9px; padding: 4px 0; font-size: 13px; }
@@ -1325,6 +1543,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chrome-ctx-dot[data-part="tools"] { background: var(--ctx-tools); }
 .chrome-ctx-dot[data-part="skills"] { background: var(--ctx-skills); }
 .chrome-ctx-dot[data-part="conversation"] { background: var(--ctx-conversation); }
+.chrome-ctx-dot[data-part="files"] { background: var(--ctx-files); }
 .chrome-ctx-dot[data-part="memory"] { background: var(--ctx-memory); }
 .chrome-ctx-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chrome-ctx-num { font-family: var(--mono); font-size: 11.5px; color: var(--ctx-muted); font-variant-numeric: tabular-nums; }
@@ -1345,25 +1564,96 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    (#atPop), the workspace (#wdPop) and the permission modes (#permPop) -- hang
    off their own
    chips: each is a child of the `.chrome-anch` wrapper around its chip, and sits 6px
-   above the chip's top edge, left edges lined up. Names only, no heading: the
-   chip already says what is being chosen, and the sentence behind a name is on
-   the row's title. The tick is the whole of the "this is the one" signal -- no
-   filled band behind the row, which on a translucent panel reads as a second
-   material. */
+   above the chip's top edge, left edges lined up.
+
+   The three menus stay names-only: the chip already says what is being chosen,
+   and the sentence behind a name is on the row's title. The permission list is
+   the exception -- choosing what the agent may do without asking earns a
+   heading, a sentence per row and a filled band behind the chosen one, so the
+   three modes can be compared without hovering any of them. */
 .chrome-anch { position: relative; display: inline-flex; align-items: center; }
 #plusPop, #atPop, #wdPop, #permPop { left: 0; right: auto; bottom: calc(100% + 6px); padding: 4px; }
 #plusPop { width: 220px; }
 #atPop { width: 240px; }
 #wdPop { width: 200px; }
 #wdPop[data-view="browse"], #wdPop[data-view="drives"] { width: 300px; }
-#permPop { width: 200px; }
+/* Solid paper, the way the context card is: this list is read sentence by
+   sentence, and its warm wash should not take its colour from whatever the
+   conversation happens to be showing behind it. */
+#permPop {
+  width: 296px; padding: 10px; border-radius: 18px;
+  background: var(--paper);
+  border-color: var(--line);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
 .pop .chrome-hr { height: 1px; background: var(--line-soft); margin: 4px 6px; }
 #plusPop .prow, #atPop .prow, #wdPop .prow, #permPop .prow { align-items: center; gap: 9px; padding: 7px 9px; border-radius: 8px; }
 #plusPop .prow .nm, #atPop .prow .nm, #wdPop .prow .nm, #permPop .prow .nm { font-weight: 500; font-size: 13px; }
 #wdPop .prow[aria-checked="true"] .nm, #permPop .prow[aria-checked="true"] .nm { font-weight: 600; }
 #wdPop .prow .tick, #permPop .prow .tick { flex: none; width: 14px; height: 14px; stroke-width: 2; color: var(--warm); }
-/* The tier with no brakes says so in its row too, in the chip's colour. */
-#permPop .prow.risk .nm { color: var(--clay); }
+/* The permission list. Each mode is a tile with a ground of its own, so the
+   three read as three things to pick rather than as three lines of one list;
+   the chosen tile lifts to a warm wash, and the tile beside the tick holds
+   the mode's glyph in a paper plate so the icon is a mark and not a stray
+   mark in the margin. */
+#permPop .hd { padding: 2px 4px 8px; }
+#permPop .hd .lab { color: var(--muted); }
+#permPop .prow {
+  align-items: center; gap: 11px; padding: 11px 12px; border-radius: 13px;
+  background: color-mix(in oklab, var(--text) 3.5%, transparent);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+#permPop .prow + .prow { margin-top: 7px; }
+#permPop .prow:hover { background: color-mix(in oklab, var(--text) 6%, transparent); }
+#permPop .prow .chrome-perm-badge {
+  flex: none; width: 34px; height: 34px; border-radius: 11px;
+  display: grid; place-items: center;
+  background: var(--paper); color: var(--muted);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+#permPop .prow .pico { width: 18px; height: 18px; }
+#permPop .prow .chrome-perm-text { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+#permPop .prow .nm {
+  flex: none; overflow: visible; white-space: normal; text-overflow: clip;
+  line-height: 1.3; color: var(--text);
+}
+#permPop .prow .sub { font-size: 11.5px; line-height: 1.45; color: var(--muted); }
+#permPop .prow[aria-checked="true"] {
+  background: color-mix(in oklab, var(--warm) 9%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--warm) 40%, transparent);
+}
+#permPop .prow[aria-checked="true"]:hover { background: color-mix(in oklab, var(--warm) 12%, transparent); }
+#permPop .prow[aria-checked="true"] .chrome-perm-badge {
+  color: var(--gold);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--warm) 45%, transparent),
+    0 2px 6px -3px rgba(0, 0, 0, .18);
+}
+#permPop .prow .tick { flex: none; width: 15px; height: 15px; stroke-width: 2; color: var(--gold); }
+#permPop .prow .chrome-tick-slot { flex: none; width: 15px; }
+/* The tier with no brakes says so in its glyph and its tick, not in its name:
+   a red title read as the card reporting an error rather than naming a mode. */
+#permPop .prow.risk .chrome-perm-badge { color: var(--clay); }
+#permPop .prow.risk[aria-checked="true"] {
+  background: color-mix(in oklab, var(--clay) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--clay) 32%, transparent);
+}
+#permPop .prow.risk[aria-checked="true"]:hover { background: color-mix(in oklab, var(--clay) 11%, transparent); }
+#permPop .prow.risk[aria-checked="true"] .chrome-perm-badge {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--clay) 36%, transparent),
+    0 2px 6px -3px rgba(0, 0, 0, .18);
+}
+#permPop .prow.risk .tick { color: var(--clay); }
+#permPop .chrome-perm-note {
+  margin: 9px 4px 1px; font-size: 11px; line-height: 1.4; color: var(--muted);
+}
+/* On a phone the chip sits too far right to hang the list off its left edge.
+   Taking the anchor out of the positioned chain hangs the list off the
+   composer card instead, whose width it can share. */
+@media (max-width: 480px) {
+  .chrome-anch:has(> #permPop) { position: static; }
+  #permPop { width: min(296px, calc(100vw - 72px)); }
+}
 #plusPop .chrome-plus-row .pico, #atPop .chrome-plus-row .pico { width: 15px; height: 15px; flex: none; color: var(--muted); }
 /* The "@" (src/chrome/AtMenu.tsx): what the conversation is pointed at. The
    button carries the count, because the scope of a question is worth seeing
@@ -1371,7 +1661,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 #atBtn { font-size: 15px; font-weight: 600; }
 #atBtn.chrome-at-set { color: var(--amber); }
 .chrome-at-n { position: absolute; top: -1px; right: -2px; min-width: 13px; height: 13px; padding: 0 3px;
-  border-radius: 999px; background: var(--amber); color: var(--ink-on-accent); font-size: 9.5px; font-weight: 600;
+  border-radius: 999px; background: var(--amber); color: var(--ink-on-amber); font-size: 9.5px; font-weight: 600;
   line-height: 13px; text-align: center; }
 /* A base's row: the tick, the name, and how many documents are in it. The tick
    holds its width whether or not it is set, so a list does not shuffle as it
@@ -1412,7 +1702,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chrome-wd-btn { padding: 4px 10px; border-radius: 7px; font-size: 12px; color: var(--text); background: var(--surface); }
 .chrome-wd-btn:hover:not(:disabled) { background: color-mix(in oklab, var(--text) 9%, transparent); }
 .chrome-wd-btn:disabled { opacity: .45; }
-.chrome-wd-use { color: var(--ink-on-accent); background: var(--amber); }
+.chrome-wd-use { color: var(--ink-on-amber); background: var(--amber); }
 .chrome-wd-use:hover:not(:disabled) { background: color-mix(in oklab, var(--amber) 88%, var(--text)); }
 
 /* The workspace tag beside a conversation's title (src/chrome/WorkdirTag.tsx):
@@ -1559,32 +1849,36 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    answer. The inset is what keeps a one-liner at the design's 40px: it is
    (40px - 1.8 lines of the body) / 2, worked out from --fs-body so it holds
    at whichever size the bubble is read at. */
+/* Capped like the delivered bubble: a runtime-opened brief's wide code block
+   would otherwise hold the bubble at its max-content width and overflow it. */
 .msg.me {
   background: var(--bubble-me); color: var(--bubble-me-fg);
-  border-radius: 12px; padding: calc((40px - 1.8 * var(--fs-body)) / 2) 12px;
+  border-radius: 12px; padding: calc((40px - 1.8 * var(--fs-body)) / 2) 12px; max-width: 100%;
   font-size: var(--fs-body); line-height: 1.8;
   white-space: pre-wrap; overflow-wrap: break-word;
 }
-/* A white card on the wash, flat the way the design lays it (Figma: Raven /
-   AssistantMessage): 16px all round and one 12px gap between what is in it --
-   the fold, a step, the answer -- so nothing inside carries a margin of its
-   own. The rim is for dark, where a card needs an edge; in light it is all but
-   invisible. */
+/* A pane of frosted glass on the wash (Figma: Raven / AssistantMessage for the
+   geometry): 16px all round and one 12px gap between what is in it -- the fold,
+   a step, the answer -- so nothing inside carries a margin of its own. The
+   glass is a neutral translucent fill, opaque enough that the wash does not
+   tint the words, with a lit top edge and a hairline rim; there is no backdrop
+   blur, because nothing scrolls behind a card but the wash, and a blur over a
+   gradient is the gradient. */
 .msg.ai {
   display: flex; flex-direction: column; gap: 12px; min-width: 0;
-  background: var(--ink); border-radius: 12px; padding: 16px;
+  background: var(--card-glass); border-radius: 12px; padding: 16px;
   font-size: var(--fs-body); line-height: 26px;
-  box-shadow: 0 0 0 1px var(--ring); color: var(--chat-ink);
+  box-shadow: var(--card-glass-sh); color: var(--chat-ink);
 }
-.msg.ai > .tfold, .msg.ai > .step, .msg.ai > .answer, .msg.ai > .sdlv { margin: 0; }
+.msg.ai > .tfold, .msg.ai > .step, .msg.ai > .answer { margin: 0; }
 /* A card holding nothing yet but a live thought, folded, is the design's small
    "thinking" card: the row alone, at its own width, 40px tall. */
-.msg.ai:not(:has(.say:not(:empty), .cot:not([hidden]), .wrow:not([hidden]), .answer, .sdlv)):has(.think.live) {
+.msg.ai:not(:has(.say:not(:empty), .cot:not([hidden]), .wrow:not([hidden]), .answer)):has(.think.live) {
   width: fit-content; min-height: 40px; padding: 10px 16px; justify-content: center;
 }
 /* The design draws the line alone; the caret that says it opens arrives with
    the pointer. */
-.msg.ai:not(:has(.say:not(:empty), .cot:not([hidden]), .wrow:not([hidden]), .answer, .sdlv)) .think.live > .cv {
+.msg.ai:not(:has(.say:not(:empty), .cot:not([hidden]), .wrow:not([hidden]), .answer)) .think.live > .cv {
   opacity: 0; transition: opacity .12s;
 }
 .msg.ai .think.live:hover > .cv, .msg.ai .think.live:focus-visible > .cv { opacity: 1; }
@@ -1751,54 +2045,100 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    out past the clip with it. */
 .dagc .dgr .v.gov > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .dagc .dgr .v.gov::after { content: '\2197'; flex: none; color: var(--faint); font-size: 10.5px; }
-/* The delivery seam: where a delegated run's result re-entered the flow. Two
-   things on the row and no more: which task, and how it went. The name is the
-   reading size rather than a mono label -- it is a sentence somebody wrote, not
-   an identifier -- and the verdict is a dot and one word, the same vocabulary a
-   task row uses, so "did it work" is answerable without reading either. */
-.sdlv { margin: 12px 0 2px; min-width: 0; font-size: 12px; color: var(--faint); }
-.sdlv .sdhd { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 22px; }
-.sdlv .ic { width: 13px; height: 13px; flex: none; stroke: var(--faint); }
-/* Capped, with the whole of it in the tooltip: a long task sentence must not
-   push the verdict out of sight. */
+/* What the runtime opened rather than a person typed: a scheduled turn, a
+   delegated record's opening brief, a delegated result coming back. One
+   material for all of them, on the reader's side where a turn's opening
+   message stands -- the reply card's white, let through, so it reads as a
+   message without being mistaken for one the reader wrote (the reader's own is
+   ink) or for a reply (a reply is the solid card). */
+.msg.me[data-auto], .sdlv {
+  background: color-mix(in srgb, var(--ink) 66%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.3); backdrop-filter: blur(14px) saturate(1.3);
+  box-shadow: inset 0 0 0 1px var(--ring-2); border: 0; color: var(--text);
+}
+/* Its own line above the sentence, sized to its words: the bubble is a bubble
+   again, and the chip is what heads it. */
+.transcript-auto {
+  display: flex; width: max-content; max-width: 100%; align-items: center; gap: 6px; margin-bottom: 6px;
+  padding: 3px 9px; border-radius: 8px; background: var(--raised); color: var(--muted);
+  font-size: 12px; font-weight: 500; line-height: 18px; white-space: nowrap;
+}
+.transcript-auto svg { width: 12px; height: 12px; flex: none; color: var(--amber); }
+.transcript-auto:has(> .agent-mark) { padding-left: 4px; }
+.transcript-auto .agent-mark { width: 18px; height: 18px; border-radius: 5px; }
+.transcript-auto .agent-mark img { width: 12px; height: 12px; }
+/* A brief written in markdown is read as markdown; the bubble's pre-wrap is
+   for what a person typed. Set a little tighter than a reply: a brief is a list
+   of instructions to scan, and at the reply's measure its bullets drift apart. */
+.msg.me > .prose { white-space: normal; color: inherit; line-height: 1.65; }
+.msg.me > .prose li { line-height: 1.65; }
+.msg.me > .prose p { margin: 4px 0; }
+.msg.me[data-auto] .prose code { background: color-mix(in srgb, var(--text) 7%, transparent); }
+/* Where an upstream node's output was fenced into the brief: the two marker
+   lines, quieter than the text between them. */
+.transcript-untrusted { font-family: var(--mono); font-size: .86em; color: var(--muted); }
+
+/* A delegated result, re-entering the conversation (TranscriptPage.tsx's
+   DeliveredView): who sent it, the task it was given -- a door to the run --
+   how it went, and what came back folded under a hairline. The secondary words
+   are the muted grey rather than the faint one: on this ground the faint grey
+   falls under 3:1. A verdict's colour rides on its dot, never on its word. */
+.turn.transcript-dlv { max-width: 72%; }
+.turn.transcript-dlv:has(> .sdlv.open) { max-width: 88%; }
+/* Capped to the turn it sits in: a delivered body's wide table would otherwise
+   hold the bubble at its max-content width and push it out to the left. */
+.sdlv { min-width: 0; max-width: 100%; padding: 10px 14px 11px; border-radius: 12px; font-size: 12px; line-height: 20px; }
+.transcript-dlv-from {
+  display: flex; width: max-content; max-width: 100%; align-items: center; gap: 6px; margin-bottom: 7px;
+  padding: 3px 10px 3px 4px; border-radius: 8px; background: var(--raised); color: var(--muted);
+  font-size: 12px; font-weight: 500; line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.transcript-dlv-from .agent-mark { width: 18px; height: 18px; border-radius: 5px; }
+.transcript-dlv-from .agent-mark img, .transcript-dlv-from .agent-mark svg { width: 12px; height: 12px; }
+.transcript-dlv-glyph {
+  width: 18px; height: 18px; flex: none; display: grid; place-items: center; border-radius: 5px;
+  background: var(--ink); color: var(--muted);
+}
+.transcript-dlv-glyph svg { width: 12px; height: 12px; }
+/* The task, whole in the tooltip: a long sentence must not push the line that
+   says how it went out of sight. */
 .sdlv .nm {
-  font: inherit; font-size: 12.5px; color: var(--text);
-  padding: 0; border: 0; background: none; cursor: pointer; border-radius: 4px;
-  min-width: 0; max-width: min(340px, 60%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: block; max-width: 100%; padding: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: var(--fs-body); line-height: 24px; color: var(--chat-ink); text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .sdlv .nm:hover {
-  color: var(--amber); text-decoration: underline; text-underline-offset: 3px;
-  text-decoration-color: color-mix(in oklab, var(--amber) 55%, transparent);
+  text-decoration: underline; text-underline-offset: 3px;
+  text-decoration-color: color-mix(in oklab, var(--text) 35%, transparent);
 }
+.sdlv .sdhd { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 22px; margin-top: 3px; color: var(--muted); }
 .sdlv .st { display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--muted); }
 .sdlv .st .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
 .sdlv.good .st .dot { background: var(--moss); }
-.sdlv.bad .st { color: var(--muted); }
 .sdlv.bad .st .dot { background: var(--muted); }
-.sdlv.warn .st { color: var(--gold); }
 .sdlv.warn .st .dot { background: var(--gold); }
-.sdlv.dim .st { color: var(--faint); }
-/* What came back, folded. It is the sub-agent's words, not Raven's, so the
-   fold sets them apart as a block of their own -- and the caption inside says
-   what they are, which is the text that entered the turn rather than a
-   retelling of it. */
+/* One cell per node, in the order the receipt counts them. */
+.transcript-dlv-bar { display: inline-flex; gap: 2px; flex: none; }
+.transcript-dlv-bar i { width: 14px; height: 4px; border-radius: 2px; background: var(--moss); }
+.transcript-dlv-bar i[data-tone="bad"] { background: var(--muted); }
+.transcript-dlv-bar i[data-tone="no"] { background: var(--line); }
+.transcript-dlv-tally, .transcript-dlv-span { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .sdlv .sdcv {
   display: inline-flex; align-items: center; gap: 1px; flex: none; margin-left: auto;
-  font: inherit; font-size: 11.5px; color: var(--faint);
+  font: inherit; font-size: 12px; color: var(--muted);
   padding: 2px 3px 2px 9px; border-radius: 999px; cursor: pointer;
 }
-.sdlv .sdcv:hover { color: var(--muted); background: var(--hover); }
+.sdlv .sdcv:hover { color: var(--text); background: color-mix(in srgb, var(--text) 6%, transparent); }
 .sdlv .sdcv .cv { width: 12px; height: 12px; transition: transform .15s; }
 .sdlv.open .sdcv .cv { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .sdlv .sdcv .cv { transition: none; } }
+/* What came back, under a hairline inside the bubble rather than in a box of
+   its own: the bubble is already the frame. */
 .sdlv .sdbd {
-  margin: 8px 0 4px 21px; padding: 10px 14px 12px; border-radius: 10px;
-  background: var(--surface); box-shadow: inset 0 0 0 1px var(--ring);
-  min-width: 0; max-height: min(50vh, 32rem); overflow: auto;
+  margin-top: 11px; padding-top: 11px; min-width: 0; max-height: min(50vh, 32rem); overflow: auto;
+  border-top: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
 }
-.sdlv .sdbd .cap {
-  font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
-  color: var(--faint); margin: 12px 0 4px;
-}
+.sdlv .sdbd .cap { font-size: 11.5px; line-height: 16px; color: var(--muted); margin: 12px 0 4px; }
 .sdlv .sdbd .cap:first-child { margin-top: 0; }
 .sdlv .sdbd .raw {
   margin: 0; font-family: var(--mono); font-size: 11px; line-height: 1.6;
@@ -1807,24 +2147,29 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .sdlv .sdbd .prose { font-size: 13px; color: var(--text); line-height: 1.7; }
 .sdlv .sdbd .prose p { margin: 0 0 6px; }
 .sdlv .sdbd .prose p:last-child { margin-bottom: 0; }
-
-/* A turn the runtime opened, on the reader's own side: outlined rather than
-   filled, because nobody typed it. Under the chip is the reader's own sentence
-   and nothing else -- the rest of the entry is wording for the model
-   (raven/agent/loop/_shared.py) -- and an origin whose reminder nothing reads
-   leaves the chip standing alone. */
-.msg.me[data-auto] {
-  background: transparent; color: var(--text); box-shadow: none; border: 1px dashed var(--line);
+/* A graph's node lines: the node, how it ended, and where its output went or
+   why there is none. Rows are `display: contents`, so the three columns line
+   up across every node. */
+.transcript-dlv-nodes {
+  display: grid; grid-template-columns: max-content max-content minmax(0, 1fr); gap: 4px 14px;
+  margin: 2px 0 10px; font-size: 12px; line-height: 18px; color: var(--muted);
 }
-/* Its own line above the sentence, sized to its words: the bubble is a bubble
-   again, and the chip is what heads it. */
-.transcript-auto {
-  display: flex; width: max-content; align-items: center; gap: 6px; margin-bottom: 6px;
-  padding: 3px 9px; border-radius: 8px; background: var(--surface); color: var(--muted);
-  font-size: 12px; font-weight: 500;
+.transcript-dlv-nodes > div { display: contents; }
+.transcript-dlv-nodes > div > span:first-child {
+  display: inline-flex; align-items: center; gap: 7px; min-width: 0;
+  font-family: var(--mono); font-size: 11.5px; color: var(--text);
 }
-.transcript-auto svg { width: 12px; height: 12px; flex: none; color: var(--amber); }
-@media (prefers-reduced-motion: reduce) { .sdlv .sdcv .cv { transition: none; } }
+.transcript-dlv-nodes > div > span:first-child::before {
+  content: ''; width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--moss);
+}
+.transcript-dlv-nodes > div[data-st="bad"] > span:first-child::before { background: var(--muted); }
+.transcript-dlv-nodes > div[data-st="no"] > span:first-child::before { background: var(--line); }
+.transcript-dlv-nodes > div > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The run directory the table's relative output paths hang off. */
+.transcript-dlv-rundir {
+  margin: -6px 0 10px; font-family: var(--mono); font-size: 11.5px; line-height: 18px;
+  color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* ── the turn's products ──────────────────────────────────────────────
    What a turn delivered, as the design lays it out (Figma: Raven /
@@ -2852,6 +3197,10 @@ textarea:focus, textarea:focus-visible,
   opacity: 0; transition: opacity .12s;
 }
 .att.img:hover .rm, .att.img .rm:focus-visible { opacity: 1; }
+/* The action row hangs 5px outside its card. Every column that hosts it gives
+   that overhang a gutter -- .col's 36px sides, .satx's 16px, and the task
+   record's own 5px (features/tasks/styles.css) -- so a wider hang has to widen
+   the narrowest gutter first. */
 .ansfoot { display: flex; align-items: center; gap: 8px; margin-top: 6px; margin-left: -5px; flex-wrap: wrap; }
 .turn.ai > .ansfoot { margin-top: 0; }
 .ansfoot .acts { margin-top: 0; }
@@ -2920,6 +3269,9 @@ textarea:focus, textarea:focus-visible,
 .under .chip:hover, .under .chip[aria-expanded="true"] {
   color: var(--rail-ink); background: var(--composer-hover); border-radius: 100px;
 }
+/* The one chip with a warning to carry keeps its colour through the resting and
+   hover inks above: the shape alone does not say "no brakes". */
+.under .chip.risk, .under .chip.risk:hover, .under .chip.risk[aria-expanded="true"] { color: var(--clay); }
 .under .chip .pico { width: 12px; height: 12px; }
 .under .chip.model { color: var(--composer-ink); font-weight: 400; }
 .under .chip.model:hover, .under .chip.model[aria-expanded="true"] { color: var(--composer-ink); }
@@ -3143,9 +3495,9 @@ textarea:focus, textarea:focus-visible,
 .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; flex: 1; }
 /* New-task state: no header title, the composer holds the centre line. */
 .chat[data-fresh] #title, .chat[data-fresh] #wdTag { visibility: hidden; }
-/* An imported conversation (state/session/conversation.ts's readOnly): nothing
+/* An imported session (state/session/conversation.ts's readOnly): nothing
    to type into, no folder it runs in, a name changed only on its rail row, and
-   no conversation menu -- taken out of the capsule, which closes up around the
+   no session menu -- taken out of the capsule, which closes up around the
    chip, and the palette's notch follows it (the desk section). */
 .chat[data-readonly] .dock { display: none; }
 .chat[data-readonly] #wdTag { display: none; }
@@ -3561,14 +3913,19 @@ html[data-traj] #trajHost > * { position: relative; z-index: 1 }
 /* The panel body stops scrolling so the transcript can: two nested scrollers
    both taking the wheel is how a reader loses their place. */
 .ws-body[data-view="agents"] { display: flex; flex-direction: column; overflow: hidden; }
-.satx { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px 20px; }
-/* The pane is a run's record beside the conversation, not the conversation:
-   it reads at the body's size throughout. Its segments are the conversation's
-   own, but drawn without the reply's card, so the answer and its markdown stay
-   at their base sizes there while every rule that reads --fs-body unscoped --
-   the user's bubble, the trail, the composer -- would step up past them.
-   Restating the token here, rather than scoping each of those rules, keeps a
-   reader added later from stepping the pane up again. */
+/* One delegated run's record, laid out as the conversation lays itself out (the
+   transcript island's AgentStageView): a column of the same rows with one gap
+   between them, the reply cards white on the conversation's own wash -- on a
+   white pane a white card has no edge to read. */
+.satx {
+  flex: 1; min-height: 0; overflow: auto; padding: 14px 16px 20px;
+  display: flex; flex-direction: column; gap: 12px; background: var(--wash);
+}
+/* The pane is a run's record beside the conversation, not the conversation: it
+   reads one step under the conversation's body size throughout. Restating the
+   token here, rather than scoping each rule that reads it -- the bubble, the
+   card, the trail, the composer -- keeps a reader added later from stepping the
+   pane back up. */
 .satx, .instance-dock { --fs-body: 14px; }
 /* Carrying the conversation on, below the transcript rather than inside its
    scroller: an input that scrolls away with the history is one the reader has
@@ -3588,7 +3945,12 @@ html[data-traj] #trajHost > * { position: relative; z-index: 1 }
    the prose beside them sat in a centred column. The chat does this with one
    `.col` wrapper; a stage box has no wrapper to put it on, so the measure goes
    on the rows. */
-.satx > [data-tsl] > * { max-width: min(var(--col), 100%); margin-left: auto; margin-right: auto; }
+.satx > [data-tsl] > * { flex: none; width: 100%; max-width: var(--col); margin-left: auto; margin-right: auto; }
+/* What opened a turn stands on the reader's side of that column: its right
+   edge is the column's, wherever the centred column sits in a wide pane. */
+.satx > [data-tsl] > .turn.me {
+  width: auto; max-width: min(88%, var(--col)); margin-right: max(0px, calc((100% - var(--col)) / 2));
+}
 /* Which agent ran it. Absent on a raven sub-agent, where the name is still the
    answer, so the row never leaves it unsaid. */
 .sarow .st .who, .sahd .trow .who {
@@ -3785,8 +4147,16 @@ details[open] summary { margin-bottom: 8px; }
 .page {
   position: fixed; inset: 0 0 0 var(--rail); z-index: var(--z-page); background: var(--page);
   display: none; flex-direction: column;
+  /* A module page stands clear of the rail, and takes the whole window when
+     the rail goes: the inset moves with the collapse, or the page would
+     jump out from under the column that is sliding away. */
+  transition: left .24s ease;
 }
 :root[data-rail="off"] .page { left: 0; }
+/* A drag is a measurement, not a state change: the grip writes the rail's
+   width as the pointer moves, and the page's inset would trail the pointer
+   instead of following it. */
+:root:has(#railGrip[data-drag="true"]) .page { transition: none; }
 /* Fade only — no translate: sliding a viewport-sized fixed layer repaints the
    whole page and reads as a lurch, not an entrance. Small popovers keep `up`;
    a full page just appears in place. */
@@ -4488,7 +4858,13 @@ details[open] summary { margin-bottom: 8px; }
 }
 
 /* settings — a dialog with its own two panes: the nav and the panel scroll
-   independently, so a long panel never drags the section list off screen. */
+   independently, so a long panel never drags the section list off screen.
+
+   The dialog runs on its own set of tokens (--set-*), so the light theme is
+   parchment and the dark theme is the same room under a lamp: a warm
+   near-black with an amber light in the top corner. The page around it is the
+   same warm ink and gold on frosted glass, so the dialog reads as the solid
+   room of the house rather than as a different palette. */
 .setveil { background: var(--scrim-soft); backdrop-filter: blur(3px); }
 .smodal {
   /* The containing block for the add-model drawer, which is clipped by this
@@ -4496,15 +4872,46 @@ details[open] summary { margin-bottom: 8px; }
   position: relative;
   width: min(1000px, 94vw); height: min(680px, 88vh);
   display: grid; grid-template-columns: 208px 1fr;
-  background: var(--ink); border: 1px solid var(--line); border-radius: 16px;
-  box-shadow: 0 24px 64px -20px rgba(0,0,0,.45), 0 2px 8px rgba(0,0,0,.12);
+  background: var(--set-paper); border: 1px solid var(--set-rule); border-radius: 16px;
+  box-shadow: var(--set-shadow);
   overflow: hidden; animation: up .18s ease both;
+
+  /* The dialog's own neutrals, re-pointed at the warm set. Every rule inside
+     it that names a colour by role -- paper, line, text -- reads the warm one
+     now, so the room is warm without each rule knowing it. The two sections
+     another domain owns (schedules, memory) are rooted in boxes of their own
+     inside this dialog, so they inherit it too: one room, not three.
+
+     --ink is deliberately NOT re-pointed: it is the page's ground, and the
+     ground under a dialog is the scrim's, not the dialog's. */
+  --paper: var(--set-paper);
+  --raised: var(--set-paper-2);
+  --surface: var(--set-rail-2);
+  --line: var(--set-rule);
+  --line-soft: var(--set-rule-soft);
+  --text: var(--set-ink);
+  --muted: var(--set-muted);
+  --faint: var(--set-faint);
+  --amber: var(--set-accent);
+  --gold: var(--set-accent);
+  --warm: var(--set-accent-2);
+  --amber-dp: var(--set-accent-wash);
 }
-/* Same seam grammar as the app shell: the rail's grey against the body's
-   white is the boundary, no rule. */
+/* The lamp: in the dark theme a warm light falls into the dialog's top corner,
+   so the one thing in it that glows is the accent. It sits over the whole
+   dialog rather than over a panel, because it is the room's light and not
+   any one part's. */
+.smodal::before {
+  content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  background: var(--set-lamp);
+}
+/* Same seam grammar as the app shell: the rail's ground against the body's
+   white is the boundary, no rule. Here the rail is a shade warmer than the
+   sheet beside it, so the seam is a change of paper rather than a change of
+   grey. */
 .snav {
   display: grid; grid-template-rows: auto 1fr auto; min-height: 0;
-  background: var(--snav-bg);
+  background: var(--set-rail);
 }
 /* Inside the settings dialog a small button is the control standard's size,
    the way the prototype's settings document sizes it -- 32 and 8, beside a
@@ -4522,46 +4929,53 @@ details[open] summary { margin-bottom: 8px; }
   font-size: 13px; padding: 0 13px;
 }
 :root[data-lang="en"] .smodal .mini { min-width: 88px; }
-.smodal .mini:hover:not(:disabled) { border-color: var(--amber); background: var(--paper); }
-.smodal .mini.ghost { background: none; color: var(--muted); }
+.smodal .mini:hover:not(:disabled) { border-color: var(--set-accent); background: var(--set-paper-2); }
+.smodal .mini.ghost { background: none; color: var(--set-muted); }
 .smodal .mini.danger { color: var(--clay); border-color: var(--clay); }
-/* The primary verb, filled: creating a schedule is the one the dialog has. */
+/* The primary verb, filled: creating a schedule is the one the dialog has.
+   Which fill it gets is the theme's to say, through --set-go: ink on paper in
+   the light theme, the lit amber in the dark one. */
 .smodal .mini.go {
-  background: var(--text); border-color: var(--text); color: var(--paper); font-weight: 500;
+  background: var(--set-go); border-color: var(--set-go); color: var(--set-go-ink); font-weight: 500;
 }
 .smodal .mini.go:hover:not(:disabled) {
-  filter: brightness(1.18); border-color: var(--text); background: var(--text);
+  filter: brightness(1.18); border-color: var(--set-go); background: var(--set-go);
 }
 .snav .brandrow { display: flex; align-items: center; height: 64px; padding: 0 24px; }
-.snav .wm { font-size: 16px; font-weight: 600; color: var(--composer-ink); }
+.snav .wm { font-size: 16px; font-weight: 600; color: var(--set-ink); }
 .snavlist { overflow-y: auto; min-height: 0; padding: 0 16px 16px; display: grid; gap: 2px; align-content: start; }
 /* Tight enough that all 14 sections fit without the rail scrolling: a section
    list you have to scroll to see hides half the settings. */
 .snav button.sitem {
-  text-align: left; padding: 5px 10px; border-radius: 7px; font-size: 12.5px; color: var(--muted);
+  text-align: left; padding: 5px 10px; border-radius: 7px; font-size: 12.5px; color: var(--set-muted);
   display: flex; align-items: center; gap: 9px; line-height: 1.55;
 }
-.snav button.sitem:hover { background: var(--raised); color: var(--text); }
-.snav button.sitem[aria-current="true"] { background: var(--ink); color: var(--text); font-weight: 600;
-  box-shadow: inset 0 0 0 1px var(--line-soft); }
+.snav button.sitem:hover { background: var(--set-paper-2); color: var(--set-ink); }
+/* The current section: a sheet of paper laid on the rail with a gold edge,
+   rather than an inverted block. In the dark theme the same shape is a warm
+   wash with the accent down its left side. */
+.snav button.sitem[aria-current="true"] {
+  background: var(--set-paper-2); color: var(--set-ink); font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--set-rule), inset 3px 0 0 var(--set-accent);
+}
 .snav button.sitem svg { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor;
-  stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; color: var(--faint); }
-.snav button.sitem[aria-current="true"] svg { color: var(--amber); }
+  stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; color: var(--set-faint); }
+.snav button.sitem[aria-current="true"] svg { color: var(--set-accent); }
 /* 14 sections stay findable only under group headings. */
 .snav .grp {
   font-family: var(--mono); font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase;
-  color: var(--faint); padding: 11px 10px 4px;
+  color: var(--set-faint); padding: 11px 10px 4px;
 }
 .snav .grp:first-child { padding-top: 2px; }
 
 .sbody { display: grid; grid-template-rows: auto 1fr; min-height: 0; min-width: 0; }
 .shd {
   display: flex; align-items: flex-start; gap: 12px; padding: 18px 20px 14px;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--set-rule-soft);
 }
 .shd .ttl { flex: 1; min-width: 0; }
-.shd h3 { font-size: 16.5px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
-.shd .sub { font-size: 12.5px; color: var(--muted); margin: 3px 0 0; line-height: 1.5; }
+.shd h3 { font-size: 16.5px; font-weight: 600; margin: 0; letter-spacing: -.01em; color: var(--set-ink); }
+.shd .sub { font-size: 12.5px; color: var(--set-muted); margin: 3px 0 0; line-height: 1.5; }
 .spanels { overflow-y: auto; min-height: 0; padding: 18px 20px 26px; }
 
 /* Two sections are another domain's island, rooted in a box of its own
@@ -6064,12 +6478,27 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
      composer card (features/desk/geometry.ts), and a fixed one here would clip
      it short of what that allows. */
   max-width: min(480px, calc(100vw - 16px)); max-height: calc(100vh - 16px);
-  resize: none; pointer-events: auto; color: var(--text); background: var(--ink);
-  border: 1px solid var(--line); border-radius: 14px;
-  box-shadow: 0 16px 42px rgba(0, 0, 0, .16), 0 1px 1px rgba(0, 0, 0, .04);
+  resize: none; pointer-events: auto; color: var(--text);
+  border: 1px solid var(--desk-edge); border-radius: 14px;
+  box-shadow: var(--desk-sh);
   /* Its own handle sits off the top-right corner, so that corner is where the
      palette comes from and goes back to. */
   transform-origin: 100% 0; }
+/* The palette is frosted glass over the transcript. The blur sits on a layer
+   behind the content rather than on the palette itself, the way #trajHost does
+   it: on the palette it would make every fixed-position descendant lay out
+   against the palette, and the rows scrolling in .desk-body would ghost at the
+   clipped edge when the compositor reuses its backdrop snapshot. */
+.desk-palette::after {
+  content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit;
+  background: var(--desk-glass);
+  -webkit-backdrop-filter: blur(26px) saturate(1.3);
+  backdrop-filter: blur(26px) saturate(1.3);
+  pointer-events: none;
+}
+@supports not ((backdrop-filter: blur(8px)) or (-webkit-backdrop-filter: blur(8px))) {
+  .desk-palette::after { background: var(--paper); }
+}
 /* Under the capsule and flush with its right edge, not beside it: the
    transcript column is centred, so a desk hung to the LEFT of the launcher
    reached back across what the reader was reading. Kept in step with
@@ -6084,11 +6513,11 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    padding -- so the notch sits over the chip's last 14px, which is its glyph
    when it has nothing to say. Drawn in the palette's own ground with the
    frame's line on its two upper sides, over the frame's top border, so the two
-   read as one outline. An imported conversation has no menu, and its chip
+   read as one outline. An imported session has no menu, and its chip
    ends at the capsule's padding. */
 .desk-palette[data-anchored="true"]::before { content: ''; position: absolute; top: -6px; right: 48.5px;
-  width: 11px; height: 11px; transform: rotate(45deg); background: inherit;
-  border-top: 1px solid var(--line); border-left: 1px solid var(--line); border-top-left-radius: 2px;
+  width: 11px; height: 11px; transform: rotate(45deg); background: var(--desk-glass);
+  border-top: 1px solid var(--desk-edge); border-left: 1px solid var(--desk-edge); border-top-left-radius: 2px;
   pointer-events: none; }
 body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { right: 11.5px; }
 /* Two curves rather than one duration in both directions: arriving is eased out
@@ -6140,14 +6569,15 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
 /* The palette no longer clips its children -- the notch stands above its top
    edge -- so the scroll box rounds its own lower corners to the frame. */
 .desk-body { flex: 1; min-height: 0; overflow: auto; padding: 5px 0; border-radius: 0 0 13px 13px; }
-/* The Tasks tab's board paints on --surface (features/tasks/styles.css's
-   `.tkboard`). The palette's own ground is --ink, which showed through the
-   body's 5px padding as a white band above and below the board. So the body
-   takes the board's ground, and only the body: the tab strip stays the
-   palette's white on every tab, and with it the notch, which inherits the
-   frame's ground. Where white meets the board the header's rule takes the
-   stronger line, and the flat list's hover moves one step up the ramp. */
-.desk-palette[data-tab="tasks"] .desk-body { background: var(--surface); }
+/* The Tasks tab's board keeps the palette's glass rather than its own ground:
+   `.tkboard` paints --surface on a page of its own, and here that opaque layer
+   made the panel read a full step darker than the rail. Inside the palette the
+   board is transparent and the body carries one faint veil, --desk-board,
+   which is just enough step for the cards to stand on. Where the tab strip
+   meets the board the header's rule takes the stronger line, and the flat
+   list's hover moves one step up the ramp. */
+.desk-palette[data-tab="tasks"] .desk-body { background: var(--desk-board); }
+.desk-palette .tkboard { background: none; }
 .desk-palette[data-tab="tasks"] .desk-drag { border-bottom-color: var(--line); }
 .desk-palette[data-tab="tasks"] .salist.tasks .sarow:hover { background: var(--raised); }
 /* The size handle sits on whichever edge is FREE, which anchored is the left
@@ -6503,14 +6933,27 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
 .desk-pane-body > .diff { min-height: 100%; }
 .desk-pane-body > .fwrap { height: 100%; }
 .instance-conversation { position: relative; height: 100%; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-.instance-conversation .satx { flex: 1; min-height: 0; overflow-y: auto; }
+/* The wash on the pane rather than on its scroller, the way the conversation
+   keeps it on `.main` rather than `.scroll`: the fade under the composer takes
+   the alpha out of the scroller, and a wash on the scroller would fade with it,
+   leaving the pane's white band behind. */
+.instance-conversation { background: var(--wash); }
+.instance-conversation .satx { flex: 1; min-height: 0; overflow-y: auto; background: none; }
 /* Room for the composer, and the glass the transcript scrolls under -- but only
    where there IS one. A finished node's record has nothing to type into, and
    reserving the composer's 150px there left a blank band under its last line
-   that read as the answer having been cut off. */
-.instance-conversation[data-composer="true"] .satx { padding-bottom: 176px; }
-.instance-conversation[data-composer="true"]::after { content: ''; position: absolute; z-index: 4;
-  left: 0; right: 0; bottom: 0; height: 140px; pointer-events: none; background: var(--ink); }
+   that read as the answer having been cut off. Sized for the dock as it rests
+   with the direct-chat hint row inside it (`.subagents-handoff`, 15px plus its
+   6px margin), so every number below moves if that row ever does -- including
+   the fullscreen reserve further down, which is cut to the same dock. */
+.instance-conversation[data-composer="true"] .satx { padding-bottom: 197px; --glass: 161px; }
+/* The record stops being painted before it reaches the composer, the way the
+   conversation's own scroller does (see .scroll): a band painted over it would
+   have to match the wash behind it, and a flat band on a gradient is a seam. */
+.instance-conversation[data-composer="true"] .satx {
+  -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - var(--glass) - 32px), transparent calc(100% - var(--glass)));
+  mask-image: linear-gradient(180deg, #000 calc(100% - var(--glass) - 32px), transparent calc(100% - var(--glass)));
+}
 .instance-dock { bottom: calc(18px - var(--desk-pad)); }
 .instance-dock.sasend { display: block; padding: 0 22px; border-top: 0; }
 /* The page's own composer, one size down and one step quieter -- and nothing
@@ -6536,8 +6979,7 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
 .instance-qrow button { width: 20px; height: 20px; flex: none; border: 0; background: transparent; color: var(--faint); cursor: pointer; }
 
 @container desk-pane (max-height: 720px) {
-  .instance-conversation[data-composer="true"] .satx { padding-bottom: 148px; }
-  .instance-conversation[data-composer="true"]::after { height: 118px; }
+  .instance-conversation[data-composer="true"] .satx { padding-bottom: 169px; --glass: 139px; }
   .instance-dock { bottom: 8px; }
   .instance-dock.sasend { padding: 0 12px; }
   .instance-dock .dock-in { padding: 8px 10px; border-radius: 14px; }
@@ -6548,8 +6990,7 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
 }
 
 @container desk-pane (max-height: 500px) {
-  .instance-conversation[data-composer="true"] .satx { padding-bottom: 120px; }
-  .instance-conversation[data-composer="true"]::after { height: 94px; }
+  .instance-conversation[data-composer="true"] .satx { padding-bottom: 141px; --glass: 115px; }
   .instance-dock { bottom: 6px; }
   .instance-dock.sasend { padding: 0 8px; }
   .instance-dock .dock-in { padding: 6px 8px; border-radius: 12px; }
@@ -6567,7 +7008,7 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
 .desk-grid[data-solo="true"] .desk-pane > header { height: 46px; padding: 0 14px 0 18px; }
 .desk-grid[data-solo="true"] .satx { padding: 26px 22px; }
 .desk-grid[data-solo="true"] .instance-conversation[data-composer="true"] .satx {
-  padding-bottom: calc(190px + 26px); }
+  padding-bottom: calc(211px + 26px); }
 
 /* The grid passes pointer events through so the chat behind it stays usable
    between panes; a divider has to take them back, or the seam a reader can see
@@ -7478,81 +7919,16 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
   box-shadow: var(--elev); padding: 14px 15px 16px; margin-top: 0; overflow: hidden;
   align-content: start;
 }
+/* A node's record (features/tasks/styles.css's `.tkrecord`) on the
+   conversation's own wash, the whole pane body rather than a
+   panel inside it: a white card on a white pane has no edge to read, and a
+   tinted box around the cards would be one frame too many. Docked, that is the
+   view; full screen, the node's own framed column beside the board. */
+.tkview:not(.full):has(.tkrecord),
+.tkwork .tkcard:has(.tkrecord) {
+  background: var(--wash);
+}
 
-/* ── one node's conversation ───────────────────────────────────────────
-   Covers the detail card rather than sitting beside it: it is the same node,
-   read at a different depth, and two panels about one step is one too many.
-   No input anywhere in here -- the record is read, not continued. This
-   reuses the transcript's own vocabulary for a turn (proto.css says as
-   much): a right-aligned bubble is what was said TO this node, and its own
-   actions and timestamp show only on hover, the way a turn's do -- at rest
-   a message is only its words. */
-.tkdisp { display: flex; flex-direction: column; align-items: flex-end; margin: 4px 0; }
-.tkdispb { max-width: 82%; background: var(--raised); border-radius: 15px 15px 4px 15px;
-  padding: 9px 15px; font-size: 13.5px; line-height: 1.6; color: var(--text);
-  white-space: pre-wrap; overflow-wrap: break-word; }
-/* A mask fades the tail rather than cutting it at a line count -- the clamp
-   reads as "this continues", not as "this ended here". */
-.tkdispb.tkclamp { max-height: 20em; overflow: hidden;
-  -webkit-mask-image: linear-gradient(180deg, #000 70%, transparent 100%);
-  mask-image: linear-gradient(180deg, #000 70%, transparent 100%); }
-/* Only the fence markers are set apart -- the injected body between them
-   stays ordinary bubble text, read as prose rather than re-typeset as
-   machinery. */
-.tkuntrusted { color: var(--faint); }
-.tkmore { margin-top: 6px; background: none; border: 0; padding: 0;
-  font-size: 11.5px; color: var(--muted); cursor: pointer; }
-.tkmore:hover { color: var(--text); }
-/* A dispatch's or an answer's footer: a small icon-only copy action and the
-   timestamp it went out or came back at -- shown on hover or focus, not
-   permanently. */
-.tkansfoot { display: flex; align-items: center; gap: 8px; margin-top: 6px;
-  opacity: 0; transition: opacity .12s; }
-.tkdisp:hover .tkansfoot, .tkdisp:focus-within .tkansfoot,
-.tkanswer:hover .tkansfoot, .tkanswer:focus-within .tkansfoot {
-  opacity: 1;
-}
-.tkfootcopy { display: grid; place-items: center; width: 22px; height: 22px;
-  border-radius: 6px; color: var(--faint); }
-.tkfootcopy:hover { color: var(--text); background: var(--surface); }
-.tkfootcopy svg { width: 13px; height: 13px; }
-.tkturnmeta { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
-
-/* A bare fold line with a hairline under the whole of it (fold and body
-   alike), and a rotating chevron rather than a swapped glyph -- the
-   prototype's own `.tfold` / `.tfh` / `.cv`, not a bordered box. */
-.tkproc { margin: 14px 0 12px; }
-.tkproc::after { content: ""; display: block; height: 1px; background: var(--line); }
-.tkprock { display: flex; align-items: center; gap: 7px; width: fit-content; max-width: 100%;
-  text-align: left; background: none; border: 0; padding: 3px 8px; margin: 0 -8px 6px;
-  border-radius: 7px; font-size: 13px; color: var(--faint); cursor: pointer; }
-.tkprock:hover { color: var(--text); }
-.tkprocn { color: var(--faint); font-family: var(--mono); font-size: 11px; }
-.tkchev { flex: none; width: 11px; height: 11px; color: var(--faint); transition: transform .16s ease; }
-.tkprock[aria-expanded="true"] .tkchev { transform: rotate(90deg); }
-.tkprocb { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
-.tkthink { display: flex; flex-direction: column; }
-.tkthink .tkthh { display: flex; align-items: center; gap: 7px; width: fit-content;
-  background: none; border: 0; padding: 0; font-size: 11.5px; color: var(--faint); cursor: pointer; }
-.tkthink .tkthh:hover { color: var(--text); }
-/* The thinking label shimmers while the thought is still live -- a gradient
-   sweep clipped to the text, with a static fallback under reduced motion. */
-.tkthink.live .tkthlb {
-  background: linear-gradient(90deg, var(--muted) 30%, var(--text) 50%, var(--muted) 70%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: tkthshine 1.7s linear infinite;
-}
-@keyframes tkthshine { to { background-position: -200% 0; } }
-@media (prefers-reduced-motion: reduce) {
-  .tkthink.live .tkthlb { animation: none; color: var(--faint); }
-}
-.tkthink blockquote { margin: 5px 0 0; padding-left: 10px;
-  border-left: 2px solid var(--line); font-size: 12px; line-height: 1.7;
-  color: var(--muted); }
-.tkans { font-size: 12.5px; line-height: 1.8; color: var(--text); white-space: pre-wrap; }
 /* Where the answer would be, when the run stopped instead of answering. */
 .tkstop { font-size: 12px; line-height: 1.7; color: var(--muted);
   background: var(--surface); border-radius: 8px; padding: 9px 11px; }

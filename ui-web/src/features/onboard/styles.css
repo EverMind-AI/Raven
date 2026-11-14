@@ -60,7 +60,7 @@
 .ob-btn { font: inherit; font-size: 14px; padding: 8px 20px; border-radius: 8px; cursor: pointer; }
 .ob-btn:focus-visible { outline: 2px solid var(--warm); outline-offset: 2px; }
 .ob-btn:disabled { opacity: .4; cursor: not-allowed; filter: none; }
-.ob-primary { border: 1px solid var(--amber); background: var(--amber); color: var(--ink-on-accent); font-weight: 600; }
+.ob-primary { border: 1px solid var(--amber); background: var(--amber); color: var(--ink-on-amber); font-weight: 600; }
 .ob-primary:hover { filter: brightness(1.05); }
 .ob-ghost { border: 1px solid var(--line); background: none; color: var(--muted); }
 .ob-ghost:hover { color: var(--text); border-color: var(--amber); }

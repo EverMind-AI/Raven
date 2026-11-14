@@ -1,4 +1,4 @@
-"""Tests for the Imported Conversation store and its runner (`raven.trajectory.imported`)."""
+"""Tests for the Imported Session store and its runner (`raven.trajectory.imported`)."""
 
 from __future__ import annotations
 
@@ -103,6 +103,31 @@ def test_imports_live_under_the_raven_home(tmp_path, monkeypatch):
     assert imp.imports_root() == tmp_path / "home" / "imports"
 
 
+# ── the on-disk schema id ──────────────────────────────────────────────
+
+
+def test_the_on_disk_schema_id_keeps_the_spelling_earlier_builds_wrote():
+    # Spelled out rather than taken from SCHEMA: packages already on disk name
+    # themselves with this id, and a reader that followed a renamed constant to
+    # a new spelling would read back nothing but its own new packages.
+    assert imp.SCHEMA == "raven_imported_conversation"
+
+
+def test_a_package_from_an_earlier_build_is_read_back(tmp_path, root):
+    package, _ = builders.build_export(tmp_path / "src")
+    imported_session = imp.import_bytes(package.read_bytes(), package.name, root=root).session
+    meta_path = imported_session.path / imp.META_FILE
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["schema"] = "raven_imported_conversation"
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+    again = imp.get(imported_session.key, root)
+    assert again is not None
+    assert again.id == imported_session.id
+    assert again.meta["schema"] == "raven_imported_conversation"
+    assert [item.id for item in imp.list_sessions(root)] == [imported_session.id]
+
+
 # ── importing real packages ────────────────────────────────────────────
 
 
@@ -119,15 +144,15 @@ def test_import_lays_out_the_conversation(tmp_path, root, build, kind):
     data = package.read_bytes()
     outcome = imp.import_bytes(data, f"/somewhere/{package.name}", root=root)
     assert outcome.status == imp.STATUS_IMPORTED
-    conversation = outcome.conversation
-    assert conversation.kind == kind
-    assert conversation.key == imp.key_of(conversation.id)
-    files = {p.name for p in conversation.path.iterdir()}
+    imported_session = outcome.session
+    assert imported_session.kind == kind
+    assert imported_session.key == imp.key_of(imported_session.id)
+    files = {p.name for p in imported_session.path.iterdir()}
     assert files == {"meta.json", "package", "state", "session.jsonl"}
-    assert (conversation.path / "state" / "logs" / "audit-spans.log").is_file()
-    assert _residue(root) == [p for p in _residue(root) if p.startswith(conversation.id)]
-    meta = conversation.meta
-    assert meta["schema"] == imp.SCHEMA and meta["format_version"] == 1 and meta["id"] == conversation.id
+    assert (imported_session.path / "state" / "logs" / "audit-spans.log").is_file()
+    assert _residue(root) == [p for p in _residue(root) if p.startswith(imported_session.id)]
+    meta = imported_session.meta
+    assert meta["schema"] == imp.SCHEMA and meta["format_version"] == 1 and meta["id"] == imported_session.id
     assert meta["source_name"] == package.name
     assert meta["sha256"] == hashlib.sha256(data).hexdigest()
     assert meta["size_bytes"] == len(data)
@@ -140,7 +165,7 @@ def test_import_lays_out_the_conversation(tmp_path, root, build, kind):
 
 def test_meta_of_an_export(tmp_path, root):
     package, _ = builders.build_export(tmp_path / "src")
-    meta = imp.import_bytes(package.read_bytes(), package.name, root=root).conversation.meta
+    meta = imp.import_bytes(package.read_bytes(), package.name, root=root).session.meta
     assert meta["title"] == builders.TITLE
     assert meta["original"]["title"] == builders.TITLE
     assert meta["turns"] == 2
@@ -152,7 +177,7 @@ def test_meta_of_an_export(tmp_path, root):
 
 def test_meta_of_a_bug_report(tmp_path, root):
     package, _ = builders.build_bug_report(tmp_path / "src", description="\n  The hotel   was never booked \nmore")
-    meta = imp.import_bytes(package.read_bytes(), package.name, root=root).conversation.meta
+    meta = imp.import_bytes(package.read_bytes(), package.name, root=root).session.meta
     assert meta["title"] == "The hotel was never booked"
     assert meta["report"]["description_first_line"] == "The hotel was never booked"
     assert meta["report"]["severity"] == "high"
@@ -164,7 +189,7 @@ def test_meta_of_a_bug_report(tmp_path, root):
 
 def test_meta_of_a_trajectory_report(tmp_path, root):
     package, _ = builders.build_report(tmp_path / "src")
-    meta = imp.import_bytes(package.read_bytes(), package.name, root=root).conversation.meta
+    meta = imp.import_bytes(package.read_bytes(), package.name, root=root).session.meta
     assert meta["title"] == builders.TITLE
     assert meta["original"]["created_at"]
     assert meta["report"] is None
@@ -183,7 +208,7 @@ def test_meta_of_a_trajectory_report(tmp_path, root):
     ],
 )
 def test_export_titles(root, manifest, expected):
-    meta = imp.import_bytes(_export_bytes(**manifest), "x.tar.gz", root=root).conversation.meta
+    meta = imp.import_bytes(_export_bytes(**manifest), "x.tar.gz", root=root).session.meta
     assert meta["title"] == expected
 
 
@@ -197,25 +222,25 @@ def test_export_titles(root, manifest, expected):
 )
 def test_report_titles(root, session, manifest_attempt, expected):
     manifest = {"format_version": 1, "attempt_id": manifest_attempt, "session_key": "tui:s"}
-    meta = imp.import_bytes(_report_bytes(session=session, manifest=manifest), "r.tar.gz", root=root).conversation.meta
+    meta = imp.import_bytes(_report_bytes(session=session, manifest=manifest), "r.tar.gz", root=root).session.meta
     assert meta["title"] == expected
 
 
 def test_a_long_title_is_cut_to_the_storage_limit(root):
-    meta = imp.import_bytes(_export_bytes(source={"title": "x" * 500}), "x.tar.gz", root=root).conversation.meta
+    meta = imp.import_bytes(_export_bytes(source={"title": "x" * 500}), "x.tar.gz", root=root).session.meta
     assert meta["title"] == "x" * TITLE_STORAGE_MAX
 
 
 def test_bug_report_titles(tmp_path, root):
     package, _ = builders.build_bug_report(tmp_path / "src", description="  \n\n Second line wins\nthird")
-    meta = imp.import_bytes(package.read_bytes(), package.name, root=root).conversation.meta
+    meta = imp.import_bytes(package.read_bytes(), package.name, root=root).session.meta
     assert meta["title"] == "Second line wins"
 
 
 def test_odd_metadata_values_fall_back_instead_of_failing(root):
     manifest = {"format_version": 1, "attempt_id": ATT, "session_key": 5, "missing_artifacts": "x"}
     data = _report_bytes(manifest=manifest, redaction=b"[1]")
-    meta = imp.import_bytes(data, "r.tar.gz", root=root).conversation.meta
+    meta = imp.import_bytes(data, "r.tar.gz", root=root).session.meta
     assert meta["original"]["session_key"] is None
     assert meta["original"]["created_at"] == ""
     assert meta["missing"] == {"artifacts": 0, "messages": 0}
@@ -235,7 +260,7 @@ def test_odd_metadata_values_fall_back_instead_of_failing(root):
     ],
 )
 def test_transcript_unmatched_of_an_odd_type_falls_back(root, value, expected):
-    meta = imp.import_bytes(_export_bytes(transcript_unmatched=value), "x.tar.gz", root=root).conversation.meta
+    meta = imp.import_bytes(_export_bytes(transcript_unmatched=value), "x.tar.gz", root=root).session.meta
     assert meta["transcript_unmatched"] == expected
 
 
@@ -275,7 +300,7 @@ def test_a_refused_package_leaves_no_residue(root, data, code):
         imp.import_bytes(data, "x.tar.gz", root=root)
     assert caught.value.code == code
     assert _residue(root) == []
-    assert imp.list_conversations(root) == []
+    assert imp.list_sessions(root) == []
 
 
 def test_a_session_record_past_its_limit_leaves_no_residue(tmp_path, root):
@@ -329,14 +354,14 @@ def test_the_same_bytes_are_found_again(root):
     first = imp.import_bytes(data, "a.tar.gz", root=root)
     again = imp.import_bytes(data, "b.tar.gz", root=root)
     assert again.status == imp.STATUS_DUPLICATE
-    assert again.conversation.id == first.conversation.id
-    assert len(imp.list_conversations(root)) == 1
+    assert again.session.id == first.session.id
+    assert len(imp.list_sessions(root)) == 1
     assert not any((root / imp.STAGING_DIR).iterdir())
     forced = imp.import_bytes(data, "c.tar.gz", root=root, force=True)
     assert forced.status == imp.STATUS_IMPORTED
-    assert forced.conversation.id != first.conversation.id
-    assert len(imp.list_conversations(root)) == 2
-    assert imp.find_by_sha256(first.conversation.meta["sha256"], root) is not None
+    assert forced.session.id != first.session.id
+    assert len(imp.list_sessions(root)) == 2
+    assert imp.find_by_sha256(first.session.meta["sha256"], root) is not None
 
 
 def test_different_bytes_are_not_duplicates(root):
@@ -349,9 +374,9 @@ def test_different_bytes_are_not_duplicates(root):
 
 
 def test_list_is_newest_first_and_skips_what_is_not_an_import(root):
-    first = imp.import_bytes(_export_bytes(source={"title": "one"}), "a", root=root).conversation
+    first = imp.import_bytes(_export_bytes(source={"title": "one"}), "a", root=root).session
     time.sleep(0.01)
-    second = imp.import_bytes(_export_bytes(source={"title": "two"}), "b", root=root).conversation
+    second = imp.import_bytes(_export_bytes(source={"title": "two"}), "b", root=root).session
     (root / "not-hex").mkdir()
     (root / ("f" * 32)).mkdir()
     (root / ("e" * 32)).mkdir()
@@ -359,61 +384,61 @@ def test_list_is_newest_first_and_skips_what_is_not_an_import(root):
     (root / ("d" * 32)).mkdir()
     (root / ("d" * 32) / "meta.json").write_text(json.dumps({"schema": imp.SCHEMA, "format_version": 1, "id": "x"}))
     os.symlink(first.path, root / ("c" * 32))
-    assert [c.id for c in imp.list_conversations(root)] == [second.id, first.id]
+    assert [c.id for c in imp.list_sessions(root)] == [second.id, first.id]
 
 
 def test_list_of_a_missing_directory_is_empty(root):
-    assert imp.list_conversations(root) == []
+    assert imp.list_sessions(root) == []
 
 
 def test_read_session_and_trajectory_target(tmp_path, root):
     package, source = builders.build_export(tmp_path / "src")
-    conversation = imp.import_bytes(package.read_bytes(), package.name, root=root).conversation
-    session = imp.read_session(conversation.key, root)
+    imported_session = imp.import_bytes(package.read_bytes(), package.name, root=root).session
+    session = imp.read_session(imported_session.key, root)
     assert session is not None
     assert [m["content"] for m in session.messages] == [m["content"] for m in source.messages]
     assert session.metadata["title"] == builders.TITLE
-    state, key = imp.trajectory_target(conversation.key, root)
-    assert state == conversation.path / "state"
+    state, key = imp.trajectory_target(imported_session.key, root)
+    assert state == imported_session.path / "state"
     assert key == builders.SESSION
     assert imp.read_session("imported:" + "0" * 32, root) is None
     assert imp.trajectory_target("tui:x", root) is None
-    unrecorded = imp.import_bytes(_export_bytes(), "no-record.tar.gz", root=root).conversation
+    unrecorded = imp.import_bytes(_export_bytes(), "no-record.tar.gz", root=root).session
     assert not (unrecorded.path / imp.SESSION_FILE).exists()
     assert imp.read_session(unrecorded.key, root) is None
 
 
 def test_a_session_record_past_the_import_limit_is_not_read_whole(tmp_path, root):
     package, _ = builders.build_export(tmp_path / "src")
-    conversation = imp.import_bytes(package.read_bytes(), package.name, root=root).conversation
-    with (conversation.path / imp.SESSION_FILE).open("r+b") as record:
+    imported_session = imp.import_bytes(package.read_bytes(), package.name, root=root).session
+    with (imported_session.path / imp.SESSION_FILE).open("r+b") as record:
         record.truncate(ImportLimits().max_transcript_bytes + 1)
-    assert imp.read_session(conversation.key, root) is None
+    assert imp.read_session(imported_session.key, root) is None
 
 
 def test_rename(root):
-    conversation = imp.import_bytes(_export_bytes(), "a", root=root).conversation
-    renamed = imp.rename(conversation.key, "  My\n  analysis  ", root)
+    imported_session = imp.import_bytes(_export_bytes(), "a", root=root).session
+    renamed = imp.rename(imported_session.key, "  My\n  analysis  ", root)
     assert renamed.title == "My analysis"
-    again = imp.get(conversation.key, root)
+    again = imp.get(imported_session.key, root)
     assert again is not None and again.title == "My analysis" and again.meta["title_auto"] is False
-    assert not [p for p in conversation.path.iterdir() if p.name.endswith(".tmp")]
+    assert not [p for p in imported_session.path.iterdir() if p.name.endswith(".tmp")]
     with pytest.raises(ValueError):
-        imp.rename(conversation.key, "   ", root)
+        imp.rename(imported_session.key, "   ", root)
     with pytest.raises(ValueError):
-        imp.rename(conversation.key, "x" * (TITLE_STORAGE_MAX + 1), root)
-    assert imp.rename(conversation.key, "x" * TITLE_STORAGE_MAX, root).title == "x" * TITLE_STORAGE_MAX
+        imp.rename(imported_session.key, "x" * (TITLE_STORAGE_MAX + 1), root)
+    assert imp.rename(imported_session.key, "x" * TITLE_STORAGE_MAX, root).title == "x" * TITLE_STORAGE_MAX
     with pytest.raises(LookupError):
         imp.rename("imported:" + "0" * 32, "x", root)
 
 
 def test_delete(root):
-    conversation = imp.import_bytes(_export_bytes(), "a", root=root).conversation
-    assert imp.delete(conversation.key, root) is True
-    assert not conversation.path.exists()
-    assert imp.list_conversations(root) == []
+    imported_session = imp.import_bytes(_export_bytes(), "a", root=root).session
+    assert imp.delete(imported_session.key, root) is True
+    assert not imported_session.path.exists()
+    assert imp.list_sessions(root) == []
     assert not [p for p in root.iterdir() if p.name.startswith(imp.TRASH_PREFIX)]
-    assert imp.delete(conversation.key, root) is False
+    assert imp.delete(imported_session.key, root) is False
     assert imp.delete("imported:../../etc", root) is False
 
 
@@ -501,7 +526,7 @@ def test_the_slot_outlives_a_caller_that_stops_waiting(runner, root, monkeypatch
         runner.try_submit(_b64(data), "again.tar.gz")
     gate.release.set()
     assert first.result(10).status == imp.STATUS_IMPORTED
-    assert len(imp.list_conversations(root)) == 1
+    assert len(imp.list_sessions(root)) == 1
 
 
 @pytest.mark.parametrize(
@@ -621,7 +646,7 @@ def test_an_import_granted_before_its_thread_runs_survives_its_caller_leaving(ro
     assert not future.cancelled()
     release.set()
     assert future.result(10).status == imp.STATUS_IMPORTED
-    assert len(imp.list_conversations(root)) == 1
+    assert len(imp.list_sessions(root)) == 1
     assert runner.stop(timeout=10)
 
 

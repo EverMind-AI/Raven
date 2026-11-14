@@ -409,13 +409,24 @@ def _npm_registry(env: Mapping[str, str], cwd: str | None) -> str | None:
 
 
 def _npm_config(
-    env: Mapping[str, str], cwd: str | None, names: Sequence[str], deadline: float | None = None
+    env: Mapping[str, str],
+    cwd: str | None,
+    names: Sequence[str],
+    deadline: float | None = None,
+    *,
+    project: bool = True,
 ) -> dict[str, str] | None:
     """What npm, run in ``cwd`` with ``env``, holds for each of ``names``, or
     None when it cannot say; see :func:`_npm_registry`.
 
     ``deadline`` is the time the preparation must not pass: npm gets no longer
     than is left of it, and starting npm is most of what asking it costs.
+
+    ``project`` says whether the directory carries a project file of its own.
+    A launch that must not see one asks npm for the global and the user
+    configuration alone: the project file that sits in the directory is
+    passed over. The user configuration is read whatever this says, so the
+    operator's own registry still decides.
     """
     npm = shutil.which("npm", path=env.get("PATH") or os.environ.get("PATH", os.defpath))
     if npm is None:
@@ -426,9 +437,16 @@ def _npm_config(
     where = Path(cwd) if cwd else None
     while where is not None and not where.is_dir():
         where = where.parent if where.parent != where else None
+    command = [npm, "config", "get", *names]
+    if not project:
+        # npm's own words for it: the global and the user configuration
+        # alone, without the project file that sits in the directory. npm
+        # reads the user configuration whatever this says, so the operator's
+        # own registry still decides.
+        command.append("--location=global")
     try:
         done = subprocess.run(
-            [npm, "config", "get", *names],
+            command,
             cwd=where,
             env=dict(env),
             stdin=subprocess.DEVNULL,
@@ -650,12 +668,13 @@ def _npx_launch(
     cwd: str | None,
     deadline: float | None,
     cache_root: Path | None,
+    project: bool,
 ) -> list[str]:
     request = _npx_request(argv[1:])
     if request is None or _npm_registry_chosen(env):
         return argv
     where = Path(cwd) if cwd else Path.cwd()
-    if _npx_finds_locally(request, where):
+    if project and _npx_finds_locally(request, where):
         return argv
     if deadline is not None and time.monotonic() >= deadline:
         return argv
@@ -663,9 +682,9 @@ def _npx_launch(
         return argv
     if deadline is not None and time.monotonic() >= deadline:
         return argv
-    if _project_npmrc_names_a_registry(where, env):
+    if project and _project_npmrc_names_a_registry(where, env):
         return argv
-    config = _npm_config(env, str(where), ("registry", "prefix"), deadline) or {}
+    config = _npm_config(env, str(where), ("registry", "prefix"), deadline, project=project) or {}
     if config.get("registry", "").rstrip("/") != NPM_DEFAULT_REGISTRY.rstrip("/"):
         return argv
     if request.command is None and "prefix" in config and (_global_bin(config["prefix"]) / request.specs[0]).is_file():
@@ -1010,6 +1029,7 @@ def package_launch(
     local: bool = True,
     deadline: float | None = None,
     cache_root: Path | None = None,
+    project: bool = True,
 ) -> list[str]:
     """``argv``, or a command line that fetches the same package from a
     mirror, where a ``uvx`` or ``npx`` launch cannot reach its default
@@ -1049,11 +1069,18 @@ def package_launch(
     ``cache_root`` is where the install of an npx launch goes; a node keeps
     its own under its own directory rather than in the home of the user it
     runs as.
+
+    ``project`` says whether the launch's directory carries a project of its
+    own -- a ``.npmrc`` npm would read. A launch that must not see one says
+    so, and the registry questions then answer as if no project file existed:
+    no project file is looked for, and npm is asked for the global and the
+    user configuration alone. The operator's own registry still decides; no
+    directory's ``.npmrc`` does.
     """
     if not argv or not enabled(env):
         return list(argv)
     try:
-        return _package_launch(list(argv), env, cwd, local, deadline, cache_root)
+        return _package_launch(list(argv), env, cwd, local, deadline, cache_root, project)
     except Exception as exc:  # noqa: BLE001 - the mirror is a way around an outage, never a gate
         logger.opt(exception=exc).warning("could not decide on a mirror for {!r}; it starts as configured", argv[0])
         return list(argv)
@@ -1066,12 +1093,13 @@ def _package_launch(
     local: bool,
     deadline: float | None,
     cache_root: Path | None,
+    project: bool,
 ) -> list[str]:
     program = _program(argv[0])
     if program == "uvx":
         return _uvx_launch(argv, env, deadline)
     if program == "npx" and local:
-        return _npx_launch(argv, env, cwd, deadline, cache_root)
+        return _npx_launch(argv, env, cwd, deadline, cache_root, project)
     return argv
 
 
@@ -1101,6 +1129,7 @@ async def package_launch_async(
     local: bool = True,
     budget: float | None = None,
     cache_root: Path | None = None,
+    project: bool = True,
 ) -> list[str]:
     """``argv``, or a command line that fetches the same package from a mirror.
 
@@ -1112,9 +1141,14 @@ async def package_launch_async(
     pool has workers, and a launch that waited for one has less of its budget
     left. A preparation past the budget is abandoned -- the launch starts as
     it was configured, and the answer comes in time.
+
+    ``project`` says whether the launch's directory carries a project of its
+    own; see :func:`package_launch`.
     """
     deadline = time.monotonic() + budget if budget is not None else None
-    work = asyncio.to_thread(package_launch, argv, env, cwd, local=local, deadline=deadline, cache_root=cache_root)
+    work = asyncio.to_thread(
+        package_launch, argv, env, cwd, local=local, deadline=deadline, cache_root=cache_root, project=project
+    )
     if deadline is None:
         return await work
     try:

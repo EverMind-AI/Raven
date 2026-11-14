@@ -166,7 +166,7 @@ def test_the_extended_card_does_not_name_the_host_as_its_own_sub_agent():
     card advertises; naming it in the roster offers a second route to the agent
     the caller is talking to, under a second name.
     """
-    agents = [_Agent(GENERIC_AGENT, "Raven's own in-process sub-agent."), _Agent("Raven-Code", "Writes code.")]
+    agents = [_Agent(GENERIC_AGENT, "Raven's own in-process subagent."), _Agent("Raven-Code", "Writes code.")]
 
     card = build_extended_agent_card(A2aConfig(), base_url="/a2a", agents=agents)
 

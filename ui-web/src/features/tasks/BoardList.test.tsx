@@ -59,7 +59,7 @@ const source = (): TasksSource => ({
   list: async () => rows,
   one: async () => null,
   stop: async () => true,
-  node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }),
+  node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false, messages: [] }),
   roster: async () => [],
   board: async () => ({ board, lineage: {} }),
   setGroupStatus: async (key, gid, status) => {

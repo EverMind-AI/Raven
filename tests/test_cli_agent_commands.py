@@ -762,7 +762,7 @@ def test_workspace_sync_debug_detail_lifts_with_raven_logging(tmp_path: Path) ->
         sync_workspace_templates(tmp_path / "ws", silent=True)
     finally:
         logger.remove(sink_id)
-    assert any("workspace sync: created" in m for m in records)
+    assert any("workspace sync: wrote" in m for m in records)
 
 
 def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, turn_summary_off: bool = False):

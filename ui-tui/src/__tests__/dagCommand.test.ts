@@ -641,7 +641,7 @@ describe('/dag <node> on a branching run', () => {
     ]
 
     expect((await paged('triage', history)).lines[1]).toBe('selected: bug')
-    expect((await paged('fix', history)).lines[1]).toBe('not executed: decision missing')
+    expect((await paged('fix', history)).lines[1]).toBe('not executed: selection missing')
   })
 })
 

@@ -11,12 +11,12 @@
 | --- | --- | --- |
 | Skill | 可发现的操作过程，可附脚本和参考文件 | 新的运行时工具或无限制执行 |
 | SkillForge | 检索本地技能、记忆中的经验和 Skill Hub | 自动修改源代码 |
-| Memory Engine / EverOS | 跨对话持久化与召回 | 所有历史消息永远在模型上下文中 |
+| Memory Engine / EverOS | 跨会话持久化与召回 | 所有历史消息永远在模型上下文中 |
 | MCP 服务 | 外部服务提供的工具、资源或 prompt | 独立 Agent 会话 |
 | Plugin | 工具、hook、服务、记忆后端等运行时贡献 | 与宿主进程隔离 |
 | 专用 Agent | 自身身份、配置、工具和会话行为 | 自动访问全部宿主工具或凭据 |
 | [Playbook](playbooks.md) | 命名的可复用过程或图 | 被 SkillForge 索引的 skill |
-| [Evolver](evolver.md) | 独立的、由基准驱动的 harness 改进评估 | 生产 Agent 在对话中改写自身代码 |
+| [Evolver](evolver.md) | 独立的、由基准驱动的 harness 改进评估 | 生产 Agent 在会话中改写自身代码 |
 
 装配边界见[架构](architecture.md)，多 Agent 协作见[DAG 编排](orchestration.md)。
 
@@ -34,13 +34,14 @@ SkillForge 有三个来源：本地文件、通过配置的记忆后端召回的
 Skill Hub 候选。可用性取决于配置和服务连通性；目录搜索命中不证明 bundle 已安装，
 也不证明所需工具存在。
 
-搜索 Skill Hub 会把文字发出本机。两个初始化向导都会把共享目录地址
-（`https://skillhub.evermind.ai`）写入 `skillForge.router.hub.endpoint`，配置里已有地址时
-保留原值；开启期间，Raven 每次查找技能都会把对话中的文字（消息本身，或模型据此写出的查询）
-发送到这个地址。可以用设置弹窗「技能」页上的 Skill Hub 开关关闭，或把
-`skillForge.router.hub.enabled` 设为 `false`；地址会保留，重新打开时回到同一个目录。没有
-配置地址时不会搜索 Hub。关闭对下一次搜索即生效；网关启动时没有地址的话，打开后要等重新
-加载才开始搜索。
+搜索 Skill Hub 会把文字发出本机。该来源默认开启，使用共享目录
+（`https://skillhub.evermind.ai`）；配置可以在 `skillForge.router.hub.endpoint`
+指定其他地址，`RAVEN_SKILLHUB_URL` 会同时覆盖对话检索和 SkillHub 页面的地址（被拒绝的
+值会让该进程的对话检索直接关闭，而不是回落到共享目录）。开启期间，Raven 每次查找技能都会
+把会话中的文字（消息本身，或模型据此写出的查询）发送到这个地址。可以用设置弹窗「技能」页
+上的 Skill Hub 开关关闭，或把 `skillForge.router.hub.enabled` 设为 `false`；地址会保留，
+重新打开时回到同一个目录。旧配置里显式的 `null` endpoint 表示保持关闭。两个方向都在下一次
+搜索时生效，不需要重新加载。
 
 `skillForge.discovery` 默认 `pull`：在符合条件的轮次中提供简短的名称/描述菜单，
 模型用 `find_skill` 搜索、用 `read_skill` 读取正文。`push` 则运行选择/注入管线，
@@ -63,8 +64,8 @@ Bundle 下载有独立的同意设置：
 应使用 blocklist。执行前检查脚本；目录安全分数不是安全保证，当前策略也不会仅因缺少
 分数就直接拒绝。成功安装记录在 `<workspace>/skills/hub/installs.jsonl`。
 
-网页端设置弹窗的「技能」页负责技能和 Skill Hub 搜索的开关；页上的「新增」会把你带到对话里，并替你写好半句
-请求——技能是让 Raven 在对话里安装的，受上面的同意设置约束。
+网页端设置弹窗的「技能」页负责技能和 Skill Hub 搜索的开关；页上的「新增」会把你带到会话里，并替你写好半句
+请求——技能是让 Raven 在会话里安装的，受上面的同意设置约束。
 
 ## 记忆与学习边界 { #memory-and-learning-boundaries }
 
@@ -75,7 +76,7 @@ EverOS 是默认记忆后端插件，与 Raven core 独立发行，通过 Memory
 应区分三个机制：
 
 1. 上下文组装决定本次模型调用看到什么，长历史可能被归档或压缩。
-2. 记忆存储和召回把选定知识保留到对话之外。
+2. 记忆存储和召回把选定知识保留到会话之外。
 3. 经验提炼由选用的记忆后端提供，通过该后端的插件设置配置。
    宿主不使用 `skillForge.extraction` 启动本地提炼管线。
 
@@ -90,7 +91,7 @@ SkillForge 负责技能检索、注入和下载包管理。宿主未实现反馈
 
 | 信息 | 合适位置 | 如何确认 |
 | --- | --- | --- |
-| 用户偏好或个人上下文 | 记忆后端 user track | 检查存储记录，在新对话测试召回 |
+| 用户偏好或个人上下文 | 记忆后端 user track | 检查存储记录，在新会话测试召回 |
 | Agent 经验或可复用案例 | 后端支持的 agent track | 查看后端实际返回的 case/skill |
 | 已审核操作指令 | 本地 Skill | 阅读正文，检查所需工具 |
 | 可重复多步骤执行 | [Playbook](playbooks.md) | 校验并测试保存的图 |
@@ -98,11 +99,11 @@ SkillForge 负责技能检索、注入和下载包管理。宿主未实现反馈
 | 失败运行证据 | [Trajectory bundle](trajectory-debugging.md) | 回放并保留相关工件 |
 
 EverOS 分别提供 user 与 agent 召回：用户记忆供应个人上下文，Agent case/skill 可作为
-SkillForge 候选。希望连接的对话应保持预期 `userId` 和 `agentId` 稳定。
+SkillForge 候选。希望连接的会话应保持预期 `userId` 和 `agentId` 稳定。
 不同 Agent 身份或记忆后端不自动共享同一记忆集合。
 
 可用不敏感偏好测试，例如“我喜欢先给简短清单，再写操作说明”。完成轮次，
-检查可用的记忆视图/后端记录，再以同一身份开启新对话并询问相关问题。
+检查可用的记忆视图/后端记录，再以同一身份开启新会话并询问相关问题。
 确认记录和检索上下文，而不只相信模型说“我记得”。若在测试问题中再次写出偏好，
 就不能证明发生了召回。
 
@@ -143,13 +144,13 @@ slow path 可消耗有限模型调用生成计划，无有效计划时使用确�
 
 | 现象 | 检查 |
 | --- | --- |
-| 新对话没有偏好 | 后端健康、索引完成情况、身份与召回相关性 |
+| 新会话没有偏好 | 后端健康、索引完成情况、身份与召回相关性 |
 | Skill 已列出但未使用 | 正文是否读取、所需工具、blocklist 和当前 Agent |
 | 任务完成后没有新技能 | 后端实际提炼支持；`skillForge.extraction` 本身不启动宿主管线 |
 | 长任务丢失细节 | 归档与当前窗口的区别、compaction、可重新读取的来源 |
 | 模型成本增加 | 后端提炼、embedding、Curator slow path，以及启用时的技能 rewrite/gating |
 
-记忆视图可能暴露私有对话和推断偏好。应另行检查后端的删除与保留控制；
+记忆视图可能暴露私有会话和推断偏好。应另行检查后端的删除与保留控制；
 删除宿主 session 或屏蔽 skill 不证明所有后端记录也已删除。
 
 ## 扩展工具或构建 Agent { #extend-tools-or-build-an-agent }
@@ -159,7 +160,7 @@ slow path 可消耗有限模型调用生成计划，无有效计划时使用确�
 插件安装器。
 
 网页端设置弹窗的「插件」页负责开关、重试和授权已配置的服务；页上的「新增」会把你带到
-对话里，由 Raven 从 PlugHub 目录接入服务；目录里没有的服务，要手改 `config.json` 的
+会话里，由 Raven 从 PlugHub 目录接入服务；目录里没有的服务，要手改 `config.json` 的
 `tools.mcpServers`。
 
 需要进程内工具、hook、服务或记忆后端时使用 Raven plugin。声明式

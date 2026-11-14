@@ -106,6 +106,16 @@ export interface InstanceModelReply {
   availableModels?: SubagentModelChoice[]
 }
 
+/* What `subagents.instances` answers: the rows, and how many direct-chat
+   entries this session still owes its main agent. The count rides the same
+   response (the runtime owns the list and clears it on the next main-agent
+   turn), so the source hands both over together rather than mapping the count
+   away and leaving the store with nothing to draw the hint from. */
+export interface InstancesAnswer {
+  rows: InstanceRow[]
+  pendingHandoff: number
+}
+
 export interface SubagentsSource {
   roster?(): Promise<SubagentRow[]>
   list(sessionId: string): Promise<AgentRow[]>
@@ -119,7 +129,7 @@ export interface SubagentsSource {
   /* The stateful handles, on their own axis from the runs above. Optional for
      the same reason `context` is: a server without the surface has none to hand
      out, and the panel says so rather than showing an empty group. */
-  instances?(sessionId: string): Promise<InstanceRow[]>
+  instances?(sessionId: string): Promise<InstancesAnswer>
   instanceHistory?(agent: string, handle: string): Promise<InstanceChat>
   /* Drops the registry row. The record directories stay on disk, which is why
      the verb is forget and not delete. */

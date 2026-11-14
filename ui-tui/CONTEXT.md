@@ -260,8 +260,8 @@ where its unmet dependencies and its error go too -- the turn-in mark standing i
 the ordinal's column so the text below starts exactly where the node's name does; then a hint naming both ways
 into a node. A node with nothing to say on the second line does not draw one. What a branch
 made of a node opens that same second line, ahead of the dependencies and the summary: why
-it was not executed, or what a decision selected (`→ docs`, or `→ (none)` for a `select:
-many` decision that chose nothing). The parts share the line's room in the order a reader
+it was not executed, or what a decision node selected (`→ docs`, or `→ (none)` for a `select:
+many` decision node that chose nothing). The parts share the line's room in the order a reader
 needs them -- the error, then the branch outcome, then the dependencies, then the node's
 guard as written, then the judge's route evidence, then the summary with what is left -- so a
 node that does not branch draws exactly the line it drew before. The evidence is clipped

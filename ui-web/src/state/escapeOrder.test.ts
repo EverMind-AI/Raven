@@ -34,6 +34,7 @@ import * as escapeOrder from './escapeOrder'
 import * as find from './find'
 import { installEscapeOrder } from './globalListeners'
 import * as mentions from './mentions'
+import * as navfly from './navfly'
 import * as page from './page'
 import * as perm from './perm'
 import * as plus from './plus'
@@ -44,7 +45,7 @@ import * as workdir from './workdir'
 
 import type { ComposerSource } from '../features/composer/types'
 
-/* The twelve, in the order Escape reaches them. Each item is the text the chain
+/* The seventeen, in the order Escape reaches them. Each item is the text the chain
    tests to decide whether that layer is on screen -- a selector for the seven
    elements, the predicate's own name for the three that have no element of
    their own to look at.
@@ -56,6 +57,7 @@ const LAYER_IDS = [
   '#veil',
   '#exportVeil',
   '#detail',
+  '#chrome-navfly',
   '#extAgentsPage',
   '#connectionsPage',
   '#knowledgePage',
@@ -79,6 +81,7 @@ const source = (path: string): string => readFileSync(path, 'utf8') as string
 const PAGE = [
   '<div class="app" data-rail="on">',
   '<button id="newBtn"></button>',
+  '<div class="chrome-navfly" id="chrome-navfly" data-open="false"></div>',
   '<div class="find" id="findBox" hidden><input id="sfind"></div>',
   '<div class="chat"><div class="dock"><div class="sheets" id="sheetRack"></div>',
   '<div class="dock-in"><textarea id="ta"></textarea>',
@@ -106,6 +109,7 @@ const PAGE = [
 const spies = {
   extAgentsClose: vi.fn(),
   pageShow: vi.fn(),
+  navflyClose: vi.fn(),
   permClose: vi.fn(),
   plusClose: vi.fn(),
   atClose: vi.fn(),
@@ -136,6 +140,9 @@ const LAYERS: Record<string, { up: () => void; taken: () => boolean }> = {
   '#veil': { up: flag('veil'), taken: () => cancelled.includes('cfNo') },
   '#exportVeil': { up: flag('exportVeil'), taken: () => cancelled.includes('exportClose') },
   '#detail': { up: flag('detail'), taken: lowered('detail') },
+  /* The rail's More group: a panel over the content, whose own close is the
+     store's verb, the way the composer bar's four are. */
+  '#chrome-navfly': { up: flag('chrome-navfly'), taken: called(spies.navflyClose) },
   '#extAgentsPage': { up: flag('extAgentsPage'), taken: called(spies.extAgentsClose) },
   '#connectionsPage': { up: flag('connectionsPage'), taken: called(spies.pageShow) },
   /* Closed by `page.show(null)` rather than by a verb of the domain's -- the
@@ -192,6 +199,7 @@ beforeEach(() => {
      test is which one the key reaches, not what any of them does. */
   vi.spyOn(extAgents, 'close').mockImplementation(spies.extAgentsClose)
   vi.spyOn(page, 'show').mockImplementation(spies.pageShow)
+  vi.spyOn(navfly, 'close').mockImplementation(spies.navflyClose)
   vi.spyOn(perm, 'close').mockImplementation(spies.permClose)
   vi.spyOn(plus, 'close').mockImplementation(spies.plusClose)
   vi.spyOn(mentions, 'close').mockImplementation(spies.atClose)
@@ -229,7 +237,7 @@ const key = (k: string, over: Partial<KeyboardEventInit> = {}): KeyboardEvent =>
 }
 
 describe('the Escape priority order', () => {
-  it('is the order the table reaches the sixteen layers in', () => {
+  it('is the order the table reaches the seventeen layers in', () => {
     expect(escapeOrder.ESCAPE_ORDER.map((layer) => layer.id)).toEqual([...LAYER_IDS])
   })
 
@@ -269,8 +277,8 @@ describe('the Escape priority order', () => {
   const pairs = LAYER_IDS.flatMap((first, i) =>
     LAYER_IDS.slice(i + 1).filter((second) => !shared(first, second)).map((second) => ({ first, second })))
 
-  it('has a hundred and seventeen pairs to answer for, every pair but the three that share a close', () => {
-    expect(pairs).toHaveLength(117)
+  it('has a hundred and thirty-three pairs to answer for, every pair but the three that share a close', () => {
+    expect(pairs).toHaveLength(133)
   })
 
   it('reaches the three pages that share a close in table order', () => {

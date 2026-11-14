@@ -158,9 +158,9 @@ class EvolverTreeStore:
     def save_node(self, node: HarnessNode) -> Path:
         """Write ``node``'s metadata JSON to ``nodes_dir/<node_id>.json``.
 
-        Atomic on POSIX (temp + rename, inherited from
-        :meth:`HarnessNode.save`). Idempotent — overwriting an existing
-        file with the same node id is allowed.
+        Atomic on every platform and serialised with the round's ledger
+        writer through :meth:`HarnessNode.save`'s sidecar lock. Idempotent —
+        overwriting an existing file with the same node id is allowed.
         """
         path = self._node_path(node.node_id)
         node.save(path)
@@ -288,6 +288,8 @@ class EvolverTreeStore:
             to disk and ready for evaluation
         :raises ImmutablePathError: if the patch hits the immutable
             kernel (spec §22)
+        :raises UnsafePathError: if the patch names an absolute, drive-
+            qualified, ``..``, or device-name path
         :raises ValueError: parent missing, malformed patch
         :raises GitOpError: git command failed (typically because
             the patch didn't apply cleanly to the parent's tree)

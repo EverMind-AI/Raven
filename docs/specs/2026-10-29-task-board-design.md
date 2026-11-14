@@ -290,7 +290,10 @@ one instruction"). The instruction carries:
   summary, followed by any `unassigned` left by an earlier failed update (6.1);
 - for a turn that belongs to some groups (What a turn may write, below), one paragraph
   naming them by id -- never by title, which is text an earlier call wrote -- and asking for
-  steps only there and wherever a listed handle goes (`task_board_scope.md`);
+  steps only there, wherever a listed handle goes, and on the matter of each question the
+  reply asked the user (`task_board_scope.md`); for a turn that also took in a message the
+  user sent while it ran, the paragraph names that message's matter too
+  (`task_board_scope_mid_turn.md`);
 - the rules: one step per group this turn advanced, in the conversation's language, its title
   saying what moved and its summary what moved and what is next or awaited -- not restating
   the reply; the lengths above; rewrite a group's summary whenever the turn changed where the
@@ -300,11 +303,24 @@ one instruction"). The instruction carries:
   matter belongs to that matter, and leaves this one as it is; open a group only for a
   matter no existing group covers, reopening a completed one instead of duplicating it; no
   step for a turn that advanced nothing; mark a group completed when it is done or the user
-  dropped it; place every listed handle exactly once.
+  dropped it; place every listed handle exactly once;
+- last, when the reply has any, its sentences that end in a question mark -- closing
+  emphasis, a bracket or a quote after the mark allowed (a half-width `>` included), and an
+  exclamation mark after the question mark allowed and dropped -- quoted from it without its
+  list markers or strong emphasis (single emphasis stays as written), each once and at most
+  the last eight, read one message at a time the way the reader was shown them (a cut answer
+  together with its continuation), fenced code blocks and quoted lines left out, for the
+  model to sort: each that asks the user to
+  answer, confirm or decide goes in the `questions` of its matter's step, which makes that
+  step `needs_you`; one not put to the user, or that only repeats a question still open
+  from an earlier turn, is skipped (`task_board_asked.md`). Left to recall them from a
+  long reply, the model most often skipped the question of a turn that had also started
+  work, and wrote the group `running`.
 
-Both blocks sit between `[BEGIN ...]` / `[END ...]` markers under a sentence calling them
-records to read as data: they hold text earlier calls wrote, sometimes carried over from tool
-output, and the instruction is a user-role message. The rules also say what a group is: the
+The three records sit between `[BEGIN ...]` / `[END ...]` markers, each under a sentence calling
+it data rather than instructions: the board and the dispatch list hold text earlier calls wrote,
+sometimes carried over from tool output, and the question marks are quoted from this turn's
+reply. The instruction is a user-role message. The rules also say what a group is: the
 matter the user pursues, titled by the matter rather than by one action inside it, with every
 request a matter even when the turn finished it.
 
@@ -379,14 +395,19 @@ group for (5.1.1) belongs to that group. The owning groups are resolved on the b
 update queue hands over, where the update before this one may just have placed the run. The
 update is then confined before it is checked: steps on the owning groups stay, and so does
 every step that places a dispatch, wherever it puts it, a new group included -- the work has
-to land somewhere -- with the `groups` changes on the groups those steps keep. A step or
-change on any other matter, and a new group with no dispatch in it, is dropped rather than
-refused, so it never costs an attempt. The instruction names the owning groups so the model
-writes to them; the confinement, not the instruction, is what keeps the update to them. A
+to land somewhere -- and every step that asks the user something, since a question that went
+out with the reply has to land somewhere too; with the `groups` changes on the groups those
+steps keep. A step or change on any other matter, and a new group with neither a dispatch nor
+a question in it, is dropped rather than refused, so it never costs an attempt. A turn that
+took in a message the user sent while it ran is not confined at all: that message may be
+about any matter, only the model can tell which, and the instruction names it beside the
+owning groups. The instruction names the owning groups so the model
+writes to them; the confinement, not the instruction, is what keeps the update to them --
+except in a turn that took in a mid-turn message, where the instruction alone does. A
 run no step has placed yet -- still in `unassigned` -- names no group, and a turn with no
-owning group is not confined. The cost: a delegated result that also moved another matter
-does not record it there, and a matter that first comes up in such a turn gets its group at
-a later turn.
+owning group is not confined. The cost: a delegated result that also moved another matter,
+without asking the user anything about it, does not record it there, and such a matter that
+first comes up in that turn gets its group at a later turn.
 
 **Ordering.** Two locks per session in the board service. The update queue holds a
 post-turn update across its model call, so the next turn's update is built on this one's
@@ -471,7 +492,10 @@ about this matter. It puts a bar at the top of the composer card (`MoveOnBar`) -
 title with its id, then its summary, one line each, and a cross that puts it away -- and the
 reader in the composer. The bar is the page's alone until the message goes: the message
 carries it (`turn.send`'s `move_on`, below), and the bar goes with it, so neither reaches the
-server without the other. The server keeps a note beside the board, as it keeps a set-aside, and the turn the message
+server without the other. The message also names the group in its own words: it opens with the
+heading Answer's draft opens with (`On "<title>":`), unless it already carries that heading. The
+note below reaches only the turn the message opens; the words stay in the conversation, so later
+turns, and the reader's own bubble, still say which matter it was about. The server keeps a note beside the board, as it keeps a set-aside, and the turn the message
 opens reads, in its runtime context, which group it moves on, by id, title and where it
 stands; the turn's own board update reads the same line, and is kept to that group (3,
 What a turn may write). A message sent while a turn runs waits for a turn of its own rather
@@ -547,9 +571,12 @@ attempt is logged with its faults, a salvage with a warning, and an update that 
 with a warning even when it left nothing new to park.
 
 6.2 **An answer in text.** With the tool choice left to the model, a reply may carry text, or
-another tool's call, instead of `task_board`. It counts as a failed attempt under 3's limit:
-the reply is kept as text -- another tool's call is never run -- and the model is told to
-answer with the call.
+another tool's call, instead of `task_board`. A reply whose whole text is the call written
+out -- a JSON object naming the action asked for, bare or in a fence -- is read as that call,
+and a refusal of it goes back as the result of the call it stood for: shown its own text
+again, a model tends to write the call out again. Any other text counts as a failed attempt
+under 3's limit: the reply is kept as text -- another tool's call is never run -- and the
+model is told to answer with the call.
 
 6.3 **History edits.** A step never points at a turn the log no longer holds. `session.undo`
 drops the steps whose `turn_at` belongs to a turn it removed, and groups left with no steps.

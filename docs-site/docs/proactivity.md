@@ -13,7 +13,7 @@ services. They have different purposes and independent lifecycles:
 
 | Mechanism | Use it when | What starts the work |
 | --- | --- | --- |
-| Sentinel | Raven should decide whether a contextual reminder or follow-up is useful | A periodic evaluation of memory, recent conversations, and derived signals |
+| Sentinel | Raven should decide whether a contextual reminder or follow-up is useful | A periodic evaluation of memory, recent sessions, and derived signals |
 | Cron | You want an explicitly scheduled task or reminder | A user-created schedule |
 | Heartbeat | You maintain periodic tasks in `HEARTBEAT.md` | Its own timer or an early wake request |
 
@@ -104,7 +104,7 @@ reminders. Plain nudges use these destinations even when task discovery is
 disabled.
 
 - `"channel:chat_id"`: a specific recipient; preferable when a channel has
-  multiple conversations.
+  multiple sessions.
 - `"channel"`: resolve the most recent recipient in that channel at fire time.
 - `"*"`: expand to enabled gateway channels and resolve their recent recipients.
 
@@ -170,7 +170,7 @@ at an exact minute. Targets default to an empty list, so enabling discovery
 alone does not deliver a menu. By default a menu has at most four options and
 expires after 60 minutes.
 
-Reply with `/pick N` in the same conversation for deterministic option selection
+Reply with `/pick N` in the same session for deterministic option selection
 without a classifier call. Bare numbers and natural-language choices require a
 configured model provider and model for the classifier, and sufficient confidence
 in its result. Without that classifier, use `/pick N` to select an option. Then
@@ -224,7 +224,7 @@ add requests. Fast paths can skip that request. Task discovery, optional daily
 analysis, routine validation, behavior extraction, and spawned tasks can add
 their own model or tool costs. A 30-minute interval is not a total cost cap.
 
-The Planner may receive memory, recent conversation excerpts, selected
+The Planner may receive memory, recent session excerpts, selected
 `attention.md` sections, and folded behavior events. Runtime state and feedback
 persist across restarts; see [State and feedback](proactivity-design.md#state-and-feedback)
 for the files and their roles.

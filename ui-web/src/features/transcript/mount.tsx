@@ -4,10 +4,11 @@ import { createRoot } from 'react-dom/client'
 import { holdsHost } from '../../state/session/hosts'
 import * as citations from './citations'
 import * as store from './store'
+import * as tail from './tail'
 import { AgentStageView, StageView } from './TranscriptPage'
 
 import type { AgentCtxLike } from './store'
-import type { AnswerData, HistoryMessage, Lane, NoteHandle, StepHandle } from './types'
+import type { AnswerData, HistoryMessage, Lane, NoteHandle, StageOpts, StepHandle } from './types'
 import type { ReactElement } from 'react'
 import type { Root } from 'react-dom/client'
 
@@ -110,6 +111,22 @@ export function shownLane(): Lane | null {
   return host ? HOSTS.get(host)?.lane ?? null : null
 }
 
+/* Mounts the turn that holds segment `id` on the stage's lane, if the Lane
+   Window had left it out, and says whether it had. Synchronous, because every
+   caller's next line looks for that turn's row in the drawn DOM. */
+export function reveal(id: number): boolean {
+  const lane = shownLane()
+  if (!lane) return false
+  const was = [lane.winFrom, lane.winTo]
+  flushSync(() => store.revealWindow(lane, id))
+  return lane.winFrom !== was[0] || lane.winTo !== was[1]
+}
+
+tail.onDown(() => {
+  const lane = shownLane()
+  if (lane) store.windowToTail(lane)
+})
+
 /* ── the public face the page's own machinery calls ───────────────────── */
 
 /* Answers the segment's id: a mid-turn bubble may have to be taken back when
@@ -205,7 +222,7 @@ export function history(messages: HistoryMessage[]): void {
 
 export function delivered(p: {
   label: string; isDag: boolean; status?: string; open: () => void; body?: string; output?: string; outputTruncated?: boolean | null
-  at?: number; turnId?: string
+  at?: number; turnId?: string; runId?: string | null; nodeId?: string | null
 }): void {
   store.delivered(mainLane(), p)
 }
@@ -233,8 +250,7 @@ export function redraw(): void {
 /* ── the agent stage: a delegated run in a workspace pane ──────────────
    Painted synchronously (a caller may read the drawn DOM in the same task),
    keeping the reader's scroll unless they were at the tail. */
-export function agentStage(box: HTMLElement, ctx: AgentCtxLike | null,
-  opts?: { key?: string; empty?: string; reset?: boolean } | null): void {
+export function agentStage(box: HTMLElement, ctx: AgentCtxLike | null, opts?: StageOpts | null): void {
   const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 4
   const top = box.scrollTop
   const lane = laneIn(box, false, (l) => <AgentStageView lane={l} />)

@@ -119,11 +119,15 @@ describe('the rail', () => {
     }
   })
 
-  it('imports a conversation from its own row under the module rows, and says which file is on its way', () => {
+  it('imports a conversation from the row the More group holds, and says which file is on its way', () => {
     const pick = vi.spyOn(imported, 'pick').mockImplementation(() => {})
     render()
     const nav = document.querySelector('nav.rail-nav') as HTMLElement
-    expect(Array.from(nav.children).map((b) => b.id)).toEqual(['newBtn', 'agentsBtn', 'knowledgeBtn', 'boardsBtn', 'importedBtn'])
+    /* The group's row is the strip's last, and the import row is inside the
+       panel that row opens rather than in the strip itself. */
+    expect(Array.from(nav.children).map((b) => b.id || b.className)).toEqual([
+      'newBtn', 'agentsBtn', 'knowledgeBtn', 'boardsBtn', 'chrome-navfly-anch',
+    ])
     const button = el('importedBtn') as HTMLButtonElement
     const idle = button.textContent
     expect(idle).not.toBe('')
@@ -341,7 +345,7 @@ describe('the task board button', () => {
         list: async () => [],
         one: async () => null,
         stop: async () => true,
-        node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }),
+        node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false, messages: [] }),
         roster: async () => [],
         boards: async () => {
           calls += 1
@@ -357,11 +361,12 @@ describe('the task board button', () => {
     resetSources()
   })
 
-  it('sits after Knowledge and before importing a conversation', () => {
+  it('sits after Knowledge and before the More group', () => {
     render()
     const ids = Array.from(rail().querySelectorAll('nav button')).map((b) => b.id)
     expect(ids.indexOf('boardsBtn')).toBe(ids.indexOf('knowledgeBtn') + 1)
-    expect(ids.indexOf('importedBtn')).toBe(ids.indexOf('boardsBtn') + 1)
+    expect(ids.indexOf('navMoreBtn')).toBe(ids.indexOf('boardsBtn') + 1)
+    expect(ids.indexOf('importedBtn')).toBe(ids.indexOf('navMoreBtn') + 1)
   })
 
   it('asks for the count once the rail mounts, before the page is ever opened', async () => {

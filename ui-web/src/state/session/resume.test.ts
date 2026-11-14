@@ -72,10 +72,12 @@ function wire(): void {
       instances: () => {
         instanceCalls += 1
         if (listFails) return Promise.reject(new Error('gateway down'))
-        if (listGate) return listGate.then(() => listed)
+        if (listGate) return listGate.then(() => ({ rows: listed, pendingHandoff: 0 }))
         /* Resolved a few microtasks later when a test asks for it, so a second
            waiter arrives while the first read is still in flight. */
-        return listSlow ? Promise.resolve().then(() => Promise.resolve()).then(() => listed) : Promise.resolve(listed)
+        return listSlow
+          ? Promise.resolve().then(() => Promise.resolve()).then(() => ({ rows: listed, pendingHandoff: 0 }))
+          : Promise.resolve({ rows: listed, pendingHandoff: 0 })
       },
     },
   })
@@ -512,7 +514,7 @@ describe('where a tab lands', () => {
   })
 })
 
-describe('an imported conversation', () => {
+describe('an imported session', () => {
   it('reads back no run and no window: they were on the machine that recorded it', async () => {
     const KEY = 'imported:' + 'a'.repeat(32)
     await resume(KEY, ['run-7'])

@@ -419,6 +419,40 @@ class TestSessionNeverRecordsTheScratch:
         assert TURN_SCRATCH_KEY not in on_disk
         assert stored[0]["content"] == "hello"
 
+    def test_the_inbound_revert_takes_the_attachment_note_record_with_it(self, tmp_path: Path) -> None:
+        """The revert files the user's own words; a mark whose text is gone would
+        count files the next request never carried."""
+        from raven.agent.window.parts import ATTACHMENT_NOTES_KEY
+
+        note = "[Attachment: report.pdf (path: /tmp/report.pdf)]"
+        message = _envelope(f"{_RUNTIME}\n\nlook at this\n\n{note}")
+        message[ATTACHMENT_NOTES_KEY] = note
+
+        stored, on_disk = self._save(tmp_path, [message], inbound_original="look at this")
+
+        assert stored[0]["content"] == "look at this"
+        assert ATTACHMENT_NOTES_KEY not in stored[0]
+        assert ATTACHMENT_NOTES_KEY not in on_disk
+
+    def test_a_block_list_keeps_the_note_record_with_the_notes(self, tmp_path: Path) -> None:
+        """Blocks are not reverted to the inbound words, so the notes (and their
+        record) stay: the request really carried them."""
+        from raven.agent.window.parts import ATTACHMENT_NOTES_KEY
+
+        note = "[Attachment: report.pdf (path: /tmp/report.pdf)]"
+        content = [
+            {"type": "text", "text": _RUNTIME},
+            {"type": "text", "text": f"look at this\n\n{note}"},
+        ]
+        message = _envelope(content)
+        message[ATTACHMENT_NOTES_KEY] = note
+
+        stored, _ = self._save(tmp_path, [message], inbound_original="look at this")
+
+        texts = _texts(stored[0]["content"])
+        assert any(note in t for t in texts)
+        assert stored[0].get(ATTACHMENT_NOTES_KEY) == note
+
     def test_a_block_list_inbound_drops_only_the_scratch_block(self, tmp_path: Path) -> None:
         content = [
             {"type": "text", "text": _RUNTIME},

@@ -294,6 +294,80 @@ def test_optional_keys_fall_back_per_slot_to_the_host_config(grounded, tmp_path)
     assert data["tools"]["web"]["search"]["apiKey"] == "host-serper"
 
 
+def _host_web(tmp_path: Path, web: dict) -> None:
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(json.dumps({"tools": {"web": web}}))
+
+
+def test_a_host_on_the_vendor_table_hands_its_web_keys_down(grounded, tmp_path, monkeypatch):
+    """A host set up on a current raven keeps its keys under tools.web.providers,
+    not in the two pre-vendor leaves the secret slots read. Rendered from the
+    leaves alone, this lane launched keyless on such a host: web_search
+    withheld while the host's own tools searched fine."""
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    _host_web(
+        tmp_path,
+        {"providers": {"serper": {"apiKey": "host-serper"}, "jina": {"apiKey": "host-jina"}}},
+    )
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    providers = data["tools"]["web"]["providers"]
+    assert providers["serper"]["apiKey"] == "host-serper"
+    assert providers["jina"]["apiKey"] == "host-jina"
+    assert data["tools"]["web"]["search"]["maxResults"] == 5, "the product's own search knobs stay"
+
+
+def test_an_own_web_key_outranks_the_hosts_vendor_slot(grounded, tmp_path, monkeypatch):
+    """ONCALL_SERPER_API_KEY lands in the pre-vendor leaf, which trunk reads only
+    after an empty vendor slot; inheriting the host's slot beside it would have
+    the host's key silently answer for the one this product set."""
+    monkeypatch.setenv("ONCALL_SERPER_API_KEY", "sk-own-serper")
+    _host_web(tmp_path, {"providers": {"serper": {"apiKey": "host-serper"}}})
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    assert data["tools"]["web"]["search"]["apiKey"] == "sk-own-serper"
+    assert "serper" not in data["tools"]["web"].get("providers", {})
+
+
+def test_the_hosts_vendor_choice_travels_with_its_key(grounded, tmp_path, monkeypatch):
+    """A host that searches through another vendor hands down the choice and the
+    key together; the key alone would sit unread beside a Serper default."""
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    _host_web(
+        tmp_path,
+        {
+            "providers": {"tavily": {"apiKey": "host-tavily"}},
+            "search": {"provider": "tavily"},
+            "fetch": {"provider": "tavily"},
+        },
+    )
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    web = data["tools"]["web"]
+    assert web["providers"]["tavily"]["apiKey"] == "host-tavily"
+    assert web["search"]["provider"] == "tavily" and web["fetch"]["provider"] == "tavily"
+
+
+def test_the_launcher_carries_nothing_under_a_raven_without_the_helper(grounded, tmp_path, monkeypatch):
+    """A stamped launcher can load on a raven that predates vendor inheritance;
+    the missing name must read as "carry nothing" rather than AttributeError."""
+    from raven.config import product_render
+
+    monkeypatch.delattr(product_render, "inherit_web_vendors", raising=False)
+    _host_web(tmp_path, {"providers": {"serper": {"apiKey": "host-serper"}}})
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    assert "providers" not in data["tools"]["web"]
+
+
+def test_the_inherited_key_resolves_through_trunks_own_predicate(grounded, tmp_path):
+    """Trunk's resolver is the reader; assert the render against it rather than
+    against the dict shape it happens to write."""
+    from raven.config.loader import load_config
+
+    _host_web(tmp_path, {"providers": {"serper": {"apiKey": "host-serper"}}})
+    config = load_config(grounded.render_config(RUN_PY.parent / "config.json"))
+    assert config.tools.web.vendor_key("serper") == "host-serper"
+    assert config.effective_web_vendor_key("serper") == "host-serper"
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
 def test_the_rendered_file_is_owner_only(grounded):
     rendered = grounded.render_config(RUN_PY.parent / "config.json")

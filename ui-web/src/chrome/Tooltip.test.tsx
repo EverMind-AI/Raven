@@ -86,7 +86,7 @@ describe('the hover pill', () => {
 
   it('flips below a control too near the top of the window to fit above', () => {
     setup()
-    const btn = control('New task', { top: 10, left: 100 })
+    const btn = control('New session', { top: 10, left: 100 })
     box(pill(), { top: 0, left: 0, height: 24, width: 140 })
     point(btn)
     expect(pill().style.top).toBe('35px')

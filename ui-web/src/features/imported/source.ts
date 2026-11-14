@@ -1,4 +1,4 @@
-/* -- imported conversations: the rpc source and how its refusals read ------- */
+/* -- imported sessions: the rpc source and how its refusals read ------- */
 
 import { gateway } from '../../rpc/gateway'
 

@@ -117,7 +117,7 @@ async def render_prompt(
     if maybe:
         rendered = (
             f"{rendered}\n\n{MAYBE_MISSING_HEADING}\n\n"
-            "Some inputs above come from steps that run only when an earlier decision selects them: "
+            "Some inputs above come from steps that run only when an earlier decision node selects them: "
             f"{', '.join(maybe)}. A missing one reads exactly:\n{MISSING_OUTPUT_TEXT}\n{_MAYBE_MISSING_TAIL}"
         )
     upstream = _upstream_memory_lines(

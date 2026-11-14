@@ -1732,23 +1732,56 @@ def test_the_node_schema_declares_the_three_branch_fields() -> None:
     assert "whose route does not matter" not in when_doc
 
 
-def test_the_when_description_says_which_nodes_of_a_branch_need_its_route() -> None:
+def test_which_nodes_of_a_branch_need_its_route_is_the_guides_rule() -> None:
     """A node is left out with a branch only when every dependency it has in the graph
     was left out. A node of the branch that also depends on something outside it --
     the decision node itself included -- runs on the route not taken unless its own
-    guard names the route, so the schema may not tell the model that the entry's guard
-    covers it. The rule is the branch's own: a merge node meant to run on every route,
-    like the guide's `reply`, keeps `<node>.done`, and unscoped the rule would forbid it."""
+    guard names the route, so nothing may tell the model that the entry's guard covers
+    it. The rule is the branch's own: a merge node meant to run on every route, like the
+    guide's `reply`, keeps `<node>.done`, and unscoped the rule would forbid it. The
+    schema states the fail-open case on its own -- a branch node that also depends on
+    something outside the branch needs the branch's route -- and points to the guide
+    for the rest, so a model that never opens the guide still gets that case right."""
     when_doc = _NODE_SCHEMA["properties"]["when"]["description"]
+    branches = _flat(_heading_span(_repo_text(_SKILL), "## Conditional branches"))
 
-    assert "A branch node needs no guard beyond naming any decision node it depends on" in when_doc
+    assert "Which atom each node needs is in the guide's Conditional branches" in when_doc
+    assert "A branch node depending on anything outside its branch needs that branch's route" in when_doc
+    assert "or runs on the route not taken" in when_doc
+    assert "a branch node needs no guard beyond naming any decision node it depends on" in branches
     assert (
-        "a node of the branch that also depends on something outside it, the decision node included, needs "
-        "the branch's route, not <node>.done"
-    ) in when_doc
-    assert "A merge node that should run on every route keeps <node>.done." in when_doc
-    assert "one that also depends on a node outside the branch" not in when_doc
-    assert "Only a branch's first node needs a guard" not in when_doc
+        "A node of the branch that also depends on something outside it, such as the decision node itself or a "
+        "node that runs whichever route is selected, is not left out that way"
+    ) in branches
+    assert "Name the route, as `<node>.<route>`, not `<node>.done`" in branches
+    assert "A merge node that should run on every route, like `reply` in the example below, keeps `<node>.done`." in (
+        branches
+    )
+    for stale in ("one that also depends on a node outside the branch", "Only a branch's first node needs a guard"):
+        assert stale not in when_doc and stale not in branches
+
+
+def test_the_instance_sentence_says_a_handle_is_not_the_agent() -> None:
+    """A handle groups nodes of one agent; it never supplies the agent itself.
+
+    A graph that named an instance but left `subagent` off every node was refused
+    with only "required", which does not connect the two. The sentence is
+    model-visible text, so it is pinned against a later trim rather than trusted
+    to survive one.
+    """
+    instance_doc = _NODE_SCHEMA["properties"]["instance"]["description"]
+
+    assert "A handle never stands in for the agent: every node still names its subagent." in instance_doc
+
+
+def test_the_dag_description_says_background_is_the_default(tmp_path: Path) -> None:
+    """`background: false` exists, so an unqualified "runs in the background" reads
+    as the only mode. The qualification is model-visible text and is pinned."""
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    described = SubAgentDagTool(workspace=tmp_path).description
+
+    assert "By default the graph runs in the background" in described
 
 
 def _guide_text() -> str:
@@ -1784,35 +1817,44 @@ def test_the_guide_says_a_false_or_unknown_guard_leaves_the_node_not_executed() 
     assert "Unknown is not false" in guide
 
 
-def test_the_prompt_template_description_says_a_missing_output_has_a_stand_in() -> None:
+def test_the_guide_says_a_missing_output_has_a_stand_in() -> None:
     """A merge step reads one sentence where a branch's node was never run, and a
     `ref:@nodes/` path to a node that may not run is refused.
 
     Both are facts the graph's author has to design around: the first is the text
     the dependent actually receives, and the second is a refusal it earns at
-    submission.
+    submission. The guide's Conditional branches states them; the prompt_template
+    description says where to read them.
     """
     described = _NODE_SCHEMA["properties"]["prompt_template"]["description"]
+    branches = _flat(_heading_span(_repo_text(_SKILL), "## Conditional branches"))
 
-    assert MISSING_OUTPUT_TEXT in described
-    assert "write one titled block per output that may be missing" in described
-    assert "rather than a ref:@nodes/ path, which is refused" in described
+    assert "How to read a node that may not run is in the guide's Conditional branches" in described
+    assert MISSING_OUTPUT_TEXT in branches
+    assert "one titled block per input that may be missing" in branches
+    assert "Reach a node that may not run with `{{ X.output }}`, **not** with `ref:@nodes/`, which is refused" in (
+        branches
+    )
     # What "may not run" covers, which is what the refusal reads: `.done` counts, even
     # though it holds whichever route is selected.
-    assert "A node may not run with a when of its own (<node>.done included)" in described
-    assert "in-graph dependencies all may not run" in described
+    assert "A node *may not run* when it has a `when` of its own, even `<node>.done`" in branches
+    assert "or when it depends on nodes of this graph that all may not run" in branches
 
 
 def test_the_stand_in_is_promised_only_for_a_node_of_the_same_graph() -> None:
     """The fixed sentence stands in only for a node of the graph being submitted. A
     node an earlier run did not execute is refused like one that failed, so the
-    schema, the guide and the glossary list it with the refused ones rather than
-    promising the sentence."""
+    schema, the guide and the glossary list it with the refused ones, and only the
+    guide's promise of the sentence names the same graph."""
     described = _NODE_SCHEMA["properties"]["prompt_template"]["description"]
 
     assert "failed, skipped, cancelled, not-executed or still-running one is refused, saying which" in described
-    assert "A node of this graph that was not executed (see when) leaves no output file" in described
     assert "A node that was not executed (see when)" not in described
+    branches = _flat(_heading_span(_repo_text(_SKILL), "## Conditional branches"))
+    assert (
+        "When a node reads a dependency of the same graph that was not executed, every placeholder form renders "
+        "this sentence"
+    ) in branches
 
     earlier = _flat(_heading_span(_repo_text(_SKILL), "### Reading a task this conversation already finished"))
     assert "One that failed, was cancelled, was skipped, was not executed, or is still running keeps its id" in earlier
@@ -2294,8 +2336,10 @@ def test_the_guide_and_the_refusal_agree_about_a_replans_unfinished_nodes() -> N
 
 def test_the_skill_states_how_to_keep_what_should_go_on() -> None:
     """The replan guidance lives in the body. The frontmatter -- whose `description`
-    is in every system prompt -- keeps the exact bytes it had, which is what keeps the
-    per-turn cost of this guidance at nothing; the digest is of those bytes."""
+    is in every system prompt -- is pinned by its digest, which is what kept the
+    per-turn cost of this guidance at nothing; a change to the resident text is a
+    deliberate one that moves the digest with it (the host-coordination sentence
+    now names only a run's status, not reading a brief)."""
     import hashlib
 
     import raven.memory_engine
@@ -2307,7 +2351,7 @@ def test_the_skill_states_how_to_keep_what_should_go_on() -> None:
     assert "Keep what should go on" in body
     assert "carried into it without stopping" in body
     frontmatter = text.split("---", 2)[1].encode("utf-8")
-    assert hashlib.sha256(frontmatter).hexdigest() == "fee4f41e9323067fa3dc5745cf4e7e0c1c5cd5bafaa8441827faad19cc698adc"
+    assert hashlib.sha256(frontmatter).hexdigest() == "3d1b1f60d4e86301771b0d8c51ae6e022de28c58486c5249a89b96bb0131daba"
 
 
 async def test_a_run_is_listed_from_init_not_from_its_finalize() -> None:
@@ -3516,7 +3560,7 @@ async def test_a_graph_with_routes_is_refused_on_a_host_that_cannot_judge(tmp_pa
     text = out if isinstance(out, str) else out.model_text
     assert "no provider to judge" in text
     assert "node 'r' declares routes" in text, "the refusal names the decision node"
-    assert "No sub-agent was run" in text
+    assert "No subagent was run" in text
 
 
 async def test_a_refusal_names_every_decision_node_in_graph_order(tmp_path) -> None:
@@ -3838,7 +3882,7 @@ async def test_the_note_lists_only_the_nodes_the_template_actually_references() 
     assert "selects them: fix." in note
     assert "write" not in note
     assert note == (
-        "\n\nSome inputs above come from steps that run only when an earlier decision selects them: fix. "
+        "\n\nSome inputs above come from steps that run only when an earlier decision node selects them: fix. "
         f"A missing one reads exactly:\n{MISSING_OUTPUT_TEXT}\n"
         "Continue with the inputs you have, and do not guess what a missing one would have said."
     )
@@ -4856,7 +4900,7 @@ def test_the_tui_glossary_says_what_the_turned_in_line_carries() -> None:
     branch parts or the next change to it reads as free."""
     entry = _flat(_glossary_entry(_repo_text("ui-tui/CONTEXT.md"), "**DAG Panel**"))
 
-    assert "why it was not executed, or what a decision selected" in entry
+    assert "why it was not executed, or what a decision node selected" in entry
     assert "guard" in entry
     assert "route evidence" in entry
     assert "`/dag <node>`" in entry
@@ -5064,14 +5108,14 @@ def test_the_docs_site_names_the_fourth_decision(page: str) -> None:
 
 def test_the_english_docs_page_says_what_a_reassign_keeps_and_what_it_cannot_move() -> None:
     """The English page's own words for the rules the code-span check shares: the
-    node stays the same, the history is conversation rather than tools, and files
+    node stays the same, the history is the session rather than the tools, and files
     on a machine are not carried over."""
     section = _flat(
         _docs_section(_repo_text(_DOCS_EN), "Failure handling and replanning", "failure-handling-and-replanning")
     )
 
     assert "keeps the node's id, task and dependencies" in section
-    assert "visible conversation so far" in section
+    assert "visible session so far" in section
     assert "without the earlier agent's tool calls or tool output" in section
     assert "spends one continuation" in section
     assert "other unfinished nodes on that instance" in section

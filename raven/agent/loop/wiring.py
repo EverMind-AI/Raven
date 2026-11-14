@@ -2119,24 +2119,29 @@ class WiringMixin:
         workspace: Path,
         skill_forge_router_config: "SkillForgeRouterConfig | None",
     ) -> "SkillHubClient | None":
-        """Construct the shared Skill Hub client, or ``None`` when no Hub
-        endpoint is configured. Downloads land under ``<workspace>/skills/hub``
-        so a use_skill'd bundle is discoverable by the on-disk skill registry.
+        """Construct the shared Skill Hub client.
 
-        Built while the switch is off too: the tools ask the live config
-        before each Hub call, so turning the source back on does not need the
-        loop rebuilt. Only the endpoint is fixed at construction.
+        Built for every loop, whatever the switch says: the tools and the
+        router's Hub source ask the live config before each Hub call, so
+        switching the source on or off never needs a rebuild. The URL is the
+        shared marketplace unless the config (or ``RAVEN_SKILLHUB_URL``) names
+        one; a refused override returns ``None`` -- the source is off for this
+        process rather than pointed at the marketplace -- and the API key is
+        carried only when the config names its own URL, never to the fallback.
+        Downloads land under ``<workspace>/skills/hub`` so a use_skill'd bundle
+        is registry-discoverable by the on-disk skill registry.
         """
-        hub_cfg = getattr(skill_forge_router_config, "hub", None)
-        if hub_cfg is None or not getattr(hub_cfg, "endpoint", None):
-            return None
-        from raven.skill_hub import SkillHubClient
+        from raven.skill_hub import SkillHubClient, hub_api_key, resolve_hub_endpoint
 
+        hub_cfg = getattr(skill_forge_router_config, "hub", None)
+        endpoint = resolve_hub_endpoint(getattr(hub_cfg, "endpoint", None))
+        if endpoint is None:
+            return None
         return SkillHubClient(
-            hub_cfg.endpoint,
-            api_key=hub_cfg.api_key,
-            timeout_s=hub_cfg.timeout_s,
-            source=hub_cfg.source,
+            endpoint,
+            api_key=hub_api_key(hub_cfg),
+            timeout_s=float(getattr(hub_cfg, "timeout_s", 2.0)),
+            source=str(getattr(hub_cfg, "source", "raven")),
             cache_dir=workspace / "skills" / "hub",
         )
 

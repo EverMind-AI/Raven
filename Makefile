@@ -1,4 +1,4 @@
-.PHONY: help install install-deps fetch-resources lint lint-python lint-imports lint-deps lint-types lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-source-language check-core-wheel fetch-templates verify-templates beta ci clean coverage coverage-shard coverage-combine coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate docker-build docker-up docker-down docs-serve docs-build
+.PHONY: help install install-deps fetch-resources lint lint-python lint-imports lint-deps lint-types lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-source-language check-soul-legacy check-core-wheel fetch-templates verify-templates beta ci clean coverage coverage-shard coverage-combine coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate docker-build docker-up docker-down docs-serve docs-build
 
 PYTHON ?= python3
 PYTHON_VERSION ?= 3.12
@@ -45,6 +45,7 @@ help:
 	@echo "  check-pr-title Validate the PR title in PR_TITLE"
 	@echo "  check-large-files Validate PR files avoid blocked assets and size bloat"
 	@echo "  check-source-language Validate PR-added lines stay English outside the exemption zones"
+	@echo "  check-soul-legacy Validate a changed SOUL.md kept its outgoing text in templates/legacy"
 	@echo "  check-core-wheel  Build the raven-core wheel and smoke it in a clean venv"
 	@echo "  fetch-templates Re-pull the deck engine's ten bundled templates over the tracked copies (maintainers; needs GITLAB_TOKEN)"
 	@echo "  verify-templates Hash the tracked deck templates against their pins"
@@ -185,6 +186,9 @@ check-large-files:
 
 check-source-language:
 	PYTHONPATH=. uv run --frozen --python $(PYTHON_VERSION) --extra dev python scripts/check_source_language.py $(COMMIT_RANGE)
+
+check-soul-legacy:
+	PYTHONPATH=. uv run --frozen --python $(PYTHON_VERSION) --extra dev python scripts/check_soul_legacy.py $(COMMIT_RANGE)
 
 # Out of the default pytest scope by norecursedirs (it builds a wheel and a
 # venv); this target is what CI and `make ci` run so the artifact stays honest.

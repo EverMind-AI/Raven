@@ -5,17 +5,19 @@ import { formatDuration } from '../../lib/duration'
 import * as hunks from '../../lib/hunks'
 import { readingImported } from '../../lib/imported'
 import { md } from '../../lib/prose'
-import { ds } from '../../state/sources'
+import { ds, sources } from '../../state/sources'
 import { show as toast } from '../../state/toast'
 import { pane } from '../../state/wsPane'
 import * as dagNodes from '../dag/nodes'
 import * as deliveries from '../workspace/deliveries'
+import { mountedTurns, opens, revealWin, TAIL_TURNS, tailFrom, TRIM_SLACK, WIDEN_TURNS, widenFrom, widenTo } from './laneWindow'
 
+import type { SubagentRow } from '../../rpc/generated'
 import type { DeliveryRow } from '../workspace/types'
 import type {
   AnswerData, ArtsData, AskData, CallData, CallHandle,
   DeliveredData, FoldData, HistoryMessage, Hunk, Lane, NoteData, NoteHandle, QaData, Seg,
-  SpawnListRow, StatusData, StepData, StepHandle, SubagentStatusLike, TranscriptSource,
+  SpawnListRow, StageCtx, StageOpts, StatusData, StepData, StepHandle, SubagentStatusLike, TranscriptSource,
 } from './types'
 
 /* Plain external store. The callers that drive the transcript are not React:
@@ -51,6 +53,17 @@ export const deliveriesOf = (lane: Lane, turn: number): DeliveryRow[] =>
    the shell bridge and back into it while hiding the
    transcript from anyone auditing md()'s callers. */
 export const mdHtml = (src: string): string => md(src)
+
+/* The fence lines a dispatch carries around an upstream node's output, set
+   apart so the reader sees where the injected text starts and stops. Only the
+   markers: the text between them stays ordinary prose. The search is over text
+   nobody here wrote, so a failed start stops at the next bracket rather than
+   running on to the end of the line, which is what keeps it linear; a marker
+   the runtime writes holds no bracket of its own. */
+const UNTRUSTED_MARK = /\[(?:BEGIN|END) UNTRUSTED[^[\]\n<]*\]/g
+export const markUntrusted = (html: string): string =>
+  html.replace(UNTRUSTED_MARK, (mark) => `<span class="transcript-untrusted">${mark}</span>`)
+
 export const durText = formatDuration
 
 const shortPath = (p: string): string => {
@@ -150,7 +163,7 @@ export function actLabel(name: string, a: Record<string, unknown>, display?: str
 }
 
 /* When an answer landed: today needs only a clock, older needs the date. */
-function stamp(when: number | string | Date): string {
+export function stamp(when: number | string | Date): string {
   const d = when instanceof Date ? when : new Date(when)
   if (!d || isNaN(d.getTime())) return ''
   const p = (n: number): string => String(n).padStart(2, '0')
@@ -253,9 +266,9 @@ const lanes = new Set<Lane>()
 
 export function newLane(key: string, main: boolean): Lane {
   const lane: Lane = {
-    key, main, epoch: 0, listV: 0, scrollReq: 0, segs: [], listeners: new Set(),
+    key, main, epoch: 0, listV: 0, scrollReq: 0, segs: [], winFrom: 0, winTo: 0, listeners: new Set(),
     pend: '', pendStep: null, flush: null,
-    agentKey: null, agentDrawn: 0, agentHold: null, agentTurn: 0, running: false, empty: '',
+    agentKey: null, agentDrawn: 0, agentHold: null, agentTurn: 0, agentShut: false, agentStart: 0, liveFold: 0, running: false, empty: '',
   }
   lanes.add(lane)
   return lane
@@ -344,6 +357,45 @@ export function nudge(lane: Lane): void {
   bumpList(lane)
 }
 
+/* Which stretch the stage draws (laneWindow.ts). */
+export function setWindow(lane: Lane, from: number, to: number): void {
+  if (lane.winFrom === from && lane.winTo === to) return
+  lane.winFrom = from
+  lane.winTo = to
+  bumpList(lane)
+}
+
+export function widenWindow(lane: Lane): void {
+  setWindow(lane, widenFrom(lane.segs, lane.winFrom, WIDEN_TURNS), lane.winTo)
+}
+
+export function widenWindowDown(lane: Lane): void {
+  setWindow(lane, lane.winFrom, widenTo(lane.segs, lane.winTo, WIDEN_TURNS))
+}
+
+/* Only for a reader at the tail: what goes is above anything they are reading.
+   A window short of the tail has no tail to be at. */
+export function trimWindow(lane: Lane): void {
+  if (lane.winTo) return
+  if (mountedTurns(lane.segs, { from: lane.winFrom, to: 0 }) > TAIL_TURNS + TRIM_SLACK) {
+    setWindow(lane, tailFrom(lane.segs, TAIL_TURNS), 0)
+  }
+}
+
+export function revealWindow(lane: Lane, id: number): void {
+  const win = revealWin(lane.segs, { from: lane.winFrom, to: lane.winTo }, id, TAIL_TURNS)
+  setWindow(lane, win.from, win.to)
+}
+
+/* A window short of the tail, for a reader going to it: the newest turns are
+   mounted in its place, and the view is asked to follow them down again once
+   they are drawn, since the height it would scroll to now is the old window's. */
+export function windowToTail(lane: Lane): void {
+  if (!lane.winTo) return
+  poke(lane)
+  setWindow(lane, tailFrom(lane.segs, TAIL_TURNS), 0)
+}
+
 /* ── segment ops ───────────────────────────────────────────────────────── */
 
 function push(lane: Lane, seg: Seg): void {
@@ -354,12 +406,12 @@ function push(lane: Lane, seg: Seg): void {
 
 function ask(
   lane: Lane, body: string, atts: string[], when?: string | null,
-  opts?: { auto?: { origin: string; note: string }; midTurn?: boolean; at?: number } | null,
+  opts?: { auto?: { origin: string; note: string }; midTurn?: boolean; at?: number; md?: boolean } | null,
 ): AskData {
   const o = opts || {}
   const seg: AskData = {
     v: 0, id: nextId(), kind: 'ask', ...(o.auto ? { auto: o.auto } : {}),
-    ...(o.midTurn ? { midTurn: true } : {}), body, atts,
+    ...(o.midTurn ? { midTurn: true } : {}), ...(o.md ? { md: true } : {}), body, atts,
     when: when != null ? when : stamp(Date.now()),
     at: o.at != null ? o.at : when != null ? 0 : Date.now(), expanded: false,
     clipped: body.length > 640 || body.split('\n').length > 12,
@@ -435,6 +487,13 @@ export function cronReminder(text: string): { note: string; said: string } | nul
    which is the reader's own sentence. Every other origin has a shape of its
    own that nothing here reads, so the row is the chip alone. */
 export function askAuto(lane: Lane, origin: string, text: string, when?: string | null, at?: number): void {
+  /* A delegated record's first message: the brief its parent wrote, every word
+     of it meant for whoever reads the record. Never on the wire -- the painter
+     names it (`markDispatch`) -- so no stored entry can claim it. */
+  if (origin === DISPATCH) {
+    ask(lane, text, [], when, { auto: { origin, note: '' }, md: true, ...(at != null ? { at } : {}) })
+    return
+  }
   const said = origin === 'cron' ? cronReminder(text) : null
   ask(lane, said ? said.said : '', [], when, {
     auto: { origin, note: said ? said.note : '' }, ...(at != null ? { at } : {}),
@@ -497,12 +556,13 @@ const deliveredStatus = (v: unknown): DeliveredData['status'] =>
    then there is nothing to fold open. Absent is a server that never sent it. */
 export function delivered(lane: Lane, p: {
   label: string; isDag: boolean; status?: string; open: () => void; body?: string; output?: string; outputTruncated?: boolean | null
-  at?: number; turnId?: string
+  at?: number; turnId?: string; runId?: string | null; nodeId?: string | null
 }): void {
   const said = typeof p.output === 'string'
   push(lane, {
     v: 0, id: nextId(), kind: 'sdlv', at: p.at ?? Date.now(), ...(p.turnId ? { turnId: p.turnId } : {}),
-    label: p.label, isDag: p.isDag, status: deliveredStatus(p.status), open: p.open,
+    label: p.label, isDag: p.isDag, runId: String(p.runId || ''), nodeId: String(p.nodeId || ''),
+    status: deliveredStatus(p.status), open: p.open,
     body: said ? (p.output as string).trim() : defence(p.body || ''), said, shown: false,
     outputTruncated: said && p.outputTruncated === true,
   } satisfies DeliveredData)
@@ -763,7 +823,13 @@ export function spawnState(c: CallData): 'ok' | 'bad' | 'run' {
   return c.done ? (c.ok ? 'ok' : 'bad') : 'run'
 }
 
-const msOfIso = (raw: unknown): number => {
+/* Epoch milliseconds from whatever a record carries: the wire's ISO string, or
+   the millisecond number a task row holds. A number is taken as-is -- handing
+   its decimal digits to Date.parse reads them as a year (Date.parse('1000')
+   is the year 1000, and a real epoch lands on NaN) -- and anything unparseable
+   is 0. */
+const msOfTime = (raw: unknown): number => {
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0
   const ms = Date.parse(String(raw || ''))
   return Number.isFinite(ms) ? ms : 0
 }
@@ -847,8 +913,8 @@ export function resolveSpawn(lane: Lane, c: CallData): void {
     c.spawnInstance = c.spawnInstance || String(row.instance || '')
     c.spawnLabel = c.spawnLabel || String(row.label || '')
     c.spawnStatus = c.spawnStatus || fromListStatus(row.status)
-    c.spawnT0 = c.spawnT0 || msOfIso(row.started_at)
-    c.spawnT1 = c.spawnT1 || msOfIso(row.ended_at)
+    c.spawnT0 = c.spawnT0 || msOfTime(row.started_at)
+    c.spawnT1 = c.spawnT1 || msOfTime(row.ended_at)
     bump(lane, c)
   }).catch(() => {
     /* Asked again if the reader reopens the card, and the memoised promise goes
@@ -1059,7 +1125,7 @@ function bindRun(call: CallData): void {
  * for a finished run and because a card is re-rendered on every node update. */
 function hydrateDag(lane: Lane, call: CallData): void {
   bindRun(call)
-  /* An imported conversation's runs are on another machine. With no record to
+  /* An imported session's runs are on another machine. With no record to
      read, the nodes the arguments named stay pending forever, so the graph is
      closed here: a run that ended long ago must not read as still going. */
   if (readingImported()) {
@@ -1385,19 +1451,21 @@ export function collapse(lane: Lane, time?: string | null, live = false): void {
     return
   }
   if (!loose.some(stepSolid)) return
-  /* A delegated lane's fold is born open. That pane IS one sub-agent's work, and
-     its steps are what the reader opened it for -- putting them behind a click
-     hid the only thing there was to see. Every turn's, not just the last: one
-     instance's conversation is short enough to read at once, which is why
-     `shutAutoFolds` stays on the live path, where a whole session's folds
-     accumulate. Marked `auto` either way, so the reader's own collapse takes it
-     over from the runtime (`toggleFold`) and survives the next poll.
+  /* A delegated lane's fold is born open unless the pane asked for settled work
+     to fold shut (`agentShut`, which a run still going never sets). The direct
+     chat IS one sub-agent's work, and its steps are what the reader opened it
+     for -- putting them behind a click hid the only thing there was to see.
+     Every turn's, not just the last: one instance's conversation is short
+     enough to read at once. Marked `auto` either way, so the reader's own
+     collapse takes it over from the runtime (`toggleFold`) and survives the
+     next poll.
 
      The main conversation's fold opens on the same rule when its work carries
      a long message or a delegation (`foldKeepsOpen`), and stays open across
      later turns because `shutAutoFolds` re-reads that rule rather than the one
-     decision made here. */
-  const born = !lane.main
+     decision made here. Shutting a record's untouched folds when its run
+     settles is `agentPaintLane`'s call, where that run's state is known. */
+  const born = !lane.main && !lane.agentShut
   const keepOpen = born || foldKeepsOpen(loose)
   const f: FoldData = {
     v: 0, id: nextId(), kind: 'fold', time: time || null, open: keepOpen, auto: true, steps: [],
@@ -1831,6 +1899,8 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
         delivered(lane, {
           label: String(d.label || ''),
           isDag,
+          runId: d.run_id,
+          nodeId: d.node_id,
           at: turnAt,
           status: d.status,
           body: m.text || '',
@@ -1974,6 +2044,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
   closeProducts()
   /* Where the next slice of this stream picks the count up. */
   if (!lane.main) lane.agentTurn = turnNo
+  else setWindow(lane, tailFrom(lane.segs, TAIL_TURNS), 0)
 }
 
 /* The composer bakes an "[attachments]" note plus "- path" bullets into the
@@ -2013,26 +2084,132 @@ function agentDidStep(lane: Lane, calls: unknown[]): void {
   st.seal()
 }
 
-/* The fold the history read just closed carries no clock; the record's own
-   start and end are the truer span for a delegated run anyway. */
-function agentFoldTime(lane: Lane, ctx: { started_at?: string; ended_at?: string }): void {
-  let fold: FoldData | null = null
-  lane.segs.forEach((s) => { if (s.kind === 'fold') fold = s })
-  if (!fold) return
-  const from = Date.parse((ctx && ctx.started_at) || '')
-  const to = Date.parse((ctx && ctx.ended_at) || '')
-  if (from && to && to > from) {
-    ;(fold as FoldData).time = durText(to - from)
-    bump(lane, fold)
+/* The last fold of the turn the lane ends on, found the way `collapse` finds
+   it: scanning stops at the turn's opening, so a final turn that produced no
+   work answers null rather than the turn above it. A mid-turn question is the
+   boundary only when work sits above it, which is `collapse`'s own rule. */
+function lastTurnFold(lane: Lane): FoldData | null {
+  let above = 0
+  for (let i = lane.segs.length - 1; i >= 0; i -= 1) {
+    const s = lane.segs[i] as Seg
+    if (s.kind === 'fold') return s
+    if (s.kind === 'step') { above += 1; continue }
+    if (s.kind === 'ask' && s.midTurn) { if (above) return null; continue }
+    if (s.kind === 'ask' || s.kind === 'sdlv') return null
   }
+  return null
 }
 
-export interface AgentCtxLike {
-  status?: string
-  messages?: HistoryMessage[]
+/* How many turns the lane holds. A typed question or a delegated result opens
+   one; a mid-turn injection joins the turn under way, which is the boundary
+   `collapse` draws too. */
+function turnCount(lane: Lane): number {
+  return lane.segs.filter(opens).length
+}
+
+/* When the lane's last turn opened, from its own opening row's stamp. */
+function lastTurnOpening(lane: Lane): number {
+  for (let i = lane.segs.length - 1; i >= 0; i -= 1) {
+    const s = lane.segs[i] as Seg
+    if (opens(s)) return s.at || 0
+  }
+  return 0
+}
+
+/* The fold the history read just closed carries no clock; the record's own
+   start and end are the truer span for a delegated run anyway. The ctx clock is
+   the RECORD's, though, so only a one-turn record takes it: a longer history's
+   earlier folds keep their own spans and the last one would otherwise claim the
+   record's whole life for a single turn. */
+function agentFoldTime(lane: Lane, ctx: { started_at?: string | number; ended_at?: string | number }): void {
+  const fold = lastTurnFold(lane)
+  if (!fold) return
+  if (turnCount(lane) > 1) return
+  const from = msOfTime(ctx && ctx.started_at)
+  const to = msOfTime(ctx && ctx.ended_at)
+  if (!from || !to || to <= from) return
+  const time = durText(to - from)
+  if (fold.time === time) return
+  fold.time = time
+  bump(lane, fold)
+}
+
+/* The origin a delegated record's first message is drawn under, when the pane
+   says the record opens with its parent's brief. Client-side only: the wire's
+   origins are the runtime's own (`cron`, `heartbeat`, ...). */
+const DISPATCH = 'dispatch'
+
+/* The record with its opening brief marked as one. Only a plain user message
+   qualifies -- an entry that already says where it came from keeps saying it --
+   and only the first: a later user message in the same record is the reader's,
+   typed into the direct chat. A copy, so the caller's snapshot is untouched. */
+function markDispatch(msgs: HistoryMessage[], on: boolean): HistoryMessage[] {
+  const first = msgs[0]
+  if (!on || !first || first.role !== 'user' || first.origin || first.delegated) return msgs
+  return [{ ...first, origin: DISPATCH }, ...msgs.slice(1)]
+}
+
+/* The call in this lane that started the run a delivered result came back from:
+   the graph call bound to its run id, or the spawn whose record id it is. What
+   the row says about who ran it and how long it took is read off this. Null
+   when the conversation holds no such call -- a branched conversation replays
+   its parent's results, whose calls are in the parent. */
+export function callOfDelivery(lane: Lane, seg: DeliveredData): CallData | null {
+  for (const s of lane.segs) {
+    const steps = s.kind === 'step' ? [s] : s.kind === 'fold' ? s.steps : []
+    for (const st of steps) {
+      for (const c of st.calls) {
+        if (seg.isDag && c.kind === 'dag' && seg.runId && c.runId === seg.runId) return c
+        if (!seg.isDag && c.kind === 'spawn' && seg.nodeId
+          && (c.spawnId === seg.nodeId || String(c.args.node_id || '') === seg.nodeId)) return c
+      }
+    }
+  }
+  return null
+}
+
+/* Which mark a named agent wears, for the row its result comes back as. A call
+   names its agent by the name it was dispatched under, and only the roster says
+   which package is behind that name -- the lookup the agents list makes, for
+   the reason AgentMark keys on a preset rather than on a name. Read once and
+   kept until a reload: the roster changes when someone adds an agent, not
+   while a conversation is being read. */
+export interface AgentBrand { preset: string | null; own: boolean }
+
+let brands: Map<string, AgentBrand> | null = null
+let brandsAsked = false
+let brandsV = 0
+const brandListeners = new Set<() => void>()
+
+export function brandOf(name: string): AgentBrand | null {
+  if (!brands && !brandsAsked) askBrands()
+  return (brands && brands.get(name)) || null
+}
+
+function askBrands(): void {
+  const roster = sources.subagents?.roster
+  if (!roster) return
+  brandsAsked = true
+  roster()
+    .then((rows: SubagentRow[]) => {
+      brands = new Map(rows.map((r) => [r.name, { preset: r.preset ?? null, own: !!(r.builtin || r.vendored) }]))
+      brandsV += 1
+      brandListeners.forEach((fn) => fn())
+    })
+    /* Asked again on the next row that wants a mark: a roster that failed once
+       is not a roster with nobody in it. */
+    .catch(() => { brandsAsked = false })
+}
+
+export function subscribeBrands(fn: () => void): () => void {
+  brandListeners.add(fn)
+  return () => { brandListeners.delete(fn) }
+}
+
+export const brandsVersion = (): number => brandsV
+
+export interface AgentCtxLike extends StageCtx {
   tool_calls?: unknown[]
-  started_at?: string
-  ended_at?: string
 }
 
 /* The rows a redraw replaces keep the identity the reader is looking at.
@@ -2089,11 +2266,15 @@ function adoptCallIdentity(prev: StepData, next: StepData): void {
    written back by position: the redraw walks the same messages, so an existing
    row keeps its place and new rows only follow. Only the reader's own choices
    travel -- a thought's live open/close is the step's, and is left to it. */
-interface FoldToggles { open: boolean; steps: Array<{ think: boolean | null; work: boolean | null; calls: boolean[] }> }
+interface FoldToggles { open: boolean; auto: boolean; steps: Array<{ think: boolean | null; work: boolean | null; calls: boolean[] }> }
 
 function readToggles(lane: Lane): FoldToggles[] {
   return lane.segs.flatMap((s) => (s.kind !== 'fold' ? [] : [{
     open: s.open,
+    /* Carried so a fold the reader took over stays over when the provisional
+       tail is redrawn as a new object: the runtime shuts the folds nobody
+       touched, and `auto` is how it knows. */
+    auto: s.auto,
     steps: s.steps.map((st) => ({
       think: st.thinkPinned ? st.thinkOpen : null,
       work: st.wkPinned ? st.wkOpen : null,
@@ -2108,6 +2289,7 @@ function writeToggles(lane: Lane, saved: FoldToggles[]): void {
     const f = folds[i]
     if (!f) return
     f.open = t.open
+    f.auto = t.auto
     t.steps.forEach((ts, j) => {
       const st = f.steps[j]
       if (!st) return
@@ -2120,13 +2302,18 @@ function writeToggles(lane: Lane, saved: FoldToggles[]): void {
   })
 }
 
-export function agentPaintLane(lane: Lane, r: AgentCtxLike | null,
-  opts?: { key?: string; empty?: string; reset?: boolean } | null): void {
-  const msgs = (r && r.messages) || []
+export function agentPaintLane(lane: Lane, r: AgentCtxLike | null, opts?: StageOpts | null): void {
+  const msgs = markDispatch((r && r.messages) || [], !!(opts && opts.dispatch))
   const running = !!(r && r.status === 'run')
   const key = (opts && opts.key) || ''
+  /* The pane asks for a settled record's work to fold shut. While the run is
+     still going its work is what the reader is watching, so the ask binds only
+     once the record has settled. */
+  lane.agentShut = !!(opts && opts.shut) && !running
   if (opts && opts.reset) lane.agentKey = null
   const fresh = lane.agentKey !== key
+  /* A lane the next node takes over says nothing about this one's run. */
+  const wasRunning = !fresh && lane.running
   if (fresh) {
     lane.segs = []
     lane.agentKey = key
@@ -2200,7 +2387,6 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null,
       history(lane, tail.filter((m) => m && m.role === 'user'), after)
       agentDidStep(lane, did)
       history(lane, tail.filter((m) => !(m && m.role === 'user')), after)
-      if (r) agentFoldTime(lane, r)
     } else {
       history(lane, tail, after)
     }
@@ -2218,7 +2404,28 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null,
     hold.folds.forEach(({ fold }, i) => adoptStepIdentity(appended[i] || [], fold.steps.slice(heldSteps[i])))
   }
   if (toggles) writeToggles(lane, toggles)
+  /* The record's own clock, for the fold this paint closed or extended. Set on
+     every paint so a record whose last paint brought nothing new (a run ending
+     on a tool result) still gets its settled span; the helper returns without a
+     bump when the value has not moved, so a poll does not redraw the fold. */
+  if (r) agentFoldTime(lane, r)
   lane.running = running
+  /* Which fold is the live one: the lane's last turn, not every turn it holds.
+     A direct-chat history spans many turns, and only the one still going wears
+     the state word and the clock. */
+  lane.liveFold = running ? (lastTurnFold(lane)?.id ?? 0) : 0
+  /* The live clock's anchor. On a one-turn record it is the record's own start,
+     the same span the settled fold shows; on a longer history it is the live
+     turn's opening, because the record's start belongs to an earlier turn. */
+  const recordStart = msOfTime(r && r.started_at)
+  const openedAt = lastTurnOpening(lane)
+  lane.agentStart = turnCount(lane) > 1 ? (openedAt || recordStart) : (recordStart || openedAt)
+  /* A fold born open because the run was going shuts when it settles, the same
+     rule a record born settled gets. `shutAutoFolds` leaves a fold the reader
+     touched and one carrying a delegation or a long message. A record ending on
+     an unstaged tool result has no provisional tail for the next paint to
+     redraw, so this is what shuts the fold it kept. */
+  if (opts && opts.shut && wasRunning && !running) shutAutoFolds(lane, null)
   lane.empty = (opts && opts.empty) || t('gui.ws.agents_none')
   bumpList(lane)
 }
@@ -2264,4 +2471,6 @@ export function _resetForTests(): void {
   dagEarly.clear()
   dagPending = null
   segId = 0
+  brands = null
+  brandsAsked = false
 }

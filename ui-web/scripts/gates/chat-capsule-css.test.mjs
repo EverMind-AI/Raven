@@ -38,7 +38,7 @@ describe('the chat header capsule', () => {
     hiddenBy('html[data-traj] .desk-follow-toggle')
   })
 
-  it('hides the conversation menu in an imported conversation', () => {
+  it('hides the session menu in an imported session', () => {
     hiddenBy('.chat[data-readonly] #moreBtn')
   })
 
@@ -57,7 +57,7 @@ describe("the anchored palette's notch", () => {
     expect(decls(NOTCH)?.get('right')).toBe('48.5px')
   })
 
-  /* An imported conversation has no menu, so the chip ends at the capsule's
+  /* An imported session has no menu, so the chip ends at the capsule's
      own padding and the notch moves with it. */
   it('follows the chip when the menu leaves the capsule', () => {
     expect(decls(READ_ONLY_NOTCH)?.get('right')).toBe('11.5px')

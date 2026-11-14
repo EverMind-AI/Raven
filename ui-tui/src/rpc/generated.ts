@@ -51,7 +51,7 @@ export type DagSnapshotNodeStatus =
   | 'not_executed'
   | 'carried';
 /**
- * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+ * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision node that was never executed. 'upstream_not_executed': every dependency of it in the graph was not executed.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "DagNotExecutedReason".
@@ -194,7 +194,7 @@ export interface SessionInitInfo {
   version: string;
   cwd: string;
   /**
-   * Ids of the knowledge bases this session's turns may search, as it was left. Beside `cwd` and for the same reason: a reader reopening a conversation has to see what it is pointed at, or the picker draws it as pointed at nothing.
+   * Ids of the knowledge bases this session's turns may search, as it was left. Beside `cwd` and for the same reason: a reader reopening a session has to see what it is pointed at, or the picker draws it as pointed at nothing.
    */
   knowledge_bases?: string[];
   mcp_servers: JsonValue[];
@@ -228,7 +228,7 @@ export interface SessionInitInfo {
    */
   reasoning_effort?: string | null;
   /**
-   * True for an Imported Conversation, which nothing can change; absent on every other session.
+   * True for an Imported Session, which nothing can change; absent on every other session.
    */
   read_only?: boolean;
   /**
@@ -414,7 +414,7 @@ export interface TranscriptNotice {
   detail?: string;
 }
 /**
- * Which delegated run re-entered the conversation at this entry. The same identity `subagent.delivered` carries, so a replayed transcript and a live stream draw the same row from the same fields.
+ * Which delegated run re-entered the session at this entry. The same identity `subagent.delivered` carries, so a replayed transcript and a live stream draw the same row from the same fields.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "TranscriptDelegated".
@@ -945,7 +945,7 @@ export interface SessionListItem {
    */
   workdir?: string;
   /**
-   * Present only on an Imported Conversation's row (source 'imported').
+   * Present only on an Imported Session's row (source 'imported').
    */
   imported?: {
     /**
@@ -1105,7 +1105,7 @@ export interface SubagentRow {
    */
   building?: boolean;
   /**
-   * Reusing a handle continues this agent's conversation rather than starting a fresh one (`agent_meta`). What makes a row direct-chattable at all: `chat` refuses a stateless agent, so a picker that offers one is offering a refusal. Absent from a server that predates this, which reads as 'not offered' rather than as an error.
+   * Reusing a handle continues this agent's session rather than starting a fresh one (`agent_meta`). What makes a row direct-chattable at all: `chat` refuses a stateless agent, so a picker that offers one is offering a refusal. Absent from a server that predates this, which reads as 'not offered' rather than as an error.
    */
   stateful?: boolean;
   /**
@@ -1376,7 +1376,7 @@ export interface ProviderEndpointInfo {
   };
 }
 /**
- * One sub-agent instance a turn is addressed to. Null means the main conversation.
+ * One sub-agent instance a turn is addressed to. Null means the main session.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "DirectTarget".
@@ -1405,7 +1405,7 @@ export interface InstanceRow {
    */
   reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
   /**
-   * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Present only on the row of a DAG node a branch decided: its dag-node row, or the ordinary row a stateful node is reported on.
+   * The routes a decision node selected. An empty list is a selection that chose nothing, which a 'many' selection may. Present only on the row of a DAG node a branch decided: its dag-node row, or the ordinary row a stateful node is reported on.
    */
   selectedRoutes?: string[];
   /**
@@ -1415,7 +1415,7 @@ export interface InstanceRow {
   createdAtMs?: number;
   updatedAtMs?: number;
   /**
-   * Whether a conversation can be opened with this row. False for a dag-node row, whose handle names a node rather than a conversation, and for an agent whose backend is not stateful. Answered by the server because statefulness is a property of the agent's configured backend, which no front end can read off the row.
+   * Whether a session can be opened with this row. False for a dag-node row, whose handle names a node rather than a session, and for an agent whose backend is not stateful. Answered by the server because statefulness is a property of the agent's configured backend, which no front end can read off the row.
    */
   resumable?: boolean;
   /**
@@ -1431,7 +1431,7 @@ export interface InstanceRow {
    */
   attemptAgents?: string[];
   /**
-   * The handle of the node's last attempt -- null when that attempt kept no session. Rides beside attemptAgents because the row's own handle is the node's name, not a conversation.
+   * The handle of the node's last attempt -- null when that attempt kept no session. Rides beside attemptAgents because the row's own handle is the node's name, not a session.
    */
   nodeInstance?: string | null;
   /**
@@ -1444,7 +1444,7 @@ export interface InstanceRow {
   turnStartedAtMs?: number;
 }
 /**
- * One row of one instance's conversation. Preferred source is the instance's own log, which is written turn by turn and holds what the run did on the way; a conversation with no log falls back to its record directories, where a turn is a pair of files.
+ * One row of one instance's session. Preferred source is the instance's own log, which is written turn by turn and holds what the run did on the way; a session with no log falls back to its record directories, where a turn is a pair of files.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "DirectTurn".
@@ -1497,7 +1497,7 @@ export interface TurnUsage {
   context_max?: number;
   context_percent?: number;
   /**
-   * The window divided: tokens by part, keyed system / tools / conversation / memory / skills. Absent when no breakdown was measured for this turn.
+   * The window divided: tokens by part, keyed system / tools / conversation / files / memory / skills. Absent when no breakdown was measured for this turn.
    */
   context_parts?: {
     [k: string]: number;
@@ -1641,7 +1641,7 @@ export interface CommandsCatalogResponse {
   warning?: string;
 }
 /**
- * A turn the runtime opened (a delegated result re-entering the conversation) has begun. `turn.send` owns `message.start`, and the spine suppresses it for these turns, so this event is the client's only live signal that a new turn started. It advances the client's live turn bookkeeping (the workspace record's turn number, which the artifact bar reads), enters the busy state, and -- when `delegated` is present -- carries the delivery identity AND the injected text, so the delivery row is drawn at the moment the result is actually visible (its turn started), not when it was submitted. A stored delegated user entry draws the same row on replay, which is what keeps the two views in step.
+ * A turn the runtime opened (a delegated result re-entering the session) has begun. `turn.send` owns `message.start`, and the spine suppresses it for these turns, so this event is the client's only live signal that a new turn started. It advances the client's live turn bookkeeping (the workspace record's turn number, which the artifact bar reads), enters the busy state, and -- when `delegated` is present -- carries the delivery identity AND the injected text, so the delivery row is drawn at the moment the result is actually visible (its turn started), not when it was submitted. A stored delegated user entry draws the same row on replay, which is what keeps the two views in step.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "TurnStartedEvent".
@@ -1660,7 +1660,7 @@ export interface TurnStartedEvent {
       node_id?: string;
       run_id?: string;
       /**
-       * The text that re-entered the conversation, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence, or `output` instead where a node's report carries it.
+       * The text that re-entered the session, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence, or `output` instead where a node's report carries it.
        */
       content?: string;
       /**
@@ -1682,7 +1682,7 @@ export interface TurnStartedEvent {
 export interface MessageStartEvent {
   type: 'message.start';
   /**
-   * `target` names the conversation this event belongs to; absent is the main agent.
+   * `target` names the session this event belongs to; absent is the main agent.
    */
   payload: {
     turn_id: string;
@@ -1700,7 +1700,7 @@ export interface MessageStartEvent {
 export interface MessageInjectedEvent {
   type: 'message.injected';
   /**
-   * A message merged into the turn already running on this conversation. `message.start` cannot say this: that event opens a turn, and an inject joins one. `target` names the conversation this event belongs to; absent is the main agent.
+   * A message merged into the turn already running on this session. `message.start` cannot say this: that event opens a turn, and an inject joins one. `target` names the session this event belongs to; absent is the main agent.
    */
   payload: {
     /**
@@ -1936,7 +1936,7 @@ export interface TurnUsage1 {
   context_max?: number;
   context_percent?: number;
   /**
-   * The window divided: tokens by part, keyed system / tools / conversation / memory / skills. Absent when no breakdown was measured for this turn.
+   * The window divided: tokens by part, keyed system / tools / conversation / files / memory / skills. Absent when no breakdown was measured for this turn.
    */
   context_parts?: {
     [k: string]: number;
@@ -1972,7 +1972,7 @@ export interface CronMissedEvent {
   };
 }
 /**
- * The model named this session, reading the opening message alongside the turn that carried it. Conversation-scoped, and emitted only when the title actually changed -- a client can replace what it is showing without comparing. A front end that parks a placeholder where the title goes fills it in here instead of showing a truncated first line and rewriting it a moment later.
+ * The model named this session, reading the opening message alongside the turn that carried it. Session-scoped, and emitted only when the title actually changed -- a client can replace what it is showing without comparing. A front end that parks a placeholder where the title goes fills it in here instead of showing a truncated first line and rewriting it a moment later.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionTitledEvent".
@@ -1998,7 +1998,7 @@ export interface SessionNamingEndedEvent {
   };
 }
 /**
- * A delegated run's result re-entered its conversation here. Emitted just after the result is submitted to the main loop, so a client can mark the seam where the sub-agent's answer came back. The turn it opens is submitted through the spine, which emits no `message.start`, so this event is the only live signal that it happened -- and a client REPLAYING the session later reads the same identity off the stored user entry's `delegated` field, which is what keeps the two views agreeing.
+ * A delegated run's result re-entered its session here. Emitted just after the result is submitted to the main loop, so a client can mark the seam where the sub-agent's answer came back. The turn it opens is submitted through the spine, which emits no `message.start`, so this event is the only live signal that it happened -- and a client REPLAYING the session later reads the same identity off the stored user entry's `delegated` field, which is what keeps the two views agreeing.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SubagentDeliveredEvent".
@@ -2017,7 +2017,7 @@ export interface SubagentDeliveredEvent {
      */
     run_id?: string;
     /**
-     * The text that re-entered the conversation, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence, or `output` instead where a node's report carries it -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.
+     * The text that re-entered the session, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence, or `output` instead where a node's report carries it -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.
      */
     content?: string;
     /**
@@ -2035,7 +2035,7 @@ export interface SubagentDeliveredEvent {
   };
 }
 /**
- * One spawned run's lifecycle transition, as it happens. 'subagent.delivered' marks where a finished result re-entered the conversation; this event is the run itself moving -- queued, started, finished -- so a client can render live delegation without polling the disk-backed lists. Terminal transitions are not replayed: a client that reconnects reconciles against subagent.list instead.
+ * One spawned run's lifecycle transition, as it happens. 'subagent.delivered' marks where a finished result re-entered the session; this event is the run itself moving -- queued, started, finished -- so a client can render live delegation without polling the disk-backed lists. Terminal transitions are not replayed: a client that reconnects reconciles against subagent.list instead.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SubagentStatusEvent".
@@ -2104,11 +2104,11 @@ export interface DagSnapshotNode {
     [k: string]: JsonValue;
   };
   /**
-   * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+   * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision node that was never executed. 'upstream_not_executed': every dependency of it in the graph was not executed.
    */
   reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
   /**
-   * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.
+   * The routes a decision node selected. An empty list is a selection that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.
    */
   selected_routes?: string[];
   /**
@@ -2120,7 +2120,7 @@ export interface DagSnapshotNode {
    */
   routes?: string[];
   /**
-   * How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
+   * How many routes the decision node selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
    */
   select?: 'one' | 'many';
   /**
@@ -2248,7 +2248,7 @@ export interface DagRunStartedEvent {
        */
       routes?: string[];
       /**
-       * How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
+       * How many routes the decision node selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
        */
       select?: 'one' | 'many';
       /**
@@ -2286,11 +2286,11 @@ export interface DagNodeUpdatedEvent {
     started_at?: number;
     ended_at?: number;
     /**
-     * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+     * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision node that was never executed. 'upstream_not_executed': every dependency of it in the graph was not executed.
      */
     reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
     /**
-     * The routes a decision node selected, on the frame that finishes it. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on every other frame, and when the node failed to decide.
+     * The routes a decision node selected, on the frame that finishes it. An empty list is a selection that chose nothing, which a 'many' selection may. Absent on every other frame, and when the node failed to decide.
      */
     selected_routes?: string[];
     /**
@@ -2395,11 +2395,11 @@ export interface DagRunCompletedEvent {
       output_file?: string;
       error?: string;
       /**
-       * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+       * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision node that was never executed. 'upstream_not_executed': every dependency of it in the graph was not executed.
        */
       reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
       /**
-       * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, and on one that failed to decide.
+       * The routes a decision node selected. An empty list is a selection that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, and on one that failed to decide.
        */
       selected_routes?: string[];
       /**
@@ -2463,7 +2463,7 @@ export interface MediaEvent {
   };
 }
 /**
- * A conversation's Task Board after a write -- the post-turn update or the reader's own action. Not replayed: a client that reconnects reads tasks.board.
+ * A session's Task Board after a write -- the post-turn update or the reader's own action. Not replayed: a client that reconnects reads tasks.board.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "TasksBoardUpdatedEvent".
@@ -2487,7 +2487,7 @@ export interface TasksBoardUpdatedPayload {
   };
 }
 /**
- * One host conversation's Task Board: its Task Groups and any dispatch still waiting for a place.
+ * One host session's Task Board: its Task Groups and any dispatch still waiting for a place.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "TaskBoard".
@@ -2498,7 +2498,7 @@ export interface TaskBoard {
   unassigned: PendingDispatch[];
 }
 /**
- * One matter a conversation is pushing, spanning any number of turns, with its Progress Steps in time order. summary says where the matter stands; any turn may rewrite it.
+ * One matter a session is pushing, spanning any number of turns, with its Progress Steps in time order. summary says where the matter stands; any turn may rewrite it.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "TaskGroup".
@@ -2857,13 +2857,13 @@ export interface PlaybookNode {
     [k: string]: JsonValue;
   };
   /**
-   * Makes this node a decision: route name -> the condition, in plain words, under which its answer selects that route. Kept whole, because re-running the graph judges against the conditions.
+   * Makes this node a decision node: route name -> the condition, in plain words, under which its answer selects that route. Kept whole, because re-running the graph judges against the conditions.
    */
   routes?: {
     [k: string]: string;
   };
   /**
-   * How many routes the decision selects, as the author wrote it. Absent means 'one'.
+   * How many routes the decision node selects, as the author wrote it. Absent means 'one'.
    */
   select?: 'one' | 'many';
   /**
@@ -3177,11 +3177,11 @@ export interface TaskNode {
    */
   mcps?: string[];
   /**
-   * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+   * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision node that was never executed. 'upstream_not_executed': every dependency of it in the graph was not executed.
    */
   reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
   /**
-   * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.
+   * The routes a decision node selected. An empty list is a selection that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.
    */
   selected_routes?: string[];
   /**
@@ -3193,7 +3193,7 @@ export interface TaskNode {
    */
   routes?: string[];
   /**
-   * How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
+   * How many routes the decision node selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
    */
   select?: 'one' | 'many';
   /**
@@ -3207,7 +3207,7 @@ export interface TaskNode {
   carried_into?: string | null;
 }
 /**
- * One unit of delegated work a conversation started, with its nodes inline.
+ * One unit of delegated work a session started, with its nodes inline.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "TaskRow".
@@ -3656,7 +3656,7 @@ export interface SessionListParams {
    */
   limit?: number;
   /**
-   * Session channels to include; defaults to tui. 'imported' adds the Imported Conversations to a list of live sessions (never to the archived one).
+   * Session channels to include; defaults to tui. 'imported' adds the Imported Sessions to a list of live sessions (never to the archived one).
    */
   channels?: string[];
   /**
@@ -4519,7 +4519,7 @@ export interface SubagentListResult {
 export interface SubagentContextParams {
   id: string;
   /**
-   * A call is addressed by conversation and call, never by call alone.
+   * A call is addressed by session and call, never by call alone.
    */
   session_id: string;
 }
@@ -5973,13 +5973,9 @@ export interface SettingsGetResult {
   config_path: string;
   raven_version: string;
   /**
-   * Whether conversational Skill Hub retrieval is on, read the way the runtime reads the config: an endpoint is required, and enabled=false turns it off.
+   * Whether conversational Skill Hub retrieval is on, read the way the runtime reads the config: enabled=false turns it off, and the default is on.
    */
   skill_hub_on: boolean;
-  /**
-   * skill_hub_on, while the agent loop serving now was built without a Hub client: retrieval starts after a reload.
-   */
-  skill_hub_awaiting_reload: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -6365,11 +6361,11 @@ export interface FsUploadParams {
  */
 export interface FsUploadResult {
   /**
-   * The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the conversation's own working directory first, so a same-named file there answers for it; uploads never return bytes.
+   * The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the session's own working directory first, so a same-named file there answers for it; uploads never return bytes.
    */
   path: string;
   /**
-   * The file the upload wrote, and the path to hand turn.send: it names the upload whatever the conversation's own directory holds.
+   * The file the upload wrote, and the path to hand turn.send: it names the upload whatever the session's own directory holds.
    */
   abs_path: string;
   size: number;
@@ -6443,11 +6439,11 @@ export interface DeckTemplatesPickParams {
  */
 export interface DeckTemplatesPickResult {
   /**
-   * The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the conversation's own working directory first, so a same-named file there answers for it; uploads never return bytes.
+   * The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the session's own working directory first, so a same-named file there answers for it; uploads never return bytes.
    */
   path: string;
   /**
-   * The file the upload wrote, and the path to hand turn.send: it names the upload whatever the conversation's own directory holds.
+   * The file the upload wrote, and the path to hand turn.send: it names the upload whatever the session's own directory holds.
    */
   abs_path: string;
   size: number;
@@ -6873,7 +6869,7 @@ export interface PlaybooksRunParams {
    */
   name: string;
   /**
-   * The conversation this run reports to, as its own `channel:chat_id`. Required because a run's progress and completion announce are addressed to a conversation, and an RPC call is an origin nothing else sets one for.
+   * The session this run reports to, as its own `channel:chat_id`. Required because a run's progress and completion announce are addressed to a session, and an RPC call is an origin nothing else sets one for.
    */
   session_key: string;
   /**
@@ -6959,7 +6955,7 @@ export interface PlaybooksCreateResult {
  */
 export interface PlaybooksDraftParams {
   /**
-   * The conversation whose generated Persona this is. A draft belongs to the session that asked for it.
+   * The session whose generated Persona this is. A draft belongs to the session that asked for it.
    */
   session_key: string;
 }
@@ -7006,7 +7002,7 @@ export interface PlaybookRow1 {
  */
 export interface PlaybooksDraftSaveParams {
   /**
-   * The conversation whose generated Persona this is. A draft belongs to the session that asked for it.
+   * The session whose generated Persona this is. A draft belongs to the session that asked for it.
    */
   session_key: string;
   /**
@@ -7030,7 +7026,7 @@ export interface PlaybooksDraftSaveResult {
  */
 export interface PlaybooksDraftDiscardParams {
   /**
-   * The conversation whose generated Persona this is. A draft belongs to the session that asked for it.
+   * The session whose generated Persona this is. A draft belongs to the session that asked for it.
    */
   session_key: string;
 }
@@ -7101,7 +7097,7 @@ export interface ApprovalRevokeResult {
  */
 export interface ApprovalPendingParams {
   /**
-   * One conversation's requests; every conversation's when absent.
+   * One session's requests; every session's when absent.
    */
   session_id?: string;
   /**
@@ -7179,7 +7175,7 @@ export interface CredentialSkipResult {
  */
 export interface CredentialPendingParams {
   /**
-   * One conversation's requests; every conversation's when absent.
+   * One session's requests; every session's when absent.
    */
   session_id?: string;
   /**

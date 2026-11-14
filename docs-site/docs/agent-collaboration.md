@@ -1,7 +1,7 @@
 # Working with sub-agents
 
 Delegate a bounded task, inspect what the specialist actually did, and continue
-the right conversation when you need changes. Raven exposes both delegated
+the right session when you need changes. Raven exposes both delegated
 tasks and stateful agent instances; they are different things.
 
 Set up agents first with [Agent Integrations](agent-integrations.md). This page
@@ -21,10 +21,16 @@ Board on, the rest wait on the board instead: every question still open is liste
 on its task's card, so a reply asks only what is new. A later message
 about a task's work -- a correction, more work, or a question about why it was
 done that way -- goes back to the instance that did the work, which still has
-its context. Raven answers conversation, what it already knows and where your
-tasks stand itself; anything to produce, however small, goes to the agent that
-fits it, and to the built-in `Raven-General` agent only when none does. In a
-conversation running on a Harness with workers, such as a Persona, Raven hands work
+its context. Raven answers in the session, what it already knows and where your
+tasks stand by its own record itself. Any work that needs a tool, however small,
+goes to the agent that fits it, and to the built-in `Raven-General` agent only
+when none does: looking something up, checking a result and a cleanup as much as
+a script or a document. Raven's own turn holds the session while it works,
+so handing the work over keeps it free for your next message. An agent's report
+comes to Raven, and the page shows it folded (the terminal as one line), so when
+one comes back Raven tells you in its own words what was done and what came of it: each finding by what it is rather than by the
+report's label, and the grounds the report gives for a verdict. In a
+session running on a Harness with workers, such as a Persona, Raven hands work
 only to those workers; work none of them covers, it tells you about and asks how to
 go on instead of doing it itself. On a turn where both dispatch tools are disabled,
 Raven does the work itself.
@@ -65,7 +71,7 @@ uses additional model calls and can start subprocesses or external work.
 
 ## A first read-only collaboration
 
-1. Open a conversation in the project's working directory. Check the chosen
+1. Open a session in the project's working directory. Check the chosen
    agent is enabled and ready.
 2. Ask: “Have Raven-Code review the public API in this checkout. Do not edit
    files. Return compatibility risks with file references, then summarize
@@ -74,18 +80,18 @@ uses additional model calls and can start subprocesses or external work.
    task view. A stream of activity is progress, not proof of success.
 4. Open its resumable instance, if one exists, and ask: “Expand the highest
    priority risk. Do not change the implementation yet.”
-5. Return to the main conversation and ask it to incorporate the follow-up
+5. Return to the main session and ask it to incorporate the follow-up
    into the final summary.
 
 The generic `raven` agent is another option when no specialized setup is ready.
-Choose a stateful backend if follow-up conversation matters; a one-shot
+Choose a stateful backend if follow-up matters; a one-shot
 stateless task is not automatically a resumable chat.
 
 ## Sessions, instances, and task ids
 
-The host session is the conversation you opened. An instance is addressed by
+The host session is the session you opened. An instance is addressed by
 an agent and handle within that session. A DAG node id identifies a task and its
-outputs; it does not identify a conversation to chat with.
+outputs; it does not identify a session to chat with.
 
 Reusing an instance can preserve that child's context. A new instance starts
 separate state. The WebUI can create an instance for an enabled, stateful agent
@@ -103,7 +109,7 @@ addressed to that instance. Direct turns use their own execution lane. They
 can run alongside the host or other instances, but a busy instance cannot
 necessarily accept another normal turn.
 
-The direct conversation is kept separately from the main transcript. On your
+The direct session is kept separately from the main transcript. On your
 next turn to the main agent, the runtime supplies a **Handoff Block**: instance
 identity, times, and paths to recorded prompts/results. It does not paste the
 whole exchange or produce an automatic semantic summary. Ask the host to read
@@ -181,5 +187,5 @@ shared-workspace report helps identify overlap.
 | Successful return but wrong result | Verify files, evidence, and DAG verdicts before retrying |
 
 Stop or retry only after checking side effects. For scheduled work, canceling a
-conversation is not proof that the remote process or campaign stopped. Use
+session is not proof that the remote process or campaign stopped. Use
 the [Oncall lifecycle](oncall.md) for that case.

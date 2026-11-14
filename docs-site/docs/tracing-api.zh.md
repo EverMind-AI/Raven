@@ -45,7 +45,7 @@ with trace.span("llm.call", {"llm.provider": provider, "llm.model": model}) as s
   默认由名称的域推导；自定义节点请显式传入（§3）。
 
 嵌套通过 `contextvars` 自动完成：在另一个 span 活跃期间开启的 span 会成为它的子节点；
-上下文可跨 `await` 存续，并会快照到任务上。一轮对话的根节点是 `session.turn` span，
+上下文可跨 `await` 存续，并会快照到任务上。一轮会话的根节点是 `session.turn` span，
 其余一切都嵌套在它之下。
 
 ### `Span` 句柄 { #span-handle }
@@ -102,7 +102,7 @@ async def chat_with_retry(self, ...): ...
   （出错时为 `None`）；`exc` 是抛出的异常（成功时为 `None`）。标准提取器位于
   `raven.observability.semconv`（`llm_call`、`tool_call`、`memory_*` 等）。
 - `seed(bound_args) -> dict`——返回 `session_key` / `channel` / `chat_id`，用于开启一个
-  *根* span（一轮对话），其身份会被所有子节点继承。
+  *根* span（一轮会话），其身份会被所有子节点继承。
 - `on_open(span, bound_args)`——在开启之后、方法体之前执行；用于记录输入，并对进行中的
   根节点调用 `span.checkpoint()` 以支持实时查看。
 
@@ -150,7 +150,7 @@ async def chat_with_retry(self, ...): ...
 携带一条原始消息。
 
 对 `llm.input` 而言，`artifact_sha1` 与 `artifact_bytes` 描述的是外壳，而不是它所引用的
-对话；`llm.request_bytes` 才是请求体量的信号，它直接从消息本身测得，因而不受外壳影响。
+会话；`llm.request_bytes` 才是请求体量的信号，它直接从消息本身测得，因而不受外壳影响。
 外壳对其列出的引用求哈希，因此篡改痕迹可定位到单条消息，而不只是证明负载被改过。
 
 有两处解析点会把外壳还原为等价的 v1：打包轨迹时的 `raven/trajectory/bundle.py`

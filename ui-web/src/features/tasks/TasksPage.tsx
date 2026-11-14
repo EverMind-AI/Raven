@@ -11,13 +11,13 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
-import { Glyph } from '../../components/Ico'
 import { PaneHead, PaneHeadSeg } from '../../components/PaneHead'
 import { t } from '../../i18n/t'
 import { copy } from '../../lib/clipboard'
 import { formatDuration } from '../../lib/duration'
 import * as lang from '../../state/lang'
 import { show as showPage } from '../../state/page'
+import { sources } from '../../state/sources'
 import { show as toast } from '../../state/toast'
 import { Board } from '../dag/Board'
 import { DagGraph } from '../dag/DagGraph'
@@ -28,12 +28,12 @@ import * as workspace from '../workspace/store'
 import { BoardCard, selectionText } from './BoardCard'
 import { BoardList } from './BoardList'
 import { fitChips } from './chipFit'
-import { Answer, StepList } from './NodeRecord'
 import * as store from './store'
 
 import type { Dims } from '../dag/graph'
 import type { DagNode } from '../dag/types'
-import type { NodeRecord, NodeStep, SubagentRow, TaskFile, TaskNode, TaskRow } from './types'
+import type { HistoryMessage } from '../transcript/types'
+import type { NodeRecord, SubagentRow, TaskFile, TaskNode, TaskRow } from './types'
 import type { JSX, ReactNode } from 'react'
 import './styles.css'
 
@@ -423,7 +423,7 @@ const fmtN = (n: number): string => n.toLocaleString('en-US')
    fact is there to push. A lane that never reported usage is a fact this
    line says nothing about, not a line that says "not reported"; the tool
    count is the board card's, and the calls themselves are the process
-   fold's, so neither is this line's. A decision's selection follows the
+   fold's, so neither is this line's. A decision node's selection follows the
    status word itself, being a fact about how the step ended. */
 function nodeSubtitleRest(node: TaskNode): string[] {
   const chosen = selectionText(node.selected_routes)
@@ -460,87 +460,43 @@ function nodeWhyText(node: TaskNode, row: TaskRow): string {
   return bad ? t('gui.tasks.skip_why_named', { name: bad.node_summary || bad.node_id }) : t('gui.tasks.skip_why')
 }
 
-/* HH:MM, zero-padded, in the reader's own timezone -- the timestamp a
-   dispatch or an answer wears in its footer. */
-function hhmm(ms: number): string {
-  const d = new Date(ms)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-
-/* The marker tokens alone, not the whole BEGIN..END span: the injected body
-   between them stays ordinary prose, and a truncated prompt carrying only a
-   BEGIN marker (its matching END never arrived) still gets that one line
-   marked rather than none of it. */
-const UNTRUSTED_MARKER = /(\[(?:BEGIN|END) UNTRUSTED[^\]]*\])/g
-const IS_UNTRUSTED_MARKER = /^\[(?:BEGIN|END) UNTRUSTED/
-/* A character count, not a line count -- the prototype folds on length so a
-   long one-line prompt still clamps and a short eight-line one does not. */
-const CLAMP_CHARS = 260
-
-function Dispatch({ text, at, nodeKey }: { text: string; at: number | null; nodeKey: string }): JSX.Element {
-  const touched = useSyncExternalStore(store.subscribe, () => store.foldOf(nodeKey, 'wide'))
-  const open = touched ?? false
-  const long = text.length >= CLAMP_CHARS
-  return (
-    <div className="tkdisp">
-      <div className={'tkdispb' + (long && !open ? ' tkclamp' : '')}>
-        {text.split(UNTRUSTED_MARKER).map((part, i) => (
-          IS_UNTRUSTED_MARKER.test(part)
-            ? <span className="tkuntrusted" key={i}>{part}</span>
-            : <span key={i}>{part}</span>
-        ))}
-      </div>
-      {long
-        ? (
-          <button className="tkmore" aria-expanded={open} onClick={() => store.setFold(nodeKey, 'wide', !open)}>
-            {t(open ? 'gui.tasks.rec_less' : 'gui.tasks.rec_more')}
-          </button>
-        )
-        : null}
-      <div className="tkansfoot">
-        <button
-          className="tkfootcopy" aria-label={t('gui.tasks.copy')}
-          onClick={() => copy(text, t('gui.tasks.copied_dispatch'))}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-            <rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
-          </svg>
-        </button>
-        {at != null ? <span className="tkturnmeta">{hhmm(at)}</span> : null}
-      </div>
-    </div>
-  )
-}
-
-/* The process, folded once it is over and open while it is not: a run of any
-   length is mostly steps a reader does not need mid-flight, but the one
-   under way is the thing their eye should find. Each step's own rendering --
-   the thought, what it said, the calls it led to and their detail cards --
-   is NodeRecord.tsx's `StepList` (proto.js's `stepView` / `callRow` /
-   `plainDtl` / `delegDtl`). */
-function Process({ steps, node, nodeKey }: { steps: NodeStep[]; node: TaskNode; nodeKey: string }): JSX.Element | null {
-  /* `undefined` (never touched) recomputes the default every render rather
-     than freezing it at mount: open while the node is the only thing moving,
-     closed the moment there is a conclusion to read instead -- a node
-     watched from running to completed folds itself, and one the reader
-     already opened or closed stays that way regardless of status. */
-  const touched = useSyncExternalStore(store.subscribe, () => store.foldOf(nodeKey, 'proc'))
-  if (!steps.length) return null
-  const open = touched ?? node.status === 'running'
-  const dur = node.ended_at && node.started_at ? formatDuration(node.ended_at - node.started_at) : ''
-  return (
-    <div className="tkproc">
-      <button
-        className="tkprock" aria-expanded={open} aria-label={t('gui.tasks.rec_process_aria')}
-        onClick={() => store.setFold(nodeKey, 'proc', !open)}
-      >
-        <span>{node.status === 'running' ? t('gui.tasks.rec_process') : nodeStatusWord(node.status)}</span>
-        {dur ? <span className="tkprocn">{dur}</span> : null}
-        <Glyph d="M9.5 6.5 15 12l-5.5 5.5" cls="tkchev" />
-      </button>
-      {open ? <div className="tkprocb"><StepList steps={steps} running={node.status === 'running'} nodeKey={nodeKey} /></div> : null}
-    </div>
-  )
+/* One node's record, painted by the transcript's own renderer: what it was
+   asked, as the bubble nobody typed, then what it did and said in the
+   conversation's reply card -- the same rows, folds and detail the
+   conversation draws for its own turns, so the two cannot drift apart. The
+   seam is optional: an assembly without the transcript (this domain's own
+   tests) still draws the tab around it. */
+function RecordStage({ record, status, node, nodeKey }: {
+  record: NodeRecord; status: TaskNode['status']; node: TaskNode; nodeKey: string
+}): JSX.Element {
+  const box = useRef<HTMLDivElement | null>(null)
+  /* A microtask after the commit, never inside it: the painter mounts and
+     flushes a React root of its own, which React refuses from inside another
+     root's commit. The panel's tail follow watches the box's height, so a
+     paint landing a tick later is still pinned. */
+  useEffect(() => {
+    const el = box.current
+    const paint = sources.transcript?.stagePaint
+    if (!el || !paint) return
+    let live = true
+    queueMicrotask(() => {
+      if (!live || !el.isConnected) return
+      paint(
+        el,
+        {
+          status: status === 'running' ? 'run' : status,
+          messages: record.messages as HistoryMessage[],
+          /* The node's own clock, in epoch milliseconds -- the seam takes either
+             unit and the fold reads it as the record's span. */
+          started_at: node.started_at ?? undefined,
+          ended_at: node.ended_at ?? undefined,
+        },
+        { key: nodeKey, dispatch: true, shut: true, empty: t('gui.tasks.ctx_none') },
+      )
+    })
+    return () => { live = false }
+  }, [record, status, nodeKey, node.started_at, node.ended_at])
+  return <div className="tkrecord" ref={box} />
 }
 
 function ContextTab({ row, node, rec }: {
@@ -578,9 +534,13 @@ function ContextTab({ row, node, rec }: {
   const nodeKey = store.rowKey(row) + ':' + node.node_id
   return (
     <div className="tkctx">
-      <Dispatch text={record.dispatch} at={node.started_at ?? null} nodeKey={nodeKey} />
-      <Process steps={record.steps} node={node} nodeKey={nodeKey} />
-      {record.answer ? <Answer text={record.answer} at={node.ended_at ?? null} running={node.status === 'running'} /> : null}
+      <RecordStage record={record} status={node.status} node={node} nodeKey={nodeKey} />
+      {/* The console tail a cli-channel node is read through while it runs has
+         no row in the conversation's renderer, so the tab says why there is
+         nothing more to read yet. */}
+      {record.steps.some((s) => s.kind === 'console')
+        ? <div className="tkconsole">{t('gui.tasks.ctx_console')}</div>
+        : null}
       {!record.answer && node.status === 'failed'
         ? (
           <div className="tkerrb">
@@ -800,9 +760,9 @@ const SETTLE_MS = 150
  * It starts not following, because a record opens at its beginning, and `key`
  * resets it -- another node, or the work order, is a different thing to read
  * rather than a continuation of this one. The pin runs off `record` rather
- * than off every render: this panel reads the task store, and every fold in
- * the record writes to it (`store.setFold`), so a pin on each render would
- * answer a reader opening a step above with a jump to the end. */
+ * than off every render: this panel reads the whole task store, which every
+ * live event on any run writes, so a pin on each render would answer a reader
+ * reading a step above with a jump to the end. */
 function useTailFollow(key: string, record: NodeRecord | null, live: boolean) {
   const box = useRef<HTMLDivElement>(null)
   const wantsTail = useRef(false)

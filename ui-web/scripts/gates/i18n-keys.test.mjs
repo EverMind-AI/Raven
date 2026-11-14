@@ -89,6 +89,11 @@ const ALIAS = {
   tpl: 'composer',
   caps: 'cron',
   conn: 'connections',
+  /* Both were shared with the task pane's own record view until a node's record
+     moved to the transcript's renderer; the TUI reads `gui.deleg` too, so the
+     rename waits on the root file like the rest of this list. */
+  deleg: 'transcript',
+  dtl: 'transcript',
   dur: 'cron',
   fold: 'transcript',
   freq: 'cron',
@@ -116,8 +121,6 @@ const SHARED = {
   att: 'an attachment is composed, carried into a delegation and drawn in the transcript',
   cron: 'a schedule is the cron page\'s and a delegated agent can carry one',
   dag: 'the delegated graph is drawn on the task pane board, read as a record on the roster and named on the transcript card',
-  deleg: 'a delegated call\'s own facts are drawn in the transcript\'s card and in a task node\'s own call row',
-  dtl: 'a tool call\'s own detail card is drawn in the transcript and in a task node\'s own call row',
   model: 'a model is picked in one domain and defaulted in another, plus the chip component',
   op: 'the six verbs any row offers -- rename, delete, retry -- with no domain of their own',
   plug: 'an extension is installed from six places, and the wording is the extension\'s',

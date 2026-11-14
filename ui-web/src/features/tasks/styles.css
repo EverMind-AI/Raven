@@ -155,8 +155,8 @@
   padding: 0 6px;
 }
 
-/* The context tab: a console-only step, an ended-without-an-answer banner,
-   the output-truncated note, and the "continue chatting" dock. */
+/* The context tab: the node's record, then the cli channel's no-transcript
+   line, an ended-without-an-answer banner and the output-truncated note. */
 .tkctx {
   display: flex;
   flex-direction: column;
@@ -167,6 +167,27 @@
   font-size: 12px;
   color: var(--muted);
 }
+/* The record itself, painted by the transcript's renderer (TasksPage.tsx's
+   RecordStage) and laid out the way the conversation lays out a turn: one
+   column of its rows, the reply card white, what opened the turn on the
+   reader's side. Read one step under the conversation's body size, as every
+   delegated record is (.satx). */
+.tkrecord {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  /* The gutter the conversation's action row hangs into. That row sits a 5px
+     negative margin outside the card it belongs to -- the chat's column has
+     the room for it, and so does the agent stage (.satx), but the record's
+     body is a scroll box flush with its cards: the row widened the column by
+     5px and the body answered with 5px of sideways scroll, a place to drag
+     the record to one side. */
+  padding: 6px 5px 8px;
+  --fs-body: 14px;
+}
+.tkrecord > [data-tsl] > * { flex: none; min-width: 0; }
+.tkrecord > [data-tsl] > .turn.me { max-width: 88%; }
 /* The graph tag, last on a row's name line: the error tag's geometry with no
    colour of its own, because it says what shape the task is, not how it went. */
 .tkgraph {
@@ -348,253 +369,8 @@
   padding: 1px 4px;
 }
 
-/* A step's own tool calls (NodeRecord.tsx): a single call is just its row,
-   more than one folds behind a summary naming the kind of work and how many
-   failed. */
-.tkwk {
-  margin: 6px 0;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-.tkwkin {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-/* A call and, when it is open, its detail card: one above the other. The row
-   used to lay these two out itself, as a flex ROW -- which put the card BESIDE
-   the verb and squeezed the verb into a two-glyph column against it. The head
-   below is the row proper; this box only stacks. */
-.tkwrow {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  width: 100%;
-  color: var(--muted);
-  font-size: 12px;
-  background: none;
-  border: 0;
-  text-align: left;
-}
-/* The head: icon, verb, what was acted on, chevron. Also what the multi-call
-   summary is, which is a row and nothing else -- its calls are folded into a
-   box beside it, not under it. */
-.tkwhd,
-.tkwrow.tksum {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  padding: 2px 0;
-}
-.tkwrow.tktog {
-  cursor: pointer;
-}
-.tkwrow.tktog:hover .tkvb,
-.tkwrow.tktog:hover .tkar {
-  color: var(--text);
-}
-.tkic {
-  flex: none;
-  width: 13px;
-  height: 13px;
-  color: var(--faint);
-}
-/* A failed row keeps its state class, but wears the ordinary row's ink: the
-   word beside it is what says the call went wrong. */
-.tkwrow.tkbad .tkic {
-  color: var(--faint);
-}
-.tkwrow.tkbusy .tkic {
-  animation: breathe 1.6s ease-in-out infinite;
-}
-.tkvb {
-  flex: none;
-}
-.tkwrow.tkbad .tkvb {
-  color: var(--muted);
-}
-.tksrv {
-  color: var(--faint);
-}
-.tkar {
-  flex: 1;
-  min-width: 0;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tkwrow.tksum .tkar {
-  color: var(--muted);
-}
-.tkwrow.tksum:hover .tkar {
-  color: var(--text);
-}
-.tkwrow .err {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tkcv {
-  flex: none;
-  width: 11px;
-  height: 11px;
-  color: var(--faint);
-  transition: transform .16s ease;
-}
-.tkwrow.tkopen .tkcv {
-  transform: rotate(90deg);
-}
-/* A failed call is ordinary work: the word says so, the colour does not. */
-.tkbadchip {
-  flex: none;
-  font-size: 10.5px;
-  padding: 0 6px;
-  border-radius: 8px;
-  line-height: 16px;
-  color: var(--muted);
-  background: var(--surface);
-}
-.tkwrow.tknoresult .tkic,
-.tkwrow.tknoresult .tkvb,
-.tkwrow.tknoresult .tkar {
-  color: var(--faint);
-}
-.tknoresultchip {
-  flex: none;
-  font-size: 10.5px;
-  padding: 0 6px;
-  border-radius: 8px;
-  line-height: 16px;
-  color: var(--faint);
-  background: color-mix(in oklab, var(--faint) 12%, transparent);
-}
-
-/* One expanded call's own card: a head naming it (plus a diff count and a
-   copy button), and a body shaped by which tool it was -- proto.js's
-   `plainDtl`. */
-.tkdtl {
-  margin: 2px 0 4px;
-  background: var(--ink);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  font-size: 11.5px;
-}
-.tkdtlhd {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 7px 11px;
-  border-bottom: 1px solid var(--line-soft);
-}
-.tkdtlnm {
-  flex: 1;
-  min-width: 0;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tkdtlcp {
-  flex: none;
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  border-radius: 5px;
-  color: var(--faint);
-}
-.tkdtlcp svg {
-  width: 13px;
-  height: 13px;
-}
-.tkdtlcp:hover {
-  color: var(--text);
-  background: var(--raised);
-}
-.tkdtlbd {
-  padding: 9px 11px;
-  max-height: 300px;
-  overflow: auto;
-}
-.tkdtlbd pre {
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font: inherit;
-  color: var(--muted);
-}
-.tkcmd {
-  color: var(--text);
-  overflow-wrap: anywhere;
-  margin-bottom: 6px;
-}
-.tkcmd::before {
-  content: "$ ";
-  color: var(--faint);
-}
-.tkexitrow {
-  margin-top: 6px;
-}
-.tkexit {
-  font-size: 10.5px;
-  padding: 1px 6px;
-  border-radius: 8px;
-}
-.tkexit.ok {
-  color: var(--moss);
-  background: color-mix(in oklab, var(--moss) 12%, transparent);
-}
-.tkexit.bad {
-  color: var(--muted);
-  background: var(--surface);
-}
-
-/* A delegated call's own key/value grid, rather than one flat pre -- proto.js's
-   `delegDtl`. */
-.tkdtl.tkdlg .tkdtlbd {
-  padding: 9px 12px 10px;
-}
-.tkdgr {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 3px 16px;
-}
-.tkdgk {
-  color: var(--faint);
-}
-.tkdgv {
-  color: var(--text);
-  min-width: 0;
-}
-/* A task row that names the run it dispatched: the whole value cell is the
-   control that opens it, the way the prototype's own `kv(..., gov)` cell is. */
-.tkdgv.tkgov {
-  cursor: pointer;
-}
-.tkdgv.tkgov:hover {
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-.tkstt {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-/* A delegated call's state dot is the page-wide `.dot bad`; inside a task
-   record it wears the record's neutral ink too, so a failed step reads as a
-   word rather than a red alarm. The shared `.dot.bad` stays warning-coloured
-   for the surfaces that need it (connections, system failures). */
-.tkstt .dot.bad { background: var(--muted); box-shadow: none; }
-
-/* One step of a node's own run (NodeRecord.tsx's `StepGroupView`): a
-   thought, something said between calls, and the tool calls it led to,
-   folded together the way proto.js's own `.step` is. */
+/* The room between two steps of a group's thread on the Task Board
+   (BoardList.tsx); the rest of a step's own geometry is further down. */
 .tkstep {
   margin: 10px 0;
 }
@@ -794,23 +570,6 @@
 .tkfork .nd[data-st="completed"] .tkrunrt { color: var(--moss); }
 .tkfork .nd[data-st="failed"] .tkrunrt { color: var(--muted); }
 .tkfork .nd[data-st="running"] .tkrunrt { color: var(--amber-dp); }
-
-/* The prototype's own streaming caret (proto.css's `.caret`), tk-prefixed
-   since the page-wide name is not this domain's to borrow (CONTRIBUTING 7):
-   trails a running node's own answer while it may still grow (NodeRecord.tsx's
-   `Answer`). */
-.tkcaret {
-  display: inline-block;
-  width: 7px;
-  height: 14px;
-  background: var(--amber);
-  vertical-align: -2px;
-  animation: tkblink 1.1s steps(2, end) infinite;
-}
-@keyframes tkblink { 50% { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) {
-  .tkcaret { animation: none; }
-}
 
 /* The run's file chips, under the status bar. Two parts: the strip of chips
    (`.tkstrip`) and, only while it is unfolded, the control that folds it back
@@ -1025,7 +784,7 @@
   cursor: pointer;
 }
 .tkaskbtn:hover { border-color: var(--faint); }
-.tkaskbtn[data-kind="answer"] { border-color: var(--amber); background: var(--amber); color: var(--ink-on-accent); }
+.tkaskbtn[data-kind="answer"] { border-color: var(--amber); background: var(--amber); color: var(--ink-on-amber); }
 .tkaskbtn[data-kind="answer"]:hover { border-color: var(--amber-dp); background: var(--amber-dp); }
 /* The card's foot, under the head and outside it: the meta, the counters,
    and Move on at the right. */

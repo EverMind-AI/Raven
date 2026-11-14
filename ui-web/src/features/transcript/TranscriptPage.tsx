@@ -4,29 +4,33 @@ import {
   AiSearch02Icon, AlertCircleIcon, ArrowUpRight01Icon, BookOpen02Icon, DocumentCodeIcon, Download04Icon,
   File01Icon, InternetIcon, PencilEdit01Icon, Wrench01Icon,
 } from '@hugeicons/core-free-icons'
-import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { flushSync } from 'react-dom'
 
 import charmSpec from '../../../../ui-shared/charms.json'
+import { AgentMark } from '../../components/AgentMark'
 import { FileBadge, FileMark, Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
 import { copy } from '../../lib/clipboard'
 import { readingImported } from '../../lib/imported'
 import { useTick } from '../../lib/tick'
+import * as lang from '../../state/lang'
 import * as lightbox from '../../state/lightbox'
 import { open as openChip } from '../../state/proseChips'
 import * as reveal from '../../state/reveal'
-import { ds } from '../../state/sources'
+import { ds, sources } from '../../state/sources'
 import * as dag from '../dag/graph'
 import { getVersion as deliveriesVersion, humanSize, subscribe as deliveriesSubscribe } from '../workspace/deliveries'
 import {
   fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath, thumbURL, versioned,
 } from '../workspace/store'
 import * as citations from './citations'
+import { endIndex, startIndex } from './laneWindow'
 import * as store from './store'
 import * as tail from './tail'
 
+import type { TaskRow } from '../tasks/types'
 import type { DeliveryRow } from '../workspace/types'
 import type {
   AnswerData, ArtsData, AskData, CallData, DeliveredData, FoldData, Lane,
@@ -110,7 +114,6 @@ const BRANCH_ICO = '<circle cx="7" cy="6" r="2.2"/><circle cx="7" cy="18" r="2.2
   + '<path d="M17 10.2v1.3a3.5 3.5 0 0 1-3.5 3.5H10"/>'
 const DTL_COPY_ICO = '<rect x="9" y="9" width="11" height="11" rx="2.4"/>'
   + '<path d="M15 5.5A1.5 1.5 0 0 0 13.5 4H6a2 2 0 0 0-2 2v7.5A1.5 1.5 0 0 0 5.5 15"/>'
-const SDLV_ICO = 'M5 5v5a4 4 0 0 0 4 4h9M14 10l4 4-4 4'
 
 function Ico({ d, cls }: { d: string; cls?: string }): ReactElement {
   return (
@@ -354,7 +357,7 @@ function mediaResult(res: string): MediaResult | null {
    name rather than to a broken-image glyph. */
 function GeneratedShot({ path }: { path: string }): ReactElement {
   const [ready, setReady] = useState(false)
-  /* An imported conversation's files are on the machine that recorded it: its
+  /* An imported session's files are on the machine that recorded it: its
      name, without asking this gateway for a file it cannot have. */
   const [gone, setGone] = useState(readingImported)
   const src = fileURL(path)
@@ -1087,6 +1090,18 @@ const AskView = memo(function AskView({ lane, seg }: { lane: Lane; seg: AskData 
   const openAll = (): void => store.expandAskAtts(lane, seg)
   const thumb = (p: string, liveImg: boolean): ReactElement => <AskShot key={p} path={p} live={liveImg} />
   const showClip = seg.clipped && !seg.clipOpen
+  /* The brief is read as markdown once per (body, language) pair. `md()` is
+     quadratic in the fence markers an upstream node can write into it (1.3 s
+     at 136 KB), and a repaint used to pay that again; the body of a message
+     never changes, and the language column is what the rendered copy depends
+     on besides it. The column is not read by the callback -- md()'s own lookup
+     reads it -- so the dependency the rule cannot see is disabled below. */
+  const col = lang.get().lang
+  const mdBody = useMemo(
+    () => (seg.md ? store.markUntrusted(store.mdHtml(seg.body)) : ''),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [seg.md, seg.body, col],
+  )
   return (
     <div className="turn me in" data-ask={seg.id}>
       {/* Pictures above the bubble, files inside it (Figma: Raven / UserMessage).
@@ -1122,7 +1137,7 @@ const AskView = memo(function AskView({ lane, seg }: { lane: Lane; seg: AskData 
         >
           {seg.auto ? (
             <span className="transcript-auto">
-              <Ico d={ACT_ICO.clock as string} />
+              {seg.auto.origin === 'dispatch' ? <AgentMark own /> : <Ico d={ACT_ICO.clock as string} />}
               {t('gui.deleg.by_' + seg.auto.origin, undefined, seg.auto.origin)}
               {seg.auto.note ? ` · ${seg.auto.note}` : ''}
             </span>
@@ -1147,7 +1162,9 @@ const AskView = memo(function AskView({ lane, seg }: { lane: Lane; seg: AskData 
                 )}
             </span>
           ) : null}
-          {seg.body}
+          {seg.md
+            ? <div className="prose" dangerouslySetInnerHTML={{ __html: mdBody }} />
+            : seg.body}
         </div>
       ) : null}
       {seg.body.trim() && seg.clipped ? (
@@ -1314,7 +1331,7 @@ const DELIVERED: Record<DeliveredData['status'], { cls: string; key: string }> =
    -- the manager reports where the work was placed, not how it went -- so the
    word on the row has to come out of this line instead, or every failed graph
    would read as "finished". */
-const DAG_COUNTS = /(\d+) completed, (\d+) failed, (\d+) cancelled, (\d+) skipped/
+const DAG_COUNTS = /(\d+) completed, (\d+) failed, (\d+) cancelled, (\d+) skipped(?:, \d+ not executed)?(?:, \d+ carried)?(?: \(of (\d+)\))?/
 
 /* Whether the row is a graph's own result, the one delivery whose `ok` says
    nothing and whose text ends with the counts. A node's report carries its own
@@ -1337,14 +1354,51 @@ function deliveredVerdict(seg: DeliveredData): { cls: string; key: string } {
   return plain
 }
 
+/* A graph receipt's node lines (`DagTool`), one per node, each with where its
+   output went and, on the line under it, why there is none. Null when the
+   receipt does not carry them in that shape -- an older server's, or one this
+   reader does not know -- and the fold then shows the lines as they came. */
+interface ReceiptNode { name: string; status: string; said: string }
+
+const NODE_LINE = /^- (.+?) \[([^\]]+)\](?: \(instance: [^)]*\))?: (.*)$/
+const NODE_NOTE = /^\s+(error|reason): (.*)$/
+/* The receipt's own line naming the run's directory. The table's output paths
+   are relative to it, so the table alone cannot reach them. */
+const RUN_DIR = /^Run dir: (.+)$/
+
+function receiptNodes(head: string[]): ReceiptNode[] | null {
+  const at = head.findIndex((line) => /^Node output files:/.test(line))
+  if (at < 0) return null
+  const nodes: Array<ReceiptNode & { why: string }> = []
+  for (const line of head.slice(at + 1)) {
+    const row = NODE_LINE.exec(line)
+    if (row) {
+      const path = row[3] as string
+      nodes.push({ name: row[1] as string, status: row[2] as string, said: path === '(no output file)' ? '' : path, why: '' })
+      continue
+    }
+    /* An error outranks a reason, and either outranks the file: a node that
+       failed after writing half an output is a failure first. */
+    const note = NODE_NOTE.exec(line)
+    const last = nodes[nodes.length - 1]
+    if (note && last && (note[1] === 'error' || !last.why)) last.why = note[2] as string
+  }
+  return nodes.length ? nodes.map(({ name, status, said, why }) => ({ name, status, said: why || said })) : null
+}
+
+/* One word per node state, on the three grounds a graph's own card uses: done,
+   failed, and everything that neither ran to an end nor broke. */
+const nodeTone = (status: string): 'ok' | 'bad' | 'no' =>
+  status === 'completed' ? 'ok' : status === 'failed' || status === 'interrupted' ? 'bad' : 'no'
+
 /* What the fold holds, which is prose unless it is a graph's finished-summary.
  *
  * That one is two kinds of text in one string (`DagTool`): the counts line,
- * the run directory and one line per node's output file -- machine lines,
- * aligned, and read as a block -- then a section per terminal node, which is
- * what the sub-agent actually said. Drawn as the two things they are rather
- * than run through the markdown reader, which folds the `- node [status]`
- * lines into a bullet list and loses the alignment that makes them scannable.
+ * the run directory and one line per node's output file -- machine lines, read
+ * as a table -- then a section per terminal node, which is what the subagent
+ * actually said. Drawn as the two things they are rather than run through the
+ * markdown reader, which folds the `- node [status]` lines into a bullet list.
+ * The counts line is not repeated: the row above the fold already counts.
  *
  * Keyed on the summary's own opening and on the row being a graph's result rather
  * than on `isDag`, because the other thing a graph delivers is one node's report
@@ -1365,18 +1419,34 @@ function DeliveredBody({ seg }: { seg: DeliveredData }): ReactElement {
   }
   const lines = seg.body.split('\n')
   const at = lines.findIndex((line) => /^Terminal outputs:/.test(line))
-  const head = (at < 0 ? lines : lines.slice(0, at)).join('\n').trimEnd()
-  const nodes: Array<{ cap: string; said: string[] }> = []
+  const headLines = at < 0 ? lines : lines.slice(0, at)
+  const nodes = receiptNodes(headLines)
+  const head = headLines.join('\n').trimEnd()
+  const runDir = nodes ? headLines.find((line) => RUN_DIR.test(line)) || '' : ''
+  const sections: Array<{ cap: string; said: string[] }> = []
   for (const line of at < 0 ? [] : lines.slice(at + 1)) {
     const heading = /^### (.+)$/.exec(line)
-    if (heading) { nodes.push({ cap: heading[1] as string, said: [] }); continue }
-    nodes[nodes.length - 1]?.said.push(line)
+    if (heading) { sections.push({ cap: heading[1] as string, said: [] }); continue }
+    sections[sections.length - 1]?.said.push(line)
   }
   return (
     <>
       {caption}
-      {head ? <pre className="raw">{head}</pre> : null}
-      {nodes.map((node) => (
+      {nodes ? (
+        <>
+          <div className="transcript-dlv-nodes">
+            {nodes.map((n) => (
+              <div key={n.name} data-st={nodeTone(n.status)}>
+                <span>{n.name}</span>
+                <span>{n.status}</span>
+                <span title={n.said}>{n.said}</span>
+              </div>
+            ))}
+          </div>
+          {runDir ? <div className="transcript-dlv-rundir">{runDir}</div> : null}
+        </>
+      ) : head ? <pre className="raw">{head}</pre> : null}
+      {sections.map((node) => (
         <Fragment key={node.cap}>
           <div className="cap">{node.cap}</div>
           <div className="prose" dangerouslySetInnerHTML={{ __html: store.mdHtml(node.said.join('\n')) }} />
@@ -1386,39 +1456,132 @@ function DeliveredBody({ seg }: { seg: DeliveredData }): ReactElement {
   )
 }
 
+/* How a graph's result went, as the row above its fold says it: one cell per
+   node in the order the receipt counts them, and the tally in the words the
+   graph's own card uses. Cells only while there are few enough to tell apart;
+   past that the words alone say it. */
+const BAR_MAX = 16
+
+function graphTally(seg: DeliveredData): { cells: Array<'ok' | 'bad' | 'no'>; words: string } | null {
+  if (!graphResult(seg)) return null
+  const m = DAG_COUNTS.exec(seg.body)
+  if (!m) return null
+  const [done, failed, stopped, skipped] = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])]
+  /* The server's line ends in the run's node total. It is larger than these
+     four terminal counts whenever a branch was not taken (`not executed`) or a
+     replan carried a node, and those nodes have their own rows in the table --
+     so the total, not the sum, is what the bar and the words count. Older
+     lines without it fall back to the sum. */
+  const n = m[5] != null ? Number(m[5]) : done + failed + stopped + skipped
+  const words = [t('gui.deleg.dag_done', { ok: String(done), n: String(n) })]
+  if (failed) words.push(t('gui.deleg.dag_bad', { n: String(failed) }))
+  if (stopped) words.push(t('gui.deleg.dag_stopped', { n: String(stopped) }))
+  if (skipped) words.push(t('gui.deleg.dag_skip', { n: String(skipped) }))
+  const cells = n > BAR_MAX ? [] : [
+    ...Array<'ok'>(done).fill('ok'),
+    ...Array<'bad'>(failed).fill('bad'),
+    ...Array<'no'>(Math.max(0, n - done - failed)).fill('no'),
+  ]
+  return { cells, words: words.join(' · ') }
+}
+
+/* How long the run took, from its own row or else the call that started it.
+   Only a settled clock: a result is a run that has ended, and a clock still
+   counting from its start would be a number about the reading rather than
+   about the run. */
+function runSpan(row: TaskRow | null, call: CallData | null): string {
+  if (row && row.started_at != null && row.ended_at != null && row.ended_at > row.started_at) {
+    return store.durText(row.ended_at - row.started_at)
+  }
+  if (!call) return ''
+  if (call.kind === 'spawn') return call.spawnT1 ? store.spawnCost(call, call.spawnT1) : ''
+  const span = store.dagSpan(call.nodes)
+  return span && !span.open && span.to ? store.durText(span.to - span.from) : ''
+}
+
+/* Who sent it, as the mark the agents list draws for that agent. A graph has no
+   one agent, so it wears the graph glyph; an agent the roster does not hold
+   wears the generic one, which is AgentMark's own answer to a name it cannot
+   place. */
+function SenderMark({ seg, who }: { seg: DeliveredData; who: string }): ReactElement {
+  useSyncExternalStore(store.subscribeBrands, store.brandsVersion)
+  if (seg.isDag) return <span className="transcript-dlv-glyph"><Ico d={ACT_ICO.dag as string} /></span>
+  const brand = who ? store.brandOf(who) : null
+  return <AgentMark preset={brand?.preset} own={brand?.own} agent={who} />
+}
+
+/* The run's own row in this conversation's task list, through the tasks seam:
+   it holds what the delivery itself does not carry -- a graph's title, who ran
+   a spawn, when it started and stopped -- whether or not the call that started
+   it is in the history read back. */
+const noWatch = (): (() => void) => () => {}
+function useRunRow(seg: DeliveredData): TaskRow | null {
+  const tasks = sources.tasks
+  const id = seg.isDag ? seg.runId : seg.nodeId
+  return useSyncExternalStore(tasks?.watch ?? noWatch,
+    () => (id && tasks?.rowOf ? tasks.rowOf(seg.isDag ? 'dag' : 'spawn', id) : null))
+}
+
+/* A delegated run's result, re-entering the conversation. It opens a turn the
+   way a question does, so it stands where a question stands -- on the reader's
+   side, in the bubble the runtime's own turns wear, between the reply before it
+   and the reply it sets off. It says who sent it, what it was asked to do (the
+   name opens the run), how it went, and folds what came back: the retelling in
+   the reply below is what the reader is meant to read, and the delivered text
+   is the receipt, there to be checked against. */
 const DeliveredView = memo(function DeliveredView({ lane, seg }: { lane: Lane; seg: DeliveredData }): ReactElement {
   useSeg(lane, seg)
-  /* The row says a result came back and opens the run it came from; the fold
-     holds what came back. Folded, because the retelling right below it is what
-     the reader is meant to read -- the delivered text is the receipt, there to
-     be checked against, and it is the sub-agent's words rather than Raven's. */
+  const row = useRunRow(seg)
   const headRef = useRef<HTMLButtonElement | null>(null)
   const flip = (): void => pinRow(headRef.current, () => store.toggleDelivered(lane, seg))
+  const call = store.callOfDelivery(lane, seg)
+  /* The call fills in after the row is drawn -- a graph's title and clock
+     arrive with its run -- so the row follows the call's own version too. */
+  useSyncExternalStore((cb) => store.subscribe(lane, cb), () => (call ? call.v : 0))
   const { cls, key } = deliveredVerdict(seg)
-  const name = seg.isDag ? t('gui.deleg.dag_title') : seg.label
+  const who = seg.isDag ? t('gui.deleg.dag_title') : call ? store.spawnHead(call).agent : row?.agent || ''
+  const title = seg.isDag ? row?.task_summary || (call && call.runTitle) || t('gui.deleg.dag_title') : seg.label
+  const tally = graphTally(seg)
+  const span = runSpan(row, call)
+  const folds = !!(seg.body || seg.outputTruncated)
   return (
-    <div className={'sdlv' + cls + (seg.shown ? ' open' : '')} data-delivered={seg.id}>
-      <div className="sdhd">
-        <Ico d={SDLV_ICO} cls="ic" />
+    <div className="turn me transcript-dlv" data-delivered={seg.id}>
+      <div className={'sdlv' + cls + (seg.shown ? ' open' : '')}>
+        <span className="transcript-dlv-from">
+          <SenderMark seg={seg} who={who} />
+          {who ? t('gui.deleg.from', { who }) : t('gui.deleg.from_subagent')}
+        </span>
         {/* The whole name, in the tooltip: a long task sentence must not push
             the word that says how it went out of sight. */}
-        <button className="nm" title={name} onClick={seg.open}>{name}</button>
-        <span className="st"><i className="dot" />{t(key)}</span>
-        {seg.body || seg.outputTruncated ? (
-          <button ref={headRef} className="sdcv" onClick={flip}
-            aria-label={t('gui.deleg.body_aria')}
-            aria-expanded={String(seg.shown) as 'true' | 'false'}>
-            <span className="lb">{t(seg.shown ? 'gui.deleg.body_hide' : 'gui.deleg.body')}</span>
-            <Chev />
-          </button>
+        <button className="nm" title={title} onClick={seg.open}>{title}</button>
+        <div className="sdhd">
+          <span className="st"><i className="dot" />{t(key)}</span>
+          {tally && tally.cells.length ? (
+            <span className="transcript-dlv-bar" aria-hidden="true">
+              {tally.cells.map((tone, i) => <i key={i} data-tone={tone} />)}
+            </span>
+          ) : null}
+          {tally ? <span className="transcript-dlv-tally">{tally.words}</span> : null}
+          {span ? <span className="transcript-dlv-span">{span}</span> : null}
+          {folds ? (
+            <button ref={headRef} className="sdcv" onClick={flip}
+              aria-label={t('gui.deleg.body_aria')}
+              aria-expanded={String(seg.shown) as 'true' | 'false'}>
+              <span className="lb">{t(seg.shown ? 'gui.deleg.body_hide' : 'gui.deleg.body')}</span>
+              <Chev />
+            </button>
+          ) : null}
+        </div>
+        {folds ? (
+          <div className="sdbd" hidden={!seg.shown} tabIndex={0} role="region"
+            aria-label={t(seg.said ? 'gui.deleg.body_cap_node' : 'gui.deleg.body_cap')}>
+            <DeliveredBody seg={seg} />
+          </div>
         ) : null}
       </div>
-      {seg.body || seg.outputTruncated ? (
-        <div className="sdbd" hidden={!seg.shown} tabIndex={0} role="region"
-          aria-label={t(seg.said ? 'gui.deleg.body_cap_node' : 'gui.deleg.body_cap')}>
-          <DeliveredBody seg={seg} />
-        </div>
-      ) : null}
+      <div className="ansfoot">
+        <span className="turnmeta">{store.stamp(seg.at)}</span>
+      </div>
     </div>
   )
 })
@@ -1598,6 +1761,18 @@ const ArtsView = memo(function ArtsView({ lane, seg }: { lane: Lane; seg: ArtsDa
 
 const FoldView = memo(function FoldView({ lane, seg }: { lane: Lane; seg: FoldData }): ReactElement {
   useSeg(lane, seg)
+  /* A delegated record's fold while its run is still going says so: "Done" over
+     work the reader can watch arriving would contradict the pane header, which
+     names the node's state. The lane's last turn is the live one; every earlier
+     turn it paints is settled history and keeps its own clock. */
+  const running = useSyncExternalStore((cb) => store.subscribe(lane, cb), () => lane.liveFold === seg.id)
+  /* A run still going counts up from its own start, the way its task row does.
+     The ellipsis covers the first second and a start the pane never had: the
+     fold is visibly live, the number is not invented. */
+  const elapsed = useTick(running, lane.agentStart)
+  const runTime = running
+    ? (lane.agentStart > 0 && elapsed >= 1000 ? store.durText(elapsed) : '\u2026')
+    : seg.time || ''
   const headRef = useRef<HTMLButtonElement | null>(null)
   const flip = (): void => pinRow(headRef.current, () => store.toggleFold(lane, seg))
   return (
@@ -1609,8 +1784,8 @@ const FoldView = memo(function FoldView({ lane, seg }: { lane: Lane; seg: FoldDa
             closing line. It is the TURN that is done -- a backgrounded graph
             dispatched from it may still be running below, and its own status
             lives on the task rows, not here. */}
-        <span className="lb">{t('gui.fold.steps')}</span>
-        <span className="tm">{seg.time || ''}</span>
+        <span className="lb">{t(running ? 'gui.deleg.st_run' : 'gui.fold.steps')}</span>
+        <span className="tm">{runTime}</span>
         <Chev />
       </button>
       {/* A shut body is not built, which is where the weight was: a forty-turn
@@ -1653,15 +1828,14 @@ function SegView({ lane, seg }: { lane: Lane; seg: Seg }): ReactElement | null {
   }
 }
 
-/* What a card holds: the work the agent did, folded, what it said, and the
-   delegated results that re-entered while it worked. One card spans everything
-   between two things the reader said, so it holds as many turns as the agent
-   took -- a result landing between them is a message inside the card, not a
-   seam across it.
-   The reader's own message and the page's annotations stay rows of their own:
-   the first carries its own shape, and the second is the page talking rather
-   than the agent. */
-const CARDED = new Set(['fold', 'step', 'answer', 'arts', 'sdlv'])
+/* What a card holds: the work the agent did, folded, and what it said. One card
+   spans everything between two messages that opened a turn, so it holds as many
+   turns as the agent took without one.
+   The messages that open a turn stay rows of their own -- the reader's own, and
+   a delegated result coming back, which opens its turn the same way and stands
+   on the same side -- and so do the page's annotations, which are the page
+   talking rather than the agent. */
+const CARDED = new Set(['fold', 'step', 'answer', 'arts'])
 
 /* How far apart two questions have to be before the column says when the
    second one was asked (Figma: Raven / Chat, dates between long-gap
@@ -1683,11 +1857,15 @@ function dateLine(at: number, now = new Date()): string {
   return `${d.getFullYear() === now.getFullYear() ? md : `${d.getFullYear()}-${md}`} ${hm}`
 }
 
-function stageRows(lane: Lane): ReactElement[] {
+function stageRows(lane: Lane, from = 0, to = lane.segs.length): ReactElement[] {
   const rows: ReactElement[] = []
   let lastAt = 0
-  let i = 0
-  while (i < lane.segs.length) {
+  for (let j = from - 1; j >= 0 && !lastAt; j -= 1) {
+    const prev = lane.segs[j] as Seg
+    if (prev.kind === 'ask' && prev.at) lastAt = prev.at
+  }
+  let i = from
+  while (i < to) {
     const seg = lane.segs[i] as Seg
     if (!CARDED.has(seg.kind)) {
       if (seg.kind === 'ask' && seg.at) {
@@ -1701,7 +1879,7 @@ function stageRows(lane: Lane): ReactElement[] {
       continue
     }
     let end = i
-    while (end < lane.segs.length && CARDED.has(lane.segs[end]!.kind)) end += 1
+    while (end < to && CARDED.has(lane.segs[end]!.kind)) end += 1
     /* A step that draws nothing yet takes the card down with it: the card is
        the frame around what a turn produced, and a frame around nothing is
        what the first seconds of every turn looked like. */
@@ -1763,27 +1941,98 @@ function stageRows(lane: Lane): ReactElement[] {
   return rows
 }
 
+/* How far beyond the scroller's top or bottom an edge starts mounting more
+   turns: a screen or two, so they are in place before the reader gets there. */
+const EDGE_MARGIN = 1200
+
+interface Anchor { row: Element; top: number }
+
+/* An end of a Lane Window that stops short of the conversation's. Watched
+   rather than scrolled to: once it comes within the margin the window widens
+   that way. Turns mounted above the reader would push what they read down, so
+   the top edge holds the row they had at the top where it was; turns mounted
+   below move nothing. A fresh observer per window, because an observer reports
+   only changes and an edge still within the margin after a widening would
+   otherwise never report again. */
+function WindowEdge({ lane, side, at, anchor }: {
+  lane: Lane; side: 'top' | 'bottom'; at: number; anchor: { current: Anchor | null }
+}): ReactElement {
+  const ref = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const edge = ref.current
+    const scroll = document.getElementById('scroll')
+    if (!edge || !scroll || typeof IntersectionObserver === 'undefined') return
+    const io = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return
+      io.disconnect()
+      if (side === 'bottom') {
+        store.widenWindowDown(lane)
+        return
+      }
+      const row = edge.nextElementSibling
+      anchor.current = row ? { row, top: row.getBoundingClientRect().top } : null
+      store.widenWindow(lane)
+    }, { root: scroll, rootMargin: side === 'top' ? `${EDGE_MARGIN}px 0px 0px 0px` : `0px 0px ${EDGE_MARGIN}px 0px` })
+    io.observe(edge)
+    return () => io.disconnect()
+  }, [lane, side, at, anchor])
+  return <div ref={ref} className="transcript-edge" data-edge={side} aria-hidden="true" />
+}
+
 export function StageView({ lane }: { lane: Lane }): ReactElement {
   useSyncExternalStore((cb) => store.subscribe(lane, cb), () => lane.listV)
   const req = useSyncExternalStore((cb) => store.subscribe(lane, cb), () => lane.scrollReq)
-  /* Tail-follow after the commit, so the new height is the one measured. */
+  const from = lane.winFrom
+  const anchor = useRef<Anchor | null>(null)
+  /* Tail-follow after the commit, so the new height is the one measured. A
+     reader following the tail reads nothing above it, so a window grown that
+     far goes back to the tail's here. */
   useEffect(() => {
-    if (lane.main) tail.down()
+    if (!lane.main) return
+    tail.down()
+    if (tail.isStuck()) store.trimWindow(lane)
   }, [lane, req])
+  /* Before paint, so the turns mounted above the reader never show them a jump.
+     Measured off the row rather than the scroll height: a browser that anchors
+     the scroll itself has already moved it, and then the shift reads zero.
+     Instant, because the scroller's own behaviour is smooth (page.css) and a
+     correction that glides is a jump the reader watches. */
+  useLayoutEffect(() => {
+    const held = anchor.current
+    anchor.current = null
+    const scroll = document.getElementById('scroll')
+    if (!held || !scroll || !held.row.isConnected) return
+    const shift = held.row.getBoundingClientRect().top - held.top
+    if (shift) scroll.scrollTo({ top: scroll.scrollTop + shift, behavior: 'instant' })
+  }, [lane, from])
+  useEffect(() => {
+    const scroll = document.getElementById('scroll')
+    if (!lane.main || !scroll) return
+    const atEnd = (): void => {
+      if (scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 4) store.trimWindow(lane)
+    }
+    scroll.addEventListener('scroll', atEnd, { passive: true })
+    return () => scroll.removeEventListener('scroll', atEnd)
+  }, [lane])
+  const start = startIndex(lane.segs, from)
+  const end = endIndex(lane.segs, lane.winTo)
   return (
     <>
-      {stageRows(lane)}
+      {start > 0 ? <WindowEdge lane={lane} side="top" at={from} anchor={anchor} /> : null}
+      {stageRows(lane, start, end)}
+      {end < lane.segs.length ? <WindowEdge lane={lane} side="bottom" at={lane.winTo} anchor={anchor} /> : null}
     </>
   )
 }
 
-/* The agent stage pane: the same segments, plus the working glyph at the
-   tail and the pane's own empty note. */
+/* The agent stage pane: one delegated run, laid out the way the conversation
+   lays itself out -- the same rows in the same cards -- plus the working glyph
+   at the tail and the pane's own empty note. */
 export function AgentStageView({ lane }: { lane: Lane }): ReactElement {
   useSyncExternalStore((cb) => store.subscribe(lane, cb), () => lane.listV)
   return (
     <>
-      {lane.segs.map((s) => <SegView key={`${lane.epoch}:${s.id}`} lane={lane} seg={s} />)}
+      {stageRows(lane)}
       {lane.running ? (
         <div className="act in sarun">
           <span className="wkg" aria-hidden="true"><i /><i /><i /></span>

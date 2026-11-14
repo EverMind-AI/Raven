@@ -114,6 +114,43 @@ async def test_a_buffered_openai_call_publishes_its_steps_and_its_cost(monkeypat
     assert did.tokens_in == 10 and did.tokens_out == 4
 
 
+async def test_a_buffered_openai_call_opens_an_external_span_with_its_outcome(monkeypatch) -> None:
+    """The lane ran with no tracing at all, so a research run left the
+    waterfall empty. It now opens the shared external-agent span and records
+    its outcome and usage, the way the acp and cli lanes do."""
+    from raven.tracing import spans as tracing_spans
+
+    body = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "3.14.3",
+                    "reasoning_steps": [{"type": "thinking", "thought": "look it up"}],
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 4},
+    }
+    backend = OpenAIApiBackend(name="Researcher", base_url="https://x/v1", model="m")
+
+    async def fake_post(self, url, *, json, headers, timeout):
+        return body
+
+    monkeypatch.setattr(OpenAIApiBackend, "_post_chat", fake_post)
+    captured: list[dict] = []
+    monkeypatch.setattr(tracing_spans, "emit", captured.append)
+
+    reply = await backend.run("q", task_id="t1", workspace=None, executor=None)
+
+    assert reply == "3.14.3"
+    attrs = captured[-1].get("attributes", {})
+    assert attrs.get("subagent.external.transport") == "openai"
+    assert attrs.get("subagent.external.agent") == "Researcher"
+    assert attrs.get("subagent.external.answer_chars", 0) > 0
+    assert attrs.get("subagent.external.usage") == {"prompt_tokens": 10, "completion_tokens": 4}
+
+
 async def test_a_buffered_call_that_reported_no_steps_publishes_no_rows(monkeypatch) -> None:
     """Most OpenAI-compatible endpoints report no steps at all, and inventing a
     row for one would make its record claim work nobody did."""

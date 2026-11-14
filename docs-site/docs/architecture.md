@@ -13,7 +13,7 @@ These are responsibilities, not additional package layers.
 | Surface | Runtime entry | Execution | State owner |
 | --- | --- | --- | --- |
 | WebUI / TUI | Shared RPC and Spine | Host Agent Loop | Host sessions and Agent home |
-| Messaging platform | Adapter, Intake, Gateway / Spine | Host loop and its permitted delegations | Channel/chat conversation; adapter account state |
+| Messaging platform | Adapter, Intake, Gateway / Spine | Host loop and its permitted delegations | Channel/chat session; adapter account state |
 | Editor / local ACP host | ACP server and RPC stack | Raven served as an agent | Server's ACP sessions and configured home |
 | Inbound A2A peer | Authenticated HTTP, one-shot turn adapter | Host Agent Loop | In-memory A2A task store plus runtime session records |
 | Host delegation | Roster and sub-agent manager | Built-in, ACP, CLI, or HTTP backend | Host call history plus backend-owned session state |

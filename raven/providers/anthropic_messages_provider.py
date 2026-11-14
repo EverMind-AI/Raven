@@ -76,6 +76,7 @@ _FINISH_REASONS = {
     "stop_sequence": "stop",
     "tool_use": "tool_calls",
     "max_tokens": "length",
+    "model_context_window_exceeded": "length",
     "pause_turn": "stop",
 }
 
@@ -670,7 +671,19 @@ def _finish_reason(reason: Any) -> str:
     # upstream's own word and goes through as it came.
     if not reason:
         return "unknown"
-    return _FINISH_REASONS.get(str(reason), str(reason))
+    raw = str(reason)
+    mapped = _FINISH_REASONS.get(raw, raw)
+    if raw == "model_context_window_exceeded":
+        # ``length`` is all downstream reads, and it no longer says which ceiling
+        # ran out. The two are fixed differently -- a context window by shrinking
+        # the prompt, an output ceiling by a larger budget -- so the raw reason is
+        # kept here, where both response paths pass through.
+        logger.warning(
+            "Anthropic stopped at the model context window (stop_reason={}); recorded as finish_reason={}",
+            raw,
+            mapped,
+        )
+    return mapped
 
 
 def parse_message(payload: dict[str, Any]) -> LLMResponse:
@@ -703,10 +716,16 @@ def parse_message(payload: dict[str, Any]) -> LLMResponse:
                     run_meta=RunMeta(arguments_repaired=True) if repaired else None,
                 )
             )
+    finish_reason = _finish_reason(payload.get("stop_reason"))
+    # A tool call beside a cut finish is not a completed call: the streaming path
+    # already reports ``length`` beside tool calls, and ``flag_truncation`` refuses
+    # the last call only when it sees that. Keep both paths telling the same story.
+    if calls and finish_reason != "length":
+        finish_reason = "tool_calls"
     return LLMResponse(
         content="".join(text) or None,
         tool_calls=calls,
-        finish_reason="tool_calls" if calls else _finish_reason(payload.get("stop_reason")),
+        finish_reason=finish_reason,
         usage=_usage(payload.get("usage")),
         reasoning_content="".join(reasoning) or None,
         thinking_blocks=thinking_blocks or None,

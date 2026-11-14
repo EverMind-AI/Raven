@@ -116,6 +116,20 @@ SECRET_SLOTS = {
     },
 }
 
+# The env var that sets each vendor's key, by vendor. Serper and Jina keep the
+# pre-vendor leaves their existing .env files point at; every other vendor's
+# key lands in the slot the host writes. The launcher library needs the name
+# table to know a product key it must not inherit over.
+OWN_WEB_KEYS = {
+    "serper": "RESEARCH_SERPER_API_KEY",
+    "jina": "RESEARCH_JINA_API_KEY",
+    **{
+        vendor: f"RESEARCH_{env_var}"
+        for vendor, env_var in WEB_VENDOR_ENV_VARS.items()
+        if vendor not in LEGACY_VENDOR_SLOTS
+    },
+}
+
 DEFAULT_SEARCH_VENDOR = "serper"
 DEFAULT_FETCH_VENDOR = "jina"
 
@@ -360,30 +374,37 @@ def render_config(source: Path) -> Path:
     """Write a copy of ``source`` with the secrets merged in, under the state root.
 
     The composition is this product's; every machine it calls is the launcher
-    library's. Order matters twice: the LLM check runs after the slot merge
-    (its absence is what switches to inheritance), and the mode catalogue is
+    library's. Order matters three times: this product's provider choices are
+    written before the vendor table is inherited, so a choice its own .env
+    names is the one the guard keeps; the LLM check runs after the slot merge
+    (its absence is what switches to inheritance); and the mode catalogue is
     assembled after the flow slice is final (a mode's budget resolves against
     the baseline flow config).
     """
     config = json.loads(source.read_text(encoding="utf-8"))
     host = render.host_config()
 
+    for env_name, slot in ((SEARCH_PROVIDER_ENV, SEARCH_PROVIDER_SLOT), (FETCH_PROVIDER_ENV, FETCH_PROVIDER_SLOT)):
+        if chosen := env_value(env_name):
+            render.put(config, slot, chosen)
+
+    if (inherit_web := getattr(render, "inherit_web_vendors", None)) is not None:
+        if carried := inherit_web(config, host, own_keys=OWN_WEB_KEYS, lookup=env_value):
+            log(f"[run] web: vendor keys from the host ({', '.join(carried)})")
+    else:
+        # A stamped launcher can load on a raven that predates the shared
+        # helper; keep the pre-helper behavior there rather than AttributeError.
+        for vendor in LEGACY_VENDOR_SLOTS:
+            slot = ("tools", "web", "providers", vendor, "apiKey")
+            if not render.dig(config, slot) and (inherited := render.dig(host, slot)):
+                render.put(config, slot, inherited)
+        for slot in (SEARCH_PROVIDER_SLOT, FETCH_PROVIDER_SLOT):
+            if not render.dig(config, slot) and (chosen := render.dig(host, slot)):
+                render.put(config, slot, chosen)
+
     render.apply_secret_slots(config, host, slots=SECRET_SLOTS, required=REQUIRED_SECRETS, lookup=env_value)
     if proxy := (env_value(PROXY_ENV) or render.dig(host, PROXY_SLOT)):
         render.put(config, PROXY_SLOT, proxy)
-
-    # A host configured AFTER the vendor table landed wrote these two to the
-    # vendor slot, not to the leaf, and the leaf is the only path the slot table
-    # inherits for them. Read the vendor slot too, or a deployment that
-    # configured Serper centrally on a current raven launches keyless.
-    for vendor in LEGACY_VENDOR_SLOTS:
-        slot = ("tools", "web", "providers", vendor, "apiKey")
-        if not render.dig(config, slot) and (inherited := render.dig(host, slot)):
-            render.put(config, slot, inherited)
-
-    for env_name, slot in ((SEARCH_PROVIDER_ENV, SEARCH_PROVIDER_SLOT), (FETCH_PROVIDER_ENV, FETCH_PROVIDER_SLOT)):
-        if chosen := (env_value(env_name) or render.dig(config, slot) or render.dig(host, slot)):
-            render.put(config, slot, chosen)
 
     llm_key = REQUIRED_SECRETS[0]
     if env_value(llm_key):

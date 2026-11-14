@@ -114,10 +114,8 @@ class SpawnTool(Tool):
     @property
     def description(self) -> str:
         base = (
-            "Spawn a subagent to handle a task in the background. "
-            "Use this for complex or time-consuming tasks that can run independently. "
-            "The subagent will complete the task and report back when done. "
-            "Multiple spawns run concurrently."
+            "Hand one task to one subagent. It runs in the background alongside any other "
+            "spawns, and its result is announced to you when it finishes."
         )
         labels, _ = self._workers()
         if labels:
@@ -140,11 +138,11 @@ class SpawnTool(Tool):
             # The result carries this path; without a word here the agent has a
             # path it does not know the use of.
             base += (
-                " The result names a `Record:` path -- this call's output file. Hand it to a "
-                "follow-up task with `{{ ref:@nodes/<node_id>.out.md }}`, or name the task by "
-                "its `node_id` directly, instead of restating the result from memory. Beside it "
-                "sits `<node_id>.memory.json` -- what the sub-agent concluded for itself, rather "
-                "than the answer it gave you -- written after the call, so absence is normal."
+                " The result names a `Record:` path, this task's output file: a follow-up task "
+                "reads it as `{{ <node_id>.output }}` instead of you restating the result; for a "
+                "large one use `{{ <node_id>.output_path }}`, which hands over the path. Beside "
+                "it, `<node_id>.memory.json` holds what the subagent concluded for itself; it is "
+                "written after the call, so it may be absent."
             )
             # Right before the roster: it is a rule about which name to pass, so it
             # sits with the list it picks from. It used to come ahead of the DAG
@@ -181,35 +179,33 @@ class SpawnTool(Tool):
                 "minLength": 1,
                 "description": (
                     "A short title for what you are dispatching, written before the task -- the "
-                    "length of a chat title, under ten words, not a sentence and not a summary "
-                    "of the task. They read it in listings and announcements and the sub-agent "
-                    "never does, so write it for them -- no ids, no internal shorthand."
+                    "length of a chat title, under ten words, not a sentence. The user reads it in "
+                    "listings and announcements and the subagent never does: no ids, no internal "
+                    "shorthand."
                 ),
             },
             "node_id": {
                 "type": "string",
                 "minLength": 1,
                 "description": (
-                    "Your name for this task (^[A-Za-z0-9_-]+$), unique across this whole "
-                    "conversation -- not just this call, and not just this tool: a "
-                    "run_subagent_dag node id and a spawn node_id share one namespace. It is "
-                    "how a later task of either kind references this one's output, so name it "
-                    "for what the task produces rather than numbering it. A task that fails "
-                    "still owns its id; reusing one is refused. There is no length limit."
+                    "Your name for this task (^[A-Za-z0-9_-]+$, any length), unique across this "
+                    "conversation -- not just this tool: run_subagent_dag node ids share its "
+                    "namespace. A later task of either kind names this one's output by it, so name "
+                    "what the task produces rather than numbering it. A failed task keeps its id; "
+                    "reusing one is refused."
                 ),
             },
             "prompt_template": {
                 "type": "string",
                 "minLength": 1,
                 "description": (
-                    "The task for the subagent. Placeholders: {{ <node_id>.output }} / "
-                    "{{ <node_id>.output_path }} inject a finished task's output / its path, by "
-                    "the node_id it ran under; {{ ref:<path> }} / {{ ref_path:<path> }} inject a "
-                    "file's contents / its path; {{ inputs.<k> }} / {{ inputs.<k>.path }} inject "
-                    "an input. Name the task rather than restating its result. By path it is "
-                    "{{ ref:@nodes/<node_id>.out.md }}; paths also resolve under the working "
-                    "directory. A task that failed, was skipped or is still running is refused "
-                    "with which of those it was. The _path forms need a sub-agent the roster tags "
+                    "The task for the subagent. Placeholders, contents / path: "
+                    "{{ <node_id>.output }} / {{ <node_id>.output_path }} for a finished task's "
+                    "output, by the node_id it ran under; {{ ref:<path> }} / {{ ref_path:<path> }} "
+                    "for a file (a task's output is {{ ref:@nodes/<node_id>.out.md }}; other paths "
+                    "resolve under the working directory); {{ inputs.<k> }} / {{ inputs.<k>.path }} "
+                    "for an input. A task that failed, was skipped or is still running is refused "
+                    "with which of those it was. The _path forms need a subagent the roster tags "
                     "[local-files]; for a [no-local-files] one use the contents forms. "
                     "Nothing is added around an injected value -- no heading, no label, no source "
                     "path -- so write in the template itself what the material is and where it "
@@ -222,8 +218,7 @@ class SpawnTool(Tool):
                     'Per-key literal string, {"file": <path>}, or {"node": <id>} to take a '
                     "finished task's output. Exactly one of those three and nothing else in the "
                     "object: no second key beside file or node, no empty path or id, and a "
-                    "number, boolean or list is refused. {{ inputs.<k> }} injects the text, "
-                    "{{ inputs.<k>.path }} the file path."
+                    "number, boolean or list is refused."
                 ),
             },
         }
@@ -259,9 +254,9 @@ class SpawnTool(Tool):
             "type": "string",
             "description": (
                 "Optional: a short semantic handle (e.g. 'refactor-auth') naming a "
-                "conversation with a resumable sub-agent. Reuse the same handle to "
-                "continue that session. Omit it and one is assigned automatically and "
-                "reported when the call finishes, so any run can be continued later. "
+                "conversation with a resumable subagent; reuse it to continue that session. "
+                "Omitted, one is assigned automatically and reported when the call finishes, so "
+                "any run can be continued later. "
                 f"{instance_targets} -- against any other one a handle "
                 "continues nothing and the call is rejected."
             ),
@@ -380,9 +375,9 @@ class SpawnTool(Tool):
         if not instance or self._is_stateful(agent):
             return None
         names = sorted(a.name for a in self._agents() if a.stateful)
-        alt = f" Sub-agents that can: {names}." if names else ""
+        alt = f" Subagents that can: {names}." if names else ""
         return (
-            f"Error: sub-agent {agent!r} is stateless, so the handle {instance!r} continues nothing -- "
+            f"Error: subagent {agent!r} is stateless, so the handle {instance!r} continues nothing -- "
             f"each run starts a fresh session regardless.{alt} Call spawn again without `instance`, "
             f"putting whatever context the run needs into `prompt_template`."
         )
@@ -494,7 +489,7 @@ class SpawnTool(Tool):
         subagent, charter = self._resolve_worker(subagent)
         template = prompt_template or kwargs.pop("task", None)
         if not template:
-            return "Error: `prompt_template` is required -- it is the task the sub-agent runs."
+            return "Error: `prompt_template` is required -- it is the task the subagent runs."
         node_id = (node_id or kwargs.pop("call_id", None) or "").strip()
         if not node_id:
             return (

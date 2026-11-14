@@ -394,6 +394,9 @@ describe('turn.started', () => {
 
     const delivered = h.did('delivered') as Array<[string, Record<string, unknown>]>
     expect(delivered[0]![1]).toMatchObject({ body: 'the brief', output: 'the fork is read-only', outputTruncated: true })
+    /* And the run it came back from, which the row reads its sender, title and
+       clock off -- the live lane names it the way a reload does. */
+    expect(delivered[0]![1]).toMatchObject({ runId: 'r1', nodeId: 'push' })
   })
 })
 

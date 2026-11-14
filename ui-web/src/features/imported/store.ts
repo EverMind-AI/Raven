@@ -21,6 +21,7 @@ import { t } from '../../i18n/t'
 import { setCurrent } from '../../lib/session'
 import { refusalBySize } from '../../lib/upload'
 import * as confirm from '../../state/confirm'
+import * as navfly from '../../state/navfly'
 import * as page from '../../state/page'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
@@ -63,7 +64,7 @@ function refusalOf(name: string, err: unknown): string {
   return t('gui.imported.err_failed', { name, detail: detailOf(err) })
 }
 
-/** Open an imported conversation the way a click on its rail row would; whether it opened.
+/** Open an imported session the way a click on its rail row would; whether it opened.
  *
  * Never throws: by the time this runs the package is imported and kept, so a
  * list that cannot be read or a row that is not in it is a failure to open,
@@ -99,6 +100,10 @@ function claim(name: string): boolean {
 
 function release(): void {
   set({ busy: null })
+  /* The group that holds this row closes with it: the reader is in the
+     session the import became, and the row that named the file has
+     nothing left to say. */
+  navfly.close()
 }
 
 /* Only ever called by an operation holding the claim. */

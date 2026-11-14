@@ -351,8 +351,10 @@ const LEGACY_EXPR = {
   rail: 2,
   settings: 0,
   /* Down from 5: `.task` moved to `LEGACY_LOCAL` and `.hl` went, with the
-     hover pairing the composer strip no longer has a side for. */
-  tasks: 3,
+     hover pairing the composer strip no longer has a side for. Down from 3
+     when a node's record moved to the transcript's renderer: `.live`, the
+     thought's shimmer, written only from inside an expression, left with it. */
+  tasks: 2,
   subagents: 6,
   /* Down from 24 with the node panel: `.tpl`, written only from inside a
      `className={...}` expression, left with it. */

@@ -10,6 +10,7 @@ names.
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,7 @@ from raven.agent_plugins.mcp import (
     schema_version,
 )
 from raven.agent_plugins.package import load_package
+from raven.mcp.client import open_mcp_transport
 
 MANIFEST_SCHEMA_URL = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
 PACKAGE_NAME = "demo-mcp"
@@ -474,6 +476,11 @@ def test_stdio_expands_placeholders_in_args_and_env(tmp_path: Path) -> None:
         "d:..\\target.txt",
         "D:..",
         "D:.. ",
+        "--config=../secret",
+        "-I../include",
+        "--require=../x.js",
+        "PATH=a:../b",
+        "a;..",
     ],
 )
 def test_stdio_refuses_an_argument_carrying_a_dotdot_component(tmp_path: Path, arg: str) -> None:
@@ -484,7 +491,7 @@ def test_stdio_refuses_an_argument_carrying_a_dotdot_component(tmp_path: Path, a
     assert "'..' path component" in report.problems[0].reason
 
 
-@pytest.mark.parametrize("value", ["${PLUGIN_DATA}/../../secret", "D:..\\secret"])
+@pytest.mark.parametrize("value", ["${PLUGIN_DATA}/../../secret", "D:..\\secret", "--config=../secret"])
 def test_stdio_refuses_an_environment_value_carrying_a_dotdot_component(tmp_path: Path, value: str) -> None:
     root = _package(tmp_path, mcp=_mcp({"local": _stdio(env={"CONFIG": value})}))
     report = package_mcp_report(load_package(root), plugin_data=tmp_path / "data")
@@ -493,7 +500,7 @@ def test_stdio_refuses_an_environment_value_carrying_a_dotdot_component(tmp_path
     assert "'..' path component" in report.problems[0].reason
 
 
-@pytest.mark.parametrize("arg", ["a..b", "...", "./bin/tool", "..-ish", "D:foo"])
+@pytest.mark.parametrize("arg", ["a..b", "...", "....", "./bin/tool", "..-ish", "D:foo"])
 def test_stdio_keeps_an_argument_without_a_dotdot_component(tmp_path: Path, arg: str) -> None:
     root = _package(tmp_path, mcp=_mcp({"local": _stdio(args=[arg])}))
     report = package_mcp_report(load_package(root), plugin_data=tmp_path / "data")
@@ -545,6 +552,17 @@ def test_stdio_carries_the_two_reserved_variables(tmp_path: Path) -> None:
 
     assert server.env["PLUGIN_ROOT"] == str(root.resolve())
     assert server.env["PLUGIN_DATA"] == str(data)
+
+
+def test_composed_servers_mark_themselves_package_sourced(tmp_path: Path) -> None:
+    root = _package(tmp_path, mcp=_mcp({"local": _stdio(command="npx"), "remote": _http()}))
+    report = package_mcp_report(load_package(root), plugin_data=tmp_path / "data")
+
+    local = report.servers[f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}local"]
+    remote = report.servers[f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}remote"]
+
+    assert local.source == "package"
+    assert remote.source == "package"
 
 
 # ---------------------------------------------------------------------------
@@ -747,3 +765,38 @@ def test_a_host_server_name_is_never_replaced_by_a_package(tmp_path: Path) -> No
 
     assert servers == {}
     assert any("already configured" in note for note in notes)
+
+
+async def test_a_composed_package_server_probes_outside_its_root(monkeypatch, tmp_path: Path) -> None:
+    """The composer's marker reaches the transport: probe outside, launch inside.
+
+    The two halves are unit-tested apart; this drives the real chain from the
+    package file to the transport, so a marker dropped between them is caught.
+    """
+    root = _package(tmp_path, mcp=_mcp({"local": _stdio(command="npx")}))
+    servers, problems, entries = package_mcp_servers(
+        [load_package(root)], allowed=[PACKAGE_NAME], plugin_data_root=tmp_path / "data"
+    )
+    assert problems == [] and entries == []
+    server = servers[f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}local"]
+    assert server.source == "package"
+
+    seen: dict = {}
+
+    async def _fake_launch(argv, env, cwd=None, **kwargs):
+        seen["probe_cwd"] = cwd
+        return list(argv)
+
+    @asynccontextmanager
+    async def _fake_stdio(params, errlog=None):
+        seen["launch_cwd"] = params.cwd
+        yield ("read", "write")
+
+    monkeypatch.setattr("raven.utils.mirrors.package_launch_async", _fake_launch)
+    monkeypatch.setattr("mcp.client.stdio.stdio_client", _fake_stdio)
+
+    async with open_mcp_transport(server, "stdio"):
+        pass
+
+    assert seen["probe_cwd"] is None
+    assert Path(seen["launch_cwd"]).resolve() == root.resolve()

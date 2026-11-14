@@ -83,8 +83,51 @@ _CORPUS_KINDS = {
     "min_iterations",
 }
 _KNOWN_KINDS = _CORPUS_KINDS | {"skill_routing", "presence"}
+_THRESHOLD_KINDS = frozenset(_CORPUS_KINDS - {"trajectory_regex"})
 
 _DEFAULT_MAX_CHARS = 80
+
+
+def _validate_pattern(pattern: object) -> None:
+    """Require a non-empty, compilable regex.
+
+    ``from_dict`` and ``evaluate_spec`` share this so a hand-built or mutated
+    spec raises the same ``ValueError`` the parse path promises, instead of
+    letting ``re.error`` escape from the evaluator.
+    """
+    if not isinstance(pattern, str) or not pattern.strip():
+        raise ValueError("trajectory_regex pattern must be a non-empty string")
+    try:
+        re.compile(pattern)
+    except re.error as exc:
+        raise ValueError(f"trajectory_regex pattern is not valid regex: {exc}") from exc
+
+
+def _require_positive_int(d: dict, key: str, kind: str, *, minimum: int = 1) -> int:
+    """Parse ``d[key]`` as an int and require ``>= minimum``.
+
+    ``threshold=0`` (or negative) makes every run-based predicate match: the
+    first record satisfies ``run >= threshold``, and ``min_iterations`` counts
+    an empty trajectory as reachable. That would turn the zero-hit preflight
+    into a guaranteed PASS, so the boundary is enforced here rather than left
+    to the evaluator.
+
+    ``max_chars`` fails in the other direction: ``0`` (or negative) makes
+    ``is_short_toolcall_iteration`` never match, so the preflight reads a live
+    mechanism as inert and kills the spec. Both directions are validation
+    errors, not evaluator concerns.
+    """
+    if isinstance(d[key], bool):
+        raise ValueError(f"{kind} {key} must be an int, got {d[key]!r}")
+    if isinstance(d[key], float) and not d[key].is_integer():
+        raise ValueError(f"{kind} {key} must be an int, got {d[key]!r}")
+    try:
+        value = int(d[key])
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{kind} {key} must be an int: {d[key]!r}") from exc
+    if value < minimum:
+        raise ValueError(f"{kind} {key} must be >= {minimum}, got {value}")
+    return value
 
 
 def _normalize_record(r: dict) -> dict:
@@ -109,50 +152,13 @@ class ActivationSpec:
         if kind == "trajectory_regex" and "pattern" not in d:
             raise ValueError("trajectory_regex requires 'pattern'")
         if kind == "trajectory_regex":
-            try:
-                re.compile(d["pattern"])
-            except re.error as exc:
-                raise ValueError(f"trajectory_regex pattern is not valid regex: {exc}") from exc
-        if kind == "consecutive_repeat" and "threshold" not in d:
-            raise ValueError("consecutive_repeat requires 'threshold'")
-        if kind == "consecutive_repeat":
-            try:
-                int(d["threshold"])
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"consecutive_repeat threshold must be an int: {d['threshold']!r}") from exc
-        if kind == "short_content_run" and "threshold" not in d:
-            raise ValueError("short_content_run requires 'threshold'")
-        if kind == "short_content_run":
-            try:
-                int(d["threshold"])
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"short_content_run threshold must be an int: {d['threshold']!r}") from exc
-            if "max_chars" in d:
-                try:
-                    int(d["max_chars"])
-                except (TypeError, ValueError) as exc:
-                    raise ValueError(f"short_content_run max_chars must be an int: {d['max_chars']!r}") from exc
-        if kind == "empty_run" and "threshold" not in d:
-            raise ValueError("empty_run requires 'threshold'")
-        if kind == "empty_run":
-            try:
-                int(d["threshold"])
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"empty_run threshold must be an int: {d['threshold']!r}") from exc
-        if kind == "repeated_failure_run" and "threshold" not in d:
-            raise ValueError("repeated_failure_run requires 'threshold'")
-        if kind == "repeated_failure_run":
-            try:
-                int(d["threshold"])
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"repeated_failure_run threshold must be an int: {d['threshold']!r}") from exc
-        if kind == "min_iterations" and "threshold" not in d:
-            raise ValueError("min_iterations requires 'threshold'")
-        if kind == "min_iterations":
-            try:
-                int(d["threshold"])
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"min_iterations threshold must be an int: {d['threshold']!r}") from exc
+            _validate_pattern(d["pattern"])
+        if kind in _THRESHOLD_KINDS:
+            if "threshold" not in d:
+                raise ValueError(f"{kind} requires 'threshold'")
+            _require_positive_int(d, "threshold", kind)
+        if kind == "short_content_run" and "max_chars" in d:
+            _require_positive_int(d, "max_chars", kind, minimum=1)
         if kind == "skill_routing" and "skill_name" not in d:
             raise ValueError("skill_routing requires 'skill_name'")
         if kind == "presence" and "needle" not in d:
@@ -180,6 +186,17 @@ def _scope_contents(traj: list[dict], scope: str) -> list[str]:
 def evaluate_spec(spec: ActivationSpec, corpus: list[list[dict]]) -> int:
     if spec.kind not in _CORPUS_KINDS:
         raise ValueError(f"{spec.kind} is not corpus-evaluable; use the preflight CLI path")
+    # `from_dict` is the normal door, but ActivationSpec is public and `raw` is
+    # mutable. Re-check the floor here so a hand-built or mutated spec cannot
+    # turn the zero-hit preflight into a guaranteed PASS.
+    if spec.kind in _THRESHOLD_KINDS:
+        if "threshold" not in spec.raw:
+            raise ValueError(f"{spec.kind} requires 'threshold'")
+        _require_positive_int(spec.raw, "threshold", spec.kind)
+    if spec.kind == "short_content_run" and "max_chars" in spec.raw:
+        _require_positive_int(spec.raw, "max_chars", spec.kind, minimum=1)
+    if spec.kind == "trajectory_regex":
+        _validate_pattern(spec.raw.get("pattern"))
     scope = spec.raw.get("scope", "assistant")
     hits = 0
     if spec.kind == "trajectory_regex":

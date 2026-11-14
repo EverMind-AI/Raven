@@ -61,6 +61,50 @@ def row_root(row: dict[str, Any]) -> Any:
     return row.get("root_session_key") or row.get("session_key")
 
 
+#: The longest a model name can be and still be one. A tools-list repr reached
+#: this field once, through the seam's model lookup; a row is not the place to
+#: carry that.
+_MODEL_NAME_MAX = 200
+
+#: What the row carries when no model name can be read off the call. A missing
+#: name and a refused one land here alike, so the two are told apart in the log
+#: rather than in the row: the row's shape is what the usage page reads, and
+#: this PR does not change it.
+_UNKNOWN_MODEL = "?"
+
+#: A call that named no model is a condition of the deployment, not of the
+#: call: every row of that shape would report it, so it is reported once.
+_WARNED_NO_MODEL: set[str] = set()
+
+
+def _model_name(value: Any) -> str:
+    """The row's model name, or the unknown marker for a value that cannot be one.
+
+    Two shapes reach the marker and the row cannot tell them apart: the call
+    named no model at all, and the call named one that could not be a name.
+    Both are reported, because both mean the row's model is not what the call
+    asked for -- a missing name is the shape that arrives with a provider that
+    defaults its own model, and it is the one that used to pass unnoticed.
+    """
+    if isinstance(value, str) and value and len(value) <= _MODEL_NAME_MAX and "\n" not in value and "\r" not in value:
+        return value
+    if value is None or (isinstance(value, str) and not value):
+        if "missing" not in _WARNED_NO_MODEL:
+            _WARNED_NO_MODEL.add("missing")
+            logger.warning("usage: no model on this call; the row carries the unknown marker")
+    else:
+        logger.warning("usage: implausible model name {!r}", str(value)[:120])
+    return _UNKNOWN_MODEL
+
+
+def reset_model_warnings() -> None:
+    """Clear the set of model-name warnings already reported.
+
+    Only useful for tests -- production code should let the warnings land once.
+    """
+    _WARNED_NO_MODEL.clear()
+
+
 def delegated_usage(
     root: str,
     since: datetime,
@@ -196,6 +240,7 @@ class UsageTracker(TokenStrategy):
         session = usage.session_key or usage_context.session_key()
         usage = replace(
             usage,
+            model=_model_name(usage.model),
             session_key=session,
             root_session_key=usage.root_session_key or usage_context.root_session_key(session),
         )

@@ -11,7 +11,7 @@ import { draw as plusDraw } from '../../state/plus'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
-import { note as transcriptNote } from '../transcript/mount'
+import { note as transcriptNote, shownLane } from '../transcript/mount'
 import * as tail from '../transcript/tail'
 import * as history from './history'
 import * as turn from './turn'
@@ -238,14 +238,11 @@ export function goPaint(): void {
   b.setAttribute('aria-label', t('gui.send'))
 }
 
-/* What the empty field says: the task on a draft, a continuation once the
-   conversation exists, and while a turn is running, that a message typed now
-   goes into that turn (`sendMidTurn` merges it at the turn's next gap) rather
-   than waiting for it to end -- the one fact about sending mid-turn a reader
-   cannot see. */
+/* What the empty field says: what the reader can ask for on a draft, and what
+   they can say next once the session exists. */
 function placeholder(): string {
   if (currentSession() === null) return t('gui.composer_ph')
-  return t(turn.busy() ? 'gui.composer.ph_busy' : 'gui.composer.ph_session')
+  return t('gui.composer.ph_session')
 }
 
 /* The field may take half the visual viewport, computed when asked rather than
@@ -386,7 +383,7 @@ export function dockLift(): void {
   const chat = document.querySelector<HTMLElement>('.chat')
   const dock = document.querySelector<HTMLElement>('.dock')
   if (!chat || !dock) return
-  /* A dock that is not drawn -- an imported conversation's column has none --
+  /* A dock that is not drawn -- an imported session's column has none --
      lifts nothing. Measured as it is below, its zero box would read as a dock
      the height of the whole column, and the transcript would fade out under it. */
   if (!dock.getClientRects().length) {
@@ -453,7 +450,9 @@ export function pillPaint(): void {
   const room = sc.scrollHeight - sc.clientHeight
   const scrollable = room > 4
   const atTop = sc.scrollTop <= 2
-  const atEnd = room - sc.scrollTop < 4
+  /* The box's end is the conversation's only when the Lane Window reaches the
+     tail; a window short of it ends at a turn. */
+  const atEnd = tail.atConversationEnd(sc, shownLane()?.winTo ?? 0)
   /* The first paint is the baseline the first scroll is measured from. */
   if (jumpDir === null) jumpTop = sc.scrollTop
   const upWanted = !!up && scrollable && (atEnd || (jumpDir === 'up' && !atTop))
@@ -502,7 +501,7 @@ export function topClick(): void {
 export function scrolled(): void {
   const sc = scroller()
   if (!sc) return
-  const atEnd = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 4
+  const atEnd = tail.atConversationEnd(sc, shownLane()?.winTo ?? 0)
   if (atEnd) tail.setStuck(true)
   const delta = sc.scrollTop - jumpTop
   if (Math.abs(delta) >= 1) {

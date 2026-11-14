@@ -104,8 +104,9 @@ the `name` in the package's manifest. One label per package, so two
 packages may each ship a skill called `postgres-best-practices` without
 either shadowing the other.
 
-**Package ledger.** The file that records which packages are imported, from
-which path, at which version, and what the installed copy looked like.
+**Package ledger.** The file that records, per workspace, which packages are
+imported, from which path, at which version, and what the installed copy
+looked like, together with the install markers that prove what it owns.
 
 ## Why an import, not a mount
 
@@ -212,9 +213,9 @@ Each `packages` entry is either a package root (a directory holding
 Discovery reads manifests only and never imports anything from a package.
 
 Containment follows spec §4.1. The package root is resolved once
-(`Path.resolve()`), and every path the loader touches must satisfy
-`is_relative_to(root)` after resolution. A symlink or junction that
-resolves outside the root is refused for that component -- the skill is
+(`os.path.realpath(..., strict=True)`), and every path the loader touches
+must satisfy `is_relative_to(root)` after resolution. A symlink or junction
+that resolves outside the root is refused for that component -- the skill is
 skipped, the server entry is invalid -- while the rest of the package still
 loads. A `plugin.json` that does not resolve inside its own root rejects
 the package (§4.1).
@@ -258,16 +259,16 @@ does (`raven/importer/skills/installer.py:116`).
 Two collisions are handled rather than papered over, at two levels:
 
 - The **package directory** (`<workspace>/skills/<package>/`). If it exists
-  and the ledger does not own it, the whole import is refused. Merging a
-  package into a directory that belongs to something else -- the operator's
-  own skill of the same name, most likely -- is never what anyone meant,
-  and the refusal says so instead of quietly merging.
-- A **skill directory** inside a package directory the ledger owns. If it
-  exists and the ledger does not claim that skill, it is skipped and
-  reported; the import continues with the remaining skills. The ledger
-  records the skills it installed, so a directory the operator put there by
-  hand is not the ledger's to replace. This is the importer's "an existing
-  on-disk target is never overwritten" rule
+  and the ledger cannot prove it installed it, the whole import is refused.
+  Merging a package into a directory that belongs to something else -- the
+  operator's own skill of the same name, most likely -- is never what anyone
+  meant, and the refusal says so instead of quietly merging.
+- A **skill directory** inside a package directory the ledger proves it
+  owns. If it exists and the ledger does not claim that skill, it is skipped
+  and reported; the import continues with the remaining skills. The ledger
+  records the marker of each skill it installed, so a directory the operator
+  put there by hand is not the ledger's to replace. This is the importer's
+  "an existing on-disk target is never overwritten" rule
   (`raven/importer/skills/installer.py:181-211`), at skill granularity.
 
 A skill whose frontmatter name is already claimed inside the same package
@@ -377,24 +378,47 @@ table describes the state before Phase 2 landed.
 
 ```json
 {
-  "version": 1,
-  "packages": {
-    "agentic-bundle-essentials": {
-      "version": "20.0.0",
-      "source": "/opt/agent-plugins/agentic-bundle-essentials",
-      "imported_at": "2026-10-25T12:00:00Z",
-      "skills": ["api-design", "lint-and-validate"],
-      "fingerprint": "sha256:..."
+  "version": 2,
+  "workspaces": {
+    "/home/operator/.raven/workspace": {
+      "agentic-bundle-essentials": {
+        "version": "20.0.0",
+        "source": "/opt/agent-plugins/agentic-bundle-essentials",
+        "imported_at": "2026-10-25T12:00:00Z",
+        "skills": ["api-design", "lint-and-validate"],
+        "fingerprint": "sha256:...",
+        "install_token": "<32 hex characters>",
+        "skill_tokens": {
+          "api-design": "<32 hex characters>",
+          "lint-and-validate": "<32 hex characters>"
+        }
+      }
     }
-  }
+  },
+  "legacy": {}
 }
 ```
 
+Records are keyed by workspace, not by package name alone: the key is the
+workspace path with links resolved and the platform's case rule applied, so
+two workspaces sharing one home keep separate records of the same package.
+Every install writes an install marker (`.raven-install.json`, a random
+token minted by the host) at the package root and at each skill root, and
+records those tokens with the entry. A `remove` or a re-import deletes a
+directory only while its marker still matches the token of a record for this
+workspace; a name match, another workspace's record, or a legacy record is
+not ownership.
+
 The fingerprint covers the package's skill files (relative path, size and
 content hash), so `raven agent-plugins check` can say whether the installed
-copy is stale without re-reading every file into memory. The ledger is what
-makes removal safe: `remove` deletes only the directories the ledger says
-it owns.
+copy is stale without re-reading every file into memory.
+
+A file written by version 1 (a flat `packages` map, no workspace, no
+markers) still loads: its records move to the top-level `legacy` map, load
+as unverified, and grant no deletion. The first successful import rewrites
+the file as version 2. A file whose version is unknown, or whose sections
+are structurally broken, loads as an empty ledger that refuses to save, so
+an unreadable file is never answered by overwriting it.
 
 ### 8. Configuration
 
@@ -464,7 +488,7 @@ can grow one later if the operator asks for it.
   The four rules in §5 are the mitigation, and they are not a substitute for
   reading what one installs.
 - **A package cannot clobber a user's own skill.** A target that exists and
-  is not ledger-owned is never overwritten; the import reports the
+  is not provably ledger-owned is never overwritten; the import reports the
   collision.
 - **The package name is a safe directory name.** The manifest's `name` is
   constrained to lowercase letters, digits, hyphens and single periods, so

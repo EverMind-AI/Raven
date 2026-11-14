@@ -353,7 +353,9 @@ def make_git_recombine_fn(repo_root: str | Path):
         try:
             for rel in elite.files:
                 files[rel] = git_ops.read_file_at(root, elite.git_commit_sha, rel)
-        except GitOpError:
+        except GitOpError as exc:
+            if exc.returncode == -1:
+                raise
             return None
         if not files and not elite.deletions:
             return None

@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from raven.skill_hub.client import SkillHubClient, SkillHubError
+from raven.skill_hub.client import SkillHubClient, SkillHubError, resolve_hub_endpoint
 
 
 def _zip(files: dict[str, str]) -> bytes:
@@ -126,3 +126,28 @@ async def test_an_injected_transport_is_never_replaced() -> None:
     await client.aclose()
 
     assert client._http() is injected
+
+
+# ── resolve_hub_endpoint ────────────────────────────────────────────
+
+
+def test_no_override_uses_the_configured_endpoint_then_the_shared_one(monkeypatch) -> None:
+    monkeypatch.delenv("RAVEN_SKILLHUB_URL", raising=False)
+
+    assert resolve_hub_endpoint("https://hub.internal.test") == "https://hub.internal.test"
+    assert resolve_hub_endpoint(None) == "https://skillhub.evermind.ai"
+
+
+def test_a_valid_override_wins_over_the_configured_endpoint(monkeypatch) -> None:
+    monkeypatch.setenv("RAVEN_SKILLHUB_URL", "https://staging.hub.test/")
+
+    assert resolve_hub_endpoint("https://hub.internal.test") == "https://staging.hub.test"
+
+
+def test_an_invalid_override_disables_the_client_rather_than_falling_back(monkeypatch) -> None:
+    """The operator pointed away from the shared marketplace; falling back to
+    it would send the turn text to the destination they were avoiding."""
+    monkeypatch.setenv("RAVEN_SKILLHUB_URL", "http://10.9.9.9:8080")
+
+    assert resolve_hub_endpoint("https://hub.internal.test") is None
+    assert resolve_hub_endpoint(None) is None

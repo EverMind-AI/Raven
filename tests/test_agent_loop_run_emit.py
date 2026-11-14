@@ -980,6 +980,153 @@ async def test_a_dispatch_tool_the_turn_does_not_hold_earns_no_note(tmp_path, ro
     assert notes["s1"] == ""
 
 
+class _WorkFake(Tool):
+    """Stands in for one of the host's task-work tools, which the loop recognises by name."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def description(self) -> str:
+        return "characterization work tool"
+
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "command": {"type": "string"}},
+            "required": [],
+        }
+
+    async def execute(self, **kwargs) -> str:
+        return "work-ran"
+
+
+@pytest.mark.parametrize("route", ["direct", "tool_call"])
+async def test_the_first_task_work_result_of_a_turn_carries_the_hand_off_note(tmp_path, route):
+    # Once per turn, on the first result that did task work, after the fence; a
+    # skill read before it is how the host runs the work and earns nothing.
+    provider = _FakeStreamToolProvider(
+        [
+            [_call_by_route("k1", "read_file", route, {"path": str(tmp_path / "skills" / "x" / "SKILL.md")})],
+            [_call_by_route("e1", "exec", route, {"command": "gh pr view 1"})],
+            [_call_by_route("e2", "read_file", route, {"path": str(tmp_path / "notes.md")})],
+            [ChatDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_SpawnReceiptTool())
+    loop.tools.register(_WorkFake("exec"))
+    loop.tools.register(_WorkFake("read_file"))
+    notes, contents = _record_tool_results(loop)
+
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    note = "that call was task work done with your own tool"
+    assert notes["k1"] == ""
+    assert note in notes["e1"]
+    assert "`spawn`" in notes["e1"]
+    assert contents["e1"].index("[END UNTRUSTED exec") < contents["e1"].index(note)
+    assert notes["e2"] == ""
+
+
+async def _dispatch_reads(tmp_path, monkeypatch, names: list[str], *, dispatch: bool = True) -> int:
+    """How many times one turn reads the dispatch paths, given the tools it calls in order."""
+    from raven.context_engine.segments import render
+
+    reads = [0]
+    real = render.live_dispatch_tools
+
+    def _count(get_definitions):
+        reads[0] += 1
+        return real(get_definitions)
+
+    monkeypatch.setattr(render, "live_dispatch_tools", _count)
+    provider = _FakeStreamToolProvider(
+        [[_call_by_route(f"c{i}", name, "direct", {"command": "ls"})] for i, name in enumerate(names)]
+        + [[ChatDelta(content="done")]]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    if dispatch:
+        loop.tools.register(_SpawnReceiptTool())
+    else:
+        for name in ("spawn", "run_subagent_dag"):
+            loop.tools.unregister(name)
+    loop.tools.register(_FakeTool())
+    loop.tools.register(_WorkFake("exec"))
+    _record_tool_results(loop)
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+    return reads[0]
+
+
+@pytest.mark.parametrize(
+    ("launched", "dispatch", "reads"),
+    [(False, True, 1), (False, False, 1), (True, True, 0)],
+    ids=["host", "host-without-dispatch", "launched-process"],
+)
+async def test_the_dispatch_paths_are_read_for_the_note_at_most_once_a_turn(
+    tmp_path, monkeypatch, launched, dispatch, reads
+):
+    # Read off the whole tool list, so read once, on the turn's first task-work call --
+    # also where that call earns no note, as on a turn with no dispatch path -- and never in
+    # a launched process, which earns none. Measured against a turn of the same length that
+    # does no task work, so the identity's own reads cancel out.
+    from raven.agent.subagent.role import SUBAGENT_ENV_VAR
+
+    if launched:
+        monkeypatch.setenv(SUBAGENT_ENV_VAR, "1")
+    working = await _dispatch_reads(
+        tmp_path / "w", monkeypatch, ["faketool", "faketool", "exec", "exec"], dispatch=dispatch
+    )
+    idle = await _dispatch_reads(tmp_path / "i", monkeypatch, ["faketool"] * 4, dispatch=dispatch)
+    assert working - idle == reads
+
+
+@pytest.mark.parametrize("route", ["direct", "tool_call"])
+async def test_a_launched_process_gets_no_hand_off_note(tmp_path, monkeypatch, route):
+    # A product agent runs as a process the host launched; whatever tools it holds, its
+    # task work is its job, so no result of its own carries the note.
+    from raven.agent.subagent.role import SUBAGENT_ENV_VAR
+
+    monkeypatch.setenv(SUBAGENT_ENV_VAR, "1")
+    provider = _FakeStreamToolProvider(
+        [[_call_by_route("e1", "exec", route, {"command": "ls"})], [ChatDelta(content="done")]]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_SpawnReceiptTool())
+    loop.tools.register(_WorkFake("exec"))
+    notes, contents = _record_tool_results(loop)
+
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    assert "work-ran" in contents["e1"]
+    assert notes["e1"] == ""
+
+
+async def test_task_work_without_a_dispatch_path_earns_no_hand_off_note(tmp_path):
+    # Nowhere to hand the work over: the note would order what the turn cannot do.
+    provider = _FakeStreamToolProvider(
+        [[_call_by_route("e1", "exec", "direct", {"command": "ls"})], [ChatDelta(content="done")]]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    for name in ("spawn", "run_subagent_dag"):
+        loop.tools.unregister(name)
+    loop.tools.register(_WorkFake("exec"))
+    notes, _contents = _record_tool_results(loop)
+
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    assert notes["e1"] == ""
+
+
 async def test_run_emits_one_episode_start_per_model_call(tmp_path):
     # Episode boundary: run() emits one EpisodeStart per model call, 0-based and
     # increasing. This turn has two calls (a tool-call iteration, then a stop

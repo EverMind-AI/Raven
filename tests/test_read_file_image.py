@@ -1579,7 +1579,7 @@ def test_the_assembler_forwards_the_verdict_to_the_renderer(monkeypatch) -> None
 
     seen = {}
 
-    def _spy(text, media, *, can_see_images=True, describe_tool=None):
+    def _spy(text, media, *, can_see_images=True, describe_tool=None, notes_sink=None):
         seen.update(can_see_images=can_see_images, describe_tool=describe_tool)
         return text
 

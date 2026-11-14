@@ -14,6 +14,16 @@ CALLS_PER_WRITER = 50
 LINES_PER_CALL = 5
 
 
+class _WindowsOS:
+    """atomic_io's view of ``os`` on Windows: patching the real ``os.name``
+    would also make pathlib build WindowsPath objects that cannot exist here."""
+
+    name = "nt"
+
+    def __getattr__(self, attribute: str):
+        return getattr(os, attribute)
+
+
 def _append_worker(path_str: str, writer_id: int) -> None:
     for call_idx in range(CALLS_PER_WRITER):
         block = [f"{writer_id}:{call_idx}:{line_idx}" for line_idx in range(LINES_PER_CALL)]
@@ -135,6 +145,32 @@ def test_atomic_update_concurrent_increments_lose_nothing(tmp_path: Path):
     assert path.read_text(encoding="utf-8") == "16"
 
 
+def test_atomic_update_retries_a_transient_sharing_violation(tmp_path: Path, monkeypatch):
+    """The transaction's write goes through the retry path too: a reader that
+    releases the target a moment later must not cost an update already read."""
+    from raven.utils import atomic_io
+
+    path = tmp_path / "state.json"
+    path.write_text("1", encoding="utf-8")
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def flaky(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise PermissionError("sharing violation")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(atomic_io.os, "replace", flaky)
+    monkeypatch.setattr(atomic_io, "_REPLACE_BACKOFF", 0.001)
+
+    result = atomic_update(path, lambda current: (str(int(current) + 1), "ok"))
+
+    assert result == "ok"
+    assert path.read_text(encoding="utf-8") == "2"
+    assert calls["n"] == 2
+
+
 def test_atomic_replace_with_explicit_mode_holds_from_creation(tmp_path: Path):
     """Secret-bearing files (serve.json's token) need their mode from the very
     first byte; an explicit mode wins over both umask and a leftover tmp's
@@ -148,6 +184,76 @@ def test_atomic_replace_with_explicit_mode_holds_from_creation(tmp_path: Path):
 
     assert (path.stat().st_mode & 0o777) == 0o600
     assert path.read_text(encoding="utf-8") == '{"token": "s3cret"}'
+
+
+def test_explicit_mode_on_windows_copies_the_named_sources_dacl(tmp_path: Path, monkeypatch):
+    """A Windows mode cannot express a DACL: when the mode came from another
+    file, the temp must take that file's descriptor at creation, or its private
+    text lands in a record only as protected as the folder."""
+    from raven.utils import atomic_io
+
+    source = tmp_path / "soul.local.md"
+    source.write_text("operator text", encoding="utf-8")
+    target = tmp_path / ".soul.md.addendum"
+    copied: list[tuple[Path, Path]] = []
+
+    def create_with_dacl(tmp: Path, like: Path) -> int:
+        copied.append((tmp, like))
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+        return os.open(tmp, flags, 0o600)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(atomic_io, "os", _WindowsOS())
+        patched.setattr(atomic_io, "_create_with_dacl_of", create_with_dacl)
+        atomic_io.atomic_replace(target, "private rule\n", mode=0o600, newline="", like=source)
+
+    assert copied == [(tmp_path / ".soul.md.addendum.tmp", source)]
+    assert target.read_text(encoding="utf-8") == "private rule\n"
+
+
+def test_a_default_replace_on_windows_still_copies_the_targets_dacl(tmp_path: Path, monkeypatch):
+    """The default path's Windows DACL copy stays: a writer that names no source
+    keeps protecting the target with its own descriptor."""
+    from raven.utils import atomic_io
+
+    target = tmp_path / "agent.md"
+    target.write_text("old", encoding="utf-8")
+    copied: list[Path] = []
+
+    def create_with_dacl(tmp: Path, like: Path) -> int:
+        copied.append(like)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+        return os.open(tmp, flags, 0o600)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(atomic_io, "os", _WindowsOS())
+        patched.setattr(atomic_io, "_create_with_dacl_of", create_with_dacl)
+        atomic_io.atomic_replace(target, "new")
+
+    assert copied == [target]
+    assert target.read_text(encoding="utf-8") == "new"
+
+
+def test_explicit_mode_without_a_named_source_keeps_the_plain_creation(tmp_path: Path, monkeypatch):
+    """The other secret writers pass only a mode: they have no source file to
+    copy a DACL from, and a target that does not exist yet has none either."""
+    from raven.utils import atomic_io
+
+    target = tmp_path / "serve.json"
+    copied: list[Path] = []
+
+    def create_with_dacl(tmp: Path, like: Path) -> int:
+        copied.append(like)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+        return os.open(tmp, flags, 0o600)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(atomic_io, "os", _WindowsOS())
+        patched.setattr(atomic_io, "_create_with_dacl_of", create_with_dacl)
+        atomic_io.atomic_replace(target, '{"token": "s3cret"}', mode=0o600)
+
+    assert copied == []
+    assert target.read_text(encoding="utf-8") == '{"token": "s3cret"}'
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
@@ -299,3 +405,87 @@ def test_write_transaction_excludes_other_processes(tmp_path: Path):
     proc2.start()
     assert q2.get(timeout=10) == "acquired"
     proc2.join(10)
+
+
+class TestReplaceRetry:
+    def test_retries_a_transient_sharing_violation(self, tmp_path: Path, monkeypatch):
+        import raven.utils.atomic_io as atomic_io
+
+        path = tmp_path / "state.json"
+        path.write_text("old", encoding="utf-8")
+        real_replace = os.replace
+        calls = {"n": 0}
+
+        def flaky(src, dst):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise PermissionError("sharing violation")
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(atomic_io.os, "replace", flaky)
+        monkeypatch.setattr(atomic_io, "_REPLACE_BACKOFF", 0.001)
+
+        atomic_replace(path, "new")
+        assert path.read_text(encoding="utf-8") == "new"
+        assert calls["n"] == 3
+
+    def test_raises_after_the_retry_budget(self, tmp_path: Path, monkeypatch):
+        import raven.utils.atomic_io as atomic_io
+
+        path = tmp_path / "state.json"
+        path.write_text("old", encoding="utf-8")
+        calls = {"n": 0}
+
+        def always_denied(src, dst):
+            calls["n"] += 1
+            raise PermissionError("sharing violation")
+
+        monkeypatch.setattr(atomic_io.os, "replace", always_denied)
+        monkeypatch.setattr(atomic_io, "_REPLACE_BACKOFF", 0.001)
+
+        with pytest.raises(PermissionError):
+            atomic_replace(path, "new")
+        # Literal, not the constant: asserting against it stays green when the
+        # budget is cut, and only "all five attempts" is the behaviour under test.
+        assert calls["n"] == 5
+        assert path.read_text(encoding="utf-8") == "old"
+        assert not (tmp_path / "state.json.tmp").exists()
+
+    def test_retries_a_held_temp_file(self, tmp_path: Path, monkeypatch):
+        import raven.utils.atomic_io as atomic_io
+
+        path = tmp_path / "state.json"
+        path.write_text("old", encoding="utf-8")
+        real_create = atomic_io._create_like
+        attempts = {"n": 0}
+
+        def flaky_create(tmp_path_arg, path_arg, preserve):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise FileExistsError(80, "held temp file")
+            return real_create(tmp_path_arg, path_arg, preserve)
+
+        monkeypatch.setattr(atomic_io, "_create_like", flaky_create)
+        monkeypatch.setattr(atomic_io, "_REPLACE_BACKOFF", 0.001)
+
+        atomic_replace(path, "new")
+        assert attempts["n"] == 2
+        assert path.read_text(encoding="utf-8") == "new"
+
+    def test_does_not_retry_a_missing_source(self, tmp_path: Path, monkeypatch):
+        import raven.utils.atomic_io as atomic_io
+
+        path = tmp_path / "state.json"
+        path.write_text("old", encoding="utf-8")
+        calls = {"n": 0}
+
+        def missing(src, dst):
+            calls["n"] += 1
+            raise FileNotFoundError(src)
+
+        monkeypatch.setattr(atomic_io.os, "replace", missing)
+        monkeypatch.setattr(atomic_io, "_REPLACE_BACKOFF", 0.001)
+
+        with pytest.raises(FileNotFoundError):
+            atomic_replace(path, "new")
+        assert calls["n"] == 1

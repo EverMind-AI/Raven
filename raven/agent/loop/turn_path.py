@@ -124,7 +124,7 @@ from raven.agent.tools.registry import call_failed
 from raven.agent.tools.removals import RemovalWatch
 from raven.agent.window import shrink
 from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, filed_image_note, image_sources
-from raven.agent.window.parts import measure_parts
+from raven.agent.window.parts import ATTACHMENT_NOTES_KEY, measure_parts
 from raven.agent.window.turn_log import TURN_LOG_KEY, TurnLog
 from raven.contracts.harness import (
     ActionRequest,
@@ -1215,6 +1215,13 @@ class TurnPathMixin:
 
         watch_state = _watch_work.TurnWatch()
         watch_request = _watch_work.asked_for(initial_messages, origin=origin)
+        # Local to this run of the loop for the same reason (a retried attempt runs it
+        # again): the first task-work call settles the hand-it-over note
+        # (render.work_tool_note) either way, and a process launched to do one task never
+        # earns one, so it never asks.
+        from raven.agent.subagent.role import is_subagent_process
+
+        work_note_due = not is_subagent_process()
 
         # Read once, here: a mode switched mid-turn lands on the next turn.
         policy = self.session_policy(session_key or "")
@@ -2015,6 +2022,18 @@ class TurnPathMixin:
                             watch_note += render.reply_rules_note(
                                 board_shown=render.board_on_page(self._task_board_config.enabled, channel, surface)
                             )
+                        if work_note_due and reached is not None:
+                            forward_to = getattr(called, "forwarded_params", None)
+                            reached_args = forward_to(call_args) if forward_to is not None else call_args
+                            # Classified first: the dispatch paths are read off the whole tool
+                            # list, too much to rebuild for a call that does no work. The first
+                            # work call settles it: the paths do not change within the run, so
+                            # a call that earned no note is followed by none that would.
+                            if render.is_work_call(reached.name, reached_args):
+                                work_note_due = False
+                                watch_note += render.work_tool_note(
+                                    reached.name, reached_args, render.live_dispatch_tools(self.tools.get_definitions)
+                                )
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string
                     # riding along on it (ToolOutput). The model always gets the
@@ -3830,7 +3849,8 @@ class TurnPathMixin:
         come from what the turn added -- a spawn still in the history belongs to the
         turn that made it. ``delegated`` (the request's mark of the result that
         opened the turn) and ``moved_on`` (the groups the notes it was shown named)
-        say what the turn is about, when anything does.
+        say what the turn is about, when anything does; a message the user sent while
+        it ran, among what it added, says it is about more than they name.
         """
         from raven.agent.task_board.dispatches import delegated_handle, turn_dispatches
         from raven.agent.task_board.runner import run_post_turn, should_run
@@ -3869,6 +3889,9 @@ class TurnPathMixin:
                     reasoning_effort=effort,
                 )
 
+        message_tool = self.tools.get("message")
+        answered = message_tool.answered_calls_in_turn if isinstance(message_tool, MessageTool) else frozenset()
+
         task = asyncio.create_task(
             run_post_turn(
                 board,
@@ -3880,8 +3903,11 @@ class TurnPathMixin:
                 turn_id=turn_id,
                 now_ms=board.now_ms,
                 generation=board.generation(key),
+                reply_rows=turn_added,
                 delegated=[handle] if (handle := delegated_handle(delegated)) else [],
                 moved_on=moved_on,
+                mid_turn=any(m.get(_MID_TURN_USER_KEY) for m in turn_added),
+                answered_message_calls=answered,
             )
         )
         self._consolidation_tasks.add(task)
@@ -4152,6 +4178,11 @@ class TurnPathMixin:
         selection of turns can find each turn's messages in the record.
         """
         # Deferred: ``raven.context_engine`` imports back out of this tier.
+        from raven.context_engine.runtime_context import (
+            RUNTIME_CONTEXT_FIELD,
+            RUNTIME_CONTEXT_KEY,
+            carries_runtime_context,
+        )
         from raven.context_engine.scratch import TURN_SCRATCH_KEY, cut_turn_scratch
 
         # Both exits that persist a turn come through here, so a question noted
@@ -4177,6 +4208,7 @@ class TurnPathMixin:
                     entry["trace_id"] = trace_id
                 first_user_pending = False
             entry.pop(TURN_LOG_KEY, None)
+            runtime_lines = entry.pop(RUNTIME_CONTEXT_KEY, None)
             if (scratch := entry.pop(TURN_SCRATCH_KEY, None)) and role == "user":
                 # The turn scratch (recalled memory, routed skills) is rebuilt
                 # from the query every turn. Recording it would turn the log
@@ -4290,7 +4322,13 @@ class TurnPathMixin:
                 if inbound_rewrite_pending:
                     inbound_rewrite_pending = False
                     if isinstance(entry.get("content"), str) and entry["content"] != inbound_original:
+                        # The user's own words, without what assembly put
+                        # around them -- and without the attachment notes
+                        # assembly appended. The record goes with them: a mark
+                        # whose text is no longer in the message would count
+                        # files the next request never carried.
                         entry["content"] = inbound_original
+                        entry.pop(ATTACHMENT_NOTES_KEY, None)
                 if isinstance(content, list):
                     filtered = [
                         c
@@ -4305,6 +4343,12 @@ class TurnPathMixin:
                     if not filtered:
                         continue
                     entry["content"] = filtered
+            if role == "user" and runtime_lines and not carries_runtime_context(entry.get("content"), runtime_lines):
+                # Filed beside the user's words, which ``content`` keeps alone, so
+                # the history projection replays the block this turn sent. Lines
+                # the strip above left in place are not filed, or they would be
+                # sent twice.
+                entry[RUNTIME_CONTEXT_FIELD] = runtime_lines
             entry.setdefault("timestamp", self._now_fn().isoformat())
             session.record(entry)
         session.updated_at = self._now_fn()

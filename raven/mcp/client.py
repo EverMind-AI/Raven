@@ -187,6 +187,19 @@ def _configured_cwd(cfg) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _host_sourced(cfg) -> bool:
+    """Whether *cfg* is the host's own server rather than a carried one.
+
+    ``getattr`` with the host default: a stub configuration that predates the
+    source marker is the host's own, the same way a config file that never
+    spelled it stays the host's own. The ``isinstance`` guard matches
+    ``_configured_cwd``: an unset attribute on a stub answers with a mock, and
+    a non-string answer names no source this code knows.
+    """
+    value = getattr(cfg, "source", "host")
+    return (value if isinstance(value, str) else "host") == "host"
+
+
 def _child_stderr() -> Any:
     """A stderr a spawned server can inherit, whatever this process's ``sys.stderr`` is.
 
@@ -235,14 +248,32 @@ async def open_mcp_transport(
             # would be the choice of registry PlugHub's vetting refuses a
             # catalogue entry (see market/vetting.py). A server the sandbox
             # starts is fetched in there, so only its command line can carry one.
-            # The registry probe runs without the server's cwd on purpose: a
-            # package root is third-party content, and a .npmrc there must not
-            # choose the registry or the payload. The cost is that a host
-            # server's own project .npmrc is not seen either; telling the two
-            # apart needs a source marker on the config, not a looser probe.
+            # The registry probe stays out of a package root, and out of the
+            # cwd a playbook definition names: that content travels with its
+            # file, so its .npmrc must not steer the probe. A host server's own
+            # project .npmrc should be seen, so the probe runs in its configured
+            # cwd; the source marker on the config tells them apart. The launch
+            # is not changed here: a package server still starts in its root,
+            # where npm reads that root's .npmrc.
+            #
+            # A server that is not the host's own reads no project file at
+            # all: with no directory of its own to read, the probe would ask
+            # npm about the directory this process runs in, and the registry
+            # would then depend on where Raven was started.
+            #
+            # A host server's own directory is the operator's content, and the
+            # vetting is what keeps a third party out of one: a catalogue
+            # entry may not choose a working directory at all (see
+            # market/vetting.py).
             sandboxed = executor is not None and executor.supports_process_spawning
+            host_sourced = _host_sourced(cfg)
+            probe_cwd = _configured_cwd(cfg) if host_sourced else None
             command, *args = await mirrors.package_launch_async(
-                [cfg.command, *cfg.args], {**os.environ, **(cfg.env or {})}, local=not sandboxed
+                [cfg.command, *cfg.args],
+                {**os.environ, **(cfg.env or {})},
+                probe_cwd,
+                local=not sandboxed,
+                project=host_sourced,
             )
             cwd = _configured_cwd(cfg)
             if executor is not None and executor.supports_process_spawning:

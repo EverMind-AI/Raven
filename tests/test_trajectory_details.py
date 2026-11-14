@@ -2080,7 +2080,7 @@ def test_replay_reads_a_command_with_the_dialect_the_connections_handshake_chose
 
 
 def test_replay_will_not_open_a_journal_the_record_names_outside_this_store(state, tmp_path):
-    # An imported conversation's records name paths on the machine that wrote
+    # An imported session's records name paths on the machine that wrote
     # them; one that resolves outside this store is not this store's journal.
     elsewhere = _frames(tmp_path / "elsewhere" / "agent-1.jsonl")
     body = _replay(_external_run(state, elsewhere), state)

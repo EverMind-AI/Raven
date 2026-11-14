@@ -38,8 +38,8 @@ Keep the Kernel independent of CLI, RPC, ACP, and product code.
 | Backend construction | `raven/agent/subagent/backends/__init__.py` |
 
 Use `CONTEXT-MAP.md` and `CONTEXT.md` for canonical names. A backend session,
-host conversation, A2A task, and DAG node id have different lifetimes; mapping
-them explicitly prevents results or credentials crossing conversations.
+host session, A2A task, and DAG node id have different lifetimes; mapping
+them explicitly prevents results or credentials crossing sessions.
 
 ## Implement a sub-agent backend
 
@@ -124,7 +124,7 @@ configuration should use that same declaration rather than a second field list.
 
 Implement `start`, `stop`, and `send` and route inbound messages through
 `Intake`. Apply sender/group checks before downloading untrusted attachments
-or performing reactions. Preserve routing metadata and conversation identity;
+or performing reactions. Preserve routing metadata and session identity;
 the gateway wires submission and outbound delivery.
 
 Declare only capabilities you implement. Interactive login requires

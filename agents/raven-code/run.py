@@ -120,6 +120,10 @@ SECRET_SLOTS = {
     "CODE_JINA_API_KEY": ("tools", "web", "jinaApiKey"),
 }
 
+# These two land in the pre-vendor leaves, which trunk reads only after an
+# empty vendor slot; the host's slot is not inherited over them.
+OWN_WEB_KEYS = {"serper": "CODE_SERPER_API_KEY", "jina": "CODE_JINA_API_KEY"}
+
 # The LLM key never inherits per-slot: its absence switches the whole LLM
 # block to host inheritance (see render_config), so it stays out of the
 # optional fallback loop.
@@ -414,6 +418,10 @@ def render_config(source: Path, partition: Path, mode: str | None = None, *, una
     host = render.host_config()
 
     render.apply_secret_slots(config, host, slots=SECRET_SLOTS, required=REQUIRED_SECRETS, lookup=env_value)
+
+    if (inherit_web := getattr(render, "inherit_web_vendors", None)) is not None:
+        if carried := inherit_web(config, host, own_keys=OWN_WEB_KEYS, lookup=env_value):
+            log(f"[run] web: vendor keys from the host ({', '.join(carried)})")
 
     llm_key = REQUIRED_SECRETS[0]
     if env_value(llm_key):

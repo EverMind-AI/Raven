@@ -12,9 +12,10 @@ schema (or vice versa) within the same commit.
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # ---------------------------------------------------------------------------
 # Re-usable model config.  ``extra="forbid"`` makes Pydantic emit
@@ -139,7 +140,7 @@ class SubagentRow(_Strict):
     stateful: bool = Field(
         default=False,
         description=(
-            "Reusing a handle continues this agent's conversation rather than starting a fresh "
+            "Reusing a handle continues this agent's session rather than starting a fresh "
             "one (`agent_meta`). What makes a row direct-chattable at all: `chat` refuses a "
             "stateless agent, so a picker that offers one is offering a refusal. Absent from a "
             "server that predates this, which reads as 'not offered' rather than as an error."
@@ -248,7 +249,7 @@ class SubagentRow(_Strict):
 class DirectTarget(_Strict):
     """One sub-agent instance a turn is addressed to, instead of the main agent.
 
-    Null everywhere it appears means the main conversation. The pair is the
+    Null everywhere it appears means the main session. The pair is the
     instance's whole identity - the registry is keyed
     ``(session_key, agent, handle)`` and the session is already implied by the
     method that carries this - so nothing else belongs here.
@@ -300,7 +301,7 @@ class InstanceRow(_Strict):
         default=None,
         alias="selectedRoutes",
         description=(
-            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "The routes a decision node selected. An empty list is a selection that chose nothing, which a "
             "'many' selection may. Present only on the row of a DAG node a branch decided: its dag-node "
             "row, or the ordinary row a stateful node is reported on."
         ),
@@ -348,7 +349,7 @@ class InstanceRow(_Strict):
         alias="nodeInstance",
         description=(
             "The handle of the node's last attempt -- null when that attempt kept no session. Rides beside "
-            "attemptAgents because the row's own handle is the node's name, not a conversation."
+            "attemptAgents because the row's own handle is the node's name, not a session."
         ),
     )
     node_instance_auto: bool | None = Field(
@@ -378,11 +379,11 @@ class TranscriptToolCall(_Strict):
 
 
 class DirectTurn(_Strict):
-    """One row of one instance's conversation.
+    """One row of one instance's session.
 
     Preferred source is the instance's own log, which is written turn by turn and
     holds what the run did on the way -- hence the step fields below and the
-    ``tool`` role. A conversation with no log falls back to its record
+    ``tool`` role. A session with no log falls back to its record
     directories, where a turn is a pair of files and flattens to two of these:
     the prompt as ``user`` and the reply as ``assistant``. A turn still running,
     or one that failed, has no reply and yields only the first.
@@ -444,7 +445,7 @@ class TurnUsage(_Strict):
         default=None,
         description=(
             "The window divided: tokens by part, keyed system / tools / conversation / "
-            "memory / skills. Absent when no breakdown was measured for this turn."
+            "files / memory / skills. Absent when no breakdown was measured for this turn."
         ),
     )
 
@@ -486,7 +487,7 @@ class MessageStartPayload(_Strict):
         ),
     )
     target: DirectTarget | None = None
-    """Which conversation this event belongs to; null is the main agent.
+    """Which session this event belongs to; null is the main agent.
 
     Carried on the four events a direct-chat turn can produce
     (``message.start`` / ``token.delta`` / ``message.complete`` / ``error``) --
@@ -502,7 +503,7 @@ class MessageStartEvent(_Strict):
 
 
 class MessageInjectedPayload(_Strict):
-    """A message merged into the turn already running on this conversation.
+    """A message merged into the turn already running on this session.
 
     ``message.start`` cannot say this: that event opens a turn, and an inject
     opens none -- it joins one. Announced so every window draws the same bubble
@@ -529,7 +530,7 @@ class MessageInjectedEvent(_Strict):
 
 
 class TurnStartedDelegated(_Strict):
-    """Which delegated run re-entered the conversation, on the live boundary.
+    """Which delegated run re-entered the session, on the live boundary.
 
     The same identity a stored user entry carries in ``TranscriptDelegated``, so
     a client draws the same row from a replay and from the stream. Declared here
@@ -552,7 +553,7 @@ class TurnStartedDelegated(_Strict):
     content: str | None = Field(
         None,
         description=(
-            "The text that re-entered the conversation, verbatim; a client shows "
+            "The text that re-entered the session, verbatim; a client shows "
             "the reader-facing part of it by keeping only what sits INSIDE the "
             "untrusted fence, or `output` instead where a node's report carries it."
         ),
@@ -584,7 +585,7 @@ class TurnStartedPayload(_Strict):
 
 class TurnStartedEvent(_Strict):
     """A turn the runtime opened (a delegated result re-entering the
-    conversation) has begun.
+    session) has begun.
 
     ``turn.send`` owns ``message.start``, and the spine suppresses it for these
     turns -- so this event is the client's only live signal that a new turn
@@ -935,7 +936,7 @@ class SubagentDeliveredPayload(_Strict):
     content: str = Field(
         default="",
         description=(
-            "The text that re-entered the conversation, verbatim. A client shows the "
+            "The text that re-entered the session, verbatim. A client shows the "
             "reader-facing part of it by keeping only what sits INSIDE the untrusted "
             "fence, or `output` instead where a node's report carries it -- and a client "
             "replaying this turn later reads the same string from "
@@ -963,7 +964,7 @@ class SubagentDeliveredPayload(_Strict):
 
 
 class SubagentDeliveredEvent(_Strict):
-    """A delegated run's result re-entered its conversation here.
+    """A delegated run's result re-entered its session here.
 
     Emitted just after the result is submitted to the main loop, so a client can
     say "this reply is the sub-agent's result coming back" at the exact point in
@@ -1014,7 +1015,7 @@ class SubagentStatusEvent(_Strict):
     """One spawned run's lifecycle transition, as it happens.
 
     ``subagent.delivered`` marks where a finished result re-entered the
-    conversation; this event is the run itself moving -- queued, started,
+    session; this event is the run itself moving -- queued, started,
     finished -- so a client can render live delegation without polling the
     disk-backed lists. Terminal transitions are not replayed: a client that
     reconnects reconciles against ``subagent.list`` instead.
@@ -1075,7 +1076,7 @@ class DagRunStartedNode(_Strict):
     select: Literal["one", "many"] | None = Field(
         default=None,
         description=(
-            "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). "
+            "How many routes the decision node selects: 'one' (exactly one) or 'many' (any number, none included). "
             "Always sent with routes, 'one' where the graph left it unset."
         ),
     )
@@ -1120,7 +1121,7 @@ class DagNodeUpdatedPayload(_FromAStint):
     selected_routes: list[str] | None = Field(
         default=None,
         description=(
-            "The routes a decision node selected, on the frame that finishes it. An empty list is a decision "
+            "The routes a decision node selected, on the frame that finishes it. An empty list is a selection "
             "that chose nothing, which a 'many' selection may. Absent on every other frame, and when the node "
             "failed to decide."
         ),
@@ -1232,7 +1233,7 @@ class DagRunFile(_Strict):
     selected_routes: list[str] | None = Field(
         default=None,
         description=(
-            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "The routes a decision node selected. An empty list is a selection that chose nothing, which a "
             "'many' selection may. Absent on a node that decides nothing, and on one that failed to decide."
         ),
     )
@@ -1344,7 +1345,7 @@ class DagSnapshotNode(_Strict):
     selected_routes: list[str] | None = Field(
         default=None,
         description=(
-            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "The routes a decision node selected. An empty list is a selection that chose nothing, which a "
             "'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, "
             "and on one that failed to decide."
         ),
@@ -1365,7 +1366,7 @@ class DagSnapshotNode(_Strict):
     select: Literal["one", "many"] | None = Field(
         default=None,
         description=(
-            "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). "
+            "How many routes the decision node selects: 'one' (exactly one) or 'many' (any number, none included). "
             "Always sent with routes, 'one' where the graph left it unset."
         ),
     )
@@ -1441,7 +1442,7 @@ class DagNodeParams(_Strict):
     session_key: str | None = Field(
         default=None,
         description=(
-            "Which conversation's run to read, as `dag.get` already takes. The handler has "
+            "Which session's run to read, as `dag.get` already takes. The handler has "
             "always read it; a run directory lives inside its session, so a caller that omits "
             "it is asking the server to guess."
         ),
@@ -1453,7 +1454,7 @@ class DagNodeResult(_Strict):
 
 
 # ---------------------------------------------------------------------------
-# tasks.* -- a conversation's delegated work as tasks, read off disk
+# tasks.* -- a session's delegated work as tasks, read off disk
 # ---------------------------------------------------------------------------
 
 TaskKind = Literal["spawn", "dag"]
@@ -1566,7 +1567,7 @@ class TaskNode(_Strict):
     selected_routes: list[str] | None = Field(
         default=None,
         description=(
-            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "The routes a decision node selected. An empty list is a selection that chose nothing, which a "
             "'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, "
             "and on one that failed to decide."
         ),
@@ -1587,7 +1588,7 @@ class TaskNode(_Strict):
     select: Literal["one", "many"] | None = Field(
         default=None,
         description=(
-            "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). "
+            "How many routes the decision node selects: 'one' (exactly one) or 'many' (any number, none included). "
             "Always sent with routes, 'one' where the graph left it unset."
         ),
     )
@@ -1602,7 +1603,7 @@ class TaskNode(_Strict):
 
 
 class TaskRow(_Strict):
-    """One unit of delegated work a conversation started, with its nodes inline."""
+    """One unit of delegated work a session started, with its nodes inline."""
 
     id: str
     kind: TaskKind
@@ -1655,7 +1656,7 @@ class ProgressStep(_Strict):
 
 
 class TaskGroup(_Strict):
-    """One matter a conversation is pushing, with its Progress Steps in time order."""
+    """One matter a session is pushing, with its Progress Steps in time order."""
 
     id: str
     title: str
@@ -1676,7 +1677,7 @@ class PendingDispatch(_Strict):
 
 
 class TaskBoard(_Strict):
-    """One host conversation's Task Board."""
+    """One host session's Task Board."""
 
     version: int
     groups: list[TaskGroup]
@@ -1752,7 +1753,7 @@ class TasksBoardUpdatedPayload(_Strict):
 
 
 class TasksBoardUpdatedEvent(_Strict):
-    """A conversation's Task Board after a write; a reconnecting client reads ``tasks.board``."""
+    """A session's Task Board after a write; a reconnecting client reads ``tasks.board``."""
 
     type: Literal["tasks.board_updated"]
     payload: TasksBoardUpdatedPayload
@@ -1823,7 +1824,7 @@ class SessionTitledPayload(_Strict):
 class SessionTitledEvent(_Strict):
     """A session was named by the model that reads its opening message.
 
-    Conversation-scoped rather than broadcast: one session being named is not
+    Session-scoped rather than broadcast: one session being named is not
     news to a client watching a different one. Emitted only when the title
     actually changed, so a client can treat it as "replace what you are showing"
     without comparing.
@@ -1914,7 +1915,7 @@ TurnEvent = Annotated[
 
 
 class SessionListImported(_Strict):
-    """What an Imported Conversation's row says about the package it came from."""
+    """What an Imported Session's row says about the package it came from."""
 
     kind: str = Field(..., description="'export', 'bugreport' or 'report'.")
     source_name: str = Field(..., description="The file name the package was imported from.")
@@ -1941,7 +1942,7 @@ class SessionListItem(_Strict):
         ),
     )
     imported: SessionListImported | None = Field(
-        default=None, description="Present only on an Imported Conversation's row (source 'imported')."
+        default=None, description="Present only on an Imported Session's row (source 'imported')."
     )
 
 
@@ -1950,7 +1951,7 @@ class SessionListParams(_Strict):
     channels: list[str] | None = Field(
         default=None,
         description=(
-            "Session channels to include; defaults to tui. 'imported' adds the Imported Conversations "
+            "Session channels to include; defaults to tui. 'imported' adds the Imported Sessions "
             "to a list of live sessions (never to the archived one)."
         ),
     )
@@ -2151,7 +2152,7 @@ class SessionUsageParams(_Strict):
 
 
 class SessionUsageResult(_Strict):
-    """What one conversation has spent, its delegations included.
+    """What one session has spent, its delegations included.
 
     Token counters are sums over every call recorded under the session's root
     key, so ``total`` is those four added up rather than a provider's own total.
@@ -2208,6 +2209,9 @@ class SessionHistoryResult(_Strict):
 # ---------------------------------------------------------------------------
 
 
+_CHANNEL_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
+
+
 class TurnSendParams(_Strict):
     session_key: str
     content: str
@@ -2238,6 +2242,15 @@ class TurnSendParams(_Strict):
     # submitted, so the note and the message arrive together; ignored for a
     # message merged into a running turn or sent to an instance.
     move_on: str | None = None
+
+    @field_validator("channel")
+    @classmethod
+    def _channel_is_a_token(cls, value: str | None) -> str | None:
+        # The channel is written into the system prompt, so a client may not put
+        # prose in it: a newline would open a heading of its own there.
+        if value and not _CHANNEL_TOKEN.fullmatch(value):
+            raise ValueError("channel must be a short token such as 'tui' or 'telegram'")
+        return value
 
 
 class TurnSendResult(_Strict):
@@ -2633,7 +2646,7 @@ class ModelAddModelParams(_Strict):
     name and has nothing to draw for a name it has never heard of.
 
     ``reasoning_efforts`` is not display data: it is this model's declaration
-    for the per-conversation effort picker, and the server validates it against
+    for the per-session effort picker, and the server validates it against
     the effort ladder. ``None`` leaves a stored declaration alone; ``[]`` clears
     it.
     """
@@ -2748,8 +2761,8 @@ class ConfigGetParams(_Strict):
         default=None,
         description=("If omitted, return all whitelisted fields. Unknown keys are silently dropped."),
     )
-    # With a session, ``permissions.mode`` answers the mode that conversation
-    # runs in; without one, the default a new conversation starts on.
+    # With a session, ``permissions.mode`` answers the mode that session
+    # runs in; without one, the default a new session starts on.
     session_id: str | None = None
 
 
@@ -2760,8 +2773,8 @@ class ConfigGetResult(_Strict):
 class ConfigSetParams(_Strict):
     key: str
     value: JsonValue
-    # Scope extras for the two keys with a per-conversation reading, ``model``
-    # and ``permissions.mode``: this conversation, the default a new one starts
+    # Scope extras for the two keys with a per-session reading, ``model``
+    # and ``permissions.mode``: this session, the default a new one starts
     # on, or -- for ``model`` alone -- both at once.
     session_id: str | None = None
     provider: str | None = None
@@ -2791,9 +2804,9 @@ class ConfigSetResult(_Strict):
     value: str | None = None
     scope: Literal["session", "default", "both"] | None = None
     session_id: str | None = None
-    # Does the asking conversation now run this model? A default-scoped switch
+    # Does the asking session now run this model? A default-scoped switch
     # moves the sessions that never chose one, so scope alone cannot answer it
-    # and a client that guesses shows a model the conversation is not on.
+    # and a client that guesses shows a model the session is not on.
     applies_to_session: bool | None = None
     needs_restart: bool | None = Field(
         default=None,
@@ -3167,14 +3180,14 @@ ToolsConfigureResult = StubResult
 
 
 # ---------------------------------------------------------------------------
-# subagent.* -- the background calls one conversation handed off
+# subagent.* -- the background calls one session handed off
 #
 # Singular, and directly above the plural `subagents.*` that configures which
 # external agents exist, because the two names are one keystroke apart and mean
 # different things. These two read the on-disk record the delegation paths leave
 # in the session's own directory -- a `spawn` call, and every node of a graph run.
 # The graph is still read through `dag.*`, which has the structure this flat list
-# does not; the list's job is "which agents worked on this conversation", and
+# does not; the list's job is "which agents worked on this session", and
 # answering it with only half of them was worse than a little duplication.
 # ---------------------------------------------------------------------------
 
@@ -3238,7 +3251,7 @@ class SubagentListParams(_Strict):
         default=None,
         description=(
             "Whose calls to list. Absent or unknown is an empty list, not an error: the record lives inside "
-            "one conversation's directory, so there is no cross-session listing to give."
+            "one session's directory, so there is no cross-session listing to give."
         ),
     )
 
@@ -3251,7 +3264,7 @@ class SubagentContextParams(_Strict):
     id: str = Field(..., description="The call id from subagent.list.")
     session_id: str = Field(
         ...,
-        description="Required with the id: a call is addressed by conversation and call, never by call alone.",
+        description="Required with the id: a call is addressed by session and call, never by call alone.",
     )
 
 
@@ -4274,7 +4287,7 @@ class SessionInitInfo(_Strict):
     cwd: str
     #: Ids of the knowledge bases this session's turns may search, as it was
     #: left. Beside ``cwd`` and for the same reason: a reader reopening a
-    #: conversation has to see what it is pointed at, or the picker draws it
+    #: session has to see what it is pointed at, or the picker draws it
     #: as pointed at nothing.
     knowledge_bases: list[str] = Field(default_factory=list)
     mcp_servers: list[JsonValue]
@@ -4312,7 +4325,7 @@ class SessionInitInfo(_Strict):
     )
     read_only: bool | None = Field(
         default=None,
-        description="True for an Imported Conversation, which nothing can change; absent on every other session.",
+        description="True for an Imported Session, which nothing can change; absent on every other session.",
     )
     running_ms: int | None = Field(
         default=None,
@@ -4349,7 +4362,7 @@ class TranscriptNotice(_Strict):
 
 
 class TranscriptDelegated(_Strict):
-    """Which delegated run re-entered the conversation at this entry.
+    """Which delegated run re-entered the session at this entry.
 
     The same identity ``subagent.delivered`` carries, so a replayed transcript
     and a live stream draw the same row from the same fields.
@@ -4480,7 +4493,7 @@ class TranscriptMessage(_Strict):
         default=None,
         description=(
             "Present on a USER entry the runtime wrote: a delegated run's result "
-            "re-entering the conversation. Same rule as `notice` and for the same "
+            "re-entering the session. Same rule as `notice` and for the same "
             "reason -- the model reads `text`, a reader must not. Render the delivery "
             "row a live client draws from `subagent.delivered`, and take the readable "
             "body from inside the untrusted fence in `text`, or from `delegated.output` "
@@ -4750,14 +4763,7 @@ class SettingsGetResult(_Strict):
         ...,
         description=(
             "Whether conversational Skill Hub retrieval is on, read the way the runtime reads the config: "
-            "an endpoint is required, and enabled=false turns it off."
-        ),
-    )
-    skill_hub_awaiting_reload: bool = Field(
-        ...,
-        description=(
-            "skill_hub_on, while the agent loop serving now was built without a Hub client: "
-            "retrieval starts after a reload."
+            "enabled=false turns it off, and the default is on."
         ),
     )
 
@@ -5138,7 +5144,7 @@ class FsUploadResult(_Strict):
         ...,
         description=(
             "The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the "
-            "conversation's own working directory first, so a same-named file there answers for it; uploads "
+            "session's own working directory first, so a same-named file there answers for it; uploads "
             "never return bytes."
         ),
     )
@@ -5146,7 +5152,7 @@ class FsUploadResult(_Strict):
         ...,
         description=(
             "The file the upload wrote, and the path to hand turn.send: it names the upload whatever the "
-            "conversation's own directory holds."
+            "session's own directory holds."
         ),
     )
     size: int
@@ -5471,9 +5477,7 @@ class ApprovalRevokeResult(_Strict):
 class ApprovalPendingParams(_Strict):
     """The approval requests still waiting for an answer, for a page that lost its sheets."""
 
-    session_id: str | None = Field(
-        default=None, description="One conversation's requests; every conversation's when absent."
-    )
+    session_id: str | None = Field(default=None, description="One session's requests; every session's when absent.")
     conversation_id: str | None = Field(default=None, description="Compatibility spelling of session_id.")
 
 
@@ -5512,9 +5516,7 @@ class CredentialSkipResult(_Strict):
 class CredentialPendingParams(_Strict):
     """The credential cards still open, for a page that lost them."""
 
-    session_id: str | None = Field(
-        default=None, description="One conversation's requests; every conversation's when absent."
-    )
+    session_id: str | None = Field(default=None, description="One session's requests; every session's when absent.")
     conversation_id: str | None = Field(default=None, description="Compatibility spelling of session_id.")
 
 
@@ -6497,13 +6499,13 @@ class PlaybookNode(_Strict):
     routes: dict[str, str] | None = Field(
         default=None,
         description=(
-            "Makes this node a decision: route name -> the condition, in plain words, under which its "
+            "Makes this node a decision node: route name -> the condition, in plain words, under which its "
             "answer selects that route. Kept whole, because re-running the graph judges against the conditions."
         ),
     )
     select: Literal["one", "many"] | None = Field(
         default=None,
-        description="How many routes the decision selects, as the author wrote it. Absent means 'one'.",
+        description="How many routes the decision node selects, as the author wrote it. Absent means 'one'.",
     )
     when: str | None = Field(
         default=None,
@@ -6825,9 +6827,7 @@ class PlaybooksValidateResult(_Strict):
 class PlaybooksDraftParams(_Strict):
     session_key: str = Field(
         ...,
-        description=(
-            "The conversation whose generated Persona this is. A draft belongs to the session that asked for it."
-        ),
+        description=("The session whose generated Persona this is. A draft belongs to the session that asked for it."),
     )
 
 
@@ -6924,8 +6924,8 @@ class PlaybooksRunParams(_Strict):
     session_key: str = Field(
         ...,
         description=(
-            "The conversation this run reports to, as its own `channel:chat_id`. Required because a "
-            "run's progress and completion announce are addressed to a conversation, and an RPC call "
+            "The session this run reports to, as its own `channel:chat_id`. Required because a "
+            "run's progress and completion announce are addressed to a session, and an RPC call "
             "is an origin nothing else sets one for."
         ),
     )
@@ -7492,7 +7492,7 @@ class BugReportOkResult(_Strict):
 
 
 # ---------------------------------------------------------------------------
-# imported.* -- packages read back in as read-only Imported Conversations
+# imported.* -- packages read back in as read-only Imported Sessions
 # ---------------------------------------------------------------------------
 
 

@@ -332,20 +332,21 @@ def _bootstrap_empty_config() -> None:
     The base config stays sparse: ``save_config`` dumps with
     ``exclude_defaults``, so the memory / plugins / skillForge blocks are not
     materialized and their readers answer from the declarations. The one
-    deliberate exception is the Skill Hub endpoint -- its schema default is
-    ``None`` so programmatic loads stay Hub-disabled, which makes onboarding
-    (the user's opt-in) the place that writes it by default; the settings
-    switch can change it later.
+    deliberate exception is the Skill Hub opt-in: onboarding records
+    ``enabled: true`` on a config that states no choice, which is what makes
+    the source on for a fresh install; the settings switch can change it later.
 
-    Runs on every onboard: an existing endpoint, explicit null included, wins,
-    and every value the user already carries is left untouched. The base
-    ``Config()`` is only written when the file is absent — overwriting an
-    existing file there would clobber it.
+    Runs on every onboard: an explicit off, a legacy null endpoint and every
+    value the user already carries are left untouched. The base ``Config()``
+    is only written when the file is absent — overwriting an existing file
+    there would clobber it.
     """
     from raven.config.live import skill_hub_on
     from raven.config.loader import get_config_path, load_config, read_raw_or_raise, save_config
     from raven.config.paths import get_workspace_path
-    from raven.config.update import initialize_skill_hub_endpoint
+    from raven.config.raven import load_raven_config
+    from raven.config.update import enable_skill_hub_if_unset
+    from raven.skill_hub import resolve_hub_endpoint
     from raven.utils.workspace import sync_workspace_templates
 
     path = get_config_path()
@@ -353,16 +354,29 @@ def _bootstrap_empty_config() -> None:
         # Creates the file; save_config dumps with exclude_defaults, so a
         # fresh config is sparse -- it records what the user set, nothing else.
         save_config(load_config())
-    seeded = initialize_skill_hub_endpoint(config_path=path)
-    if seeded is not None and skill_hub_on(read_raw_or_raise(path)):
-        console.print(
-            t(
-                "  [dim]Skill Hub search is on: when Raven looks for a skill, it sends text from your "
-                "conversation to {endpoint}. Turn it off under Settings > Skills on the web page, or set "
-                "skillForge.router.hub.enabled to false.[/dim]",
-                endpoint=seeded,
+    enable_skill_hub_if_unset(config_path=path)
+    if skill_hub_on(read_raw_or_raise(path)):
+        # Through the client's own resolver: RAVEN_SKILLHUB_URL moves where the
+        # loop sends this text, and a refused override turns the client off
+        # rather than pointing it at the marketplace, so the disclosure has to
+        # say which of the two happened.
+        endpoint = resolve_hub_endpoint(load_raven_config(path).skill_forge.router.hub.endpoint)
+        if endpoint is None:
+            console.print(
+                t(
+                    "  [dim]Skill Hub search is off: RAVEN_SKILLHUB_URL was refused, and Raven does not fall back "
+                    "to the shared catalog. Fix or unset the variable to turn it on.[/dim]"
+                )
             )
-        )
+        else:
+            console.print(
+                t(
+                    "  [dim]Skill Hub search is on: when Raven looks for a skill, it sends text from your "
+                    "conversation to {endpoint}. Turn it off under Settings > Skills on the web page, or set "
+                    "skillForge.router.hub.enabled to false.[/dim]",
+                    endpoint=endpoint,
+                )
+            )
     workspace = get_workspace_path()
     workspace.mkdir(parents=True, exist_ok=True)
     sync_workspace_templates(workspace, notify=lambda m: console.print(f"  [dim]{m}[/dim]"))

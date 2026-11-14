@@ -109,7 +109,7 @@ describe('a listed session as a row', () => {
     })
   })
 
-  it('marks an Imported Conversation by where it came from and keeps its package name', async () => {
+  it('marks an Imported Session by where it came from and keeps its package name', async () => {
     const { part } = await harness()
 
     const row = part.rowFrom({

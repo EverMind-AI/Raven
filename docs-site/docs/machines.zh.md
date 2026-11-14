@@ -1,9 +1,9 @@
 # 在登记机器上工作
 
 把子 Agent 放到另一台电脑上跑：GPU 机器、实验室工作站、办公室的服务器，
-而对话仍在你自己的 Raven 里。登记一次机器，把 Raven 的节点装上去，再在 Agent
+而会话仍在你自己的 Raven 里。登记一次机器，把 Raven 的节点装上去，再在 Agent
 条目里写上这台机器，之后 Agent 就派到那里执行，在那里的目录里工作，文件也留在那里；
-对话按地址读取，你要的时候再取回一个。连接断了，或者你把 Raven 停了，Agent 照样工作，
+会话按地址读取，你要的时候再取回一个。连接断了，或者你把 Raven 停了，Agent 照样工作，
 回来时接回结果。
 
 本页是完整的操作指南。委派本身见[与子 Agent 协作](agent-collaboration.md)，
@@ -247,9 +247,9 @@ Raven 之后，再跑一次 `install-node`：新节点装在旧节点旁边；`-
 内置 Agent 是 Raven 自己的循环，跑在这个进程里，模型密钥和工具都在这里，没有可以放到
 别处启动的进程。内置条目上的 `machine` 在加载时丢弃并给出警告，条目仍在本机运行。
 
-## 4. 或者在对话里添加 { #4-or-add-one-from-a-conversation }
+## 4. 或者在会话里添加 { #4-or-add-one-from-a-session }
 
-在对话里直接说，比如“把 Codex 预设添加到机器 gpu1 上”。主 Agent 会列出可用的登记机器，
+在会话里直接说，比如“把 Codex 预设添加到机器 gpu1 上”。主 Agent 会列出可用的登记机器，
 然后带着预设、机器，以及（ACP 或命令行预设可选的）`remote_cwd` 调用 `subagents.add`：
 
 ```json
@@ -315,11 +315,11 @@ grep, write_file and edit_file take that path as it is, and deliver_files fetche
   每个条目的 `remoteCwd`，以及注册表那一行里列出的绝对路径 `paths`。读别处会询问，
   就像在本机读工作区以外的文件一样。
 - **写一律询问**，和本机一样，授权只对那一个文件有效。整文件写入会核对文件是否还是这个
-  对话上次读到的样子；中途被改过的文件不动，并提示 *changed after it was read;
+  会话上次读到的样子；中途被改过的文件不动，并提示 *changed after it was read;
   nothing was written. Read it again before writing.*
 - 节点把每次调用限制在审批允许的目录内，并按机器自己的符号链接解析。
 
-`deliver_files` 按地址取回一个文件，这样你就能在页面上下载它。文件落在对话工作区下的
+`deliver_files` 按地址取回一个文件，这样你就能在页面上下载它。文件落在会话工作区下的
 `pulled/<机器>/<键>/<文件名>`，键是它在机器上路径的摘要，所以两个路径永远不会互相覆盖。
 只取 Agent 工作目录之内的文件，而且不超过 20 MiB；更大的文件或别处的文件，在机器上读。
 `pulled/` 不会自动清理，不需要时自己清掉。
@@ -338,7 +338,7 @@ Raven 对每台机器保持一条 ssh 链路，用心跳看着它：每 5 秒 pi
 停止 Raven 的效果是一样的，而且是有意为之。机器上的 Agent 留给守护进程，Raven 这边
 留下的是 `<Raven 主目录>/machines/runs/` 下的一条记录。下次启动时读这些记录，把每次
 运行从原来的位置接回，连同这一轮写在 stderr 里的内容一起读到（命令的整个 stderr：失败的原因，或只在 stderr
-里报会话 id 的 CLI 给出的 id），再把结果通告到发起它的那个对话，就像一轮正常结束一样。为此要保留
+里报会话 id 的 CLI 给出的 id），再把结果通告到发起它的那个会话，就像一轮正常结束一样。为此要保留
 机器的登记和 Agent 条目。`/restart` 和被强制结束的 Raven 也按同样方式处理。
 
 接不回来的情况：机器重启过，或者守护进程被手动结束，任务就不再被机器认识。这一轮会以错误
@@ -412,7 +412,7 @@ Windows 保留的字符，落地时该字符写成百分号编码。
 | *already runs 8 agents; wait for one to finish* | 机器已到上限 | 等一等，或换一台机器 |
 | *did not answer a heartbeat within 15s* | 链路断了 | 不用做什么，Raven 会重连；Agent 还在跑 |
 | *no longer runs 'agent' (task …)* | 守护进程丢了这个任务（重启、被结束） | 重新派发 |
-| *changed after it was read; nothing was written* | 这个对话读过之后文件被别人改了 | 重新读一遍再写 |
+| *changed after it was read; nothing was written* | 这个会话读过之后文件被别人改了 | 重新读一遍再写 |
 | *is over the 20.0 MB limit for a file brought back* | 超过 `deliver_files` 的上限 | 在机器上读，或用 `scp` 拷贝 |
 | *an endpoint reached through the machine has to be http* | `baseUrl` 是 `https` | 用机器访问它的 `http` 地址 |
 | *this command reaches … over raw ssh* | 在 `exec` 里直接 `ssh` 到登记的地址 | 改用 `exec(machine=…)` 或文件工具 |
@@ -425,7 +425,7 @@ Windows 保留的字符，落地时该字符写成百分号编码。
   密钥和 ssh 命令行永远不会。
 - 节点不开网络端口。它监听自己目录下的一个套接字，属主是登记用户，只有这个用户的 ssh
   会话能接到它。那里每个任务的记录也只有这个用户能读。
-- 节点用 Raven 自己的文件工具执行文件调用，限制在审批允许的目录内。它不保存对话、
+- 节点用 Raven 自己的文件工具执行文件调用，限制在审批允许的目录内。它不保存会话、
   不调用模型；你的模型密钥不会去到机器上。
 - 机器上的 Agent 是那台机器自己装的、在那里登录过的。Raven 不借给它自己的密钥：
   写了 `machine` 的条目上，`lendKeys` 什么都不出借。它从你这里收到的只有条目的

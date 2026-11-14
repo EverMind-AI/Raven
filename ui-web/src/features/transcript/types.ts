@@ -204,6 +204,9 @@ export interface AskData {
   expanded: boolean
   clipped: boolean
   clipOpen: boolean
+  /* Read as markdown rather than as typed text: a dispatch is a brief its
+     parent wrote in markdown, and nobody typed it into the composer. */
+  md?: boolean
 }
 
 export interface AnswerData {
@@ -258,6 +261,11 @@ export interface DeliveredData {
   turnId?: string
   label: string
   isDag: boolean
+  /* Which run came back: the graph's run id, or the spawn's record id (a node
+     report carries both). The row reads who ran it and how it went off the call
+     in this conversation that started it, found by these. */
+  runId: string
+  nodeId: string
   status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled'
   open: () => void
   /* What was delivered, as a reader may read it: the text from inside the
@@ -318,6 +326,10 @@ export interface Lane {
   /* bumps on every append that asks the view to scroll down */
   scrollReq: number
   segs: Seg[]
+  /* The Lane Window (laneWindow.ts): the opening segment the stage draws from
+     (0: the start of the lane), and the one it stops before (0: the tail). */
+  winFrom: number
+  winTo: number
   listeners: Set<() => void>
   /* streaming say buffer for the open step, flushed once per frame */
   pend: string
@@ -339,6 +351,16 @@ export interface Lane {
      provisional steps get folded into a fold that already exists, which a
      truncation by length never reached; null means nothing is provisional. */
   agentHold: AgentHold | null
+  /* Whether a delegated record's settled work folds shut. The direct chat keeps
+     its steps open; the task pane asks for the conversation's own default. */
+  agentShut: boolean
+  /* When this lane's run started, in epoch ms (0 when unknown). The fold's live
+     clock counts from it while the run is going. */
+  agentStart: number
+  /* The id of the fold the lane's last turn closed while that turn is still
+     running, or 0. A lane holds a multi-turn history, so the lane-wide `running`
+     says nothing about a fold belonging to an earlier turn. */
+  liveFold: number
   running: boolean
   empty: string
 }
@@ -418,6 +440,16 @@ export interface HistoryMessage {
   silent?: boolean
 }
 
+/* What a stage painter is handed: a record's messages, and the clock its fold
+   reads. Times are epoch milliseconds or an ISO string, whichever the pane
+   holds -- a task node carries the first, a spawn record the second. */
+export interface StageCtx {
+  status?: string
+  messages?: HistoryMessage[]
+  started_at?: string | number
+  ended_at?: string | number
+}
+
 /* The pull half of the seam. Event pushes arrive through this island's own
    verbs, which the session pipeline calls directly (features/transcript/mount). */
 export interface TranscriptSource {
@@ -443,9 +475,22 @@ export interface TranscriptSource {
      card's own task cell go through this one verb, so the replayed row opens
      the same place the live one does. */
   openDagRun?: (runId: string) => void
-  /* One-line label for a tool call, derived from its arguments -- the same
-     table a call's own row in this island reads, so a sibling that draws its
-     own tool rows (features/tasks) shows the same words for the same tool
-     rather than a second guess at them. */
-  actLabel?: (name: string, args: Record<string, unknown>, display?: string | null) => string
+  /* Paints one delegated run's record into a box with this island's renderer --
+     the conversation's own cards, folds and rows -- so a sibling that shows a
+     run's record (features/tasks) draws it the way the conversation draws its
+     own rather than keeping a second renderer that drifts from this one. */
+  stagePaint?: (box: HTMLElement, ctx: StageCtx | null, opts?: StageOpts | null) => void
+}
+
+/* How a delegated record is painted. `key` names the record (a different key
+   starts the box over), `empty` is what an empty record says, `reset` forces a
+   fresh paint. `dispatch` draws the record's first message as the task its
+   parent sent rather than as something the reader typed, and `shut` folds the
+   work of a settled turn behind its one line, the conversation's own default. */
+export interface StageOpts {
+  key?: string
+  empty?: string
+  reset?: boolean
+  dispatch?: boolean
+  shut?: boolean
 }

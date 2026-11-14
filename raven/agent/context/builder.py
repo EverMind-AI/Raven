@@ -172,6 +172,11 @@ Skills with available="false" need dependencies installed first - you can try in
 
 {skills_summary}""")
 
+        # Knowing no channel, the estimate counts the conversation block the way
+        # the served page shows it, as it does the board in the identity.
+        from raven.context_engine.segments import render
+
+        parts.append(render.build_conversation_context(render.PAGE_CHANNEL, "page"))
         return "\n\n---\n\n".join(parts)
 
     def _get_identity(self) -> str:

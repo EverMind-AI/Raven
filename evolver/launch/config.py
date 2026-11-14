@@ -43,6 +43,7 @@ from evolver.orchestrator.config import (
     OrchestratorConfig,
     Termination,
 )
+from evolver.tree.git_ops import GIT_TIMEOUT, run_capture, timeout_detail
 
 SMOKE_BUILTIN: dict = {
     "funnel": {
@@ -217,16 +218,18 @@ def _resolve_head(repo_root: Path) -> str:
     silently moving the root.
     """
     try:
-        proc = subprocess.run(
+        returncode, stdout, stderr = run_capture(
             ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
+            cwd=repo_root,
+            timeout=GIT_TIMEOUT,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise RunSpecError(f"git rev-parse failed for {repo_root}: {timeout_detail(exc, GIT_TIMEOUT)}") from exc
     except OSError as exc:
-        raise RunSpecError(f"git is not runnable ({exc}) — install git") from exc
-    if proc.returncode != 0:
-        raise RunSpecError(f"base_sha omitted and resolving HEAD of {repo_root} failed: {proc.stderr.strip()}")
-    return proc.stdout.strip()
+        raise RunSpecError(f"git is not runnable ({exc}) - install git") from exc
+    if returncode != 0:
+        raise RunSpecError(f"base_sha omitted and resolving HEAD of {repo_root} failed: {stderr.strip()}")
+    return stdout.strip()
 
 
 __all__ = ["RunSpec", "RunSpecError", "load_run_spec", "deep_merge", "SMOKE_BUILTIN"]

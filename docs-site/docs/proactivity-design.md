@@ -27,7 +27,7 @@ as permission to interrupt or act. Three choices shape the implementation:
   This makes decisions testable without starting background tasks.
 - **Match the interruption to the situation.** Silence, a standalone nudge,
   a reply-appended nudge, a deferred nudge, and a background task have different
-  effects on an active conversation.
+  effects on an active session.
 - **Reuse runtime services.** Policy, persisted feedback, the Spine, and
   SubagentManager provide the shared mechanisms. Sentinel does not implement a
   second tool-running agent loop.
@@ -313,7 +313,7 @@ missed reminders and automatic disabling. A successful retry clears its
 pending failure event; an explicit reply or a `[SILENT]` run also clears any
 earlier completion event. Unrelated events stay queued.
 
-The Spine's Scheduler routes turns into per-conversation Lanes and origin
+The Spine's Scheduler routes turns into per-session Lanes and origin
 concurrency pools; DeliveryHub routes output to outlets. User-inbound and
 response-modifier hooks distinguish genuine user turns from system-origin
 work. A user-confirmed discovery action has its own marker to avoid counting

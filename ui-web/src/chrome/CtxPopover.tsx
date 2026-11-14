@@ -42,6 +42,7 @@ const LABEL: Record<CtxPart, string> = {
   system: 'gui.ctx.part.system',
   tools: 'gui.ctx.part.tools',
   conversation: 'gui.ctx.part.conversation',
+  files: 'gui.ctx.part.files',
   memory: 'gui.ctx.part.memory',
   skills: 'gui.ctx.part.skills',
 }

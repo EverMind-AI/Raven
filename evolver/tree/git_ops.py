@@ -73,7 +73,7 @@ def _ephemeral_dir() -> Optional[str]:
 
 
 class GitOpError(RuntimeError):
-    """Raised when a git command exits non-zero."""
+    """Raised when a git command fails: a non-zero exit or a timeout (returncode -1)."""
 
     def __init__(self, cmd: list[str], returncode: int, stderr: str, stdout: str = ""):
         self.cmd = cmd
@@ -92,37 +92,140 @@ class GitOpError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
+#: Bound every git call: a credential prompt, index lock or hung hook must not
+#: freeze an unattended evolution run. 60 s is about 26x the measured 2.3 s
+#: `git worktree add` over 4,885 files on a local SSD; a network filesystem may
+#: need this raised.
+GIT_TIMEOUT = 60.0
+
+
+def _run_capture_files(
+    cmd: list[str],
+    *,
+    cwd: Path | str,
+    env: Optional[dict[str, str]] = None,
+    input_bytes: Optional[bytes] = None,
+    timeout: float = GIT_TIMEOUT,
+) -> tuple[int, bytes, bytes]:
+    """Run ``cmd`` with a hard timeout, returning raw ``(code, stdout, stderr)``.
+
+    Output goes to temporary files rather than pipes. On Windows, a git hook
+    or credential helper (a grandchild) inherits the pipe handles, and
+    ``communicate`` waits for those handles to close even after the timeout has
+    killed the direct child, so pipe capture can outlive the bound. POSIX waits
+    only for the direct child in that path, so the pipe shape returned at the
+    timeout there too; regular files remove the Windows-only wait on both
+    platforms. Stdin is ``DEVNULL`` unless a caller supplies input, and terminal
+    credential prompts are disabled; a helper that still runs is bounded by the
+    timeout.
+    """
+    merged_env = {**os.environ, **(env or {}), "GIT_TERMINAL_PROMPT": "0"}
+    with (
+        tempfile.TemporaryFile(dir=_ephemeral_dir()) as out,
+        tempfile.TemporaryFile(dir=_ephemeral_dir()) as err,
+    ):
+        kwargs: dict = {"stdout": out, "stderr": err}
+        if input_bytes is None:
+            kwargs["stdin"] = subprocess.DEVNULL
+        else:
+            kwargs["input"] = input_bytes
+        try:
+            proc = subprocess.run(cmd, cwd=str(cwd), env=merged_env, timeout=timeout, **kwargs)
+        except subprocess.TimeoutExpired as exc:
+            out.seek(0)
+            err.seek(0)
+            partial_out = out.read()
+            partial_err = err.read()
+            # A test double may raise TimeoutExpired directly (no temp files).
+            if not partial_out and isinstance(exc.output, bytes):
+                partial_out = exc.output
+            if not partial_err and isinstance(exc.stderr, bytes):
+                partial_err = exc.stderr
+            raise subprocess.TimeoutExpired(cmd, timeout, output=partial_out, stderr=partial_err) from exc
+        out.seek(0)
+        err.seek(0)
+        return proc.returncode, out.read(), err.read()
+
+
+def run_capture(
+    cmd: list[str],
+    *,
+    cwd: Path | str,
+    env: Optional[dict[str, str]] = None,
+    input_text: Optional[str] = None,
+    timeout: float = GIT_TIMEOUT,
+) -> tuple[int, str, str]:
+    """Text wrapper around :func:`_run_capture_files`."""
+    code, out, err = _run_capture_files(
+        cmd,
+        cwd=cwd,
+        env=env,
+        input_bytes=input_text.encode("utf-8") if input_text is not None else None,
+        timeout=timeout,
+    )
+    return code, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
+
+
+def timeout_detail(exc: subprocess.TimeoutExpired, timeout: float, *, include_stdout: bool = True) -> str:
+    """A one-line timeout plus whatever the command managed to write.
+
+    ``include_stdout=False`` leaves the stdout stream out, for callers that
+    report it in a dedicated field instead of folding it into stderr.
+    """
+    parts = [f"timed out after {timeout}s"]
+    fields = ("stderr", "output") if include_stdout else ("stderr",)
+    for field in fields:
+        value = getattr(exc, field, None)
+        text = value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value or "")
+        if text.strip():
+            parts.append(text.strip())
+    return "\n".join(parts)
+
+
 def _run(
     repo_root: Path,
     *args: str,
     env: Optional[dict[str, str]] = None,
     input_text: Optional[str] = None,
     check: bool = True,
+    timeout: float = GIT_TIMEOUT,
 ) -> str:
     """Run ``git <args>`` in ``repo_root`` and return stdout.
 
-    :param env: extra env vars merged on top of os.environ
+    :param env: extra env vars merged on top of os.environ; ``GIT_TERMINAL_PROMPT``
+        is forced to ``"0"`` after that merge, so a value passed here is overridden
     :param input_text: passed to stdin (used by ``git apply``)
     :param check: raise :class:`GitOpError` on non-zero exit
+    :param timeout: seconds before the command is killed
     """
     cmd = ["git", *args]
     merged_env = {**os.environ, **(env or {})}
-    proc = subprocess.run(
-        cmd,
-        cwd=str(repo_root),
-        env=merged_env,
-        input=input_text,
-        capture_output=True,
-        text=True,
-    )
-    if check and proc.returncode != 0:
+    try:
+        returncode, stdout, stderr = run_capture(
+            cmd,
+            cwd=repo_root,
+            env=merged_env,
+            input_text=input_text,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        partial = (
+            (exc.output or b"").decode("utf-8", "replace") if isinstance(exc.output, bytes) else str(exc.output or "")
+        )
         raise GitOpError(
             cmd=cmd,
-            returncode=proc.returncode,
-            stderr=proc.stderr,
-            stdout=proc.stdout,
+            returncode=-1,
+            stderr=timeout_detail(exc, timeout, include_stdout=False),
+            stdout=partial,
+        ) from exc
+    if check and returncode != 0:
+        raise GitOpError(
+            cmd=cmd,
+            returncode=returncode,
+            stderr=stderr,
+            stdout=stdout,
         )
-    return proc.stdout
+    return stdout
 
 
 # ---------------------------------------------------------------------------
@@ -141,10 +244,16 @@ def get_tree_sha(repo_root: Path, commit_sha: str) -> str:
 
 
 def commit_exists(repo_root: Path, sha: str) -> bool:
-    """Return True iff ``sha`` is a known commit object in this repo."""
+    """Return True iff ``sha`` is a known commit object in this repo.
+
+    A timeout is not evidence that the object is missing, so it propagates
+    instead of being reported as ``False``.
+    """
     try:
         out = _run(repo_root, "cat-file", "-t", sha).strip()
-    except GitOpError:
+    except GitOpError as exc:
+        if exc.returncode == -1:
+            raise
         return False
     return out == "commit"
 
@@ -161,14 +270,17 @@ def read_file_at(repo_root: Path, sha: str, rel_path: str) -> bytes:
     :class:`GitOpError` when the path does not exist in that commit.
     """
     cmd = ["git", "cat-file", "blob", f"{sha}:{rel_path}"]
-    proc = subprocess.run(cmd, cwd=str(repo_root), capture_output=True)
-    if proc.returncode != 0:
+    try:
+        returncode, stdout, stderr = _run_capture_files(cmd, cwd=repo_root)
+    except subprocess.TimeoutExpired as exc:
+        raise GitOpError(cmd=cmd, returncode=-1, stderr=timeout_detail(exc, GIT_TIMEOUT)) from exc
+    if returncode != 0:
         raise GitOpError(
             cmd=cmd,
-            returncode=proc.returncode,
-            stderr=proc.stderr.decode("utf-8", errors="replace"),
+            returncode=returncode,
+            stderr=stderr.decode("utf-8", errors="replace"),
         )
-    return proc.stdout
+    return stdout
 
 
 # ---------------------------------------------------------------------------
@@ -308,14 +420,48 @@ def commit_files_as_child(
         wt = Path(tmp) / "wt"
         create_worktree(repo_root, wt, parent_sha)
         try:
+            from evolver.applier.path_guard import assert_patch_allowed
+
+            wt_resolved = wt.resolve()
             for rel, data in files.items():
-                dest = wt / rel
+                assert_patch_allowed([rel])
+                try:
+                    dest = (wt / rel).resolve()
+                except RuntimeError as exc:
+                    raise ValueError(f"symlink loop in {rel!r}") from exc
+                if not dest.is_relative_to(wt_resolved):
+                    raise ValueError(f"refusing to write outside the worktree: {rel!r}")
+                resolved_rel = dest.relative_to(wt_resolved).as_posix()
+                assert_patch_allowed([resolved_rel])
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(data if isinstance(data, bytes) else str(data).encode())
             for rel in deletions:
-                fp = wt / rel
-                if fp.exists():
-                    fp.unlink()
+                assert_patch_allowed([rel])
+                link = wt / rel
+                try:
+                    parent = link.parent.resolve()
+                except RuntimeError as exc:
+                    raise ValueError(f"symlink loop in {rel!r}") from exc
+                if not parent.is_relative_to(wt_resolved):
+                    raise ValueError(f"refusing to delete outside the worktree: {rel!r}")
+                # Resolve unconditionally: a symlinked parent directory can
+                # carry the delete into an immutable file even when the last
+                # component is not itself a link.
+                try:
+                    target = link.resolve()
+                except RuntimeError as exc:
+                    # Only Python 3.12's Path.resolve() raises RuntimeError for
+                    # a loop; 3.13 returns the loop path silently, so the write
+                    # path fails later with OSError(ELOOP) and this delete
+                    # would proceed.
+                    raise ValueError(f"symlink loop in {rel!r}") from exc
+                if target.is_relative_to(wt_resolved):
+                    resolved_rel = target.relative_to(wt_resolved).as_posix()
+                    assert_patch_allowed([resolved_rel])
+                # Unlink the authored path, not its resolved target: deleting a
+                # link is safe even when it points outside the worktree.
+                if link.is_symlink() or link.exists():
+                    link.unlink()
             _run(wt, "add", "-A")
             changed = [
                 line for line in _run(wt, "diff", "--cached", "--name-only", parent_sha).splitlines() if line.strip()
@@ -391,13 +537,12 @@ def create_branch(repo_root: Path, branch_name: str, sha: str) -> None:
 
 def branch_exists(repo_root: Path, branch_name: str) -> bool:
     """True iff a local branch with this name exists."""
-    proc = subprocess.run(
-        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"],
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-    )
-    return proc.returncode == 0
+    cmd = ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"]
+    try:
+        returncode, _stdout, _stderr = run_capture(cmd, cwd=repo_root)
+    except subprocess.TimeoutExpired as exc:
+        raise GitOpError(cmd=cmd, returncode=-1, stderr=timeout_detail(exc, GIT_TIMEOUT)) from exc
+    return returncode == 0
 
 
 def delete_branch(repo_root: Path, branch_name: str, *, force: bool = True) -> None:

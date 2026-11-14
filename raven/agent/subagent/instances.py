@@ -98,7 +98,7 @@ def _carried_outcome(
 
     A move is a change of agent, not a new branch decision, so the outcome the
     old row records survives it -- an empty selection included, since a decision
-    that chose nothing has still decided.
+    node that chose nothing has still decided.
     """
     fields = {
         "reason": reason if reason is not None else held.get("reason"),
@@ -323,7 +323,7 @@ class InstanceRegistry:
 
         ``reason``, ``selected_routes`` and ``route_evidence`` are written as
         ``reason``, ``selectedRoutes`` and ``routeEvidence``, each only when given;
-        an empty selection is given, since a decision that chose nothing has still
+        an empty selection is given, since a decision node that chose nothing has still
         decided. Until the run's manifest is written they are the only durable
         record of a branch's outcome. The record is rebuilt on every write, so the
         row always says what the latest write said: a write without them leaves

@@ -58,6 +58,12 @@ function composer(bottom: number, { height = 132, left = 36, right = 600 } = {})
 afterEach(() => { document.body.innerHTML = '' })
 
 describe('desk placement', () => {
+  it('asks to reach the bottom until the reader sets a height, and the clamp keeps the ask', () => {
+    launcher()
+    expect(defaultGeometry().fill).toBe(true)
+    expect(clampGeometry(defaultGeometry()).fill).toBe(true)
+  })
+
   it('hangs the desk under the launcher, flush with it, clear of the chat column', () => {
     const right = launcher()
     const at = defaultGeometry()
@@ -185,7 +191,7 @@ describe('how far down the desk reaches', () => {
   })
 
   it('reaches the window\'s own gutter when the composer is not drawn', () => {
-    /* An imported conversation has no dock (`.chat[data-readonly] .dock`), and
+    /* An imported session has no dock (`.chat[data-readonly] .dock`), and
        a card that is not drawn measures as a zero box -- taken as the limit, it
        would hold the palette at its minimum height. */
     launcher()

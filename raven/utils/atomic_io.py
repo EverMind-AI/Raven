@@ -7,9 +7,11 @@ lock is cross-platform (``portalocker``: POSIX ``fcntl`` + Windows
 ``LockFileEx``), so concurrent writers are serialized on Windows too.
 """
 
+import itertools
 import os
 import stat
 import threading
+import time
 from contextlib import contextmanager, suppress
 from functools import cache
 from pathlib import Path
@@ -20,6 +22,35 @@ from raven.utils.portable_lock import file_lock
 T = TypeVar("T")
 
 _held = threading.local()
+
+#: A reader on Windows holds the target open without delete sharing, so the
+#: replacement fails at its temp-file open or at ``os.replace`` with a sharing
+#: violation (WinError 32/5). A scanner can also hold the new ``.tmp`` itself,
+#: so the retry's ``O_EXCL`` create fails with ``FileExistsError`` until the
+#: handle is released. The hold is normally brief; retry the whole replacement
+#: instead of losing the write. The bound is deliberately small; callers that
+#: must not block an event loop should reach the helper through a thread.
+_REPLACE_ATTEMPTS = 5
+_REPLACE_BACKOFF = 0.05
+
+
+def _replace_with_retry(
+    path: Path,
+    data: str,
+    create_mode: int | None = None,
+    newline: str | None = None,
+    like: Path | None = None,
+) -> None:
+    delay = _REPLACE_BACKOFF
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            _replace_unlocked(path, data, create_mode=create_mode, newline=newline, like=like)
+            return
+        except (PermissionError, FileExistsError):
+            if attempt + 1 == _REPLACE_ATTEMPTS:
+                raise
+            time.sleep(delay)
+            delay *= 2
 
 
 @contextmanager
@@ -188,7 +219,13 @@ def _create_like(tmp_path: Path, path: Path, preserve: int | None) -> int:
     return os.open(tmp_path, flags, 0o666 if preserve is None else preserve & 0o777)
 
 
-def _replace_unlocked(path: Path, data: str, create_mode: int | None = None, newline: str | None = None) -> None:
+def _replace_unlocked(
+    path: Path,
+    data: str,
+    create_mode: int | None = None,
+    newline: str | None = None,
+    like: Path | None = None,
+) -> None:
     tmp_path = path.with_name(path.name + ".tmp")
     # Callers hold path's lock, so a tmp already here is a dead writer's: it
     # would lend its old mode through O_CREAT, or refuse the open outright
@@ -204,14 +241,19 @@ def _replace_unlocked(path: Path, data: str, create_mode: int | None = None, new
             f = os.fdopen(_create_like(tmp_path, path, preserve), "w", encoding="utf-8", newline=newline)
         else:
             # Secret-bearing files: the mode must hold from the first byte, so it
-            # is applied by os.open at creation — narrowing with a chmod after the
-            # write leaves the payload readable for the span in between.
-            f = os.fdopen(
-                os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, create_mode),
-                "w",
-                encoding="utf-8",
-                newline=newline,
-            )
+            # is applied at creation — narrowing with a chmod after the write
+            # leaves the payload readable for the span in between. A Windows mode
+            # cannot express a DACL, so a named source's descriptor is copied
+            # instead of the folder's inherited one.
+            if os.name == "nt" and like is not None:
+                fd = _create_with_dacl_of(tmp_path, like)
+            else:
+                fd = os.open(
+                    tmp_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+                    create_mode,
+                )
+            f = os.fdopen(fd, "w", encoding="utf-8", newline=newline)
         with f:
             f.write(data)
             f.flush()
@@ -241,18 +283,75 @@ def remove_with_lock(path: Path) -> None:
     (path.parent / ".lock" / (path.name + ".lock")).unlink(missing_ok=True)
 
 
-def atomic_replace(path: Path, data: str, *, mode: int | None = None, newline: str | None = None) -> None:
+def atomic_replace(
+    path: Path,
+    data: str,
+    *,
+    mode: int | None = None,
+    newline: str | None = None,
+    like: Path | None = None,
+) -> None:
     """Replace ``path``'s content with ``data`` via temp file + os.replace.
 
     ``mode``: hold this exact mode from the temp file's creation onward and
     carry it onto ``path`` (for secret-bearing files like token state). The
     default preserves the target's existing mode -- and on Windows its DACL --
     from the temp file's creation, umask for a new file.
+    ``like``: with ``mode``, the file whose Windows DACL the new bytes must
+    carry when the mode came from another file: a Windows mode cannot express
+    a DACL, so the temp would otherwise take its folder's inherited one.
     ``newline`` is :func:`open`'s: ``""`` writes ``data`` byte for byte, with
     no translation of line endings to the platform's.
     """
     with _locked(path):
-        _replace_unlocked(path, data, create_mode=mode, newline=newline)
+        _replace_with_retry(path, data, create_mode=mode, newline=newline, like=like)
+
+
+# A new Windows file takes its folder's inherited ACL whatever mode os.open is
+# given, so a copy of a prompt kept private in a shared folder would be open
+# to every account the folder lets in.
+_BACK_UP_BY_LINK = os.name == "nt"
+
+
+def back_up_file(target: Path, raw: bytes) -> Path:
+    """Keep ``target``'s bytes beside it under a name no earlier backup holds.
+
+    Never readable by more accounts than ``target``, since it holds the
+    operator's private text. On POSIX, a copy of ``raw`` created owner-only
+    and never wider than ``target``. On Windows, a hard link to ``target``
+    itself, so the backup is the same file with the same ACL and no bytes are
+    written; a volume that cannot link refuses the backup instead of copying.
+    """
+    stem = f"{target.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+    names = (target.with_name(f"{stem}-{attempt}" if attempt else stem) for attempt in itertools.count())
+    if _BACK_UP_BY_LINK:
+        for backup in names:
+            try:
+                os.link(target, backup)
+            except FileExistsError:
+                continue
+            except OSError as exc:
+                raise OSError(
+                    f"cannot back it up: on Windows only a hard link keeps the file's access rights, "
+                    f"and this volume refused one ({exc})"
+                ) from exc
+            return backup
+    try:
+        mode = stat.S_IMODE(target.stat().st_mode) & 0o600
+    except OSError:
+        mode = 0o600
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    for backup in names:
+        try:
+            fd = os.open(backup, flags, mode)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        return backup
+    raise AssertionError("unreachable: itertools.count does not end")
 
 
 def atomic_update(
@@ -275,5 +374,5 @@ def atomic_update(
             current = None
         replacement, result = update(current)
         if replacement is not None:
-            _replace_unlocked(path, replacement, create_mode=mode)
+            _replace_with_retry(path, replacement, create_mode=mode)
         return result

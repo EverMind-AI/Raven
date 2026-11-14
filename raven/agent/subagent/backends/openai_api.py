@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json as jsonlib
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -35,6 +36,7 @@ from raven.agent.subagent import activity
 from raven.agent.subagent.attachments import with_attachment_note
 from raven.agent.subagent.backends import turn_rows
 from raven.agent.subagent.backends.base import bounded_delta, clamp_output
+from raven.agent.subagent.backends.observability import external_agent_span, record_outcome, record_steps
 from raven.agent.subagent.openai_steps import OpenAIStepReader
 from raven.contracts.subagent_backend import SubagentNoAnswerError
 from raven.spine.message import Media
@@ -186,6 +188,7 @@ class OpenAIApiBackend:
         reader: OpenAIStepReader,
         task_id: str,
         session_key: str | None,
+        usage_out: list[Any] | None = None,
     ) -> str:
         """Consume a Chat Completions SSE response, returning the assembled text.
 
@@ -252,6 +255,8 @@ class OpenAIApiBackend:
                     for step in steps if isinstance(steps, list) else []:
                         reader.feed_delta(step)
                         activity.note_transcript(turn_rows.rows(reader.events()))
+        if usage_out is not None and usage:
+            usage_out.append(usage)
         await activity.note_provider_usage(
             usage,
             model=self.model,
@@ -320,45 +325,76 @@ class OpenAIApiBackend:
         client_timeout = aiohttp.ClientTimeout(total=self.timeout, connect=30)
 
         reader = OpenAIStepReader()
-        async with self._reached(url, headers, target) as (url, headers):
-            if on_delta is not None:
-                content: Any = await self._stream_chat(
-                    url,
-                    payload=body,
-                    headers=headers,
-                    timeout=client_timeout,
-                    on_delta=bounded_delta(on_delta, self.max_output_chars),
-                    reader=reader,
-                    task_id=task_id,
-                    session_key=session_key,
+        started = time.monotonic()
+        span_usage: list[Any] = []
+        answer_chars: list[int] = [0]
+        with external_agent_span(
+            agent=self.name,
+            transport="openai",
+            task_id=task_id,
+            instance=instance or task_id,
+        ) as span:
+            try:
+                async with self._reached(url, headers, target) as (url, headers):
+                    if on_delta is not None:
+                        content: Any = await self._stream_chat(
+                            url,
+                            payload=body,
+                            headers=headers,
+                            timeout=client_timeout,
+                            on_delta=bounded_delta(on_delta, self.max_output_chars),
+                            reader=reader,
+                            task_id=task_id,
+                            session_key=session_key,
+                            usage_out=span_usage,
+                        )
+                    else:
+                        data = await self._post_chat(url, json=body, headers=headers, timeout=client_timeout)
+                        try:
+                            message = data["choices"][0]["message"]
+                        except (KeyError, IndexError, TypeError) as exc:
+                            raise RuntimeError(f"OpenAI-API agent {self.name!r}: unexpected response shape") from exc
+                        content = message.get("content")
+                        if not content:
+                            # Some reasoning models put the answer only in a reasoning field.
+                            content = message.get("reasoning_content") or message.get("reasoning") or ""
+                        reader.feed_steps(message.get("reasoning_steps"))
+                        if data.get("usage"):
+                            span_usage.append(data["usage"])
+                        await activity.note_provider_usage(
+                            data.get("usage"),
+                            model=self.model,
+                            session_key=session_key,
+                            task_id=task_id,
+                        )
+                # The answer is deliberately not among these rows: the record keeps it and
+                # its reader appends it as the closing message, the same contract the acp
+                # lane follows.
+                activity.note_transcript(turn_rows.rows(reader.events()))
+                reply = await clamp_output(str(content).strip(), self.max_output_chars, agent=self.name, sink=on_delta)
+                if not reply:
+                    # A reply with nothing visible in it is no answer, as the in-process
+                    # backend reads one: handed back as "", the run was recorded
+                    # completed with nothing as its result (manager.py, dag_runner.py).
+                    raise SubagentNoAnswerError(f"OpenAI-API agent {self.name!r}: the model's reply was empty")
+                if on_messages is not None:
+                    on_messages([*messages, {"role": "assistant", "content": reply}])
+                answer_chars[0] = len(reply)
+                return reply
+            except Exception as exc:
+                span.error(exc)
+                raise
+            finally:
+                elapsed_ms = int((time.monotonic() - started) * 1000)
+                record_outcome(
+                    span,
+                    answer_chars=answer_chars[0],
+                    elapsed_ms=elapsed_ms,
+                    usage=span_usage[0] if span_usage else None,
                 )
-            else:
-                data = await self._post_chat(url, json=body, headers=headers, timeout=client_timeout)
-                try:
-                    message = data["choices"][0]["message"]
-                except (KeyError, IndexError, TypeError) as exc:
-                    raise RuntimeError(f"OpenAI-API agent {self.name!r}: unexpected response shape") from exc
-                content = message.get("content")
-                if not content:
-                    # Some reasoning models put the answer only in a reasoning field.
-                    content = message.get("reasoning_content") or message.get("reasoning") or ""
-                reader.feed_steps(message.get("reasoning_steps"))
-                await activity.note_provider_usage(
-                    data.get("usage"),
-                    model=self.model,
-                    session_key=session_key,
-                    task_id=task_id,
+                record_steps(
+                    span,
+                    prompt=task,
+                    events=reader.events(),
+                    elapsed_ms=elapsed_ms,
                 )
-        # The answer is deliberately not among these rows: the record keeps it and
-        # its reader appends it as the closing message, the same contract the acp
-        # lane follows.
-        activity.note_transcript(turn_rows.rows(reader.events()))
-        reply = await clamp_output(str(content).strip(), self.max_output_chars, agent=self.name, sink=on_delta)
-        if not reply:
-            # A reply with nothing visible in it is no answer, as the in-process
-            # backend reads one: handed back as "", the run was recorded
-            # completed with nothing as its result (manager.py, dag_runner.py).
-            raise SubagentNoAnswerError(f"OpenAI-API agent {self.name!r}: the model's reply was empty")
-        if on_messages is not None:
-            on_messages([*messages, {"role": "assistant", "content": reply}])
-        return reply

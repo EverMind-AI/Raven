@@ -1279,8 +1279,8 @@ class TrajectoryIndexer:
 
 
 # Indexers of state directories other than this process's own trace store --
-# an Imported Conversation's -- kept at once. Each holds up to MAX_SESSIONS
-# session indexes, so without a bound every conversation opened stays resident.
+# an Imported Session's -- kept at once. Each holds up to MAX_SESSIONS
+# session indexes, so without a bound every session opened stays resident.
 MAX_FOREIGN_INDEXERS = 4
 
 # Read and written on the event loop only, like every caller of the functions below.

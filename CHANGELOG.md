@@ -20,6 +20,44 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
+- When an agent's report comes back, Raven's reply explains it in full in its
+  own words instead of a one-to-two-sentence summary: the user has not read
+  the report (the page shows it folded), so each finding is named by what it
+  is rather than by the report's label, files and values from the report are
+  explained before they are relied on, and a verdict carries the grounds the
+  report gives. The same rule follows a background DAG run's result and sits
+  in the reply rules, and it tells Raven to retell the report rather than
+  check it again itself.
+
+- Raven hands a task's work to an agent even when it is small: looking
+  something up, checking a result, a cleanup or a one-line edit now go to the
+  agent that fits, and to `Raven-General` when none does, instead of being done
+  with Raven's own tools while the conversation waits. A brief names where
+  things are rather than carrying facts Raven looked up first, a report that
+  needs checking goes back out, and the Delegation list ends with what
+  `Raven-General` owns. The first time in a turn Raven does task work with its
+  own tool anyway, that result carries a note to hand the rest over. The soul
+  template no longer calls Raven a personal assistant that reads and searches
+  for itself.
+
+- The `spawn` and `run_subagent_dag` definitions a model reads on every call
+  are about 175 tokens shorter. Each tool describes its placeholder forms once,
+  and the node schema states the branch-route guard rule while pointing to the
+  orchestration guide's Conditional branches for the rest of the guard and
+  stand-in rules, instead of restating them. `spawn` opens with what it does
+  rather than "for complex or time-consuming tasks", its `Record:` sentence
+  points a large output at the `.output_path` form, the DAG description says a
+  graph runs in the background by default, a node's `instance` is described as
+  a handle that never replaces its `subagent`, and both tools, their error
+  messages and the Raven-General roster row spell "subagent".
+
+- The conversational Skill Hub source is on by default and its URL defaults to
+  the shared marketplace, so an install that never named an endpoint now sends
+  turn text there; `skillForge.router.hub.enabled: false` turns it off, and a
+  legacy explicit `endpoint: null` keeps it off. `RAVEN_SKILLHUB_URL` overrides
+  the URL, and a value the client refuses disables conversational retrieval for
+  that process instead of falling back to the marketplace.
+
 - LiteLLM moves to 1.108.0 and the MCP client to 2.3.0; `TIKTOKEN_CACHE_DIR`
   now defaults to the tokenizer files bundled in the LiteLLM wheel, so a cold
   offline estimator counts with cl100k without a download.

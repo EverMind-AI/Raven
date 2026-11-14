@@ -84,6 +84,19 @@ def _provider_config(model: str, provider: str, api_key: str | None = None, api_
 
 
 class TestIdentityBootstrap:
+    def test_the_soul_template_names_no_role(self) -> None:
+        """The template is the soul of the host and of any agent that ships none of its
+        own, so it says how Raven talks and leaves what Raven is for to the host's role.
+        A soul that was "a personal AI assistant" who reads the file and searches for it
+        itself contradicted a role that hands every piece of work over."""
+        from importlib.resources import files
+
+        soul = (files("raven.templates") / "SOUL.md").read_text(encoding="utf-8")
+        assert "I am Raven" in soul
+        for doer in ("personal AI assistant", "I read the file", "I read before I change", "what I checked"):
+            assert doer not in soul
+        assert "I find out before I ask" in soul
+
     async def test_identity_matches_legacy(self, tmp_path: Path) -> None:
         seg = await IdentitySegmentBuilder(tmp_path).build(_ctx(tmp_path))
         legacy = ContextBuilder(workspace=tmp_path)._get_identity()
@@ -725,6 +738,36 @@ class TestIdentityDelegationSection:
         )
         assert "## Delegation" not in (await builder.build(_ctx(tmp_path))).text
 
+    def test_the_generic_agent_closes_the_ownership_list(self, tmp_path: Path) -> None:
+        """Lookups, checks and chores had no owner on the list, so they fell back to the
+        host. The generic agent's line names them, after every specialist, so a
+        specialist's own kind of work still goes to that specialist first."""
+        text = render.identity_text(tmp_path, specialists=[("Scribe", "owns decks.")])
+        delegation = text.split("## Delegation", 1)[1].split("\n## ", 1)[0]
+        lines = [line for line in delegation.splitlines() if line.startswith("- ")]
+        assert lines == ["- `Scribe` owns decks.", f"- `{GENERIC_AGENT}` {render.GENERIC_OWNS}"]
+        assert "finding things, checking results and state, and small chores" in render.GENERIC_OWNS
+        assert "no agent above owns" in render.GENERIC_OWNS
+
+    def test_a_launched_subagent_process_lists_no_generic_line(self, tmp_path: Path, monkeypatch) -> None:
+        """A product agent runs as a process the host launched; it renders no role, so the
+        role's fallback is not said there either, whatever tools that process holds."""
+        from raven.agent.subagent.role import SUBAGENT_ENV_VAR
+
+        monkeypatch.setenv(SUBAGENT_ENV_VAR, "1")
+        text = render.identity_text(
+            tmp_path, specialists=[("Scribe", "owns decks.")], dispatch_tools=render.DISPATCH_TOOLS
+        )
+        assert render.GENERIC_OWNS not in text
+        assert "`Scribe` owns decks." in text, "the section itself still renders; only the generic line goes"
+
+    def test_a_worker_table_turn_lists_no_generic_line(self, tmp_path: Path) -> None:
+        """A bound table's enums refuse the generic agent's name, and a generated Persona
+        never offers it as a worker, so the line would point at a value nothing accepts."""
+        text = render.identity_text(tmp_path, specialists=[("Scribe", "owns decks.")], worker_table=True)
+        assert "`Scribe` owns decks." in text
+        assert render.GENERIC_OWNS not in text
+
 
 def _role_of(text: str) -> str:
     assert "## Your role" in text, "baseline: the ``## Your role`` section must be present, or this asserts nothing"
@@ -757,7 +800,7 @@ class TestHostRole:
         skills = await ActiveSkillsSegmentBuilder(catalog, get_tool_definitions=tools).build(_ctx(tmp_path))
         body = catalog.load_skill("subagent-dag-orchestration")
 
-        assert "Producing anything, however small" in identity.text
+        assert "any work that needs a tool, however small, goes to an agent" in identity.text
         assert "goes to an agent" in identity.text
         assert "### Skill: subagent-dag-orchestration" in skills.text
         for text in (skills.text, body):
@@ -811,6 +854,58 @@ class TestHostRole:
         role = _role_of(render.identity_text(tmp_path))
         assert "however small" in role
         assert "quick question" not in role
+
+    def test_lookups_checks_and_chores_are_work_for_an_agent(self, tmp_path: Path) -> None:
+        """Recorded live (deepseek-flash, one conversation of 293 turns), the host ran 891
+        tool calls of its own against 140 dispatches: lookups before a brief, checks of a
+        report, status questions and cleanups. The rule had named only things produced,
+        and read none of those as work. Every kind is named now, with the cost of doing
+        it in the turn: the conversation waits."""
+        for role in (
+            _role_of(render.identity_text(tmp_path)),
+            _role_of(render.identity_text(tmp_path, worker_table=True)),
+        ):
+            assert "Your turn holds this conversation" in role
+            assert "any work that needs a tool, however small" in role
+            for kind in ("finding a file, a PR or a record", "checking a result", "a cleanup or a one-line edit"):
+                assert kind in role
+            assert "Keep your own tools to managing the work" in role
+            assert "keeping your own skills (read a skill file before you edit it)" in role
+            assert "where each task stands by your own record" in role
+            assert "looking up where things stand" not in role
+
+    def test_a_brief_names_where_things_are_instead_of_looking_them_up(self, tmp_path: Path) -> None:
+        """ "What it cannot see: files, links" was read as facts to fetch before briefing:
+        in 20 of 28 recorded turns where the user said to send someone, the host first
+        looked things up itself. The agent can read a file or a PR; only the conversation
+        is out of its sight."""
+        role = _role_of(render.identity_text(tmp_path))
+        assert "Brief it with what only this conversation holds" in role
+        assert "do not look anything up to write a brief" in role
+        assert "what it cannot see" not in role
+
+    def test_a_report_that_needs_checking_goes_back_out(self, tmp_path: Path) -> None:
+        """After 90 of 138 recorded reports the host re-verified the result with its own
+        tools. A check is a task like any other: a fresh instance for an independent one,
+        the task's own instance for its follow-up."""
+        role = _role_of(render.identity_text(tmp_path))
+        assert "A report that needs checking goes back out" in role
+        assert "a fresh instance for an independent check" in role
+        assert "Do not check it with your own tools." in role
+        assert "what a brief or a check needs" not in role
+
+    def test_the_host_role_drops_the_file_editing_guidelines(self, tmp_path: Path, monkeypatch) -> None:
+        """How to edit a file is guidance for whoever edits one. Where the role hands all
+        work over it read as leave to edit; without a dispatch path, or in a process
+        launched to do one task, it is the guidance that applies. The one file work the
+        role keeps, its own skills, carries the read-first rule in the role itself."""
+        from raven.agent.subagent.role import SUBAGENT_ENV_VAR
+
+        line = "Before modifying a file, read it first."
+        assert line not in render.identity_text(tmp_path)
+        assert line in render.identity_text(tmp_path, dispatch_tools=())
+        monkeypatch.setenv(SUBAGENT_ENV_VAR, "1")
+        assert line in render.identity_text(tmp_path)
 
     def test_a_decision_the_user_has_not_made_is_asked_again(self, tmp_path: Path) -> None:
         """Results arrive one turn each, so the decisions they raise are spread over
@@ -980,6 +1075,78 @@ class TestHostRole:
         assert "named by its label" in render.worker_table_note(("run_subagent_dag",))
         monkeypatch.setenv(SUBAGENT_ENV_VAR, "1")
         assert render.worker_table_note(("spawn",)) == ""
+
+
+class TestWorkToolNote:
+    """The host's first task-work result of a turn carries a note to hand the rest over."""
+
+    DISPATCH = ("spawn", "run_subagent_dag")
+
+    def test_task_work_earns_the_note(self) -> None:
+        for name, args in (
+            ("exec", {"command": "gh pr view 1"}),
+            ("read_file", {"path": "/repo/raven/loop.py"}),
+            ("grep", {"pattern": "x"}),
+            ("web_fetch", {"url": "https://example.com"}),
+            ("browser_navigate", {"url": "https://example.com"}),
+        ):
+            note = render.work_tool_note(name, args, self.DISPATCH)
+            assert note.startswith("\n\nNote: that call was task work done with your own tool"), name
+            assert "`spawn` or `run_subagent_dag`" in note
+
+    def test_running_the_work_earns_nothing(self) -> None:
+        """Reading a skill, by its tool or its file, and the board, question and dispatch
+        tools are how the host runs the work."""
+        for name, args in (
+            ("read_skill", {"skill_id": "local/x"}),
+            ("read_file", {"path": "/home/u/.raven/workspace/skills/conventions/SKILL.md"}),
+            ("list_dir", {"path": "/home/u/.raven/workspace/skills/conventions/references"}),
+            ("read_file", {"path": "C:\\Users\\u\\.raven\\workspace\\Skills\\conventions\\SKILL.md"}),
+            ("read_file", {"path": "/home/u/.raven/workspace/SKILLS/conventions/SKILL.md"}),
+            ("task_board", {"action": "update"}),
+            ("ask_user", {"question": "q"}),
+            ("spawn", {"subagent": "Raven-General"}),
+            ("cron", {"action": "list"}),
+        ):
+            assert render.work_tool_note(name, args, self.DISPATCH) == "", name
+
+    def test_the_note_names_only_the_paths_the_turn_holds(self) -> None:
+        note = render.work_tool_note("exec", {}, ("run_subagent_dag",))
+        assert "`run_subagent_dag`" in note
+        assert "`spawn`" not in note
+
+    def test_no_note_where_no_role_routes(self, monkeypatch) -> None:
+        from raven.agent.subagent.role import SUBAGENT_ENV_VAR
+
+        assert render.work_tool_note("exec", {}, ()) == ""
+        monkeypatch.setenv(SUBAGENT_ENV_VAR, "1")
+        assert render.work_tool_note("exec", {}, self.DISPATCH) == ""
+
+
+class TestResultReportRule:
+    """An agent's report reaches the host, not the user, and the reply has to say so."""
+
+    def test_the_reply_rules_name_an_agents_report(self, tmp_path: Path) -> None:
+        rules = render.identity_text(tmp_path).split("## How you reply", 1)[1]
+        assert "has not seen your tool results, an agent's report or your reasoning" in rules
+        assert "The user has not read an agent's report; you have." in rules
+
+    def test_both_homes_retell_findings_in_the_same_words(self, tmp_path: Path) -> None:
+        """The announce's rule and the reply rules state one rule; worded apart, they
+        drifted once already (one kept the labels-alone wording the other dropped)."""
+        rules = render.identity_text(tmp_path).split("## How you reply", 1)[1]
+        assert render.REPORT_FINDINGS_RULE in rules
+        assert render.REPORT_FINDINGS_RULE in render.RESULT_REPORT_RULE
+
+    def test_the_note_is_the_rule_after_a_fence(self) -> None:
+        note = render.result_report_note()
+        assert note == f"\n\nNote: {render.RESULT_REPORT_RULE}"
+
+    def test_no_note_in_a_process_launched_to_do_one_task(self, monkeypatch) -> None:
+        from raven.agent.subagent.role import SUBAGENT_ENV_VAR
+
+        monkeypatch.setenv(SUBAGENT_ENV_VAR, "1")
+        assert render.result_report_note() == ""
 
 
 class TestDelegationNeedsSomewhereToDelegateTo:

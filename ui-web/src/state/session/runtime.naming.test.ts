@@ -137,7 +137,7 @@ describe('the live naming block', () => {
     /* The ordinary shape of this path, and the one that was missed: the turn is
        still running at 12s, so `SessionManager.save` has not derived a name yet
        and the read answers null. Landing on the default name here would leave
-       the row saying "New task" until a reload, because nothing re-reads the
+       the row saying "New session" until a reload, because nothing re-reads the
        session the reader is looking at. */
     const rows: Row[] = [{ id: 's1', title: 'gui.new_task' }]
     const h = await harness({ rows, current: 's1', titleCall: async () => ({ title: null }) })

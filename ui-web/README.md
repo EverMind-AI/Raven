@@ -125,7 +125,7 @@ runs the same three and then `npm test`.
 
 ## Gates
 
-`npm test` is one run over both trees, so the 38 gate suites under `scripts/gates/`
+`npm test` is one run over both trees, so the 39 gate suites under `scripts/gates/`
 go with the unit suites. Each one's header says what it pins and why; the
 conventions they are written to are `CONTRIBUTING.md` section 8.
 
@@ -158,6 +158,7 @@ conventions they are written to are `CONTRIBUTING.md` section 8.
 | `agent-fold-css` | the roster's fold slot keeps its width on a head that cannot fold |
 | `rail-row-css` | the session row's height contract |
 | `rail-sig-css` | every state the session row's tail slot can hold has a visible mark |
+| `rail-slide-css` | the rail's collapse is one movement: the column leaves as a panel, the content follows it, and every part of it runs on one clock |
 | `desk-header-css` | the pane header's two controls sit on one line |
 | `desk-layer-css` | the three layers a drag puts on the desk, in order |
 | `desk-reserve-css` | the chat's right inset while the anchored desk is over it |

@@ -1,11 +1,12 @@
 """Which Node.js an npm-installed agent is launched with, and whether it is new enough.
 
 An agent installed with ``npm i -g`` is a script whose first line is
-``#!/usr/bin/env node``, so the Node.js that runs it is whichever ``node``
-comes first on the PATH it is launched with -- not the one it was installed
-with. A machine with an older Node.js ahead of the right one (an nvm default
-left on 18, a Homebrew formula nobody upgraded) runs the agent on that, and the
-agent dies at import time with nothing that names Node.js. Measured
+``#!/usr/bin/env node`` -- or, on Windows, a ``.cmd`` shim that runs that
+script -- so the Node.js that runs it is whichever ``node`` comes first on the
+PATH it is launched with, not the one it was installed with. A machine with an
+older Node.js ahead of the right one (an nvm default left on 18, a Homebrew
+formula nobody upgraded) runs the agent on that, and the agent dies at import
+time with nothing that names Node.js. Measured
 2026-09-24 on Qwen Code 0.24.4 under Node 18.20.8: ``SyntaxError: The
 requested module 'node:fs' does not provide an export named 'openAsBlob'``,
 exit 1, while its ``package.json`` asks for ``>=22.0.0``.
@@ -28,6 +29,10 @@ from pathlib import Path
 
 _ENGINES_FLOOR = re.compile(r">=\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?")
 _NODE_VERSION = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
+_BATCH_SUFFIXES = (".cmd", ".bat")
+_DP0 = re.compile(r"%dp0%|%~dp0", re.IGNORECASE)
+#: A batch shim's quoted path to the Node.js entry it runs, named through its own directory.
+_DP0_SCRIPT = re.compile(r'"([^"]*(?:%dp0%|%~dp0)[^"]*\.(?:js|cjs|mjs))"', re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -55,9 +60,11 @@ def node_too_old(exe: str, path: str) -> NodeTooOld | None:
     script = shutil.which(exe, path=path)
     if script is None:
         return None
-    real = os.path.realpath(script)
-    node = _interpreter(real, path)
-    floor = _declared_floor(real)
+    entry = _entry_script(os.path.realpath(script))
+    if entry is None:
+        return None
+    node = _interpreter(entry, path)
+    floor = _declared_floor(entry)
     if node is None or floor is None:
         return None
     found = _version_of(node)
@@ -69,6 +76,44 @@ def node_too_old(exe: str, path: str) -> NodeTooOld | None:
         node=node,
         upgrade=_upgrade_command(node, floor[0]),
     )
+
+
+def _entry_script(launcher: str) -> str | None:
+    """The Node.js script a launcher runs, following npm's batch shim on Windows.
+
+    POSIX resolves the package's bin symlink, so ``which`` lands on the entry
+    script itself and its ``#!`` line. npm cannot make that symlink on Windows:
+    it writes a ``.cmd`` (or ``.bat``) shim that runs ``node`` on the entry,
+    named there through the shim's own directory. The shim has neither a
+    shebang nor the package's ``package.json`` beside it, so without following
+    it the check found no interpreter and no floor and said nothing on the one
+    platform the shim exists for.
+    """
+    if os.path.splitext(launcher)[1].lower() in _BATCH_SUFFIXES:
+        return _batch_target(launcher)
+    try:
+        with open(launcher, "rb") as handle:
+            first = handle.readline(256)
+    except OSError:
+        return None
+    return launcher if first.startswith(b"#!") else None
+
+
+def _batch_target(launcher: str) -> str | None:
+    """The entry a batch launcher names through ``%dp0%``/``%~dp0``, when it exists."""
+    try:
+        text = Path(launcher).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    here = os.path.dirname(launcher)
+    for match in _DP0_SCRIPT.finditer(text):
+        named = _DP0.sub(lambda _found: here + os.sep, match.group(1))
+        # npm writes the shim with backslashes, so take them as separators
+        # whatever host this is read on.
+        target = os.path.normpath(named.replace("\\", os.sep))
+        if os.path.isfile(target):
+            return target
+    return None
 
 
 def _interpreter(script: str, path: str) -> str | None:

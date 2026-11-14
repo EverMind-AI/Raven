@@ -1,7 +1,9 @@
 // @vitest-environment happy-dom
+import { act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { resetTranslator, setTranslator } from '../i18n/t'
+import { resetTranslator, setTranslator, t } from '../i18n/t'
+import * as lang from '../state/lang'
 import { mountPageRoot } from '../test/pageRoot'
 import * as store from './perm'
 
@@ -40,6 +42,7 @@ afterEach(() => {
   unmount()
   unmount = () => {}
   store._resetForTests()
+  lang._resetForTests()
   resetTranslator()
   document.body.innerHTML = ''
   localStorage.clear()
@@ -89,12 +92,17 @@ describe('the permission chip', () => {
     expect(perm.current()).toBe('ask')
   })
 
-  it('puts the tier icon in the chip slot', async () => {
+  it('puts the tier icon in the chip slot, the same glyph the row draws', async () => {
     const perm = await load('ask')
     perm.draw()
     const pic = chip().querySelector('.pico')!
-    expect(pic.innerHTML).toContain('M9.6 10.2')
-    expect(pic.querySelectorAll('path').length).toBe(3)
+    expect(pic.tagName.toLowerCase()).toBe('svg')
+    perm.open()
+    const row = rows().find((r) => r.querySelector('.nm')!.textContent === 'gui.perm.ask')!
+    const shape = (el: Element): (string | null)[] =>
+      [...el.querySelectorAll('path')].map((p) => p.getAttribute('d'))
+    expect(shape(pic).length).toBeGreaterThan(0)
+    expect(shape(pic)).toEqual(shape(row.querySelector('.pico')!))
   })
 })
 
@@ -111,13 +119,61 @@ describe('the permission popover', () => {
     ])
     expect(rows().map((r) => r.getAttribute('role'))).toEqual(['radio', 'radio', 'radio'])
     expect(rows().map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'true', 'false'])
+    /* The dialog and the group take their name from the visible heading, so a
+       reader who has not picked a language still has one, and the words are
+       not repeated by an aria-label. */
+    expect(pop().getAttribute('aria-label')).toBeNull()
+    expect(pop().getAttribute('aria-labelledby')).toBe('perm-pop-title')
+    const group = pop().querySelector('[role="radiogroup"]')!
+    expect(group.getAttribute('aria-labelledby')).toBe('perm-pop-title')
+    expect(group.querySelectorAll('[role="radio"]').length).toBe(3)
+    expect(document.getElementById('perm-pop-title')!.textContent).toBe('gui.perm.title')
     /* Only the risky tier wears the class, and only the chosen one has a tick. */
     expect(rows().filter((r) => r.classList.contains('risk')).length).toBe(1)
     expect(pop().querySelectorAll('svg.tick').length).toBe(1)
-    /* Names only: the sentence behind each is a hover away, and there is no
-       heading and no note -- the chip already says what is being chosen. */
-    expect(rows().map((r) => r.title)).toEqual(['gui.perm.ask_h', 'gui.perm.smart_h', 'gui.perm.full_h'])
-    expect(pop().querySelector('.hd, .note, .sub')).toBeNull()
+    /* Each row carries the sentence the tooltip used to hold, under the name,
+       and a glyph of its own; the list is named once above them. */
+    expect(rows().map((r) => r.querySelector('.sub')!.textContent)).toEqual([
+      'gui.perm.ask_h',
+      'gui.perm.smart_h',
+      'gui.perm.full_h',
+    ])
+    expect(rows().map((r) => r.getAttribute('title'))).toEqual([null, null, null])
+    const glyphs = rows().map((r) => r.querySelector('svg.pico')!.outerHTML)
+    expect(new Set(glyphs).size).toBe(rows().length)
+    /* Each row's glyph sits in a plate of its own, so the icon reads as the
+       mode's mark rather than as a mark loose in the margin. */
+    expect(rows().every((r) => r.querySelector('.chrome-perm-badge > svg.pico'))).toBe(true)
+    /* The row names its name and describes itself with the sentence. Without
+       the label the sentence is part of the name and is read twice. */
+    expect(rows().map((r) => r.getAttribute('aria-labelledby'))).toEqual([
+      'perm-nm-ask',
+      'perm-nm-smart',
+      'perm-nm-full',
+    ])
+    expect(rows().every((r) => {
+      const label = document.getElementById(r.getAttribute('aria-labelledby')!)
+      return label?.classList.contains('nm') && label.textContent !== r.querySelector('.sub')!.textContent
+    })).toBe(true)
+    expect(pop().querySelector('.hd .lab')!.textContent).toBe('gui.perm.title')
+    expect(pop().querySelector('.chrome-perm-note')!.textContent).toBe('gui.perm.note')
+  })
+
+  it('reads the heading and the note in the language in force', async () => {
+    const perm = await load()
+    /* The rows are built at open and stay in that language; the heading and the
+       note name the control, so they follow the catalogue as it stands. */
+    resetTranslator()
+    act(() => { lang.set('en') })
+    perm.open()
+    const heading = pop().querySelector('.hd .lab')!
+    const note = pop().querySelector('.chrome-perm-note')!
+    const en = [heading.textContent, note.textContent]
+    act(() => { lang.set('zh') })
+    expect([heading.textContent, note.textContent]).toEqual([t('gui.perm.title'), t('gui.perm.note')])
+    expect([heading.textContent, note.textContent]).not.toEqual(en)
+    expect(pop().getAttribute('aria-labelledby')).toBe('perm-pop-title')
+    expect(document.getElementById('perm-pop-title')!.textContent).toBe(t('gui.perm.title'))
   })
 
   it('hangs off the chip inside the card, and measures nothing', async () => {

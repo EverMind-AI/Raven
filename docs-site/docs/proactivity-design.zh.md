@@ -22,7 +22,7 @@
 - **决策与执行分离。** Planner 读取组装后的上下文，返回结构化决策；执行器负责投递与
   任务派发。因此可以在不启动后台任务的情况下测试决策。
 - **按场景选择打扰方式。** 保持安静、独立提醒、追加到回复、延迟提醒与后台任务，对活跃
-  对话的影响各不相同。
+  会话的影响各不相同。
 - **复用运行时服务。** 策略、持久化反馈、Spine 与 SubagentManager 提供共享机制，
   Sentinel 不再实现第二套运行工具的 Agent 循环。
 
@@ -217,7 +217,7 @@ PendingDecisionStore 管理过期、取代与确认状态。DecisionRouter 通�
 - `spawn`：直接交给 SubagentManager。
 - `routine_confirm`：提升例行任务状态；载荷有要求且接入 CronService 时，可创建 Cron 任务。
 
-确定性选择避开的是普通对话的 LLM 路径；分类、确认或所选任务本身仍可能调用模型。
+确定性选择避开的是普通会话的 LLM 路径；分类、确认或所选任务本身仍可能调用模型。
 
 <span id="6-delivery-and-turn-transport-the-spine"></span>
 

@@ -6,7 +6,7 @@ import type { DeskGeometry, DeskPane } from './types'
    written on the first render, so every reader who has opened the desk once
    already has the old numbers under the old key -- keeping the key would leave
    the new default reaching nobody but a fresh browser. */
-export const DESK_GEOMETRY_KEY = 'raven.gui.desk.geometry.v6'
+export const DESK_GEOMETRY_KEY = 'raven.gui.desk.geometry.v7'
 export const DESK_ANCHOR_GAP = 12
 export const DESK_SNAP_DISTANCE = 34
 /* How far the pointer travels before a press on the handle becomes a drag.
@@ -31,7 +31,10 @@ export const DESK_COMPOSER_GAP = 12
    its right edge there, so widening it reaches further back across the centred
    transcript column, which is what put the default at the minimum in the first
    place. Anchored below rather than beside, it covers the top of that column
-   rather than the middle of it, and this much buys a tab that fits. */
+   rather than the middle of it, and this much buys a tab that fits.
+   The height is only a fallback: the default desk reaches the bottom
+   (`DeskGeometry.fill`), and takes this where there is no limit to reach --
+   no anchor drawn -- or once it is dragged loose. */
 export const DESK_DEFAULT_WIDTH = 300
 export const DESK_DEFAULT_HEIGHT = 340
 
@@ -52,8 +55,9 @@ export const DESK_COLUMN_FLOOR = 520
 /* How much of the chat's width the anchored panel is asking for.
  *
  * The transcript column is centred in the chat and the anchored panel hangs into
- * it. Measured on the running page in a 900px-tall window with the default 300px
- * panel, as the intersection of the two rectangles:
+ * it. Measured on the running page in a 900px-tall window with a 300px panel at
+ * the 330px it opened at before it opened full height, as the intersection of
+ * the two rectangles:
  *
  *     1920px   nothing
  *     1600px   13px wide, 330px tall
@@ -65,9 +69,11 @@ export const DESK_COLUMN_FLOOR = 520
  * where any conversation's does once the reader scrolls back up. At that height
  * it does not reach the composer: the panel ends at y=394 and the composer sits
  * near the bottom of the window, so the two intersect on the x-axis only.
- * Pulled all the way down, it ends level with the composer card's bottom edge
- * (`deskBottomLimit`) -- beside the card, because the reserve moves the composer
- * as well, and short of it where the reserve stands aside.
+ * Pulled all the way down -- where it now opens (`DeskGeometry.fill`) -- it ends
+ * level with the composer card's bottom edge (`deskBottomLimit`): a strip down
+ * the column's whole height rather than a band across its top, beside the card
+ * because the reserve moves the composer as well, and short of it where the
+ * reserve stands aside.
  *
  * So the chat gives the width up instead, and the column re-centres in what is
  * left. That is what already happens when the workspace column opens (`--wsw`),
@@ -110,7 +116,7 @@ const COLUMN_TRANSITION_DELTA = WORKSPACE_EDGE_GUTTER + COLUMN_GAP
    see `anchoredRoom` -- it is the gap above the card instead: the landing page
    and a chat too narrow for the reserve leave the card there, where its bottom
    edge would put the palette on the field and the send button. A dock that is
-   not drawn -- an imported conversation has none -- leaves the window's gutter
+   not drawn -- an imported session has none -- leaves the window's gutter
    as the limit, the case `dockLift` reads the same way. */
 export function deskBottomLimit(column?: { left: number; right: number }): number {
   const card = document.querySelector('.chat > .dock > .dock-in')
@@ -136,6 +142,7 @@ export function clampGeometry(value: DeskGeometry): DeskGeometry {
     w,
     h,
     detached: value.detached,
+    ...(value.fill ? { fill: true } : {}),
   }
 }
 
@@ -188,7 +195,7 @@ export function anchoredRoom(w: number): number {
 export function defaultGeometry(): DeskGeometry {
   const w = Math.min(DESK_DEFAULT_WIDTH, window.innerWidth - 20)
   const h = Math.min(DESK_DEFAULT_HEIGHT, window.innerHeight - 82)
-  return anchoredGeometry({ x: 0, y: 0, w, h, detached: false })
+  return anchoredGeometry({ x: 0, y: 0, w, h, detached: false, fill: true })
 }
 
 /* Where the anchored desk actually sits, for the magnet to snap back to. It

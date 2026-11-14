@@ -316,8 +316,10 @@ export const mediaOf = (text: unknown): { media?: string[] } => {
 }
 
 /* What a message carries when it goes, lent at boot (src/app/install.ts)
-   rather than imported from a domain: the Task Board's Move on, which tells
-   the server which group the message is about. It rides the send itself, so
+   rather than imported from a domain: the Task Board's Move on, which names
+   the group the message is about -- in the message's words, which is what the
+   bubble draws and what the conversation keeps, and to the server by id. The
+   lent hook answers the message as it goes, or nothing. It rides the send itself, so
    nothing waits between the two and a Stop finds no moment where one has gone
    without the other. A message with one waits for a turn of its own rather
    than joining the one running, which was told about something else -- and
@@ -327,7 +329,7 @@ export const mediaOf = (text: unknown): { media?: string[] } => {
    keep every message sent meanwhile out of the running turn. Unlent, nothing
    is carried. */
 export interface BeforeSend {
-  take: (sessionKey: string | null) => string | null
+  take: (sessionKey: string | null, text: string) => Required<QueuedMessage> | null
 }
 let beforeSend: BeforeSend | null = null
 
@@ -375,10 +377,9 @@ export function sendMidTurn(text: string): void {
 /** Send, into the turn that is running or as one of its own. */
 export function send(text: string): void {
   /* Every way of sending ends here, the ones that skip the composer's own
-     button included; an imported conversation takes none of them. */
+     button included; an imported session takes none of them. */
   if (isImportedKey(sessionCurrent())) return
-  const moveOn = beforeSend?.take(sessionCurrent())
-  route(moveOn ? { text, moveOn } : { text })
+  route(beforeSend?.take(sessionCurrent(), text) ?? { text })
 }
 
 /** A queued message, let go with the group it was sent with. */

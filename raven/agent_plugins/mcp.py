@@ -80,11 +80,16 @@ def _has_dotdot_component(text: str) -> bool:
     Stripping an optional drive prefix first turns ``D:..`` and ``d:..`` into
     the ``..`` this refuses, and a trailing space before the next separator
     does not hide it (``D:.. ``); a plain drive-relative component like
-    ``D:foo`` stays allowed.
+    ``D:foo`` stays allowed. Application syntax can hide the ``..`` behind
+    an option or a list delimiter (``--config=../x``, ``-I../x``, ``a:../x``),
+    so a component that merely ends in ``..`` is refused as well; an all-dot
+    name (``...``) is not a traversal and stays allowed.
     """
     for component in _PATH_COMPONENT_RE.split(text):
-        rest = ntpath.splitdrive(component)[1]
-        if rest == ".." or rest.rstrip(" ") == "..":
+        rest = ntpath.splitdrive(component)[1].rstrip(" ")
+        if rest == "..":
+            return True
+        if rest.endswith("..") and rest[:-2].strip("."):
             return True
     return False
 
@@ -339,6 +344,7 @@ def _build_stdio(
         args=args,
         env=env,
         cwd=str(cwd),
+        source="package",
     )
 
 
@@ -347,7 +353,7 @@ def _build_http(name: str, entry: HttpServer) -> MCPServerConfig:
     _check_url(entry.url)
     _check_headers(entry.headers)
     transport = "streamableHttp" if entry.type == "streamable-http" else "sse"
-    return MCPServerConfig(type=transport, url=entry.url, headers=dict(entry.headers))
+    return MCPServerConfig(type=transport, url=entry.url, headers=dict(entry.headers), source="package")
 
 
 def _server_entry(raw: Any) -> Any:

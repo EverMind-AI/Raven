@@ -1,7 +1,7 @@
 # 轨迹调试与回放
 
 把真实失败转化为可检查的证据，必要时进一步形成确定性回归测试。
-Tracing 记录执行过程；轨迹汇集相关 attempt、模型/工具工件、对话上下文和结果标注。
+Tracing 记录执行过程；轨迹汇集相关 attempt、模型/工具工件、会话上下文和结果标注。
 添加埋点时参考[追踪与埋点 API](tracing-api.md)，本页介绍如何保存证据、诊断和回放。
 
 ## 保存失败 Attempt { #capture-the-failing-attempt }
@@ -24,7 +24,7 @@ raven trajectory save ATTEMPT_ID
 缺少证据的 bundle 不一定能回放。
 
 原始 bundle 保留在本地、不要进入 git。其中可能有源码、prompt、凭据、工具输出
-和私有对话历史。
+和私有会话历史。
 
 ## 生成经审核的报告 { #produce-a-reviewed-report }
 

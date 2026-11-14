@@ -1,7 +1,7 @@
 """Configuration schema using Pydantic."""
 
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 from urllib.parse import urlparse
 
 from loguru import logger
@@ -1409,6 +1409,11 @@ class MCPOAuthConfig(Base):
     nobody is listening on."""
 
 
+# Where an MCP server came from: the host's own configuration, a portable
+# Agent Plugins package, or a definition a playbook carries with it.
+_SOURCES = Literal["host", "package", "playbook"]
+
+
 class MCPServerConfig(Base):
     """MCP server connection configuration (stdio or HTTP)."""
 
@@ -1432,6 +1437,28 @@ class MCPServerConfig(Base):
     # that fails may just be waiting for a human.
     auth: Literal["none", "apikey", "oauth"] = "none"
     oauth: MCPOAuthConfig = Field(default_factory=MCPOAuthConfig)
+    # Who configured the server: the host's own configuration, a portable
+    # Agent Plugins package, or a definition a playbook carries with it. The
+    # registry probe reads a host server's project .npmrc (it runs in the
+    # server's cwd) but stays out of a package root and out of a directory a
+    # playbook definition names. Raven composes this marker; it is not a
+    # user-facing knob, and hand-writing a non-host value only turns the
+    # probe-cwd behaviour off for that server.
+    source: _SOURCES = "host"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _an_unknown_source_is_no_source(cls, raw: Any) -> Any:
+        """A marker this code does not know names no source at all.
+
+        The marker is the composer's to state, but a file may spell it, and a
+        value from a newer Raven (or a typo) must not fail a configuration
+        that used to load: the server keeps the meaning the key had before
+        the field existed.
+        """
+        if isinstance(raw, dict) and "source" in raw and raw["source"] not in get_args(_SOURCES):
+            return {key: value for key, value in raw.items() if key != "source"}
+        return raw
 
 
 class ToolSearchConfig(Base):

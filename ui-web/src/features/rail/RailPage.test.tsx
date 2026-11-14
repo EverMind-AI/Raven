@@ -410,7 +410,7 @@ describe('rail island', () => {
     expect(screen.getByText('GTM research')).toBeTruthy()
   })
 
-  it('lists Imported Conversations in their own group after recent, and only while there is one', () => {
+  it('lists Imported Sessions in their own group after recent, and only while there is one', () => {
     install({ rows: [row(), row({ id: 'b', title: 'second task' })] })
     const host = mount()
     expect([...host.querySelectorAll('.grp .lab')].map((n) => n.textContent)).not.toContain('gui.rail.imported')
@@ -485,7 +485,7 @@ describe('rail island', () => {
     expect(buttons).toEqual(['gui.sess.rename', 'gui.sess.delete'])
   })
 
-  it('never opens the header editor on an imported conversation', () => {
+  it('never opens the header editor on an imported session', () => {
     install({ rows: [row({ id: 'imported:1', title: 'a bug report', from: 'imported' })], cur: 'imported:1' })
     mount()
     store.rename()

@@ -9,7 +9,7 @@ Raven host, not a durable distributed workflow service.
 
 | Shape | Use it for | What is shared |
 | --- | --- | --- |
-| Direct turn | Work that needs no delegation | The current conversation |
+| Direct turn | Work that needs no delegation | The current session |
 | `spawn` | One focused sub-agent task | An explicit task and optional instance |
 | `run_subagent_dag` | Several tasks with dependencies | Node outputs, references, run status |
 | [Playbook](playbooks.md) | A reviewed workflow used repeatedly | A stored procedure, parameters, and any carried configuration |
@@ -72,7 +72,7 @@ For hands-on instance follow-up and steering, use
 
 ## A first graph
 
-First configure the needed agents and choose the conversation's working
+First configure the needed agents and choose the session's working
 directory. Ask Raven to inspect two independent aspects of a project, then
 synthesize the findings without editing files. The model can submit the
 following **tool arguments**, not a shell command or standalone config file:
@@ -108,7 +108,7 @@ following **tool arguments**, not a shell command or standalone config file:
 The first two nodes can run concurrently; the last waits for both. Substitute
 names from the current tool's advertised roster. When the host generates a
 worker table, use its worker labels rather than the underlying agent names.
-Choose fresh node ids when submitting another graph in the same conversation.
+Choose fresh node ids when submitting another graph in the same session.
 
 For parallel coding in a Git project, the host's `multi-agent-coding` skill
 instructs each coding agent to create and report its own worktree. When
@@ -120,7 +120,7 @@ the DAG scheduler itself does not create worktrees or lock files. See
 
 | Field | Meaning |
 | --- | --- |
-| `id` | Task address, unique across the conversation, including earlier DAGs and `spawn` calls |
+| `id` | Task address, unique across the session, including earlier DAGs and `spawn` calls |
 | `subagent` | Agent or worker label advertised by the current tool |
 | `node_summary` | Short user-visible step title |
 | `prompt_template` | Task instructions and input placeholders |
@@ -145,15 +145,15 @@ backend that can read local files. A path on this host is not a file transfer to
 a remote service. Prefer content forms when the backend has no local-file access.
 
 References to another node in the same graph must declare their dependency.
-Earlier completed nodes in the same conversation can be referenced without
+Earlier completed nodes in the same session can be referenced without
 re-running them; the saved output must exist. Earlier failed, skipped,
 canceled, interrupted, not-executed, or still-running nodes are not valid
 inputs. Ids are case-folded for uniqueness and remain claimed after failure.
 
 File references are confined to the working directory and the current
-conversation's sub-agent history. They do not expose the whole Agent home,
-memory store, skill tree, or another conversation. `@nodes/` names the current
-conversation's flat node-artifact directory.
+session's sub-agent history. They do not expose the whole Agent home,
+memory store, skill tree, or another session. `@nodes/` names the current
+session's flat node-artifact directory.
 
 ## Conditional branches
 
@@ -235,7 +235,7 @@ downgrade; inspect those notices before relying on the restriction.
 ## Foreground, background, and approval
 
 `background` defaults to true: the tool returns a run id, and later results are
-announced to the originating conversation. Use false when the main agent needs
+announced to the originating session. Use false when the main agent needs
 the outputs before continuing. A foreground call returns either the final
 result or a node exception report; answering with `resolve_dag_node` continues
 the wait.
@@ -283,7 +283,7 @@ continue message becomes part of the node's task: the next attempt is judged
 against the prompt as that message changed it, so a deliverable the user swaps
 after an attempt falls short is the one judged. A `reassign` keeps the node's id,
 task and dependencies and runs it again on the agent named in `agent`; the new
-agent opens on the visible conversation so far as plain text, without the earlier
+agent opens on the visible session so far as plain text, without the earlier
 agent's tool calls or tool output, so the message has to say what went wrong. It
 spends one continuation like a continue, and a node on an `instance` takes the
 run's other unfinished nodes on that instance with it, which needs a `[stateful]`

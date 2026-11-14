@@ -142,6 +142,30 @@ is why the transcript's store keeps a listener set per lane -- a token appended
 to the open step re-renders that leaf and nothing else -- and why a resident
 conversation keeps the detached host its lane is mounted in.
 
+**Lane Window**:
+The stretch of the conversation's lane the stage mounts: between the segments
+the lane's `winFrom` and `winTo` name, every segment in the store still kept
+(`features/transcript/laneWindow.ts`). Counted in turns and always cut at a
+segment that opens one -- a question that is not `midTurn`, or a delivered
+result -- because `stageRows` gathers what lies between two openings into one
+card. Opening a stored conversation mounts its last 20 turns -- and more at
+once when they are no taller than the scroller's height plus the top edge's
+1200px margin, since the edge is then already inside that margin and widens
+again. An end that stops short of the
+conversation's carries an edge, and once that edge comes within 1200px of the
+scroller the window widens by 20 turns that way; the top edge holds the row the
+reader had where it was. The turn nav and the task board mount the turn they go
+to before scrolling there (`mount.tsx`'s `reveal`): 20 turns from it, joined to
+the window when the two meet. Going down to the tail (`tail.ts`'s `down`, which
+the down pill and a question sent both reach) mounts the last 20 turns in place
+of a window short of it, and a reader at the tail gives a window wider than 40
+turns back to the last 20. The scroller's own length is the window's, not the
+conversation's: its scrollbar reaches only mounted turns, while the turn nav
+reaches every turn. Only the conversation's own lane is windowed; an agent
+stage pane mounts its whole record.
+_Avoid_: "window" alone for this -- the Trajectory View's window is a time
+range, and the browser's window is the page.
+
 **Turn Nav**:
 The strip of marks at the chat column's right edge, one per turn of the
 conversation on the stage, drawn by `features/transcript/TurnNav.tsx` under the
@@ -417,12 +441,24 @@ rather than in the order they are asked for.
 **Popover**:
 A panel anchored to the control that opened it and floating over the page: the
 permission modes (`#permPop`), the session tier (`#tierPop`), the context
-window (`#ctxPop`, the ring's analysis of what fills it) and the model
-picker (`.mpick`). `src/lib/popover.ts` decides what one has to clear -- the
+window (`#ctxPop`, the ring's analysis of what fills it), the model
+picker (`.mpick`) and the rail's **More group** (`#chrome-navfly`).
+`src/lib/popover.ts` decides what one has to clear -- the
 composer card when its anchor sits on one, the anchor itself when it does not --
 and `src/chrome/PermPopover.tsx` and `CtxPopover.tsx` are the two the dock
 raises.
 _Avoid_: "pop" and "panel" for this.
+
+**More group**:
+The rail's last row (`#navMoreBtn`, `src/chrome/MoreFly.tsx`) and the popover it
+opens (`#chrome-navfly`): what the strip does not show waits behind one row
+rather than taking a row of the column of its own. The row is an action rather
+than a destination -- the **Imported Session**'s file dialog today -- so the
+group marks nothing: there is no page behind it to light. `src/state/navfly.ts`
+holds whether it stands open. The popover shuts on a pointer outside it and on
+Escape (the **Escape order**), and the imported domain shuts it when the package
+is through.
+_Avoid_: "fold" or "expander" for this -- it is a popover, not a fold.
 
 **Kind**:
 Which bucket a model list files a model under: `text`, `image`, `audio`,
@@ -592,9 +628,13 @@ exactly when it says no.
 _Avoid_: "report dialog" for the bug report -- it is this wizard on another
 flow, not a dialog of its own.
 
-**Imported Conversation** (page side; the runtime term is in `../CONTEXT.md`):
-A package read back in, shown read-only. The rail's `#importedBtn`
-(`src/chrome/Rail.tsx`, under the module rows) opens a file dialog through the
+**Imported Session** (page side; the runtime term is in `../CONTEXT.md`):
+A package read back in, shown read-only. The page's own words for it are a
+**session**: the button reads Import session and the export wizard reads Export
+session, the way the rest of the page calls a session. The rail's
+`#importedBtn`
+(`src/chrome/MoreFly.tsx`, in the popover the **More group** opens) opens a file
+dialog through the
 `imported` domain's store, which holds one claim from reading the file to
 dealing with the answer: while it is held the button names the file and takes
 no second one, and the second copy a duplicate offers goes through the same

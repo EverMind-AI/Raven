@@ -11,7 +11,7 @@ from mcp.types import CallToolResult, TextContent
 from raven.agent.tools.registry import ToolRegistry
 from raven.config.schema import MCPServerConfig
 from raven.contracts.tool import ToolResult
-from raven.mcp.client import MCPToolWrapper, connect_mcp_server
+from raven.mcp.client import MCPToolWrapper, _host_sourced, connect_mcp_server, open_mcp_transport
 
 
 class _Session:
@@ -217,3 +217,51 @@ async def test_registry_respects_the_mcp_servers_declared_extra_property_policy(
         else:
             assert result == "received"
             assert session.calls == [("read", args)]
+
+
+# ---------------------------------------------------------------------------
+# stdio transport
+# ---------------------------------------------------------------------------
+
+
+async def test_the_registry_probe_takes_a_host_servers_cwd_but_not_a_packages(monkeypatch) -> None:
+    """A host server probes in its own cwd; a package server probes outside it."""
+    seen: dict = {}
+
+    async def _fake_launch(argv, env, cwd=None, **kwargs):
+        seen["cwd"] = cwd
+        seen["project"] = kwargs.get("project", True)
+        return list(argv)
+
+    @asynccontextmanager
+    async def _fake_stdio(params, errlog=None):
+        seen["params_cwd"] = params.cwd
+        yield ("read", "write")
+
+    monkeypatch.setattr("raven.utils.mirrors.package_launch_async", _fake_launch)
+    monkeypatch.setattr("mcp.client.stdio.stdio_client", _fake_stdio)
+
+    host = MCPServerConfig(type="stdio", command="npx", args=["server"], cwd="/proj")
+    async with open_mcp_transport(host, "stdio"):
+        pass
+
+    assert seen["cwd"] == "/proj"
+    assert seen["params_cwd"] == "/proj"
+    assert seen["project"] is True, "the host's own directory is the host's own content"
+
+    package = MCPServerConfig(type="stdio", command="npx", args=["server"], cwd="/pkg", source="package")
+    seen.clear()
+    async with open_mcp_transport(package, "stdio"):
+        pass
+
+    assert seen["cwd"] is None
+    assert seen["params_cwd"] == "/pkg"
+    assert seen["project"] is False, "a package root is third-party content: no project file is read"
+
+
+def test_a_config_without_the_marker_is_the_hosts_own() -> None:
+    """A stub that predates the source marker is the host's own, not a carried one."""
+    assert _host_sourced(object()) is True
+    assert _host_sourced(SimpleNamespace()) is True
+    assert _host_sourced(SimpleNamespace(source="package")) is False
+    assert _host_sourced(SimpleNamespace(source="playbook")) is False

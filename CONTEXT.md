@@ -733,9 +733,15 @@ a request into tasks and dispatches each, keeps every task until the user accept
 sends each later message about a task's work -- a question included -- to that task's
 instance, and gathers the reports into one answer. A decision it put to the user stays open
 until they make it, drop it or defer it, and each reply until then ends by asking about it
-again; an offer the user passes over is declined. Producing anything goes to the agent whose
-ownership or description fits it, to `Raven-General` only when none does; the host answers
-itself only what needs no tools and belongs to no task. On a turn that dispatches through a
+again; an offer the user passes over is declined. Any work that needs a tool -- a lookup, a
+check or a cleanup as much as anything produced -- goes to the agent whose ownership or
+description fits it, to `Raven-General` only when none does; a brief names where things are
+rather than carrying facts looked up for it, and a report to check goes back out. The host
+answers itself only what needs none of its other tools and belongs to no task, and the first
+task-work result of its own in a turn carries a note to hand the rest over
+(`work_tool_note`). A report an agent sends back reaches the host and shows folded on the page
+(one line in the terminal), so the reply retells it in the host's own words (`RESULT_REPORT_RULE`, said on the spawn and DAG announcements and
+in the reply rules). On a turn that dispatches through a
 **Worker Table** the same rule names the table's workers instead: the worker whose brief
 covers the work, by its label. Work no worker covers is put to the user -- a worker added for
 it, or another Harness -- rather than done by the host or sent to an agent outside the enum,
@@ -804,8 +810,10 @@ sub-agent -- those are a Turn, a coroutine, and a prompt.
 one host session's set of Task Groups, kept by the host model in one extra call after each
 completed turn that answered or dispatched work, and read back through the `task_board` tool. A turn
 known to be about a group -- one a delegated result opened, one whose message a Move on or an
-Answer named the group for -- writes only to that group and to wherever it places the work it
-started. Only the Raven host keeps one; a subagent or product agent never does
+Answer named the group for -- writes only to that group, to wherever it places the work it
+started, and to each matter its reply asked the user about; one that also took in a message the
+user sent while it ran writes wherever that message's matter lies too. Only the Raven host
+keeps one; a subagent or product agent never does
 (`docs/specs/2026-10-29-task-board-design.md`).
 _Avoid_: "task list" (that is `tasks.list`), "todo" (Raven-Code's Checklist).
 
@@ -1587,6 +1595,23 @@ re-summarises it.
 _Avoid_: confusing it with the in-turn head summary (`agent/window`), which is
 written mid-turn for the working transcript and is never filed.
 
+**Runtime Context** (`context_engine/runtime_context.py`, `segments/render.py:build_runtime_context`):
+The block each turn's user message opens with: the current time, the chat id, and
+any tool or session notices. The channel tag and the surface hold for the whole
+conversation, so they close the system prompt instead, under `# This Conversation`
+(`segments/render.py:build_conversation_context`), which writes them only when they are
+names, never prose, and `turn.send` refuses any other channel; that prompt is shared by every
+conversation on the same channel and surface, which is why the chat id stays in the
+block. The assembler records the
+lines on the message, the session write keeps the user's words in `content` and
+files the lines beside them as `runtime_context`, and `HistoryTrimmer.history_from_ids`
+joins them back the way they were sent, so a later turn replays the block byte
+for byte and the provider's cached prefix still matches through it. The scent menu
+rides in the same paragraph when the message is sent but is not filed. Tool notices
+are sent as changes: a plugin's line goes out when it differs from what the replayed
+blocks already say, a plugin no longer noted gets a cleared line, and a compaction
+that takes the blocks out has them told again.
+
 **Source Ref** (`utils/refs.py`, `session/refs.py`):
 A `[[ref store/scope#lo-hi]]` token naming verbatim entries of an append-only
 store; for the session log the scope is the Session Revision's
@@ -1847,12 +1872,14 @@ conflating `find_skill` (search, returns ids + descriptions) with `read_skill`
 
 **Skill Hub** (`skill_hub/`):
 A remote OpenAPI skill marketplace, configured via `skillForge.router.hub` (`endpoint` /
-`enabled` / `api_key` / `timeout_s` / `min_safety`; `endpoint=None` disables it, and
-`enabled=false` switches it off without clearing the URL -- off is read live). Both
-onboarding wizards seed the shared catalog URL and say what that sends; the settings page's
-Skill Hub switch is `enabled`, drawn from `settings.get`'s answer rather than the raw file.
-While on, text from the conversation (a turn's message, or a `find_skill` query) is sent as
-the catalog query.
+`enabled` / `api_key` / `timeout_s` / `min_safety`). `enabled` is the only switch and defaults
+to on; `endpoint` defaults to the shared catalog and may name an internal one, and
+`RAVEN_SKILLHUB_URL` overrides both for this source and the SkillHub page. A legacy explicit
+`endpoint: null` is migrated to `enabled: false`. Onboarding records the opt-in and says what
+that sends; the settings page's Skill Hub switch is `enabled`, drawn from `settings.get`'s
+answer rather than the raw file. Either direction applies on the next search -- the loop always
+holds the client, so nothing waits for a reload. While on, text from the conversation (a turn's
+message, or a `find_skill` query) is sent as the catalog query.
 `SkillHubClient` offers
 progressive disclosure — `search()` (metadata-only discovery), `get()` (skill body),
 `install()` (download + safe extract); during routing `HubSkillSource` feeds metadata-only
@@ -2096,8 +2123,15 @@ separate process. It is not a **Plugin** (the kernel kind, which ships Python fa
 imports `config`, `security`, `skill_hub` and `utils`, and no surface. The loader imports
 a package's skills into the workspace skill tree under `<workspace>/skills/<package name>/`,
 one directory per package, so the pool mints one source label per package rather than one
-per skill; the copy is recorded in the package ledger (`<home>/agent-plugins.json`), which is
-what makes removal safe. An imported skill carries no unconditional-injection flag: `always`
+per skill; the copy is recorded in the **package ledger** (`<home>/agent-plugins.json`,
+version 2), one record per workspace, and that record is what makes removal safe: the
+package root and every skill root carry an **install marker** (`.raven-install.json`, a
+random token minted by the host at install time), and a directory is deletable only while
+its marker still matches the recorded token
+-- so a same-named user directory, whether in another workspace sharing the home or
+standing where an install was moved away from, is never claimed. Records written by ledger
+version 1 load as unverified legacy records that grant nothing; a fresh verified import of
+the same name supersedes one. An imported skill carries no unconditional-injection flag: `always`
 is dropped from the copy, so a third-party package cannot put text into every turn. A package
 may also carry `mcp.json`, and those servers are composed under the package's own names
 (`<package>__<server>`) with the package root as their working directory and `PLUGIN_ROOT` /
@@ -2713,16 +2747,16 @@ trimmed, and it travels only from the local gateway to the browser, fetched by a
 one-hour token (`raven/trajectory/export_jobs.py`).
 _Avoid_: calling it a bundle or a report.
 
-**Imported Conversation** (`raven/trajectory/imported.py`, `raven/trajectory/imported_package.py`):
+**Imported Session** (`raven/trajectory/imported.py`, `raven/trajectory/imported_package.py`):
 A Trajectory Export, Bug Report Package or Trajectory Report read back in and kept
-as a read-only conversation, addressed as `imported:<id>` (32 lowercase hex). Each
+as a read-only session, addressed as `imported:<id>` (32 lowercase hex). Each
 lives in its own `<raven home>/imports/<id>/`: `meta.json` (`schema:
 "raven_imported_conversation"`, the kind, the source file name and sha256, the
 title, where it came from), `package/` (the package as unpacked, a report's inner
 bundle expanded in place), `state/` (a trace store the trajectory index and detail
 layer read unchanged: the span log copied, every artifact pointer rewritten
 relative to `state/` or set to null when the package does not carry the file, and a
-bundle's v1 model inputs split back into v2 shells so a long conversation reads
+bundle's v1 model inputs split back into v2 shells so a long session reads
 whole) and `session.jsonl` when the package carried a session record. Every layer
 of the archive is walked once under one shared byte and member budget
 (`package_check.walk_archive`); an import is built in `imports/.staging/` and
@@ -4213,13 +4247,28 @@ Which default a `WorkdirResolver` falls back to when a session has no explicit o
 `LAUNCH_DIR` or `PER_CHANNEL`. Fixed per entrypoint (tui/agent vs. gateway), not user-facing.
 
 **Workspace Template** (`templates/`):
-The bundled markdown seed files copied into Agent home on first run by
-`sync_workspace_templates()` (idempotent — fills only missing files, so user edits win):
-`SOUL.md` (agent persona), `AGENTS.md` (agent operating instructions), `USER.md` (user
-profile), `HEARTBEAT.md` (periodic-task list read by the heartbeat Scheduler), `TOOLS.md`
-(tool-usage notes), `memory/MEMORY.md` (legacy memory seed). On the L4 layout these map
-under `agent_memory/profile/` (soul.md, agent.md) and `user_memory/profile/` (user.md);
-`HEARTBEAT.md` / `TOOLS.md` stay at the Agent home root.
+The bundled markdown seed files copied into Agent home by `sync_workspace_templates()`
+(idempotent — fills only missing files, so user edits win), with one exception: `SOUL.md`
+is the host's voice as well as a template. The sync keeps the product text it last wrote in
+`.soul.md.template` and applies a line-level three-way merge: a conflict with an operator edit
+leaves every section the product hunk touches as the operator has it, including a heading
+rename, and names them in the notice; a product hunk that spans several sections is left whole,
+so those sections stay as the operator has them too. Product hunks that no conflict touches
+follow the new release. A copy is attributed to the product by the base record, an exact shipped text,
+a `.soul.md.generated.sha256` receipt naming it, a shipped text it starts with, or a
+`SequenceMatcher` ratio of at least 0.6 against one. A copy that none of those attributes is
+left alone and named; a generated product prompt whose receipt names a text no shipped template
+carries is another product's and is left alone silently. The historical texts under
+`templates/legacy/` give the first merge a base, so a release that changes `SOUL.md` copies the
+outgoing text there; `scripts/check_soul_legacy.py` fails a change that does not. The
+operator's own lines may also live in `soul.local.md` beside it; the sync records the block it
+appended and withdraws that block on the next sync while the block is still at the end of the
+file, so editing or deleting `soul.local.md` takes effect. The set is `SOUL.md` (agent persona), `AGENTS.md`
+(agent operating instructions), `USER.md` (user profile), `HEARTBEAT.md` (periodic-task
+list read by the heartbeat Scheduler), `TOOLS.md` (tool-usage notes), `memory/MEMORY.md`
+(legacy memory seed). On the L4 layout these map under `agent_memory/profile/` (soul.md,
+agent.md) and `user_memory/profile/` (user.md); `HEARTBEAT.md` / `TOOLS.md` stay at the
+Agent home root.
 
 **Onboarding** (`raven onboard` → `run_wizard`):
 The first-run wizard (LLM provider → sandbox → channel → EverOS memory → web access → sub-agents → cold-start import) that also seeds

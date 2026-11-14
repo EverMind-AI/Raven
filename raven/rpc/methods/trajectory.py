@@ -72,7 +72,7 @@ def _session_key(value: str) -> str:
 async def _target(session_key: str) -> tuple[index.TrajectoryIndexer, Path, str]:
     """The indexer, trace store and span session key a session's trajectory is read through.
 
-    An Imported Conversation reads its own store, under the key its spans were
+    An Imported Session reads its own store, under the key its spans were
     recorded with; one whose spans named no session reads as empty.
     """
     if not imported.is_imported_key(session_key):
@@ -80,7 +80,7 @@ async def _target(session_key: str) -> tuple[index.TrajectoryIndexer, Path, str]
         return index.indexer_for(state), state, session_key
     target = await asyncio.to_thread(imported.trajectory_target, session_key)
     if target is None:
-        raise SessionNotFoundError(f"no imported conversation {session_key!r}")
+        raise SessionNotFoundError(f"no imported session {session_key!r}")
     state, original = target
     return index.indexer_for(state), state, original or session_key
 

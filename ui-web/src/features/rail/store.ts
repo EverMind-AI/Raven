@@ -324,7 +324,7 @@ export function rename(): void {
     return
   }
   const s = snap.rows.find(x => x.id === snap.cur)
-  /* An imported conversation is renamed on its own rail row, never here. */
+  /* An imported session is renamed on its own rail row, never here. */
   if (!s || s.from === 'imported' || isImportedKey(snap.cur)) return
   const inp = document.createElement('input')
   inp.className = 'titin'

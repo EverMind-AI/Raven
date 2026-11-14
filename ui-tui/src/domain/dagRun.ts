@@ -54,14 +54,14 @@ export interface DagRunNode {
   /** Why a branch left this node out. Only on a `not_executed` node, and absent
    * when the frame or the run dir that said so did not say why. */
   reason?: DagNotExecutedReason
-  /** What a decision node selected. `[]` is a decision that chose nothing, which
-   * is not the same as `undefined`, a decision not made (or not made yet). */
+  /** What a decision node selected. `[]` is a selection that chose nothing,
+   * which is not the same as `undefined`, a selection not made (or not made yet). */
   selectedRoutes?: string[]
   /** The judge's quote supporting the selection. */
   routeEvidence?: string
   /** The route names a decision node chooses between, in declaration order. */
   routes?: string[]
-  /** How many routes the decision selects, `one` where the graph left it unset. */
+  /** How many routes the decision node selects, `one` where the graph left it unset. */
   select?: 'many' | 'one'
   /** The guard: this node runs only if it holds once its dependencies settle. */
   when?: string
@@ -124,8 +124,8 @@ const fromStart = (payload: DagRunStartedEvent['payload'], promptTemplates?: Rec
 })
 
 // What a frame or a manifest entry says a branch did to a node, copied by
-// presence and never by truthiness: `selected_routes: []` is a decision that
-// chose nothing, and dropping it would read as a decision never made. A frame
+// presence and never by truthiness: `selected_routes: []` is a selection that
+// chose nothing, and dropping it would read as a selection never made. A frame
 // that says none of it adds none of it, so an earlier frame's word stands.
 const outcomeOf = (source: {
   reason?: DagNotExecutedReason

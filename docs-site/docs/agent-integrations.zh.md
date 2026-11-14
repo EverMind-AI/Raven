@@ -50,11 +50,11 @@ roster。不要假定修改显示名就创建了新身份。可通过 `raven onb
 | 调用入口 | 支持情况 | 说明 |
 | --- | --- | --- |
 | 宿主通过 `spawn` 委派 | 五个 Agent 均支持，前提是已启用且 ready | 从 TUI、WebUI 或已配置渠道请求；使用实际公布的 roster 名称。Raven-PPT 通常通过 Raven-Design 路由进入。 |
-| 有状态 instance 对话 | 支持并公布 stateful session 的 ACP Agent | 通过 WebUI instance 面板或对应 RPC 继续对话；依赖 live capability snapshot，不要仅凭配置推断 resume 支持。 |
+| 有状态 instance 会话 | 支持并公布 stateful session 的 ACP Agent | 通过 WebUI instance 面板或对应 RPC 继续会话；依赖 live capability snapshot，不要仅凭配置推断 resume 支持。 |
 | `run_subagent_dag` 节点 | 当前 roster 公布的 Agent | 在 `subagent` 中填写 roster 名称；生成的 Worker Table label 只在当前轮次有效，不能用于存储的 Playbook。 |
 | Playbook | 已注册的 roster Agent | Playbook 最终使用同一个 DAG registry；常规 Raven-PPT 流程应使用 Raven-Design。 |
 | 直接通过 stdio 调用 ACP | 五个 Agent 均支持 | 启动产品 launcher，发送按行分隔的 JSON-RPC。Raven-Research 默认提供 ACP，不使用 `--acp` 参数。 |
-| 单次 CLI hosting | 仅 Raven-Code | 使用 launcher 的 `--task` 或 `--prompt-file`；`--session` 可继续 CLI 对话。 |
+| 单次 CLI hosting | 仅 Raven-Code | 使用 launcher 的 `--task` 或 `--prompt-file`；`--session` 可继续 CLI 会话。 |
 | 消息渠道 | 五个 Agent 均可被宿主间接委派 | 消息先进入 Raven 宿主，再使用相同 roster 和权限进行委派。 |
 | 直接通过 A2A 调用单个原生 Agent | 不支持 | A2A 暴露的是 Raven 宿主，不是五个独立的原生 Agent endpoint。 |
 
@@ -70,7 +70,7 @@ launcher。readiness probe 成功或收到委派回执，都不代表任务已�
 
 | 键 | 默认值 | 作用 |
 | --- | --- | --- |
-| `idleCloseS` | `600` | Agent 空闲达到该秒数（双方都没有在途请求，也没有任何消息）后关闭其进程。仍持有已设定的提醒或正在运行的插件服务的 Agent 会被保留。只关闭能重新打开会话的 Agent（声明了 `loadSession` 或 `sessionCapabilities.resume`），因此下一轮会在新进程中续上原对话。`0` 或 `null` 表示一直保留到宿主退出。 |
+| `idleCloseS` | `600` | Agent 空闲达到该秒数（双方都没有在途请求，也没有任何消息）后关闭其进程。仍持有已设定的提醒或正在运行的插件服务的 Agent 会被保留。只关闭能重新打开会话的 Agent（声明了 `loadSession` 或 `sessionCapabilities.resume`），因此下一轮会在新进程中续上原会话。`0` 或 `null` 表示一直保留到宿主退出。 |
 | `llmRelay` | `true` | 由宿主代为发出原生 Agent 的 LiteLLM 调用，Agent 自身不再加载 LiteLLM。请求组装、重试和用量记录仍由 Agent 自己完成。若 Agent 自己的 `env` 设置了 LLM 端点、云凭据、代理或 CA 证书，它会自己发起调用。 |
 | `forkTemplate` | `true` | 在 Linux 上，原生 Agent 从一个已加载 Raven 的进程 fork 出来，共享这些内存页，而不是各自加载一份。其他系统仍按原方式启动。 |
 
@@ -193,7 +193,7 @@ Mirasim 为该 Agent 提供的列表，分为三组：Agent 自己名下的模�
 和 `Own key`（你在 Mirasim 中添加的 key）。Mirasim 平台也能运行 Claude Code、Codex、
 Kimi Code 和 ZCode CLI 的自有模型，因此这四个 Agent 的这些模型在前两组各列一次：
 选 Agent 名下的走你自己的账号，选 `Mirasim` 下的走平台额度。每一轮都会带上所选模型对应的
-路由，因此已有对话的会话改选另一组后，从下一轮起即切到那条路由。未选模型的会话使用 Mirasim
+路由，因此已有会话改选另一组后，从下一轮起即切到那条路由。未选模型的会话使用 Mirasim
 为该 Agent 设定的默认模型和默认路由。
 
 适配器是本机已在运行的 Mirasim host 的又一个客户端——桌面端的 host、`mirasim serve`
@@ -201,8 +201,8 @@ Kimi Code 和 ZCode CLI 的自有模型，因此这四个 Agent 的这些模型�
 每轮以流式返回：思考、正文、工具调用、计划和交付的文件随发生随送达 Raven，结束时报告
 所用上下文。取消会停止该轮。对 Claude Code、Codex、DSH、Pi 和 ZCode CLI，运行中追加的
 文字会并入当前轮。图片以内联方式送达 Claude Code；其他 Agent 收到以本地文件链接给出的
-图片时得到该文件的路径，内联图片则会被拒绝。会话可以列出（指定目录下该 Agent 的对话，
-包括在 Mirasim 中开启的）、续接、连同全部历史载入、关闭和删除；删除时 Mirasim 中的对话
+图片时得到该文件的路径，内联图片则会被拒绝。会话可以列出（指定目录下该 Agent 的会话，
+包括在 Mirasim 中开启的）、续接、连同全部历史载入、关闭和删除；删除时 Mirasim 中的会话
 一并删除，Agent 自己保存的转录文件不会删除。Raven 持有的会话里由 Mirasim 自行发起的轮次
 （例如后台任务的报告）也会转给 Raven，这类轮次中的提问留给 Mirasim 应用处理。
 
@@ -273,7 +273,7 @@ elicitation 发出，由你或 Raven 的提问自动作答回答。不支持表�
 
 CLI 后端的 `command` 是 argv 模板。`{prompt}` 作为一个参数替换，`{prompt_file}`
 指向 prompt 文件，无占位符时走 stdin。`resumeCommand` 必须包含 `{agent_id}`；
-id 分配方式和对话记录解析必须符合该 CLI。不要把这些字段复制到 ACP 配置条目。
+id 分配方式和会话记录解析必须符合该 CLI。不要把这些字段复制到 ACP 配置条目。
 
 HTTP 后端配置 `baseUrl`、`model` 和凭据，而不是命令。宿主重放可提供历史，但不等于
 远程原生会话。此后端不能读取本地路径或接收 MCP 下发。OpenAI-compatible Agent
@@ -288,7 +288,7 @@ HTTP 后端配置 `baseUrl`、`model` 和凭据，而不是命令。宿主重放
 | Agent state root | Launcher 渲染配置与 Agent 工作状态 |
 | Agent ACP home | 子引擎身份、transcript 和 skill pool |
 | `instance` | 在后端支持时续接子 Agent 会话 |
-| Node id | 寻址宿主对话中记录的任务和输出 |
+| Node id | 寻址宿主会话中记录的任务和输出 |
 
 CLI 的 `readsLocalFiles` 是对其执行环境的声明。ACP 能力通过协商并由适配器解释。
 HTTP 后端没有本地文件访问，应传有界内容而不是宿主路径。只有 Agent 真正支持相应

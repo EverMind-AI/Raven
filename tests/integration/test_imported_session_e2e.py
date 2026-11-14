@@ -1,9 +1,9 @@
-"""An Imported Conversation from a package made on one machine to reading it on another.
+"""An Imported Session from a package made on one machine to reading it on another.
 
 Packages come out of their real writers (``tests/imported_package_builders.py``)
 under one raven home; everything after that happens in a second home, through
 a dispatcher carrying every method production registers: ``imported.upload``
-and its runner, ``session.*`` serving the conversation from ``imports/``,
+and its runner, ``session.*`` serving the session from ``imports/``,
 ``trajectory.*`` reading its store, and the read-only guard. Nothing under test
 is stood in for; the limits are the shipped ones, so the oversized upload and
 the decompression bomb and the oversized session records are built at full size.
@@ -47,7 +47,7 @@ pytestmark = pytest.mark.integration
 
 SECRET = "sk-e2e0123456789abcdefghijKLMNOP"
 PLACEHOLDER = "[REDACTED:pattern.openai-style-key]"
-LONG_CONVERSATION_BYTES = 512 * 1024
+LONG_SESSION_BYTES = 512 * 1024
 TRANSCRIPT_LIMITS = ImportLimits()
 UNPACKED_LIMIT = ImportLimits().max_unpacked_export
 BOMB_MEMBERS = 5
@@ -223,7 +223,7 @@ async def test_an_export_reads_in_another_home_like_the_original(homes, monkeypa
     assert blocks["messages"] == blocks["system"] == blocks["prompt"] == "available"
     messages = await _all_messages(dispatcher, key, llm, epoch)
     assert messages == source.first_call
-    assert len(json.dumps(messages)) > LONG_CONVERSATION_BYTES
+    assert len(json.dumps(messages)) > LONG_SESSION_BYTES
 
     (directory,) = _imported_dirs()
     assert (directory / "meta.json").is_file()

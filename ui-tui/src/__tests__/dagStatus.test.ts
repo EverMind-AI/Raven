@@ -612,7 +612,7 @@ describe('dag elapsed', () => {
 describe('dagNodeOutcome', () => {
   it.each([
     ['when_false', 'not selected'],
-    ['when_unknown', 'decision missing'],
+    ['when_unknown', 'selection missing'],
     ['upstream_not_executed', 'upstream not executed']
   ] as const)('says why a node was left out: %s reads %s', (reason, words) => {
     expect(dagNodeOutcome({ reason, status: 'not_executed' })).toBe(words)
@@ -932,7 +932,7 @@ describe('formatDagNodeDetail on a branching run', () => {
 
   it.each([
     ['when_false', 'not executed: not selected'],
-    ['when_unknown', 'not executed: decision missing'],
+    ['when_unknown', 'not executed: selection missing'],
     ['upstream_not_executed', 'not executed: upstream not executed']
   ] as const)('says why a node was left out: %s', (reason, line) => {
     expect(page({ reason, status: 'not_executed' })[1]).toBe(line)

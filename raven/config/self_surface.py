@@ -142,7 +142,7 @@ class Setting:
             out["secret"] = True
             out["entered_by"] = "the user, on a card of its own (web), or in Settings"
         if self.session:
-            out["scope"] = "this conversation only"
+            out["scope"] = "this session only"
         if self.unset_means:
             out["when_unset"] = self.unset_means
         if self.sensitive:
@@ -202,7 +202,7 @@ SECTIONS: tuple[Section, ...] = (
         (
             Setting(
                 "agents.defaults.model",
-                "Default model for new conversations, with the provider whose credential serves it",
+                "Default model for new sessions, with the provider whose credential serves it",
                 "model_ref",
                 _E.IMMEDIATE,
                 writer="config.model",
@@ -210,13 +210,13 @@ SECTIONS: tuple[Section, ...] = (
             ),
             Setting(
                 "session.model",
-                "The model this conversation runs on; the default and every other conversation stay as they are",
+                "The model this session runs on; the default and every other session stay as they are",
                 "model_ref",
                 _E.NEXT_TURN,
                 writer="config.model",
                 session=True,
                 note='value is {"provider": "<provider>", "model": "<model id>"}; takes over from this '
-                "conversation's next turn",
+                "session's next turn",
             ),
             # The words are ``REASONING_EFFORTS``, the one list the console's
             # checker and the session's pick read too; null hands the choice
@@ -308,7 +308,7 @@ SECTIONS: tuple[Section, ...] = (
                 _E.NEXT_TURN,
                 writer="model.fields",
                 nullable=True,
-                sensitive="sends this provider's API key, and every conversation on it, to the address given",
+                sensitive="sends this provider's API key, and every session on it, to the address given",
                 note="a raven serve or TUI process keeps its startup default binding until restarted",
             ),
             Setting(
@@ -556,7 +556,7 @@ SECTIONS: tuple[Section, ...] = (
             ),
             Setting(
                 "memory.models.llm",
-                "Model that turns conversations into long-term memories",
+                "Model that turns sessions into long-term memories",
                 "model_ref",
                 _E.MEMORY_SERVER,
                 writer="everos",
@@ -610,10 +610,7 @@ SECTIONS: tuple[Section, ...] = (
                 _E.IMMEDIATE,
                 writer="settings",
                 sensitive=("turning it back on resumes sending the turn's message text to the Skill Hub"),
-                note=(
-                    "on only while skillForge.router.hub.endpoint is set, which a read shows as in_effect; "
-                    "switching it off applies at once; turning it on may wait for a reload, and the write says so"
-                ),
+                note=("on by default; switching it applies at once, and a read shows the effective state"),
                 in_effect=_skill_hub_in_effect,
             ),
             Setting(

@@ -146,7 +146,7 @@
       },
       "zh": {
         "name": "撤销",
-        "help": "撤销上一轮对话"
+        "help": "撤销上一轮"
       }
     },
     "retry": {
@@ -244,7 +244,7 @@
     "effort": {
       "en": {
         "name": "effort",
-        "help": "show or set how much the model thinks for this conversation [word] - the words are the ones the model declares"
+        "help": "show or set how much the model thinks for this session [word] - the words are the ones the model declares"
       },
       "zh": {
         "name": "思考深度",
@@ -519,7 +519,7 @@
     },
     "gui.deleg.body_cap": {
       "en": "What entered this turn",
-      "zh": "注入本轮对话的内容"
+      "zh": "注入本轮的内容"
     },
     "gui.deleg.body_cap_node": {
       "en": "What the node returned",
@@ -544,6 +544,18 @@
     "gui.deleg.by_subagent": {
       "en": "Sub-agent report",
       "zh": "子智能体回报"
+    },
+    "gui.deleg.by_dispatch": {
+      "en": "From Raven",
+      "zh": "来自 Raven"
+    },
+    "gui.deleg.from": {
+      "en": "From {who}",
+      "zh": "来自 {who}"
+    },
+    "gui.deleg.from_subagent": {
+      "en": "From a subagent",
+      "zh": "来自子智能体"
     },
     "gui.deleg.dlv_partial": {
       "en": "Partly done",
@@ -570,8 +582,8 @@
       "zh": "失败"
     },
     "gui.deleg.delivered_cancelled": {
-      "en": "was cancelled before it finished; the notice just joined this conversation",
-      "zh": "运行被取消，未完成，取消通知已注入本轮对话"
+      "en": "was cancelled before it finished; the notice just joined this session",
+      "zh": "运行被取消，未完成，取消通知已注入本轮会话"
     },
     "gui.deleg.delivered_exception": {
       "en": "Waiting on a decision",
@@ -580,10 +592,6 @@
     "gui.deleg.dag_title": {
       "en": "Task graph",
       "zh": "编排任务图"
-    },
-    "gui.deleg.dag_meta": {
-      "en": "{n} nodes · {m} agents",
-      "zh": "{n} 个节点 · {m} 个 agent"
     },
     "gui.deleg.dag_done": {
       "en": "{ok}/{n} done",
@@ -1218,8 +1226,8 @@
       "zh": "已添加并启用「{name}」"
     },
     "gui.caps.back_to_chat": {
-      "en": "Back to the chat",
-      "zh": "回到对话"
+      "en": "Back to the session",
+      "zh": "回到会话"
     },
     "gui.caps.configure": {
       "en": "Configure",
@@ -1466,8 +1474,8 @@
       "zh": "Hi，我是 Raven Agent"
     },
     "gui.composer_ph": {
-      "en": "Describe your task",
-      "zh": "描述你的任务"
+      "en": "What can I help you with today?",
+      "zh": "我能帮你做些什么？"
     },
     "gui.compress.done": {
       "en": "Archived {n} messages - {before} to {after} tokens",
@@ -1822,8 +1830,8 @@
       "zh": "下次 {next}"
     },
     "gui.cron.none": {
-      "en": "Ask Raven in a conversation, say \"every morning at 8...\", and it sets one up for you.",
-      "zh": "在对话里跟 Raven 说「每天早上八点……」，它会帮你建一条。"
+      "en": "Ask Raven in a session, say \"every morning at 8...\", and it sets one up for you.",
+      "zh": "在会话里跟 Raven 说「每天早上八点……」，它会帮你建一条。"
     },
     "gui.cron.none_t": {
       "en": "No schedules yet",
@@ -1907,15 +1915,19 @@
     },
     "gui.ctx.noparts": {
       "en": "The breakdown appears after the next turn.",
-      "zh": "分项在下一轮对话后显示。"
+      "zh": "分项在下一轮后显示。"
     },
     "gui.ctx.of": {
       "en": "of {max} tokens",
       "zh": "共 {max} tokens"
     },
     "gui.ctx.part.conversation": {
-      "en": "Conversation",
-      "zh": "对话"
+      "en": "Session",
+      "zh": "会话"
+    },
+    "gui.ctx.part.files": {
+      "en": "Files",
+      "zh": "文件"
     },
     "gui.ctx.part.memory": {
       "en": "Memory",
@@ -2183,7 +2195,7 @@
     },
     "gui.ext.mcp_pending": {
       "en": "not connected yet (connects on the first turn)",
-      "zh": "尚未连接（首轮对话时自动连接）"
+      "zh": "尚未连接（首轮时自动连接）"
     },
     "gui.ext.mcp_tools": {
       "en": "{n} tools available",
@@ -2247,7 +2259,7 @@
     },
     "gui.transcript.nav": {
       "en": "Turns",
-      "zh": "对话轮次"
+      "zh": "轮次"
     },
     "gui.transcript.nav_turn": {
       "en": "Turn {n}",
@@ -2310,15 +2322,15 @@
       "zh": "{n} 日"
     },
     "gui.cron.src_chat": {
-      "en": "created in a conversation",
-      "zh": "对话创建"
+      "en": "created in a session",
+      "zh": "会话创建"
     },
     "gui.cron.src_hand": {
       "en": "created here",
       "zh": "手动创建"
     },
     "gui.cron.open_sess": {
-      "en": "Open its conversation",
+      "en": "Open its session",
       "zh": "打开会话"
     },
     "gui.cron.expr_lab": {
@@ -2558,7 +2570,7 @@
       "zh": "{name} 由更新版本的 Raven 生成，请升级后再导入"
     },
     "gui.imported.err_transcript": {
-      "en": "{name} holds a conversation record too large to open here: {detail}",
+      "en": "{name} holds a session record too large to open here: {detail}",
       "zh": "{name} 中的会话记录过大，无法在这里打开：{detail}"
     },
     "gui.imported.err_invalid": {
@@ -2867,7 +2879,7 @@
     },
     "gui.job.what_ph": {
       "en": "What to send Raven when it fires - write it the way you would say it",
-      "zh": "到点发给 Raven 的话，像平时对话一样写"
+      "zh": "到点发给 Raven 的话，像平时说话一样写"
     },
     "gui.live.busy": {
       "en": "Working · {t}",
@@ -2878,7 +2890,7 @@
       "zh": "等待子智能体返回"
     },
     "gui.mem.down": {
-      "zh": "长期记忆当前写不进去，这段时间的对话不会被记住。",
+      "zh": "长期记忆当前写不进去，这段时间的内容不会被记住。",
       "en": "Long-term memory is not being written; nothing from here on will be remembered."
     },
     "gui.mem.cloud_bad_key": {
@@ -2958,7 +2970,7 @@
       "en": "Task retrospectives"
     },
     "gui.mem.hint_episode": {
-      "zh": "与你共事的对话经历",
+      "zh": "与你共事的经历",
       "en": "What happened in your sessions"
     },
     "gui.mem.hint_profile": {
@@ -3079,11 +3091,11 @@
     },
     "gui.mem.switch_busy_sub": {
       "en": "Long-term memory switches when that turn finishes. Continue?",
-      "zh": "切换会在当前对话结束后生效。继续吗？"
+      "zh": "切换会在本轮结束后生效。继续吗？"
     },
     "gui.mem.switch_busy_t": {
-      "en": "A conversation is in progress",
-      "zh": "有对话正在进行"
+      "en": "A session is in progress",
+      "zh": "有会话正在进行"
     },
     "gui.mem.switch_confirm": {
       "en": "Switch anyway",
@@ -3798,8 +3810,8 @@
       "zh": "设置"
     },
     "gui.new_task": {
-      "en": "New task",
-      "zh": "新任务"
+      "en": "New session",
+      "zh": "新会话"
     },
     "gui.page.agents": {
       "en": "Agent connector",
@@ -3834,24 +3846,24 @@
       "zh": "逐项审批"
     },
     "gui.perm.ask_h": {
-      "en": "Reads run on their own; everything else asks you first.",
-      "zh": "只读操作直接执行，其余每一步先问你"
+      "en": "Reads run on their own, and everything else asks you first.",
+      "zh": "只读操作直接执行，其余步骤会先问你"
     },
     "gui.perm.full": {
       "en": "Full access",
       "zh": "完全访问"
     },
     "gui.perm.full_h": {
-      "en": "Never asks and may run dangerous operations; deny rules still hold.",
-      "zh": "全程不问，可能执行危险操作；禁止规则仍然生效"
+      "en": "Never asks and can run dangerous operations. Deny rules still apply.",
+      "zh": "全程不询问，可能执行危险操作。禁止规则仍然生效"
     },
     "gui.perm.smart": {
       "en": "Smart mode",
       "zh": "智能模式"
     },
     "gui.perm.smart_h": {
-      "en": "Routine actions run on their own; risky ones ask you first.",
-      "zh": "常规操作直接执行，有风险的操作才问你"
+      "en": "Routine actions run on their own, and risky ones ask you first.",
+      "zh": "常规操作直接执行，有风险的操作会先问你"
     },
     "gui.perm.title": {
       "en": "Permission",
@@ -4542,15 +4554,15 @@
       "zh": "取消固定"
     },
     "gui.sess.imported_no_transcript": {
-      "en": "This package carries no conversation record; open the trajectory view to see what it holds",
+      "en": "This package carries no session record; open the trajectory view to see what it holds",
       "zh": "包内没有会话记录，可在轨迹视图中查看内容"
     },
     "gui.sess.imported_unavailable": {
-      "en": "Not available in an imported conversation",
+      "en": "Not available in an imported session",
       "zh": "导入会话中不可用"
     },
     "gui.sess.imported_no_files": {
-      "en": "The files of an imported conversation are not on this machine",
+      "en": "The files of an imported session are not on this machine",
       "zh": "导入会话里的文件不在本机"
     },
     "gui.session_commands": {
@@ -4926,8 +4938,8 @@
       "zh": "最多同时打开 4 个窗口"
     },
     "gui.ws.instance_empty": {
-      "en": "No conversation on record for this subagent.",
-      "zh": "这个子智能体还没有留下对话记录。"
+      "en": "No session on record for this subagent.",
+      "zh": "这个子智能体还没有留下会话记录。"
     },
     "gui.ws.spawn_empty": {
       "en": "This call has not written anything yet.",
@@ -4942,7 +4954,7 @@
       "zh": "新建实例"
     },
     "gui.ws.instance_new_hint": {
-      "en": "Start a new conversation with {name}",
+      "en": "Start a new session with {name}",
       "zh": "和 {name} 开一个新会话"
     },
     "gui.ws.instance_turn_elapsed": {
@@ -4960,6 +4972,18 @@
     "gui.ws.instance_say_hint": {
       "en": "Carry on with {name}",
       "zh": "继续和 {name} 对话"
+    },
+    "gui.ws.instance_handoff_hint": {
+      "en": "What you say here is not added to the main agent's context automatically. With your next message, the main agent is told which direct chats have happened in this session, so it can read them if it needs to.",
+      "zh": "你在这里说的不会自动加入主智能体的上下文。你下次给主智能体发消息时，它会得知本会话里发生过哪些直接对话，需要时它可以自己去读。"
+    },
+    "gui.ws.instance_handoff_count_one": {
+      "en": "With your next message, the main agent is told about 1 direct-chat entry from this session; the text is not added to its context automatically and enters only if the agent reads it.",
+      "zh": "你下次给主智能体发消息时，它会得知本会话有 1 个直接对话条目；对话正文不会自动进入它的上下文，只有它去读才会进入。"
+    },
+    "gui.ws.instance_handoff_count_n": {
+      "en": "With your next message, the main agent is told about {n} direct-chat entries from this session; the text is not added to its context automatically and enters only if the agent reads it.",
+      "zh": "你下次给主智能体发消息时，它会得知本会话有 {n} 个直接对话条目；对话正文不会自动进入它的上下文，只有它去读才会进入。"
     },
     "gui.ws.instance_resumable": {
       "en": "Can continue",
@@ -6396,7 +6420,7 @@
       "zh": "模式"
     },
     "gui.tier.scope": {
-      "en": "The tier the sub-agents this conversation dispatches run at. This conversation only.",
+      "en": "The tier the sub-agents this session dispatches run at. This session only.",
       "zh": "派出的子智能体按这一档运行。只作用于本会话。"
     },
     "gui.tier.failed": {
@@ -6444,7 +6468,7 @@
       "zh": "最高"
     },
     "gui.effort.scope": {
-      "en": "How much the model thinks before each answer, for this conversation only. Sub-agents are not affected.",
+      "en": "How much the model thinks before each answer, for this session only. Sub-agents are not affected.",
       "zh": "模型每次回答前思考多少，只作用于本会话，不影响子智能体。"
     },
     "gui.effort.now": {
@@ -6496,11 +6520,11 @@
       "zh": "该子智能体自己的默认"
     },
     "gui.imode.auto_tip": {
-      "en": "Following the conversation. Click to give this instance its own mode.",
+      "en": "Following the session. Click to give this instance its own mode.",
       "zh": "跟随会话。点击可为这个实例单独设定模式。"
     },
     "gui.imode.set_tip": {
-      "en": "This instance's own mode, set apart from the conversation.",
+      "en": "This instance's own mode, set apart from the session.",
       "zh": "这个实例自己的模式，与会话分开设定。"
     },
     "gui.imode.failed": {
@@ -6764,8 +6788,8 @@
       "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
     },
     "gui.confirm.cfg.why.channels.dingtalk.workspace": {
-      "en": "moves where this channel's conversations read and write files",
-      "zh": "改变此通道的对话读写文件的位置"
+      "en": "moves where this channel's sessions read and write files",
+      "zh": "改变此通道的会话读写文件的位置"
     },
     "gui.confirm.cfg.why.channels.discord.allow_from": {
       "en": "widening it lets more people instruct Raven",
@@ -6788,8 +6812,8 @@
       "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
     },
     "gui.confirm.cfg.why.channels.discord.workspace": {
-      "en": "moves where this channel's conversations read and write files",
-      "zh": "改变此通道的对话读写文件的位置"
+      "en": "moves where this channel's sessions read and write files",
+      "zh": "改变此通道的会话读写文件的位置"
     },
     "gui.confirm.cfg.why.channels.email.allow_from": {
       "en": "widening it lets more people instruct Raven",
@@ -6832,8 +6856,8 @@
       "zh": "关闭它会让此通道的凭据或消息以未加密方式发送"
     },
     "gui.confirm.cfg.why.channels.email.workspace": {
-      "en": "moves where this channel's conversations read and write files",
-      "zh": "改变此通道的对话读写文件的位置"
+      "en": "moves where this channel's sessions read and write files",
+      "zh": "改变此通道的会话读写文件的位置"
     },
     "gui.confirm.cfg.why.channels.feishu.allow_from": {
       "en": "widening it lets more people instruct Raven",
@@ -6852,8 +6876,8 @@
       "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
     },
     "gui.confirm.cfg.why.channels.feishu.workspace": {
-      "en": "moves where this channel's conversations read and write files",
-      "zh": "改变此通道的对话读写文件的位置"
+      "en": "moves where this channel's sessions read and write files",
+      "zh": "改变此通道的会话读写文件的位置"
     },
     "gui.confirm.cfg.why.channels.matrix.allow_from": {
       "en": "widening it lets more people instruct Raven",
@@ -6888,8 +6912,8 @@
       "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
     },
     "gui.confirm.cfg.why.channels.matrix.workspace": {
-      "en": "moves where this channel's conversations read and write files",
-      "zh": "改变此通道的对话读写文件的位置"
+      "en": "moves where this channel's sessions read and write files",
+      "zh": "改变此通道的会话读写文件的位置"
     },
     "gui.confirm.cfg.why.channels.mochat.allow_from": {
       "en": "widening it lets more people instruct Raven",
@@ -6928,8 +6952,8 @@
       "zh": "会把此通道的凭据和消息发往所给地址"
     },
     "gui.confirm.cfg.why.channels.mochat.workspace": {
-      "en": "moves where this channel's conversations read and write files",
-      "zh": "改变此通道的对话读写文件的位置"
+      "en": "moves where this channel's sessions read and write files",
+      "zh": "改变此通道的会话读写文件的位置"
     },
     "gui.confirm.cfg.why.channels.qq.allow_from": {
       "en": "widening it lets more people instruct Raven",
@@ -6944,8 +6968,8 @@
       "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
     },
     "gui.confirm.cfg.why.channels.qq.workspace": {
-      "en": "moves where this channel's conversations read and write files",
-      "zh": "改变此通道的对话读写文件的位置"
+      "en": "moves where this channel's sessions read and write files",
+      "zh": "改变此通道的会话读写文件的位置"
     },
     "gui.confirm.cfg.why.channels.slack.allow_from": {
       "en": "widening it lets more people instruct Raven",
@@ -6984,8 +7008,8 @@
       "zh": "关闭它会让 Raven 以你的身份在 Slack 上行事"
     },
     "gui.confirm.cfg.why.channels.slack.workspace": {
-      "en": "moves where this channel's conversations read and write files",
-      "zh": "改变此通道的对话读写文件的位置"
+      "en": "moves where this channel's sessions read and write files",
+      "zh": "改变此通道的会话读写文件的位置"
     },
     "gui.confirm.cfg.why.channels.telegram.allow_from": {
       "en": "widening it lets more people instruct Raven",
@@ -7008,8 +7032,8 @@
       "zh": "会把此通道的凭据和消息发往所给地址"
     },
     "gui.confirm.cfg.why.channels.telegram.workspace": {
-      "en": "moves where this channel's conversations read and write files",
-      "zh": "改变此通道的对话读写文件的位置"
+      "en": "moves where this channel's sessions read and write files",
+      "zh": "改变此通道的会话读写文件的位置"
     },
     "gui.confirm.cfg.why.channels.wecom.allow_from": {
       "en": "widening it lets more people instruct Raven",
@@ -7024,8 +7048,8 @@
       "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
     },
     "gui.confirm.cfg.why.channels.wecom.workspace": {
-      "en": "moves where this channel's conversations read and write files",
-      "zh": "改变此通道的对话读写文件的位置"
+      "en": "moves where this channel's sessions read and write files",
+      "zh": "改变此通道的会话读写文件的位置"
     },
     "gui.confirm.cfg.why.channels.weixin.allow_from": {
       "en": "widening it lets more people instruct Raven",
@@ -7052,8 +7076,8 @@
       "zh": "改变此通道登录信息的存放位置，这决定它以哪个账号的身份运行"
     },
     "gui.confirm.cfg.why.channels.weixin.workspace": {
-      "en": "moves where this channel's conversations read and write files",
-      "zh": "改变此通道的对话读写文件的位置"
+      "en": "moves where this channel's sessions read and write files",
+      "zh": "改变此通道的会话读写文件的位置"
     },
     "gui.confirm.cfg.why.channels.whatsapp.allow_from": {
       "en": "widening it lets more people instruct Raven",
@@ -7076,8 +7100,8 @@
       "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
     },
     "gui.confirm.cfg.why.channels.whatsapp.workspace": {
-      "en": "moves where this channel's conversations read and write files",
-      "zh": "改变此通道的对话读写文件的位置"
+      "en": "moves where this channel's sessions read and write files",
+      "zh": "改变此通道的会话读写文件的位置"
     },
     "gui.confirm.cfg.why.embedding": {
       "en": "a different embedding model invalidates every vector already stored",
@@ -7092,8 +7116,8 @@
       "zh": "'full' 模式下每个工具调用都不经询问直接执行"
     },
     "gui.confirm.cfg.why.providers.*.apiBase": {
-      "en": "sends this provider's API key, and every conversation on it, to the address given",
-      "zh": "会把该提供商的 API 密钥及其上的全部对话发往所给地址"
+      "en": "sends this provider's API key, and every session on it, to the address given",
+      "zh": "会把该提供商的 API 密钥及其上的全部会话发往所给地址"
     },
     "gui.confirm.cfg.why.skillForge.autoInstall": {
       "en": "'auto' downloads and installs skills without asking",
@@ -7105,7 +7129,7 @@
     },
     "gui.confirm.cfg.why.skillForge.router.hub.enabled": {
       "en": "turning it back on resumes sending the turn's message text to the Skill Hub",
-      "zh": "重新打开会把当轮对话内容发送到 Skill Hub"
+      "zh": "重新打开会把当轮内容发送到 Skill Hub"
     },
     "gui.confirm.cfg.why.subagents.*.description": {
       "en": "the dispatching model reads it every turn, so it can steer what is sent where",
@@ -7192,8 +7216,8 @@
       "zh": "凭据"
     },
     "gui.pb.cred_intro": {
-      "en": "What this machine holds for the servers this playbook carries. Values never enter the playbook file or a conversation.",
-      "zh": "本机为此剧本自带的 MCP 服务器保存的凭据。值不会进入剧本文件，也不会进入对话。"
+      "en": "What this machine holds for the servers this playbook carries. Values never enter the playbook file or a session.",
+      "zh": "本机为此剧本自带的 MCP 服务器保存的凭据。值不会进入剧本文件，也不会进入会话。"
     },
     "gui.pb.cred_none": {
       "en": "This playbook declares no secret params and carries no OAuth server.",
@@ -7273,7 +7297,7 @@
     },
     "gui.onb.restart": {
       "en": "Saved. Restart the gateway to start chatting: it had no model when it started.",
-      "zh": "已保存。重启网关后即可开始对话：它启动时还没有模型。"
+      "zh": "已保存。重启网关后即可开始聊天：它启动时还没有模型。"
     },
     "gui.model.refused": {
       "en": "Set a model in Settings first - this gateway started without one",
@@ -7317,7 +7341,7 @@
     },
     "gui.op.saved_next_turn": {
       "en": "Saved. It applies from the next turn.",
-      "zh": "已保存 · 下一轮对话生效"
+      "zh": "已保存 · 下一轮生效"
     },
     "gui.op.saved_restart": {
       "en": "Saved. It applies once the engine restarts.",
@@ -8091,46 +8115,6 @@
       "en": "Graph",
       "zh": "图"
     },
-    "gui.tasks.rec_more": {
-      "en": "Show all",
-      "zh": "展开全文"
-    },
-    "gui.tasks.rec_less": {
-      "en": "Show less",
-      "zh": "收起"
-    },
-    "gui.tasks.rec_process": {
-      "en": "Process",
-      "zh": "过程"
-    },
-    "gui.tasks.rec_thought": {
-      "en": "Thought",
-      "zh": "已思考"
-    },
-    "gui.tasks.rec_thinking": {
-      "en": "Thinking",
-      "zh": "思考中"
-    },
-    "gui.tasks.call_failed_n": {
-      "en": "{n} failed",
-      "zh": "{n} 失败"
-    },
-    "gui.tasks.call_no_result": {
-      "en": "No result",
-      "zh": "未返回"
-    },
-    "gui.tasks.call_no_result_n": {
-      "en": "{n} with no result",
-      "zh": "{n} 未返回"
-    },
-    "gui.tasks.deleg_a_graph": {
-      "en": "a graph",
-      "zh": "一张图"
-    },
-    "gui.tasks.exit_code": {
-      "en": "Exit code {n}",
-      "zh": "退出码 {n}"
-    },
     "gui.tasks.canvas": {
       "en": "Graph - drag to pan, ctrl and scroll to zoom",
       "zh": "流程图 - 拖动平移，按住 ctrl 滚动缩放"
@@ -8324,7 +8308,7 @@
       "zh": "还没有归档的会话"
     },
     "gui.settings.archive.empty_sub": {
-      "en": "Archived conversations are kept here, and any of them can be restored.",
+      "en": "Archived sessions are kept here, and any of them can be restored.",
       "zh": "归档的会话收在这里，随时可以恢复。"
     },
     "gui.settings.archive.restore": {
@@ -8916,8 +8900,8 @@
       "zh": "上下文压缩"
     },
     "gui.settings.roles.curator_use": {
-      "en": "Tidies the history when a conversation outgrows its budget; a small model does",
-      "zh": "对话超出预算时整理历史，适合小模型"
+      "en": "Tidies the history when a session outgrows its budget; a small model does",
+      "zh": "会话超出预算时整理历史，适合小模型"
     },
     "gui.settings.roles.title": {
       "en": "Session naming",
@@ -8932,8 +8916,8 @@
       "zh": "记忆提取"
     },
     "gui.settings.roles.memllm_use": {
-      "en": "Distills memories from conversations into EverOS",
-      "zh": "从对话中提炼记忆写入 EverOS"
+      "en": "Distills memories from sessions into EverOS",
+      "zh": "从会话中提炼记忆写入 EverOS"
     },
     "gui.settings.roles.gate": {
       "en": "Skill gate",
@@ -9100,12 +9084,8 @@
       "zh": "使用 EverMind Skill Hub 的 11 万+ 技能"
     },
     "gui.settings.skills.hub_sub": {
-      "en": "While on, Raven sends text from your conversation to the Skill Hub when it looks for a skill.",
-      "zh": "开启时，Raven 查找技能会把对话中的文字发送到 Skill Hub。"
-    },
-    "gui.settings.skills.hub_sub_reload": {
-      "en": "While on, Raven sends text from your conversation to the Skill Hub when it looks for a skill. Search starts after Raven reloads.",
-      "zh": "开启时，Raven 查找技能会把对话中的文字发送到 Skill Hub。Raven 重新加载后才会开始搜索。"
+      "en": "While on, Raven sends text from your session to the Skill Hub when it looks for a skill.",
+      "zh": "开启时，Raven 查找技能会把会话中的文字发送到 Skill Hub。"
     },
     "gui.settings.skills.builtin": {
       "en": "Built-in",
@@ -9148,8 +9128,8 @@
       "zh": "安全分 {n}"
     },
     "gui.settings.skills.trig_use": {
-      "en": "Installed in conversation",
-      "zh": "对话中安装"
+      "en": "Installed in a session",
+      "zh": "会话中安装"
     },
     "gui.settings.skills.trig_auto": {
       "en": "Installed automatically",
@@ -9472,8 +9452,8 @@
       "zh": "分支未选中"
     },
     "gui.tasks.node_reason_when_unknown": {
-      "en": "Decision missing",
-      "zh": "缺少分支决策"
+      "en": "Selection missing",
+      "zh": "缺少分支选择"
     },
     "gui.tasks.node_reason_upstream": {
       "en": "Upstream not executed",
@@ -9584,7 +9564,7 @@
       "zh": "本机没有这个子智能体，去注册"
     },
     "gui.tasks.instance_note": {
-      "en": "@{instance}, this conversation",
+      "en": "@{instance}, this session",
       "zh": "@{instance} 这条会话"
     },
     "gui.tasks.skills": {
@@ -9648,7 +9628,7 @@
       "zh": "回到图"
     },
     "gui.tasks.lane": {
-      "en": "@{instance}, same conversation",
+      "en": "@{instance}, same session",
       "zh": "@{instance} 同一会话"
     },
     "gui.ws.task_changes": {
@@ -9683,25 +9663,9 @@
       "en": "Could not read this node's record.",
       "zh": "没能读到这个节点的记录。"
     },
-    "gui.tasks.rec_process_aria": {
-      "en": "Show what happened before this answer",
-      "zh": "展开这次回答之前的过程"
-    },
-    "gui.tasks.copied_dispatch": {
-      "en": "Dispatch prompt copied",
-      "zh": "已复制派单提示词"
-    },
-    "gui.tasks.copied_answer": {
-      "en": "Answer copied",
-      "zh": "已复制这次的回答"
-    },
     "gui.composer.ph_session": {
-      "en": "Continue the conversation...",
-      "zh": "继续对话…"
-    },
-    "gui.composer.ph_busy": {
-      "en": "Continue the conversation; Raven will receive your new instruction directly",
-      "zh": "继续对话，Raven 将直接收到你的新指令"
+      "en": "Continue the conversation…",
+      "zh": "继续对话……"
     },
     "gui.composer.resize": {
       "en": "Drag to resize the composer",
@@ -9709,7 +9673,7 @@
     },
     "gui.at.point": {
       "en": "What this is about",
-      "zh": "本次对话的范围"
+      "zh": "本次会话的范围"
     },
     "gui.at.folder": {
       "en": "Folder",
@@ -9820,8 +9784,8 @@
       "zh": "重命名会话"
     },
     "gui.wd.locked": {
-      "en": "The workspace is fixed once the conversation starts",
-      "zh": "对话开始后工作区不可更改"
+      "en": "The workspace is fixed once the session starts",
+      "zh": "会话开始后工作区不可更改"
     },
     "gui.wd.recent": {
       "en": "Recent",
@@ -9956,7 +9920,7 @@
       "en": "Also removes the facts and foresight derived from this episode; this cannot be undone"
     },
     "gui.mem.del_profile_note": {
-      "zh": "删除后画像会随后续对话重新生成",
+      "zh": "删除后画像会随后续会话重新生成",
       "en": "The profile will regenerate from future sessions"
     },
     "gui.mem.delete": {
@@ -10316,7 +10280,7 @@
       "zh": "智能体模型"
     },
     "gui.set.dm.agent_note": {
-      "en": "What a conversation runs on when it has not chosen its own.",
+      "en": "What a session runs on when it has not chosen its own.",
       "zh": "会话未单独选择时使用的模型。"
     },
     "gui.set.dm.embed": {
@@ -10352,7 +10316,7 @@
       "zh": "快捷模型"
     },
     "gui.set.dm.quick_note": {
-      "en": "Short errands beside the conversation, starting with naming a new session. A cheaper tier is the point.",
+      "en": "Short errands beside the session, starting with naming a new session. A cheaper tier is the point.",
       "zh": "会话之外的简短任务，目前用于为新会话命名。选择更低成本的模型即可。"
     },
     "gui.set.dm.translate": {
@@ -10384,8 +10348,8 @@
       "zh": "搜索会话"
     },
     "gui.set.kbd.grp_chat": {
-      "en": "Conversation",
-      "zh": "对话"
+      "en": "Session",
+      "zh": "会话"
     },
     "gui.set.kbd.grp_nav": {
       "en": "Navigation",
@@ -10400,8 +10364,8 @@
       "zh": "换行"
     },
     "gui.set.kbd.newtask": {
-      "en": "New task",
-      "zh": "新任务"
+      "en": "New session",
+      "zh": "新会话"
     },
     "gui.set.kbd.rail": {
       "en": "Toggle sidebar",
@@ -10856,7 +10820,7 @@
       "zh": "权限模式"
     },
     "gui.set.prm.mode_note": {
-      "en": "New conversations start in this mode. The chip next to the composer changes only the open conversation.",
+      "en": "New sessions start in this mode. The chip next to the composer changes only the open session.",
       "zh": "新会话以这个模式开始；输入框旁边的芯片只改当前会话。"
     },
     "gui.set.prm.ro": {
@@ -11684,11 +11648,11 @@
       "zh": "知识库"
     },
     "gui.nav.tasks_board": {
-      "en": "Task board",
+      "en": "Task Board",
       "zh": "任务看板"
     },
     "gui.nav.import": {
-      "en": "Import conversation",
+      "en": "Import session",
       "zh": "导入会话"
     },
     "gui.nav.importing": {
@@ -11700,7 +11664,7 @@
       "zh": "知识库"
     },
     "gui.page.tasks_board": {
-      "en": "Task board",
+      "en": "Task Board",
       "zh": "任务看板"
     },
     "gui.tasks.page.badge": {
@@ -11756,15 +11720,15 @@
       "zh": "全部"
     },
     "gui.tasks.page.title": {
-      "en": "Task board",
+      "en": "Task Board",
       "zh": "任务看板"
     },
     "gui.tasks.page.all_conversations": {
-      "en": "All conversations",
+      "en": "All sessions",
       "zh": "全部会话"
     },
     "gui.tasks.page.conversation": {
-      "en": "Conversation",
+      "en": "Session",
       "zh": "会话"
     },
     "gui.tasks.page.show_completed": {
@@ -12252,7 +12216,7 @@
       "zh": "轨迹"
     },
     "gui.trajectory.back": {
-      "en": "Conversation",
+      "en": "Session",
       "zh": "会话"
     },
     "gui.trajectory.scanning": {
@@ -13396,7 +13360,7 @@
       "zh": "导出"
     },
     "gui.export.dialog": {
-      "en": "Export conversation",
+      "en": "Export session",
       "zh": "导出会话"
     },
     "gui.export.close": {
@@ -13404,7 +13368,7 @@
       "zh": "关闭"
     },
     "gui.export.title_export": {
-      "en": "Export conversation",
+      "en": "Export session",
       "zh": "导出会话"
     },
     "gui.export.step_turns": {
@@ -13440,7 +13404,7 @@
       "zh": "仍在进行，暂不能导出"
     },
     "gui.export.why_not_in_session": {
-      "en": "No longer in this conversation",
+      "en": "No longer in this session",
       "zh": "已不在该会话中"
     },
     "gui.export.selection_changed": {
@@ -13448,7 +13412,7 @@
       "zh": "部分轮次已变化，请检查选择后重试。"
     },
     "gui.export.no_turns": {
-      "en": "This conversation has no turns to export yet.",
+      "en": "This session has no turns to export yet.",
       "zh": "该会话还没有可导出的轮次。"
     },
     "gui.export.loading": {

@@ -26,12 +26,21 @@ from __future__ import annotations
 
 import asyncio
 import re
-from dataclasses import replace
+import sys
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
+from raven.agent.window.parts import ATTACHMENT_NOTES_KEY
+from raven.context_engine.runtime_context import (
+    RUNTIME_CONTEXT_KEY,
+    notice_ceiling,
+    notice_changes,
+    told_notices,
+    with_runtime_context,
+)
 from raven.context_engine.scent import ScentMenu
 from raven.context_engine.scratch import mark_turn_scratch, render_turn_scratch
 from raven.context_engine.segments import render
@@ -45,6 +54,8 @@ if TYPE_CHECKING:
 
 
 _SEG_SEP = "\n\n---\n\n"
+_CONVERSATION_ORDER = sys.maxsize
+"""Sorts the conversation block after every phase-A segment, whatever order a plugin declares."""
 
 # The phase-A segments a reader of the window can tell apart even though they
 # are not turn-scoped: the always-on skill digest is stable and rides the
@@ -195,6 +206,11 @@ class ContextAssembler(ContextEngine):
                 prefix_parts.append((builder.order, seg.text, bool(getattr(builder, "stable", False))))
             if turn_scoped or builder.name in _WINDOW_SEGMENTS:
                 window_parts[builder.name] = seg.text
+        # Channel and surface hold for the whole conversation, so they close the
+        # system prompt rather than ride every user message, after everything
+        # that every conversation shares.
+        if conversation := render.build_conversation_context(ctx.channel, ctx.surface):
+            prefix_parts.append((_CONVERSATION_ORDER, conversation, True))
         prefix_parts.sort(key=lambda t: t[0])
         scratch_parts.sort(key=lambda t: t[0])
         system_prefix = _SEG_SEP.join(text for _, text, _ in prefix_parts)
@@ -216,9 +232,17 @@ class ContextAssembler(ContextEngine):
         if window_parts:
             meta["window_parts"] = window_parts
         scratch = render_turn_scratch([text for _, text in scratch_parts])
+        # Tool notices are sent as changes against what the history this turn
+        # replays already says, and that history exists only after phase B,
+        # which budgets with this envelope. So phase B gets the ceiling of what
+        # the changes can be, and the envelope is rebuilt with the changes once
+        # the history is known: the budget never counts less than is sent.
+        notices = self.get_tool_notices() if self.get_tool_notices is not None else []
+        parts = self._user_parts(ctx)
+        ceiling = notice_ceiling(notices, ctx.session_messages)
         # Appended after the envelope is built, and recorded on it: what the
         # session write and every other reader strip is exactly this text.
-        user_msg = mark_turn_scratch(self._build_user(ctx), scratch)
+        user_msg = mark_turn_scratch(self._envelope(ctx, parts, ceiling), scratch)
 
         # ── Phase B — prefix-dependent builders (Curator), serial ───
         ctx_b = replace(
@@ -253,6 +277,9 @@ class ContextAssembler(ContextEngine):
         seg6_parts.sort(key=lambda t: t[0])
         for _, text in seg6_parts:
             system = system + "\n\n---\n\n" + text
+        changes = notice_changes(notices, told_notices(history))
+        if changes != ceiling:
+            user_msg = mark_turn_scratch(self._envelope(ctx, parts, changes), scratch)
 
         # Measured now, not after phase A: whether the stable run reaches the end
         # of the message depends on whether phase B appended anything to it.
@@ -371,29 +398,61 @@ class ContextAssembler(ContextEngine):
         it — stored as the user's own text it would render as such on resume
         and feed the next turn's novelty window its own output. Hence the
         single-newline join and the collapse of any blank lines within.
+
+        The runtime-context lines themselves, without the menu, are recorded
+        on the message (``RUNTIME_CONTEXT_KEY``). The persist files them beside
+        the user's words and the history projection joins them back through
+        the same ``with_runtime_context``, so a later turn replays the block
+        this turn sent and the provider's cached prefix still matches.
+
+        Built with the tool-notice ceiling: the changes against the replayed
+        history are worked out in :meth:`assemble`, once phase B has built it.
         """
-        notices = self.get_tool_notices() if self.get_tool_notices is not None else None
-        runtime_ctx = render.build_runtime_context(
-            self._now_fn,
-            ctx.channel,
-            ctx.chat_id,
-            surface=ctx.surface,
-            tool_notices=notices,
-            session_notices=self._session_notices(ctx.session_key),
-        )
-        if ctx.scent_text:
-            runtime_ctx = f"{runtime_ctx}\n{_scent_in_envelope(ctx.scent_text)}"
-        user_content = render.build_user_content(
+        notices = self.get_tool_notices() if self.get_tool_notices is not None else []
+        return self._envelope(ctx, self._user_parts(ctx), notice_ceiling(notices, ctx.session_messages))
+
+    def _user_parts(self, ctx: AssemblyContext) -> _UserParts:
+        """What the envelope is made of besides the tool notices, read once per turn."""
+        notes: list[str] = []
+        content = render.build_user_content(
             ctx.current_message,
             ctx.media,
             can_see_images=ctx.can_see_images,
             describe_tool=ctx.describe_tool,
+            notes_sink=notes,
         )
-        if isinstance(user_content, str):
-            merged: Any = f"{runtime_ctx}\n\n{user_content}"
-        else:
-            merged = [{"type": "text", "text": runtime_ctx}] + user_content
-        return {"role": "user", "content": merged}
+        return _UserParts(self._now_fn(), self._session_notices(ctx.session_key), content, notes)
+
+    def _envelope(self, ctx: AssemblyContext, parts: _UserParts, tool_notices: list[str]) -> dict[str, Any]:
+        lines = render.build_runtime_context(
+            lambda: parts.now,
+            ctx.channel,
+            ctx.chat_id,
+            tool_notices=tool_notices,
+            session_notices=parts.session_notices,
+        )
+        runtime_ctx = f"{lines}\n{_scent_in_envelope(ctx.scent_text)}" if ctx.scent_text else lines
+        message: dict[str, Any] = {
+            "role": "user",
+            "content": with_runtime_context(runtime_ctx, parts.content),
+            RUNTIME_CONTEXT_KEY: lines,
+        }
+        # The notes as they ride in the content, recorded the way the turn
+        # scratch is: the window measurement takes them out of the conversation
+        # and counts them as files by this text, never by the ``[Attachment:``
+        # shape a user could paste. The save gate drops the record with the
+        # notes whenever it files the user's own words instead.
+        if parts.notes:
+            message[ATTACHMENT_NOTES_KEY] = "\n".join(parts.notes)
+        return message
+
+
+@dataclass(frozen=True)
+class _UserParts:
+    now: datetime
+    session_notices: list[str] | None
+    content: Any
+    notes: list[str]
 
 
 def _scent_in_envelope(text: str) -> str:

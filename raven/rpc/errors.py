@@ -30,7 +30,7 @@ Code table (server-defined range -32000..-32099):
 | -32026 | bugreport_unavailable         | no bug report receiver here      |
 | -32027 | review_conflict               | review decisions out of date     |
 | -32028 | bugreport_state               | report not in a state for this   |
-| -32029 | imported_read_only            | imported conversation is fixed   |
+| -32029 | imported_read_only            | imported session is fixed      |
 | -32030 | imported_package_invalid      | package refused; data.reason     |
 | -32031 | imported_busy                 | another import is running        |
 

@@ -19,7 +19,14 @@ import pytest
 from pydantic import ValidationError
 
 from raven.agent.loop.recovery import limits_from_defaults
-from raven.config.schema import AgentDefaults, CompactionConfig, ProviderConfig, ProviderEndpoint
+from raven.config.schema import (
+    AgentDefaults,
+    CompactionConfig,
+    MCPServerConfig,
+    ProviderConfig,
+    ProviderEndpoint,
+    ToolsConfig,
+)
 
 
 def test_context_window_tokens_defaults_to_none() -> None:
@@ -172,3 +179,24 @@ def test_the_cost_threshold_is_read_from_config() -> None:
 def test_the_cost_threshold_must_be_positive(threshold: float) -> None:
     with pytest.raises(ValidationError):
         AgentDefaults.model_validate({"emptyRetryCostThresholdUsd": threshold})
+
+
+def test_a_source_marker_this_code_knows_is_kept() -> None:
+    """A marker the composer states is the server's provenance."""
+    assert MCPServerConfig.model_validate({"command": "npx", "source": "package"}).source == "package"
+
+
+@pytest.mark.parametrize("spelling", ["carried", "plugin", "", 5, None])
+def test_a_source_marker_this_code_does_not_know_is_no_marker(spelling) -> None:
+    """A marker from a newer Raven, or a typo, must not fail a configuration
+    that used to load: the server keeps the meaning the key had before the
+    field existed."""
+    assert MCPServerConfig.model_validate({"command": "npx", "source": spelling}).source == "host"
+
+
+def test_a_stanza_with_an_unknown_marker_still_loads() -> None:
+    """The section loads whole, so a configuration file that spells a marker
+    this code does not know is still a configuration and not a broken one."""
+    tools = ToolsConfig.model_validate({"mcpServers": {"files": {"command": "npx", "source": "carried"}}})
+
+    assert tools.mcp_servers["files"].source == "host"

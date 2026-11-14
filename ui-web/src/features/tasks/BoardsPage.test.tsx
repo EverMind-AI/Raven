@@ -329,7 +329,7 @@ describe('the page', () => {
     list: async (key) => rowsOf[key] ?? [],
     one: async () => null,
     stop: async () => true,
-    node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }),
+    node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false, messages: [] }),
     roster: async () => [],
     boards: async (includeCompleted) => {
       asked.push(includeCompleted)

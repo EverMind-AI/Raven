@@ -34,6 +34,7 @@ import type {
   TasksBoardUpdatedEvent,
   TasksSetGroupStatusResult,
   TasksIgnoreQuestionResult,
+  TranscriptMessage,
 } from '../../rpc/generated'
 
 export type {
@@ -76,6 +77,10 @@ export interface NodeRecord {
   steps: NodeStep[]
   answer: string | null
   outputTruncated: boolean
+  /* The record as the run wrote it, opening with its dispatch: what the context
+     tab hands the transcript's renderer, which draws a run's record the way the
+     conversation draws its own. The three fields above are read off it. */
+  messages: TranscriptMessage[]
 }
 
 /* The seam the renderer reads. Every verb it needs:
@@ -97,6 +102,11 @@ export interface TasksSource {
   /* The dag equivalent of `openByNode`: opens the task a `run_subagent_dag` /
      `load_playbook` call's own receipt named, when the list holds that run. */
   openRun?: (runId: string) => boolean
+  /* One run's row as this conversation's list holds it, or null, and a way to
+     hear the list change: the seam a sibling reads a run's title, agent and
+     clock through (the transcript's delivered row), read-only. */
+  rowOf?: (kind: TaskKind, id: string) => TaskRow | null
+  watch?: (fn: () => void) => () => void
   /* The five turn-event consumers `state/session/stages.ts` drives (contract
      §5.1), reached the same way: optional so a suite that assembles the
      session pipeline without a tasks source does not throw. */

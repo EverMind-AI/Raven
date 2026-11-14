@@ -74,7 +74,12 @@ async function harness({
         claimDraft: () => {},
       },
       'src/lib/duration': { formatDuration: (ms: number) => `${ms}ms` },
-      'src/i18n/t': { t: (key: string) => key },
+      /* The one heading a case reads back filled in: a message about a group
+         opens with it, and which group it named is what those cases check. */
+      'src/i18n/t': {
+        t: (key: string, vars?: Record<string, unknown>) =>
+          key === 'gui.tasks.board.answer_head' ? `On "${String(vars?.title)}":` : key,
+      },
       'src/lib/dom': { $: looseQuery() },
       'src/lib/session': { current: () => current, setCurrent: () => {} },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
@@ -400,7 +405,7 @@ describe('the model a message goes out on', () => {
   })
 })
 
-describe('an imported conversation', () => {
+describe('an imported session', () => {
   it('sends nothing, by any door', async () => {
     const h = await harness({ current: 'imported:' + 'a'.repeat(32) })
     h.runtime.send('can I add to it?')
@@ -414,26 +419,51 @@ describe('an imported conversation', () => {
    the two. It waits for a turn of its own rather than joining one already
    running, which was told about something else. */
 describe('a message that moves a task on', () => {
+  const naming = (moveOn: string) => (_key: string | null, text: string) => ({ text: `On "Fix":\n${text}`, moveOn })
+
   it('goes at once, carrying the group it moves on', async () => {
     const h = await harness()
-    h.runtime.lendBeforeSend({ take: (key) => (key === 's1' ? 'g_1' : null) })
+    h.runtime.lendBeforeSend({ take: (key, text) => (key === 's1' ? naming('g_1')(key, text) : null) })
 
     h.runtime.send('the next step')
 
-    expect(h.sends()).toEqual([{ session_key: 's1', content: 'the next step', move_on: 'g_1' }])
+    expect(h.sends()).toEqual([{ session_key: 's1', content: 'On "Fix":\nthe next step', move_on: 'g_1' }])
+    h.runtime.lendBeforeSend(null)
+  })
+
+  /* The reader's bubble is the message as it went, so the heading is on the page
+     as it is in the conversation the turn reads. */
+  it('is drawn as it goes, with the group named', async () => {
+    const h = await harness()
+    h.runtime.lendBeforeSend({ take: naming('g_1') })
+
+    h.runtime.send('the next step')
+
+    expect(h.did('ask')).toEqual([['ask', 'On "Fix":\nthe next step']])
+    h.runtime.lendBeforeSend(null)
+  })
+
+  it('still hands the turn the files its note names', async () => {
+    const h = await harness()
+    h.runtime.lendBeforeSend({ take: naming('g_1') })
+
+    h.runtime.send('look\n\n[attachments, saved in the workspace]\n- uploads/shot.png')
+    await h.tick()
+
+    expect(h.sends()[0]?.media).toEqual(['uploads/shot.png'])
     h.runtime.lendBeforeSend(null)
   })
 
   it('waits for a turn of its own instead of joining the one running', async () => {
     const h = await harness()
-    h.runtime.lendBeforeSend({ take: () => 'g_1' })
+    h.runtime.lendBeforeSend({ take: naming('g_1') })
     turn.dispatch({ type: 'stream', cancellable: true })
 
     h.runtime.send('the next step')
     await h.tick()
 
     expect(h.sends()).toEqual([])
-    expect(h.queue).toEqual([{ text: 'the next step', moveOn: 'g_1' }])
+    expect(h.queue).toEqual([{ text: 'On "Fix":\nthe next step', moveOn: 'g_1' }])
     h.runtime.lendBeforeSend(null)
   })
 })
@@ -492,8 +522,8 @@ describe('a message that moves a group on, sent while a turn runs', () => {
     await h.tick()
 
     expect(h.sends()).toEqual([
-      { session_key: 's1', content: 'about a', move_on: 'g_a' },
-      { session_key: 's1', content: 'about b', move_on: 'g_b' },
+      { session_key: 's1', content: 'On "Matter g_a":\nabout a', move_on: 'g_a' },
+      { session_key: 's1', content: 'On "Matter g_b":\nabout b', move_on: 'g_b' },
     ])
     h.runtime.lendBeforeSend(null)
   })
@@ -506,12 +536,12 @@ describe('a message that moves a group on, sent while a turn runs', () => {
 describe('a message that moves a group on, sent before the conversation exists', () => {
   it('carries the group through the branch that mints the conversation', async () => {
     const h = await harness({ draft: true, create: true })
-    h.runtime.lendBeforeSend({ take: () => 'g_1' })
+    h.runtime.lendBeforeSend({ take: (_key, text) => ({ text: `On "Fix":\n${text}`, moveOn: 'g_1' }) })
 
     h.runtime.send('the next step')
     await h.tick()
 
-    expect(h.sends()).toEqual([{ session_key: 's1', content: 'the next step', move_on: 'g_1' }])
+    expect(h.sends()).toEqual([{ session_key: 's1', content: 'On "Fix":\nthe next step', move_on: 'g_1' }])
     h.runtime.lendBeforeSend(null)
   })
 })
@@ -538,8 +568,8 @@ describe('a retry after a send the gateway refused', () => {
     await h.tick()
 
     expect(h.sends()).toEqual([
-      { session_key: 's1', content: 'about a', move_on: 'g_a' },
-      { session_key: 's1', content: 'about a', move_on: 'g_a' },
+      { session_key: 's1', content: 'On "Matter g_a":\nabout a', move_on: 'g_a' },
+      { session_key: 's1', content: 'On "Matter g_a":\nabout a', move_on: 'g_a' },
     ])
     h.runtime.lendBeforeSend(null)
   })
@@ -585,8 +615,8 @@ describe('a retry after a turn that failed', () => {
     await h.tick()
 
     expect(h.sends()).toEqual([
-      { session_key: 's1', content: 'about a', move_on: 'g_a' },
-      { session_key: 's1', content: 'about a', move_on: 'g_a' },
+      { session_key: 's1', content: 'On "Matter g_a":\nabout a', move_on: 'g_a' },
+      { session_key: 's1', content: 'On "Matter g_a":\nabout a', move_on: 'g_a' },
     ])
     h.runtime.lendBeforeSend(null)
   })

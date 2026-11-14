@@ -6,7 +6,7 @@ import * as store from './store'
 
 import type { NodeRecord, TaskFile, TaskNode, TaskRow, TasksSource } from './types'
 
-const emptyRecord: NodeRecord = { dispatch: null, steps: [], answer: null, outputTruncated: false }
+const emptyRecord: NodeRecord = { dispatch: null, steps: [], answer: null, outputTruncated: false, messages: [] }
 
 const row = (over: Partial<TaskRow> & Pick<TaskRow, 'id' | 'kind' | 'status'>): TaskRow => ({
   task_summary: null, started_at: null, ended_at: null, agent: null, handle: null,
@@ -168,7 +168,7 @@ describe('fileDiffChange', () => {
         args: JSON.stringify({ path: '/w/a.py', old_text: 'a', new_text: 'ab' }),
         result: null, ok: true,
       }],
-      answer: null, outputTruncated: false,
+      answer: null, outputTruncated: false, messages: [],
     })
     const taskRow = row({ id: 'r1', kind: 'dag', status: 'completed' })
     const file: TaskFile = { path: '/w/a.py', op: 'edit', add: 1, del: 0 }
@@ -214,23 +214,6 @@ describe('fileDiffChange', () => {
     const file: TaskFile = { path: '/w/a.py', op: 'write', add: 3, del: 0 }
     const change = await store.fileDiffChange(taskRow, node({ node_id: 'n1' }), file)
     expect(change.hunks).toEqual([])
-  })
-})
-
-describe('node fold memory', () => {
-  it('is undefined until the reader touches a fold, then remembers per node', () => {
-    expect(store.foldOf('dag:r1:n1', 'proc')).toBeUndefined()
-    store.setFold('dag:r1:n1', 'proc', false)
-    expect(store.foldOf('dag:r1:n1', 'proc')).toBe(false)
-    /* A different node's own fold of the same name is untouched. */
-    expect(store.foldOf('dag:r1:n2', 'proc')).toBeUndefined()
-  })
-
-  it('keeps two folds on the same node independent', () => {
-    store.setFold('dag:r1:n1', 'wide', true)
-    store.setFold('dag:r1:n1', 'think:0', false)
-    expect(store.foldOf('dag:r1:n1', 'wide')).toBe(true)
-    expect(store.foldOf('dag:r1:n1', 'think:0')).toBe(false)
   })
 })
 
@@ -426,7 +409,7 @@ describe('a frame that lands while the list read is in flight', () => {
   })
 })
 
-/* While a run goes, `tasks.list` takes a decision's selection and a left-out
+/* While a run goes, `tasks.list` takes a decision node's selection and a left-out
    node's reason from registry rows, a best-effort write that can be dropped, so
    any read taken then -- the beat on a running node, the palette opening, a
    node's own terminal frame -- can answer those nodes without them. The frames
