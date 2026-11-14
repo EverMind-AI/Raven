@@ -115,18 +115,23 @@ def test_media_set_preserves_siblings_and_shared_settings(cfg: Path):
     assert media["image"]["apiKey"] == "sk-img"
 
 
-def test_the_image_and_video_sections_take_a_provider(cfg: Path):
-    """A write puts the section back whole through its class: the image and video
-    sections keep the provider they run on, and speech refuses one like any unknown
-    field."""
-    media = {"image": {"model": "gpt-image-2", "provider": "openai"}, "video": {"model": "MiniMax-H3"}}
+def test_media_sections_take_a_provider(cfg: Path):
+    """A write puts each routed section back through its declared class."""
+    media = {
+        "image": {"model": "gpt-image-2", "provider": "openai"},
+        "speech": {"model": "speech-02", "provider": "minimax"},
+        "video": {"model": "MiniMax-H3"},
+    }
     cfg.write_text(json.dumps({"tools": {"media": media}}), encoding="utf-8")
     ut.set_media("image", {"quality": "low"}, config_path=cfg)
+    ut.set_media("speech", {"provider": "minimax_cn_api"}, config_path=cfg)
     ut.set_media("video", {"provider": "minimax"}, config_path=cfg)
     written = _raw(cfg)["tools"]["media"]
-    assert (written["image"]["provider"], written["video"]["provider"]) == ("openai", "minimax")
-    with pytest.raises(KeyError):
-        ut.set_media("speech", {"provider": "openai"}, config_path=cfg)
+    assert (written["image"]["provider"], written["speech"]["provider"], written["video"]["provider"]) == (
+        "openai",
+        "minimax_cn_api",
+        "minimax",
+    )
 
 
 def test_media_rejects_an_unknown_tool(cfg: Path):

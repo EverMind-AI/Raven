@@ -192,6 +192,10 @@ class ProviderSpec:
     # `image_api`.
     video_api: bool = False
 
+    # The speech tool can run direct provider operations on this provider's
+    # address and key. OpenRouter remains the default speech backend.
+    speech_api: bool = False
+
     @property
     def label(self) -> str:
         return self.display_name or self.name.title()
@@ -994,6 +998,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="https://api.minimax.io/v1",
         image_api=True,
         video_api=True,
+        speech_api=True,
     ),
     ProviderSpec(
         name="minimax_cn_api",
@@ -1012,6 +1017,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_model="minimax-cn-api/MiniMax-M3",
         image_api=True,
         video_api=True,
+        speech_api=True,
     ),
     ProviderSpec(
         name="minimax_global",
