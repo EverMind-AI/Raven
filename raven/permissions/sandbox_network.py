@@ -48,6 +48,14 @@ KIND = "sandbox.network"
 # and one prompt asks about no more targets than it names.
 _MAX_LISTED = 10
 _MAX_LINE = 160
+# What a person approves is the address, so it is never shortened; the program
+# path, which the sandboxed command chooses, is. An address longer than any host
+# name is not asked about, which with the caps below keeps every prompt's
+# targets well under the gate's evidence clamp, so the card can list them.
+_MAX_HOST = 253
+_MIN_PROGRAM = 24
+_MAX_EVIDENCE_PROGRAM = 300
+_MAX_REASON = 80
 _SHARED_NOTE = (
     "Every conversation shares this sandbox, so what you allow here stays allowed for all of them until Raven restarts."
 )
@@ -82,7 +90,7 @@ async def handle_denials(
     for denial in denials:
         if refusing_rule(network, denial.binary, denial.host, denial.port) is not None:
             refused.append(denial)
-        elif denial.binary and denial.port is not None:
+        elif denial.binary and denial.port is not None and len(denial.host) <= _MAX_HOST:
             askable.append(denial)
         else:
             unaskable.append(denial)
@@ -177,7 +185,12 @@ async def _prompt(
     lines = _lines(denials)
     keys = tuple(f"net:{grant.binary}@{grant.host}:{grant.port}" for grant in _grants(denials))
     targets = [
-        {"binary": denial.binary, "host": denial.host, "port": denial.port, "reason": denial.reason}
+        {
+            "binary": _tail(denial.binary, _MAX_EVIDENCE_PROGRAM),
+            "host": denial.host,
+            "port": denial.port,
+            "reason": denial.reason[:_MAX_REASON],
+        }
         for denial in denials
     ]
 
@@ -353,7 +366,26 @@ def _record_blocked(denials: Sequence[NetworkDenial], tool_name: str) -> None:
 
 
 def _lines(denials: Sequence[NetworkDenial]) -> list[str]:
-    return [_shortened(denial_line(denial)) for denial in denials[:_MAX_LISTED]]
+    return [_shown(denial) for denial in denials[:_MAX_LISTED]]
+
+
+def _shown(denial: NetworkDenial) -> str:
+    """One connection as the person and the model read it: the program may be shortened, the address never."""
+    line = denial_line(denial)
+    if len(line) <= _MAX_LINE:
+        return line
+    target = line[len(denial.binary) + len(" -> ") :] if denial.binary else line
+    if len(target) > _MAX_HOST + len("[]:65535"):
+        # No host name is this long, and it is never asked about: only recorded.
+        return _shortened(line)
+    if not denial.binary:
+        return target
+    room = max(_MAX_LINE - len(target) - len(" -> "), _MIN_PROGRAM)
+    return f"{_tail(denial.binary, room)} -> {target}"
+
+
+def _tail(text: str, limit: int) -> str:
+    return text if len(text) <= limit else "..." + text[-(limit - 3) :]
 
 
 def _listed(denials: Sequence[NetworkDenial]) -> str:

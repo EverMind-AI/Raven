@@ -71,13 +71,19 @@ async def test_a_flood_of_denials_names_ten_and_counts_the_rest():
     assert turn.refusals[-1].action == "and 40 more blocked targets"
 
 
-async def test_a_long_target_line_is_shortened():
+async def test_a_long_program_path_is_shortened_and_a_long_address_never_is():
     turn = start_permission_turn(None, conversation_id="c", turn_id="t")
     long_host = "a" * 60 + "." + "b" * 60 + "." + "c" * 60 + ".example.com"
-    text = (await handle_denials(None, [NetworkDenial("/usr/bin/curl", long_host, 443, "x")], command="curl")).text
-    (refusal,) = turn.refusals
-    assert len(refusal.action) <= 160 and refusal.action.endswith("...")
-    assert refusal.action in text
+    long_program = "/tmp/" + "x" * 140 + "/curl"
+    denials = [
+        NetworkDenial("/usr/bin/curl", long_host, 443, "x"),
+        NetworkDenial(long_program, "example.org", 443, "x"),
+    ]
+    text = (await handle_denials(None, denials, command="curl")).text
+    address, program = (refusal.action for refusal in turn.refusals)
+    assert address == f"/usr/bin/curl -> {long_host}:443"
+    assert len(program) <= 160 and program.startswith("...") and program.endswith("x/curl -> example.org:443")
+    assert address in text and program in text
 
 
 class FakeSandbox:
@@ -144,6 +150,43 @@ async def test_an_approved_target_tells_the_model_to_run_the_command_again(grant
         == "\n\n[sandbox] Network access for /usr/bin/curl -> example.com:443 was approved; run the command again."
     )
     assert notice.stop is False
+
+
+LONG_PROGRAM = "/tmp/" + "x" * 140 + "/curl"
+
+
+async def test_a_long_program_path_never_hides_the_address_from_the_prompt(grants):
+    """The program is the sandboxed command's own choice; the prompt every surface shows
+    (IM, ACP and the TUI read `command`) must still name what Allow opens."""
+    responder = Responder(ApprovalChoice.ALLOW)
+    sandbox = FakeSandbox()
+    await _handle(responder, [NetworkDenial(LONG_PROGRAM, "exfil.attacker-example.com", 443, "x")], sandbox)
+    (call,) = responder.calls
+    assert call["command"].endswith("x/curl -> exfil.attacker-example.com:443")
+    assert sandbox.granted == [[NetworkGrant(LONG_PROGRAM, "exfil.attacker-example.com", 443)]]
+
+
+async def test_every_target_survives_the_evidence_clamp(grants):
+    """Ten targets at the largest size a prompt takes stay a list the web card can show."""
+    responder = Responder(ApprovalChoice.ALLOW)
+    hosts = [f"h{i}" + "a" * 61 + "." + ".".join(["b" * 63] * 2) + "." + "c" * 61 for i in range(10)]
+    assert all(len(host) == 253 for host in hosts)
+    denials = [NetworkDenial("/" + "p" * 1817, host, 443, "r" * 500) for host in hosts]
+    await _handle(responder, denials, FakeSandbox())
+    (call,) = responder.calls
+    evidence = call["evidence"]
+    assert "truncated" not in evidence
+    assert [target["host"] for target in evidence["targets"]] == hosts
+    assert all(host in call["command"] for host in hosts)
+
+
+async def test_an_address_no_host_name_can_be_is_never_asked_about(grants):
+    responder = Responder(ApprovalChoice.ALLOW)
+    sandbox = FakeSandbox()
+    notice, turn = await _handle(responder, [NetworkDenial("/usr/bin/curl", "a" * 300, 443, "x")], sandbox)
+    assert responder.calls == [] and sandbox.granted == []
+    assert "blocked" in notice.text and [r.source for r in turn.refusals] == ["sandbox_network"]
+    assert len(turn.refusals[0].action) <= 160
 
 
 class UnloadingSandbox(FakeSandbox):
