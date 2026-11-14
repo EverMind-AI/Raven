@@ -43,8 +43,19 @@ def carries_runtime_context(content: Any, lines: str) -> bool:
     if isinstance(content, str):
         return lines in content
     if isinstance(content, list):
-        return any(isinstance(b, dict) and isinstance(b.get("text"), str) and lines in b["text"] for b in content)
+        return _block_holding(content, lines) is not None
     return False
+
+
+def _block_holding(content: list[Any], lines: str) -> int | None:
+    return next(
+        (
+            i
+            for i, b in enumerate(content)
+            if isinstance(b, dict) and isinstance(b.get("text"), str) and lines in b["text"]
+        ),
+        None,
+    )
 
 
 def replayed_content(message: dict[str, Any]) -> Any:
@@ -134,8 +145,9 @@ def retell_notices(before: list[dict[str, Any]], after: list[dict[str, Any]]) ->
     A reclaim trims the history after the question was built, and the question's
     block may have left a note out because a reclaimed message had told it. The
     lines that bring ``after`` back to the state ``before`` reads are added to the
-    newest envelope that recorded its block (``RUNTIME_CONTEXT_KEY``); ``after``
-    itself comes back when nothing was lost.
+    newest envelope that recorded its block (``RUNTIME_CONTEXT_KEY``) and still
+    holds it, wherever in the content the block now sits; ``after`` itself comes
+    back when nothing was lost.
     """
     repair = notice_changes(list(told_notices(before).values()), told_notices(after))
     if not repair:
@@ -145,18 +157,24 @@ def retell_notices(before: list[dict[str, Any]], after: list[dict[str, Any]]) ->
         lines = message.get(RUNTIME_CONTEXT_KEY)
         if message.get("role") != "user" or not isinstance(lines, str) or not lines:
             continue
-        if MCP_NOTICE_HEADER in lines.splitlines():
-            repair = repair[1:]
-        told = "\n".join([lines, *repair])
-        content = message.get("content")
-        if isinstance(content, list) and content and isinstance(content[0], dict):
-            content = [{**content[0], "text": str(content[0].get("text", "")).replace(lines, told, 1)}, *content[1:]]
-        elif isinstance(content, str):
-            content = content.replace(lines, told, 1)
+        told = "\n".join([lines, *(repair[1:] if MCP_NOTICE_HEADER in lines.splitlines() else repair)])
+        content = _replaced(message.get("content"), lines, told)
+        if content is None:
+            continue
         retold = list(after)
         retold[index] = {**message, "content": content, RUNTIME_CONTEXT_KEY: told}
         return retold
     return after
+
+
+def _replaced(content: Any, lines: str, told: str) -> Any:
+    """``content`` with the ``lines`` it holds told as ``told``; ``None`` when it does not hold them."""
+    if isinstance(content, str):
+        return content.replace(lines, told, 1) if lines in content else None
+    at = _block_holding(content, lines) if isinstance(content, list) else None
+    if at is None:
+        return None
+    return [*content[:at], {**content[at], "text": content[at]["text"].replace(lines, told, 1)}, *content[at + 1 :]]
 
 
 def _split(lines: list[str]) -> tuple[list[str], dict[str, str]]:
@@ -172,11 +190,22 @@ def _split(lines: list[str]) -> tuple[list[str], dict[str, str]]:
 
 
 def _block_lines(message: dict[str, Any]) -> list[str]:
-    """The lines under the runtime-context tag ``message`` was sent with; none for any other message."""
+    """The lines under the runtime-context tag ``message`` was sent with; none for any other message.
+
+    A recorded block is read from its record, since text put in front of the
+    question after assembly (a recovery notice) moves it off the content's start.
+    """
     if message.get("role") != "user":
         return []
+    content = message.get("content")
     filed = message.get(RUNTIME_CONTEXT_FIELD)
-    text = filed if isinstance(filed, str) and filed else message.get("content")
+    sent = message.get(RUNTIME_CONTEXT_KEY)
+    if isinstance(filed, str) and filed:
+        text = filed
+    elif isinstance(sent, str) and sent and carries_runtime_context(content, sent):
+        text = sent
+    else:
+        text = content
     if isinstance(text, list):
         first = text[0] if text else None
         text = first.get("text") if isinstance(first, dict) else None

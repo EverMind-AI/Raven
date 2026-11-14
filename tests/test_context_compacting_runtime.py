@@ -758,6 +758,48 @@ class TestOverflow:
         assert note in retry_question["content"].split("\n\n", 1)[0]
         assert note in retry_question[RUNTIME_CONTEXT_KEY]
 
+    async def test_a_multimodal_question_behind_a_recovery_notice_is_told_the_note_too(self, tmp_path: Path) -> None:
+        """Recovery puts its notice in front of the question after assembly, so
+        the question's lines no longer open its content; the retry must still
+        carry the note in what the provider is sent."""
+        from types import SimpleNamespace
+
+        from raven.agent.loop.turn_path import TurnPathMixin
+        from raven.context_engine.runtime_context import (
+            MCP_NOTICE_HEADER,
+            RUNTIME_CONTEXT_KEY,
+            mcp_notice,
+            with_runtime_context,
+        )
+        from raven.context_engine.segments.render import RUNTIME_CONTEXT_TAG
+
+        note = mcp_notice("github", "installed, awaiting authorization.")
+        session = _session(60)
+        session[20] = {
+            "role": "user",
+            "content": with_runtime_context(
+                f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{note}", session[20]["content"]
+            ),
+        }
+        builder = _builder(tmp_path)
+        lines = f"{RUNTIME_CONTEXT_TAG}\nChat ID: x"
+        words = [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+            {"type": "text", "text": "and now?"},
+        ]
+        question = {"role": "user", "content": with_runtime_context(lines, words), RUNTIME_CONTEXT_KEY: lines}
+        messages = [*await self._refused(builder, session), question]
+        recovering = SimpleNamespace(_pending_recovery={"s1": {"files": ["a.py"]}})
+        TurnPathMixin._inject_recovery_block(recovering, "s1", messages)  # type: ignore[arg-type]
+        assert not recovering._pending_recovery, "fixture must put the recovery notice in front"
+
+        outcome = await builder.on_context_overflow("s1", messages, attempt=1, window=WINDOW)
+
+        assert outcome is not None
+        assert not any(note in str(m.get("content")) for m in outcome.messages[:-1]), "fixture must reclaim the note"
+        sent = [part.get("text", "") for part in outcome.messages[-1]["content"] if part.get("type") == "text"]
+        assert any(text.startswith(RUNTIME_CONTEXT_TAG) and note in text for text in sent)
+
     async def test_the_reclaimed_prompt_is_still_a_valid_one(self, tmp_path: Path) -> None:
         builder = _builder(tmp_path)
         messages = await self._refused(builder, _session(60, pinned=True))

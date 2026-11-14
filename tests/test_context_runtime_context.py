@@ -13,6 +13,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from raven.agent.context import ContextBuilder
 from raven.config.raven import ContextConfig
 from raven.context_engine import ContextAssembler, TurnContext, headroom
@@ -588,6 +590,54 @@ class TestNotesAReclaimTookAwayAreToldAgain:
 
         assert kept["content"][0]["text"].endswith(_AUTH)
         assert kept["content"][1:] == [{"type": "text", "text": "look"}]
+
+    _RECOVERY = "[Recovery - the previous turn was interrupted before finishing]"
+    _IMAGE = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+
+    def test_a_question_behind_a_recovery_notice_gets_the_note_in_its_own_block(self) -> None:
+        """Recovery puts its notice in front of the question after assembly; the
+        note still goes into the block that holds the question's lines."""
+        from raven.context_engine.runtime_context import retell_notices, told_notices
+
+        older = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_AUTH}", "q0")}
+        question = self._envelope(f"{_TAG}\nChat ID: x", [self._IMAGE, {"type": "text", "text": "look"}])
+        question["content"] = [{"type": "text", "text": self._RECOVERY}, *question["content"]]
+
+        [kept] = retell_notices([older, question], [question])
+
+        recovery, block, *rest = kept["content"]
+        assert recovery == {"type": "text", "text": self._RECOVERY}
+        assert block["text"] == kept[RUNTIME_CONTEXT_KEY]
+        assert block["text"].endswith(f"{_HEADER}\n{_AUTH}")
+        assert rest == [self._IMAGE, {"type": "text", "text": "look"}]
+        assert told_notices([kept]) == {"github": _AUTH}
+
+    def test_a_note_the_question_changed_behind_a_recovery_notice_is_not_put_back(self) -> None:
+        """The question's own block is read wherever it sits, so a reclaim does
+        not add back an older note the question had already replaced."""
+        from raven.context_engine.runtime_context import retell_notices, told_notices
+
+        older = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_CONNECTING}", "q0")}
+        question = self._envelope(f"{_TAG}\nChat ID: x\n{_HEADER}\n{_FOLDED}")
+        question["content"] = f"{self._RECOVERY}\n\n{question['content']}"
+
+        [kept] = retell_notices([older, question], [question])
+
+        assert kept["content"] == question["content"]
+        assert told_notices([kept]) == {"notion": _FOLDED}
+
+    @pytest.mark.parametrize("words", ["q1", [{"type": "text", "text": "q1"}]], ids=["string", "block-list"])
+    def test_a_recorded_block_the_content_no_longer_holds_is_neither_read_nor_retold(self, words: Any) -> None:
+        """What counts as told is what was sent, so a record whose block is gone
+        from the content is not read, and no note is written into the record alone."""
+        from raven.context_engine.runtime_context import retell_notices, told_notices
+
+        older = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_AUTH}", "q0")}
+        rewritten = {"role": "user", "content": words, RUNTIME_CONTEXT_KEY: f"{_TAG}\n{_HEADER}\n{_FOLDED}"}
+        after = [rewritten]
+
+        assert told_notices([rewritten]) == {}
+        assert retell_notices([older, rewritten], after) is after
 
     def test_a_question_that_already_has_the_header_is_not_given_a_second(self) -> None:
         from raven.context_engine.runtime_context import retell_notices
