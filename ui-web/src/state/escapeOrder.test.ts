@@ -45,15 +45,16 @@ import * as workdir from './workdir'
 
 import type { ComposerSource } from '../features/composer/types'
 
-/* The seventeen, in the order Escape reaches them. Each item is the text the chain
-   tests to decide whether that layer is on screen -- a selector for the seven
-   elements, the predicate's own name for the three that have no element of
+/* The eighteen, in the order Escape reaches them. Each item is the text the chain
+   tests to decide whether that layer is on screen -- a selector for the fourteen
+   elements, the predicate's own name for the four that have no element of
    their own to look at.
 
    The composer bar's three sit next to last: every layer above them covers the
    bar, and the turn below them is the last resort. */
 const LAYER_IDS = [
   '.lightbox',
+  '#findVeil',
   '#veil',
   '#exportVeil',
   '#detail',
@@ -97,6 +98,7 @@ const PAGE = [
   '<aside class="detail" id="detail" data-open="false"><div class="body" id="dBody"></div></aside>',
   '<div class="veil setveil" id="setVeil" data-open="false"><div id="setModal"></div></div>',
   '<div class="veil" id="exportVeil" data-open="false"><button id="exportClose"></button></div>',
+  '<div class="veil" id="findVeil" data-open="false"><input id="sfind"></div>',
   '<div class="veil" id="veil" data-open="false"><button id="cfNo"></button></div>',
   '</div>',
   '<button id="railShow"></button>',
@@ -137,6 +139,9 @@ const LAYERS: Record<string, { up: () => void; taken: () => boolean }> = {
     },
     taken: () => !document.querySelector('.lightbox'),
   },
+  /* The dialog writes `data-open` from the store, and nothing renders while
+     this file drives the table, so the store is what answers both ways. */
+  '#findVeil': { up: () => { find.set({ open: true }); flag('findVeil')() }, taken: () => !find.get().open },
   '#veil': { up: flag('veil'), taken: () => cancelled.includes('cfNo') },
   '#exportVeil': { up: flag('exportVeil'), taken: () => cancelled.includes('exportClose') },
   '#detail': { up: flag('detail'), taken: lowered('detail') },
@@ -237,11 +242,11 @@ const key = (k: string, over: Partial<KeyboardEventInit> = {}): KeyboardEvent =>
 }
 
 describe('the Escape priority order', () => {
-  it('is the order the table reaches the seventeen layers in', () => {
+  it('is the order the table reaches the eighteen layers in', () => {
     expect(escapeOrder.ESCAPE_ORDER.map((layer) => layer.id)).toEqual([...LAYER_IDS])
   })
 
-  it('has no seventeenth entry, and every entry is in the fixture', () => {
+  it('has no eighteenth entry, and every entry is in the fixture', () => {
     expect(escapeOrder.ESCAPE_ORDER).toHaveLength(LAYER_IDS.length)
     expect(Object.keys(LAYERS)).toEqual([...LAYER_IDS])
   })
@@ -277,8 +282,8 @@ describe('the Escape priority order', () => {
   const pairs = LAYER_IDS.flatMap((first, i) =>
     LAYER_IDS.slice(i + 1).filter((second) => !shared(first, second)).map((second) => ({ first, second })))
 
-  it('has a hundred and thirty-three pairs to answer for, every pair but the three that share a close', () => {
-    expect(pairs).toHaveLength(133)
+  it('has a hundred and fifty pairs to answer for, every pair but the three that share a close', () => {
+    expect(pairs).toHaveLength(150)
   })
 
   it('reaches the three pages that share a close in table order', () => {
