@@ -213,9 +213,9 @@ Each `packages` entry is either a package root (a directory holding
 Discovery reads manifests only and never imports anything from a package.
 
 Containment follows spec §4.1. The package root is resolved once
-(`Path.resolve()`), and every path the loader touches must satisfy
-`is_relative_to(root)` after resolution. A symlink or junction that
-resolves outside the root is refused for that component -- the skill is
+(`os.path.realpath(..., strict=True)`), and every path the loader touches
+must satisfy `is_relative_to(root)` after resolution. A symlink or junction
+that resolves outside the root is refused for that component -- the skill is
 skipped, the server entry is invalid -- while the rest of the package still
 loads. A `plugin.json` that does not resolve inside its own root rejects
 the package (§4.1).

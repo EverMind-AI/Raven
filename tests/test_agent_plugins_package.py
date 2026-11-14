@@ -219,6 +219,15 @@ def test_a_child_path_is_contained(tmp_path: Path) -> None:
     assert is_contained(root, root)
 
 
+def test_a_path_that_does_not_exist_yet_is_contained(tmp_path: Path) -> None:
+    """A root-internal location stays contained before anything creates it."""
+    root = tmp_path / "pkg"
+    root.mkdir()
+
+    assert is_contained(root, root / "gone") is True
+    assert is_contained(root, root / "skills" / "deeper" / "x") is True
+
+
 def test_a_path_that_escapes_with_a_parent_reference_is_not_contained(
     tmp_path: Path,
 ) -> None:
@@ -304,3 +313,35 @@ def test_the_package_exposes_the_same_fingerprint(tmp_path: Path) -> None:
     root = _tree(tmp_path / "acme")
     package = load_package(root)
     assert package.fingerprint() == package_fingerprint(root)
+
+
+def test_a_loop_that_resolution_cannot_resolve_is_not_contained(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``resolve`` reports a loop as contained from 3.13, so containment uses ``realpath``."""
+    root = tmp_path / "pkg"
+    root.mkdir()
+    candidate = root / "loop"
+    realpath = os.path.realpath
+
+    def raising_realpath(path: str | os.PathLike[str], *, strict: bool = False) -> str:
+        if strict and str(path) == str(candidate):
+            raise OSError(errno.ELOOP, "Symlink loop")
+        return realpath(path, strict=strict)
+
+    monkeypatch.setattr(os.path, "realpath", raising_realpath)
+
+    assert is_contained(root, candidate) is False
+
+
+@pytest.mark.skipif(os.name == "nt", reason="a symlink loop needs a POSIX host to create")
+def test_a_real_symlink_loop_is_not_contained(tmp_path: Path) -> None:
+    root = tmp_path / "pkg"
+    root.mkdir()
+    loop = root / "loop"
+    try:
+        _link_to(loop, loop)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"this host cannot create a symlink loop: {exc}")
+
+    assert is_contained(root, loop) is False
