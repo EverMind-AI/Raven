@@ -52,6 +52,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from loguru import logger
 
+from raven.config.agent_names import is_builtin_agent_name
 from raven.utils.commands import command_tokens, resolve_subagent_command
 
 if TYPE_CHECKING:
@@ -775,10 +776,17 @@ def merge_product_seeds(configs: list[Any] | None, discovered: list[Any] | None)
             # folder it named has gone. A stub that still has its marker is
             # provably a switch for a folder that is not there, and drops out
             # below instead.
-            if name not in by_name:
-                order.append(name)
-            by_name[name] = _with_enabled(cfg, False)
-            continue
+            #
+            # One row is exempt: an acp redeclaration of a built-in agent, whose
+            # command the host fills in after this merge. For that row an empty
+            # command means "not yet" rather than "nothing to run", and its own
+            # flag is the operator's -- read as it was written, so switching the
+            # agent off stays off.
+            if not _waits_for_a_host_command(cfg, name):
+                if name not in by_name:
+                    order.append(name)
+                by_name[name] = _with_enabled(cfg, False)
+                continue
         if marked or (found is not None and (no_launcher or _same_but_enabled(cfg, found))):
             # A row that carries nothing but the switch. Three ways of telling,
             # because a row has to survive being rewritten by a raven that does
@@ -843,6 +851,24 @@ def merge_product_seeds(configs: list[Any] | None, discovered: list[Any] | None)
         by_name[name] = cfg
 
     return [by_name[name] for name in order]
+
+
+def _waits_for_a_host_command(cfg: Any, name: str) -> bool:
+    """Will the host fill this row's command in, after this merge?
+
+    An ``acp`` row that redeclares a built-in agent takes that agent's slot
+    wholesale, and the slot's transport comes from the host: the command
+    defaults to this install's own ``raven acp``. That default is filled in
+    later -- by ``merge_builtin_seeds``, which runs after this merge -- so for
+    such a row an empty command means "not yet", not "nothing to run".
+
+    Answered from the name vocabulary alone: the seeds' names are the same
+    names the vocabulary keeps, and a row whose name is not one of them is not
+    a redeclaration of anything, so nothing will be filled in for it.
+    """
+    if getattr(cfg, "kind", None) != "acp":
+        return False
+    return is_builtin_agent_name(name)
 
 
 def _same_but_enabled(cfg: Any, discovered: Any) -> bool:
