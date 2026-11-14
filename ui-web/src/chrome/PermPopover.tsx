@@ -7,9 +7,10 @@
  * so neither repeats it.
  *
  * WHERE this renders is the one thing it does not decide. It is a child of the
- * chip's anchor (`.chrome-anch`, src/chrome/Dock.tsx), hung off the chip's top edge by
- * the stylesheet, and never moved -- which is what lets every row carry a plain
- * onClick: the tree never leaves the container React delegates from.
+ * chip's anchor (`.chrome-anch`, src/chrome/Dock.tsx), hung by the stylesheet off the
+ * top edge of the session segment the chip sits in, and never moved -- which is what
+ * lets every row carry a plain onClick: the tree never leaves the container React
+ * delegates from.
  *
  * The rows themselves are the store's, words and tick and all, read when the
  * popover opened rather than while it stands: a language applied over an open
