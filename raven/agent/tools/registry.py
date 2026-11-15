@@ -125,7 +125,8 @@ def admit_tool(tool: Tool) -> ToolSpec:
 def _truncation_error(truncation: TruncationInfo) -> str:
     """What is known, and what is only inferred, kept apart.
 
-    Known: the turn stopped at the output limit, because the upstream said so.
+    Known: the turn stopped at a limit, because the upstream said so -- the
+    output limit, or the model's context window when ``reason`` says so.
     Inferred: that this call was the cut one, which follows from generation
     being sequential but not from anything the upstream said -- a turn can
     finish a call and then hit the limit in the prose after it. Saying "this
@@ -133,8 +134,15 @@ def _truncation_error(truncation: TruncationInfo) -> str:
 
     The refusal is not conditional on that inference. A call that may be
     incomplete is not dispatched either way; being wrong costs one retry. What
-    to do about it is the tool's, via ``Tool.truncation_hint``.
+    to do about an output-limit cut is the tool's, via ``Tool.truncation_hint``.
+    A window cut gets no such advice: a smaller call does not shrink the prompt
+    that filled the window, and making room there is the loop's job.
     """
+    if truncation.reason == "context_window":
+        return (
+            "Error: [truncated] This turn hit the model's context window, and this call was the last thing "
+            "being written, so it may have been cut short. It was not run."
+        )
     at = f" at the {truncation.at_tokens}-token output limit" if truncation.at_tokens else " at the output limit"
     return (
         f"Error: [truncated] This turn stopped{at}, and this call was the last thing "
@@ -956,6 +964,8 @@ class ToolRegistry:
         # A wasted turn is cheaper than a silent overwrite.
         truncation = run_meta.truncation if run_meta else None
         if truncation:
+            if truncation.reason == "context_window":
+                return _truncation_error(truncation) + _received_tail(params)
             # The tail belongs here too, and this is the path it matters most on:
             # ``flag_truncation`` reads ``arguments_repaired`` to reach its verdict
             # and adds ``truncation`` to that same run_meta, so a streamed reply cut
