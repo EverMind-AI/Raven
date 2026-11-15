@@ -354,6 +354,172 @@ def test_the_wire_carries_code_and_a_deadline() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# The step a generated function is handed                                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_step_payload_keeps_normalized_tool_calls_structured() -> None:
+    """A generated participant reads the calls the model proposed as data, not
+    as whatever a dataclass happens to print as."""
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.charter import _step_payload
+    from raven.contracts.llm_provider import LLMResponse, RunMeta, ToolCallRequest
+
+    arguments = {"path": "out/report.md", "options": {"dry_run": True}, "items": [1, None]}
+    call = ToolCallRequest(
+        id="call-1",
+        name="write_file",
+        arguments=arguments,
+        provider_specific_fields={"opaque": "provider-private"},
+        function_provider_specific_fields={"also": "provider-private"},
+        run_meta=RunMeta(),
+    )
+    step = SimpleNamespace(response=LLMResponse(content=None, tool_calls=[call]))
+
+    payload = _step_payload(step)
+    [projected] = payload["response"]["tool_calls"]
+
+    assert projected == {"id": "call-1", "name": "write_file", "arguments": arguments}
+    assert projected["arguments"] is not arguments
+    projected["arguments"]["options"]["dry_run"] = False
+    projected["arguments"]["items"].append(2)
+    assert arguments["options"]["dry_run"] is True
+    assert arguments["items"] == [1, None]
+
+
+def test_each_call_keeps_its_own_id_name_and_arguments_in_order() -> None:
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.charter import _step_payload
+    from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
+
+    step = SimpleNamespace(
+        response=LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCallRequest(id="a", name="read_file", arguments={"path": "one.txt"}),
+                ToolCallRequest(id="b", name="write_file", arguments={"path": "two.txt", "content": "x"}),
+            ],
+        )
+    )
+
+    assert _step_payload(step)["response"]["tool_calls"] == [
+        {"id": "a", "name": "read_file", "arguments": {"path": "one.txt"}},
+        {"id": "b", "name": "write_file", "arguments": {"path": "two.txt", "content": "x"}},
+    ]
+
+
+def test_the_projected_calls_are_plain_json_data() -> None:
+    """The projection is what a JSON wire could carry: no ToolCallRequest left
+    anywhere, and bools, numbers and nulls still typed."""
+    import json
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.charter import _step_payload
+    from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
+
+    arguments = {"flag": False, "count": 3, "ratio": 0.5, "missing": None, "nested": [{"deep": True}]}
+    step = SimpleNamespace(
+        response=LLMResponse(
+            content=None, tool_calls=[ToolCallRequest(id="call-1", name="write_file", arguments=arguments)]
+        )
+    )
+
+    calls = _step_payload(step)["response"]["tool_calls"]
+
+    assert json.loads(json.dumps(calls)) == calls
+    [projected] = calls
+    assert projected["arguments"]["flag"] is False
+    assert projected["arguments"]["count"] == 3
+    assert projected["arguments"]["ratio"] == 0.5
+    assert projected["arguments"]["missing"] is None
+    assert projected["arguments"]["nested"] == [{"deep": True}]
+
+
+def test_a_step_without_calls_projects_without_them() -> None:
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.charter import _step_payload
+    from raven.contracts.llm_provider import LLMResponse
+
+    answered = _step_payload(SimpleNamespace(response=LLMResponse(content="done")))
+    assert answered["response"]["content"] == "done"
+    assert answered["response"]["tool_calls"] == []
+    assert _step_payload(SimpleNamespace(response=None))["response"] is None
+
+
+def test_calls_that_arrived_as_plain_dicts_are_untouched() -> None:
+    """A response whose calls are already plain data -- a replay, a fixture --
+    keeps the recursion it always had, and an object the projections know
+    nothing about still falls back to its string."""
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.charter import _pure_data, _step_payload
+
+    wire_shaped = [{"function": {"name": "write_file", "arguments": {"path": "a"}}}]
+    step = SimpleNamespace(response=SimpleNamespace(tool_calls=wire_shaped, content=None))
+
+    assert _step_payload(step)["response"]["tool_calls"] == wire_shaped
+
+    class _Opaque:
+        pass
+
+    opaque = _Opaque()
+    assert _pure_data(opaque) == str(opaque)
+
+
+ADVISE_ON_DRY_RUN = """
+def advise(step):
+    response = step.get("response") or {}
+    calls = response.get("tool_calls") or []
+    if calls and calls[0].get("name") == "write_file":
+        options = calls[0].get("arguments", {}).get("options") or {}
+        if options.get("dry_run"):
+            return "Keep the next action read-only."
+    return None
+"""
+
+
+async def test_a_generated_advise_reads_nested_call_arguments() -> None:
+    """Not just a greener payload test: the function compiles behind the gate,
+    runs through the participant the loop seats, and changes its answer when the
+    nested argument changes -- which it cannot do reading a string."""
+    from raven.agent.subagent.charter import CharterParticipant
+    from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
+    from raven.contracts.participant import StepView
+
+    def _step(dry_run: bool) -> StepView:
+        return StepView(
+            session_key="s1",
+            iteration=1,
+            response=LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call-1",
+                        name="write_file",
+                        arguments={"path": "out/report.md", "options": {"dry_run": dry_run}},
+                    )
+                ],
+            ),
+            transcript=(),
+            history=(),
+            turn_base=0,
+            question="write the report",
+            rollbacks=0,
+            mode=None,
+            mode_overlay=None,
+            phase="after_iteration",
+        )
+
+    participant = CharterParticipant()
+    with charter_scope(Charter(functions=(("advise", ADVISE_ON_DRY_RUN),))):
+        assert await participant.advise(_step(dry_run=True)) == "Keep the next action read-only."
+        assert await participant.advise(_step(dry_run=False)) is None
+
+
+# --------------------------------------------------------------------------- #
 # The deadline: tighter, never looser                                           #
 # --------------------------------------------------------------------------- #
 

@@ -31,6 +31,7 @@ from typing import Any
 
 from loguru import logger
 
+from raven.contracts.llm_provider import ToolCallRequest
 from raven.contracts.participant import AgentParticipant, StepView
 
 MAX_PROMPT_CHARS = 4000
@@ -322,10 +323,21 @@ def _pure_data(value: Any) -> Any:
         return {str(key): _pure_data(item) for key, item in value.items()}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [_pure_data(item) for item in value]
+    if isinstance(value, ToolCallRequest):
+        # The normalized shape, three keys and no more: a generated function
+        # reads id, name and arguments, and the provider-private fields the
+        # dataclass carries beside them are not its business.
+        return {
+            "id": value.id,
+            "name": value.name,
+            "arguments": _pure_data(value.arguments),
+        }
     return str(value)
 
 
 def _step_payload(step: Any) -> dict[str, Any]:
+    """The step as the generated functions see it: plain data throughout, with
+    ``response.tool_calls`` projected to ``id``/``name``/``arguments`` mappings."""
     response = getattr(step, "response", None)
     response_data = None
     if response is not None:
