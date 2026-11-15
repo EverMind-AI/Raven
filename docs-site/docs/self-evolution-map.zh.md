@@ -58,7 +58,7 @@ SOP §8.0 的分工（语义交给模型、确定性算术交给代码）原样�
 | ④ 应用改动、创建子节点；path_guard 守护内核；git 持久化 | 先改后提交：改动以父节点的真实 git 子提交落地，工作树不受影响，由程序确定并返回变更文件的路径 | `evolver/tree/git_ops.py::commit_files_as_child`；`evolver/applier/path_guard.py` |
 | ⑤a K=1 锚点宽松筛选；计算 σ_screen；1.5σ 处淘汰；三档 | 三个分桶 clear_win / within_band / cull，只有 cull 会被拦；σ 公式与 SOP 一致，由 `select_anchor` 从账本中给出；AppWorld 线路使用聚焦子集的 Fisher 探测变体（同样是宽松通过：只淘汰显著更差者） | `orchestrator/nodes/screen.py::screen_candidate`；`evolver/scheduler/anchor_selection.py::select_anchor / simple_anchor`；`orchestrator/gates/strategies.py::FocusedFisherGate` |
 | ⑤a 锚点构成：亲和度占多数 + 破冰任务 + 哨兵任务，且 ⊂ train | 三种角色均已实现；哨兵守卫引入了 SOP 没有的分层（稳定任务用均值守卫，脆弱任务用 Fisher，避免被噪声误杀）；亲和度的数据来源尚未接线（§6 ③） | `evolver/scheduler/anchor_selection.py`；`orchestrator/gates/strategies.py`（哨兵守卫） |
-| ⑤ 借用机制（SOP 标注为 [defer]） | 模块已存在（与上游逐字节一致），尚未接线（§6 ②） | `evolver/scheduler/tree_aware_bandit.py` |
+| ⑤ 借用机制（SOP 标注为 [defer]） | 模块已存在（同一血脉；后验公式的 docstring 已改为说明代码实际实现的「按尝试求和」），尚未接线（§6 ②） | `evolver/scheduler/tree_aware_bandit.py` |
 | ⑤b 幸存者：全集 × K=3 确认 | `k_confirm=3`，确认阶段跑完整 train 集 | `orchestrator/gates/strategies.py` |
 | ⑥ 三道护盾，顺序为 Gate-f → Gate-b → Gate2 | `run_gates` 正是这个顺序；缺少埋点数据时 Gate-b **放行**（绝不冤枉一个没埋点但诚实的候选）；上报分数始终使用全集的固定分母，因此 Gate-b 的子集均值绝无可能冒充成绩 | `orchestrator/gates/pipeline.py::run_gates`；`orchestrator/production.py`（感知 beacon 的 `fired_source`） |
 | Gate-b 数据链 | 写入侧：编辑器强制内联 beacon → 每次尝试生成 beacon 目录；读取侧：对确认目录与 infra 阶梯的兄弟目录取并集。诚实说明：归因只到「存在」层面——Gate-b 证明的是候选代码中*某个* beacon 在某任务上执行过，而非该 beacon 位于机制的触发条件之内；无条件放置的 beacon 会把 Gate-b 降级为空操作（晋级仍需在全 train 集上取胜） | `evolver/activation/ledger.py::beacon_workspace / mark_beacons_enabled`（由 `benchmarks/appworld/batch.py` 调用）；`evolver/activation/ledger.py::read_fired_tasks` |
