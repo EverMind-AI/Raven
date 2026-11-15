@@ -2,20 +2,22 @@
 
 Hierarchical Bernoulli model with **single-source ancestry kernel**:
 
-    p̂(t, v_new)  =  Σ_a  w(d(v_new, a)) × outcome(a, t)
-                    ─────────────────────────────────────
-                    Σ_a  w(d(v_new, a))
+    p̂(t, v_new)  =  Σ_(a,k)  w(d(v_new, a)) × outcome_k(a, t)
+                    ───────────────────────────────────────────
+                    Σ_(a,k)  w(d(v_new, a))
 
     w(d)  =  exp(-λ × d)     # ancestry distance kernel
 
 Where:
 
-- ``a`` ranges over all observed ancestors of ``v_new`` (the new
-  candidate whose task subset we're selecting)
+- ``(a, k)`` ranges over every recorded attempt on the task: ``a`` is an
+  observed ancestor of ``v_new`` (the new candidate whose task subset
+  we're selecting) and ``k`` is one of that node's attempts on it
 - ``d(v_new, a)`` is the ancestry distance in the evolution tree
-- ``outcome(a, t)`` is each recorded (a, t) outcome ∈ {0, 1}
-- Multi-attempt nodes (root k=3 paired) contribute multiple outcomes;
-  descendant k=1 contributes one
+- ``outcome_k(a, t)`` is the k-th recorded (a, t) outcome ∈ {0, 1}
+- The sum runs over attempts, not over ancestors: a node with several
+  attempts on the task contributes one term per attempt, so a k=3 paired
+  root weighs 3 × w(d) while a k=1 descendant weighs 1 × w(d)
 
 Score per task ``t`` for next subset pick:
 
@@ -219,15 +221,18 @@ class TreeAwareTaskScheduler:
         - ``p_hat`` is the ancestry-weighted mean of observed outcomes
           on ``task_id`` across all of ``v_new_id``'s registered
           ancestors (including itself if it already has outcomes).
-        - ``effective_n`` is the sum of weights — proxy for posterior
-          tightness. 0 means no informative observations.
+        - The weighting runs per recorded attempt, so an ancestor with k
+          attempts on the task contributes k × w(distance): a k=3 paired
+          root outweighs a k=1 descendant at the same distance.
+        - ``effective_n`` is the sum of those per-attempt weights — proxy
+          for posterior tightness. 0 means no informative observations.
 
         When no ancestor has any outcome on the task, returns the
         uninformative prior ``(0.5, 0.0)`` so cold-start tasks still
         rank highly via exploration bonus.
         """
         if task_id not in self._task_id_set:
-            raise ValueError(f"task {task_id!r} not in registered pool")
+            raise ValueError(f"task {task_id!r} not in the registered task pool")
         if v_new_id not in self._nodes:
             raise ValueError(f"node {v_new_id!r} not registered")
 
