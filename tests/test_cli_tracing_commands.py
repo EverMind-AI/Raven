@@ -248,6 +248,46 @@ def test_tracing_keeps_a_live_viewer_record_when_its_health_probe_fails(tmp_path
     assert "raven tracing stop" in out
 
 
+def test_tracing_starts_a_viewer_on_another_port_when_the_recorded_one_is_stuck(tmp_path, monkeypatch):
+    """A stuck viewer on another port does not block the port the user asked for.
+
+    The record names a viewer on 5555 that stopped answering; the user asked
+    for 4318, which that viewer never held. The launcher goes on to 4318 and
+    says the old one is out of reach now, instead of refusing a port the
+    stuck viewer was not on.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 4242, "port": 5555}), encoding="utf-8")
+    monkeypatch.setattr(tc, "_pid_is_viewer", lambda pid: pid == 4242)
+    # The recorded viewer does not answer; the port the user asked for does,
+    # once a viewer is started there.
+    monkeypatch.setattr(tc, "_viewer_health", lambda port: port != 5555)
+    monkeypatch.setattr(tc, "_port_live", lambda port: False)
+    monkeypatch.setattr(tc, "_resolve_node", lambda: "/usr/bin/node")
+    spawned = {}
+
+    class _Proc:
+        pid = 31337
+
+    def fake_popen(*args, **kwargs):
+        spawned["cmd"] = args[0]
+        return _Proc()
+
+    monkeypatch.setattr(tc.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(tc.webbrowser, "open", lambda url: None)
+    buf = StringIO()
+    monkeypatch.setattr(tc, "console", Console(file=buf, width=200))
+
+    tc._open_dashboard(4318)
+
+    assert spawned, "expected a viewer to be started on the port the user asked for"
+    out = buf.getvalue()
+    # The old viewer is named, so the user can stop it by hand.
+    assert "4242" in out, out
+    assert "5555" in out, out
+    assert json.loads(pidfile.read_text(encoding="utf-8")) == {"pid": 31337, "port": 4318}
+
 def test_tracing_adopts_unrecorded_viewer_and_says_stop_will_not_manage_it(tmp_path, monkeypatch):
     """A viewer this CLI did not start has no pid record, so stop cannot reach it.
 

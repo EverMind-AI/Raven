@@ -236,6 +236,7 @@ def _server_js() -> Path:
 
 def _open_dashboard(port: int) -> None:
     entry = _read_pid_file()
+    stuck: dict | None = None
     if entry is not None:
         if _checked_viewer(entry["pid"]):
             if _viewer_health(entry["port"]):
@@ -246,27 +247,38 @@ def _open_dashboard(port: int) -> None:
             # The record names a live viewer of ours, but it is not answering:
             # it may be hung, or its assets were replaced under it. Starting a
             # second viewer would leave this process unreachable, because
-            # `raven tracing stop` only signals pids named in this file. Keep
-            # the record and send the user to stop it.
-            console.print(
-                f"[yellow]Tracing viewer (pid {entry['pid']}) is not answering on "
-                f"http://127.0.0.1:{entry['port']}/. "
-                "Run [cyan]raven tracing stop[/cyan] to stop it, then retry.[/yellow]"
-            )
-            raise typer.Exit(1)
-        _clear_pid_file()
+            # `raven tracing stop` only signals pids named in this file.
+            if entry["port"] == port:
+                # The user asked for this exact port, so the viewer that is not
+                # answering is the one they are waiting for. Keep the record
+                # and send them to stop it.
+                console.print(
+                    f"[yellow]Tracing viewer (pid {entry['pid']}) is not answering on "
+                    f"http://127.0.0.1:{entry['port']}/. "
+                    "Run [cyan]raven tracing stop[/cyan] to stop it, then retry.[/yellow]"
+                )
+                raise typer.Exit(1)
+            # Another port: the viewer that is stuck is not the one the user is
+            # waiting for, so the launcher goes on to the port they asked for.
+            # The record still names the old viewer until a viewer started
+            # below takes it over, and `raven tracing stop` can then reach only
+            # the new one.
+            stuck = entry
+        else:
+            _clear_pid_file()
 
     if _port_live(port):
         if _viewer_health(port):
             url = f"http://127.0.0.1:{port}/"
             console.print(f"Tracing dashboard already running at [cyan]{url}[/cyan]")
-            # This viewer has no pid record (there was none, or the record we
-            # had was stale and has just been cleared), so nothing in the CLI
-            # can stop it later. Say so instead of handing out a dashboard the
-            # user cannot shut down.
+            # This viewer has no record of its own -- there was none, the one we
+            # had was stale and has just been cleared, or the record names a
+            # viewer on another port -- so nothing in the CLI can stop it
+            # later. Say so instead of handing out a dashboard the user cannot
+            # shut down.
             console.print(
-                "[yellow]It has no pid record, so `raven tracing stop` will not manage it; "
-                "stop that instance by hand.[/yellow]"
+                "[yellow]It has no pid record, so [cyan]raven tracing stop[/cyan] will not "
+                "manage it; stop that instance by hand.[/yellow]"
             )
             webbrowser.open(url)
             return
@@ -300,6 +312,14 @@ def _open_dashboard(port: int) -> None:
         start_new_session=True,
     )
     _write_pid_file(proc.pid, port)
+    if stuck is not None:
+        # The record now names the viewer just started, so the old one is out of
+        # the CLI's reach: name its pid so the user can stop it by hand.
+        console.print(
+            f"[yellow]The recorded viewer (pid {stuck['pid']}, port {stuck['port']}) is not "
+            "answering and keeps running; [cyan]raven tracing stop[/cyan] now manages the "
+            "new viewer only, so stop the old one by hand.[/yellow]"
+        )
 
     for _ in range(24):  # wait up to ~6s for the server to actually serve
         if _viewer_health(port):
