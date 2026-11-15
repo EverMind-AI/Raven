@@ -612,10 +612,10 @@ default behind the file.
 
 Known unrelated: at the time of this validation the full unit suite could not
 run to completion in-process because `agent -m` then called an unconditional
-`os._exit(0)` (`agent_commands.py`, commit 33b4b0d9, to dodge a torch teardown
-segfault), which killed the in-process pytest CliRunner. That hard exit has
-since been removed, so the limit no longer applies. Pre-existing, independent
-of this refactor.
+`os._exit(0)` (in `agent_commands.py`, to dodge a torch teardown segfault),
+which killed the in-process pytest CliRunner. That hard exit has since been
+removed, so the limit no longer applies. Pre-existing, independent of this
+refactor.
 
 ---
 
