@@ -10115,20 +10115,22 @@ def test_a_launcher_that_vanishes_before_it_is_read_keeps_the_old_digest(
     assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="the fixture names an extensionless launcher; Windows runs its .exe")
 def test_a_relative_launcher_resolves_against_the_configured_cwd(tmp_path: Path) -> None:
     """The launch starts the agent in the row's cwd, so a relative launcher is
     that directory's file; reading raven's own directory would fingerprint a
     different binary, or none at all."""
     from raven.acp_client.capabilities import _executable_identity
 
-    _installed(tmp_path / "agent-acp")
+    # Windows runs the ``.exe`` beside an extensionless name, so the fixture
+    # carries the extension there and the digest reads that file.
+    launcher = "agent-acp.exe" if os.name == "nt" else "agent-acp"
+    _installed(tmp_path / launcher)
     cfg = ThirdPartyAcpSubagentConfig(name="a", command="./agent-acp", cwd=str(tmp_path))
 
     identity = _executable_identity(cfg)
 
     assert identity is not None
-    assert identity[0] == str(tmp_path / "agent-acp")
+    assert identity[0] == str(tmp_path / launcher)
 
 
 def test_a_relative_launcher_in_a_row_with_a_cwd_is_read_on_windows(
@@ -10186,28 +10188,32 @@ def test_a_windows_absolute_launcher_without_an_extension_is_read_as_its_exe(
     assert identity[0] == str(exe)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="the fixture names an extensionless launcher; Windows runs its .exe")
 def test_a_relative_launcher_in_a_subdirectory_is_read_from_the_configured_cwd(tmp_path: Path) -> None:
     """The same rule for a launcher that names a directory of its own: the
     directory part is relative to where the subprocess starts, not to raven."""
     from raven.acp_client.capabilities import _executable_identity
 
+    # Windows runs the ``.exe`` beside an extensionless name, so the fixture
+    # carries the extension there and the digest reads that file.
+    launcher = "agent-acp.exe" if os.name == "nt" else "agent-acp"
     launch_dir = tmp_path / "agent"
     (launch_dir / "bin").mkdir(parents=True)
-    _installed(launch_dir / "bin" / "agent-acp")
+    _installed(launch_dir / "bin" / launcher)
     cfg = ThirdPartyAcpSubagentConfig(name="a", command="bin/agent-acp", cwd=str(launch_dir))
 
     identity = _executable_identity(cfg)
 
     assert identity is not None
-    assert identity[0] == str(launch_dir / "bin" / "agent-acp")
+    assert identity[0] == str(launch_dir / "bin" / launcher)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="the fixture names an extensionless launcher; Windows runs its .exe")
 def test_a_relative_launchers_in_place_upgrade_moves_the_digest(tmp_path: Path) -> None:
     """The blocking case: an agent installed beside its configured cwd is
     upgraded where it stands, exactly as for an absolute command."""
-    exe = _installed(tmp_path / "agent-acp")
+    # Windows runs the ``.exe`` beside an extensionless name, so the fixture
+    # carries the extension there and the digest reads that file.
+    launcher = "agent-acp.exe" if os.name == "nt" else "agent-acp"
+    exe = _installed(tmp_path / launcher)
     cfg = ThirdPartyAcpSubagentConfig(name="a", command="./agent-acp", cwd=str(tmp_path))
     before = snapshot_fingerprint(cfg)
     assert before != _legacy_launch_digest(cfg)
