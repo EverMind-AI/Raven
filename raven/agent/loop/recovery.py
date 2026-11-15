@@ -138,7 +138,7 @@ class ReplyKind(Enum):
     REFUSAL = auto()  # the upstream declined; any text is the model's explanation
     NETWORK_CUT = auto()  # a stream that died after sending text
     THINKING_ONLY = auto()  # reasoning and no answer
-    TRUNCATED = auto()  # stopped at the output ceiling with nothing in it
+    TRUNCATED = auto()  # cut before any text: at the output ceiling unthinking, or at the context window
     POST_TOOL_EMPTY = auto()  # nothing, right after the turn ran tools
     EMPTY = auto()  # nothing at all
 
@@ -388,9 +388,11 @@ def reply_kind(
     text is the start of a reply the model may have been going on past, never a whole one, so it is
     not read as a marker. A refusal is named before text because the text is the model's explanation
     of it, and thinking before a cut because a reply that thought and was cut is thinking-only:
-    TRUNCATED is a cut with no reasoning behind it. ``reply_awaited`` is a turn whose caller waits on
-    its text, where a marker is text like any other. ``silence_taught`` says the turn's prompt taught
-    the marker, which with ``origin`` picks the rule a marker is read by (``is_silence``).
+    TRUNCATED is a cut with no reasoning behind it, or one at the context window, which is a cut
+    whatever it thought, since re-feeding the thought or thinking less sends the same full window
+    back. ``reply_awaited`` is a turn whose caller waits on its text, where a marker is text like any
+    other. ``silence_taught`` says the turn's prompt taught the marker, which with ``origin`` picks
+    the rule a marker is read by (``is_silence``).
     """
     has_text = bool(visible and visible.strip())
     # Only a stream that died carries ``STREAM_CUT``. A clean close without a terminal chunk, and a body
@@ -403,6 +405,8 @@ def reply_kind(
         return ReplyKind.REFUSAL
     if has_text:
         return ReplyKind.TEXT
+    if response.truncated and response.truncation_reason == "context_window":
+        return ReplyKind.TRUNCATED
     if has_thinking(response) or (token_count(_usage(response).get("reasoning_tokens")) or 0) > 0:
         return ReplyKind.THINKING_ONLY
     if response.truncated:
