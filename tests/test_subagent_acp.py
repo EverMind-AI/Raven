@@ -10165,6 +10165,27 @@ def test_a_relative_launcher_in_a_row_with_a_cwd_is_read_on_windows(
     assert snapshot_fingerprint(absent) == _legacy_launch_digest(absent)
 
 
+def test_a_windows_absolute_launcher_without_an_extension_is_read_as_its_exe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``windows._program`` appends ``.exe`` to an absolute name with no
+    extension, so the digest reads that file -- the one the spawn starts --
+    rather than the name as written."""
+    from raven.acp_client.capabilities import _executable_identity
+
+    # The rule is Windows'; faking the name runs it on any host. The row's own
+    # PATH keeps login_path.recall() out of the test: on a POSIX host the faked
+    # name would make Path.home() build a WindowsPath it cannot instantiate.
+    monkeypatch.setattr(os, "name", "nt")
+    exe = _installed(tmp_path / "agent-acp.exe")
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command=str(tmp_path / "agent-acp"), env={"PATH": str(tmp_path)})
+
+    identity = _executable_identity(cfg)
+
+    assert identity is not None
+    assert identity[0] == str(exe)
+
+
 @pytest.mark.skipif(os.name == "nt", reason="the fixture names an extensionless launcher; Windows runs its .exe")
 def test_a_relative_launcher_in_a_subdirectory_is_read_from_the_configured_cwd(tmp_path: Path) -> None:
     """The same rule for a launcher that names a directory of its own: the
@@ -10200,8 +10221,10 @@ def test_a_relative_launchers_in_place_upgrade_moves_the_digest(tmp_path: Path) 
 def test_a_relative_launcher_without_a_configured_cwd_resolves_from_the_process_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A row that sets no cwd is launched in raven's own directory, so the
-    fallback has to be that same directory."""
+    """The verify/Test launch passes no ``cwd`` for such a row, so the child
+    starts in raven's own directory and the fallback has to be that same
+    directory. The pooled dispatch starts in its task's workspace instead;
+    this digest can only read the directory the measurement ran in."""
     from raven.acp_client.capabilities import _executable_identity
 
     # Windows runs the ``.exe`` beside an extensionless name, so the fixture
