@@ -540,7 +540,11 @@ def render_config(source: Path, partition: Path, mode: str | None = None, *, una
     seed_soul(partition)
     seed_conduct(partition, defaults.get("model"))
     render.sweep_stale_renders(partition)
-    return render.write_rendered(config, partition, own_plugins=(FLOW_PLUGIN_ID,))
+    # The mode pinned above is the hosting's, so it holds under the host's
+    # permission set. A raven that predates that set inherits only the host's
+    # refusals, which leave the mode alone already.
+    keep = {"keep_own_mode": True} if hasattr(render, "inherit_host_permissions") else {}
+    return render.write_rendered(config, partition, own_plugins=(FLOW_PLUGIN_ID,), **keep)
 
 
 def render_acp_config(source: Path, mode: str | None = None) -> Path:

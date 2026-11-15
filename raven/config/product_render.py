@@ -369,7 +369,8 @@ def inherit_host_permissions(config: dict, host: dict, *, keep_own_mode: bool = 
     network rules a product's own gate reads are the host's, so a product
     asks about what the host asks about and grants what it grants. A product's
     own mode gives way to the host's unless its launcher asks to keep it
-    (``keep_own_mode``) because it applies the owner's mode another way. A
+    (``keep_own_mode``): because it applies the owner's mode another way, or
+    because its hosting pins one the host's mode would break. A
     product that brings refusals of its own keeps them on top, since a refusal
     always wins, and the host's extra deny patterns reach it as before
     (:func:`inherit_host_denials`). The host's file is read the way its own
@@ -392,7 +393,9 @@ def inherit_host_permissions(config: dict, host: dict, *, keep_own_mode: bool = 
             # Only on the launcher's word: raven-oncall renders its trunk gate
             # at full and applies the owner's mode, read from the host, in a
             # gate of its own, and the host's mode there would refuse the wakes
-            # nobody attends. A product config alone cannot widen the mode.
+            # nobody attends; raven-code pins full for a one-shot turn nobody
+            # can answer and ask for an editor user who reviews each write. A
+            # product config alone cannot widen the mode.
             if keep_own_mode and "mode" in own:
                 config["permissions"]["mode"] = own["mode"]
             inherit_host_denials(config, {"permissions": own})
@@ -1057,7 +1060,8 @@ def write_rendered(config: dict, root: Path, *, own_plugins: Iterable[str] = (),
     write a config that forgot them. ``own_plugins`` is the product's engine,
     which the opt-outs leave alone; a launcher that names none inherits them
     all. ``keep_own_mode`` is for a launcher that applies the owner's mode in a
-    gate of its own (:func:`inherit_host_permissions`).
+    gate of its own, or pins the mode its hosting needs
+    (:func:`inherit_host_permissions`).
     """
     host = host_config()
     inherit_host_permissions(config, host, keep_own_mode=keep_own_mode)
