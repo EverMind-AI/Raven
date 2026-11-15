@@ -188,6 +188,10 @@ before each sandbox's next command. What was opened directly in the sandbox
 that was refused, once or for the session, stays open there until that sandbox
 stops, which for the main agent's sandbox is until Raven restarts.
 
+Under the open default, a deny rule for one of the common names takes the
+ports it lists from that name, for every program, and the whole name when it
+lists none. Another program that needs one of those ports is asked about.
+
 The main agent's sandbox is shared by every conversation the gateway serves,
 so what is allowed in it reaches all of them until Raven restarts. The
 approval prompt says so when it applies. In this sandbox a target opens

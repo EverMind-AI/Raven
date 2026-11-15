@@ -106,6 +106,21 @@ def test_a_deny_rule_takes_an_apex_host_out_of_the_open_set():
     assert "pypi.org" not in hosts and "github.com" in hosts
 
 
+def test_a_deny_rule_with_ports_takes_only_those_ports_from_an_apex_host():
+    """Blocking ssh pushes must not stop an https clone. The open set names no program,
+    so the ports go for every program; another program meeting one is asked about."""
+    network = NetworkPermissions(
+        rules=[
+            NetworkRule(host="github.com", ports=[22], binary="/usr/bin/ssh", tier="deny"),
+            NetworkRule(host="pypi.org", ports=list(COMMON_PORTS), tier="deny"),
+        ]
+    )
+    endpoints = {e["host"]: e["ports"] for e in compile_network_policy(network)["allow_open"]["endpoints"]}
+    assert endpoints["github.com"] == [port for port in COMMON_PORTS if port != 22]
+    assert "pypi.org" not in endpoints, "a host with no port left leaves the open set"
+    assert endpoints["gitlab.com"] == COMMON_PORTS
+
+
 def test_a_deny_rule_the_wildcard_covers_is_reported_as_unenforced(caplog):
     import logging
 

@@ -79,9 +79,22 @@ def _endpoint(host: str, ports: list[int]) -> dict:
     return {"host": host, "ports": ports, "tls": "NETWORK_TLS_MODE_SKIP"}
 
 
-def _open_rule(extra_hosts: list[str], denied: frozenset[str] = frozenset()) -> dict:
-    hosts = [host for host in dict.fromkeys([*_APEX_DOMAINS, *extra_hosts]) if host not in denied]
-    endpoints = [_endpoint(_OPEN_WILDCARD, _ALL_PORTS), *(_endpoint(host, COMMON_PORTS) for host in hosts)]
+def _open_rule(denies: Iterable[NetworkRule] = ()) -> dict:
+    """The open set, less what the deny rules take from its apex names.
+
+    A deny rule takes the ports it names, or the whole host when it names none.
+    The open set names no program, so a rule's program cannot be carved out and
+    its ports go for every program; another program refused one is asked about,
+    since the deny rule itself does not name it.
+    """
+    endpoints = [_endpoint(_OPEN_WILDCARD, _ALL_PORTS)]
+    for host in _APEX_DOMAINS:
+        ports = list(COMMON_PORTS)
+        for deny in denies:
+            if _host_pattern(deny.host).fullmatch(host):
+                ports = [port for port in ports if deny.ports and port not in deny.ports]
+        if ports:
+            endpoints.append(_endpoint(host, ports))
     return {"name": OPEN_RULE, "endpoints": endpoints, "binaries": [{"path": "/**"}]}
 
 
@@ -93,9 +106,9 @@ _warned_partial: set[tuple[str, str, str]] = set()
 def unenforced_denials(network: NetworkPermissions) -> list[str]:
     """Denied hosts the open default's ``**.*.*`` wildcard still lets a sandbox reach.
 
-    A two-label host leaves the open set when denied; a host of three labels or
-    more is matched by the wildcard, which OpenShell cannot carve an exception
-    out of at this level.
+    A two-label host the open set names loses what a deny rule takes from it
+    (:func:`_open_rule`); a host of three labels or more is matched by the
+    wildcard, which OpenShell cannot carve an exception out of at this level.
     """
     if network.default != "open":
         return []
@@ -121,7 +134,7 @@ def refusing_rule(network: NetworkPermissions, binary: str, host: str, port: int
 
     A deny rule with no ports refuses every port, and one with no program
     refuses every program: what it names is a host the user does not want
-    reached, and the open set already drops a denied host on every port.
+    reached.
     """
     # The fully qualified spelling (a trailing dot) names the same host.
     host = host.lower().rstrip(".")
@@ -154,8 +167,7 @@ def compile_network_policy(
     policies: dict[str, dict] = {}
     denies = [rule for rule in network.rules if rule.tier == "deny"]
     if network.default == "open":
-        denied = frozenset(rule.host for rule in network.rules if rule.tier == "deny")
-        policies[OPEN_RULE] = _open_rule([], denied)
+        policies[OPEN_RULE] = _open_rule(denies)
         for host in unenforced_denials(network):
             if host not in _warned_unenforced:
                 _warned_unenforced.add(host)
