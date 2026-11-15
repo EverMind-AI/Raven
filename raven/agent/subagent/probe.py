@@ -51,6 +51,7 @@ from raven.agent.subagent.presets import (
 )
 from raven.agent.subagent.probe_state import LastTest, Remedy
 from raven.utils.commands import command_argv
+from raven.utils.paths import resolve_directory_program
 from raven.utils.scratch import ScratchDir
 
 ProbeStatus = Literal["ready", "attention", "missing", "unknown"]
@@ -663,6 +664,17 @@ def _probe_cli(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     # real spawn; resolving against the login PATH alone here would report an agent
     # missing that a real spawn finds just fine.
     cfg_path = (getattr(cfg, "env", None) or {}).get("PATH")
+    base = (getattr(cfg, "cwd", None) or "").strip()
+    if base and os.path.dirname(exe):
+        # A program that names a directory is on no PATH: the launch starts it
+        # in the directory the child starts in, which is the row's own cwd.
+        # shutil.which would answer for this process's own directory instead,
+        # so the probe reported a launcher the launch finds missing, and missed
+        # one the launch runs.
+        resolved = shutil.which(resolve_directory_program(exe, base))
+        if resolved is None:
+            return replace(done("missing", f"{exe} is not in {base}", exe), absent=exe)
+        return done("ready", f"installed at {resolved}", resolved)
     resolved = shutil.which(exe, path=cfg_path or path)
     if resolved is None:
         return replace(done("missing", _missing_exe_detail(cfg, exe), exe), absent=exe)
