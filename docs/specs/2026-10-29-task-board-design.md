@@ -190,7 +190,7 @@ product agent the host runs never sees the tool; the five product configs also s
 resident under tool-search compaction (`DEFAULT_ALWAYS_VISIBLE`,
 `raven/agent/tools/tool_search.py`): the post-turn call forces it by name.
 
-**Schema.** One description and six bare properties: `action` (`"recall" | "update"`),
+**Schema.** One description and six properties: `action` (`"recall" | "update"`),
 `query`, `group_id`, `include_turns`, and `steps` / `groups` as arrays of objects whose only
 declared fields are their lists -- `tasks` and `questions` on a step, `questions` on a carry
 entry -- each an array of strings. The schema rides in every host call: nested, the update's
