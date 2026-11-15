@@ -88,6 +88,11 @@ _PID_LABEL = "raven.pid"
 
 _reaped = False
 _pending_deletes: set[asyncio.Task] = set()
+# Deletes still running on each control plane, by id(): a plane its executor
+# let go of (in _released) closes when the last of them ends. A counted plane
+# is held by its delete tasks, so its id is not reused while it is counted.
+_deletes_on: dict[int, int] = {}
+_released: set[int] = set()
 
 
 class ExecStream(Protocol):
@@ -236,8 +241,10 @@ async def drain_pending_deletes() -> None:
         await asyncio.gather(*mine, return_exceptions=True)
 
 
-def _spawn_delete(control_plane: OpenShellControlPlane, name: str, *, close: bool = False) -> None:
-    """Delete ``name`` in the background, then close ``control_plane`` when ``close`` says it is done with."""
+def _spawn_delete(control_plane: OpenShellControlPlane, name: str) -> None:
+    """Delete ``name`` in the background; a released ``control_plane`` closes after its last delete."""
+    key = id(control_plane)
+    _deletes_on[key] = _deletes_on.get(key, 0) + 1
 
     async def run() -> None:
         try:
@@ -245,12 +252,25 @@ def _spawn_delete(control_plane: OpenShellControlPlane, name: str, *, close: boo
         except Exception as exc:
             logger.warning("Could not delete OpenShell sandbox %s: %s", name, exc)
         finally:
-            if close:
+            left = _deletes_on.pop(key) - 1
+            if left:
+                _deletes_on[key] = left
+            elif key in _released:
+                _released.discard(key)
                 _close_plane(control_plane)
 
     task = asyncio.get_running_loop().create_task(run())
     _pending_deletes.add(task)
     task.add_done_callback(_pending_deletes.discard)
+
+
+def _release_plane(control_plane: OpenShellControlPlane) -> None:
+    """Close ``control_plane`` once no delete runs on it: now when none does, else after the last."""
+    key = id(control_plane)
+    if key in _deletes_on:
+        _released.add(key)
+    else:
+        _close_plane(control_plane)
 
 
 def _close_plane(control_plane: Any) -> None:
@@ -369,7 +389,13 @@ class OpenShellExecutor(SandboxExecutor):
     async def start(self) -> None:
         async with self._start_lock:
             if self._name is None:
-                await self._start_locked()
+                try:
+                    await self._start_locked()
+                except BaseException:
+                    # A caller whose start raised may never call stop(): ``async
+                    # with`` does not, so the plane is let go of here.
+                    self._let_go_of_plane()
+                    raise
 
     async def _start_locked(self) -> None:
         try:
@@ -886,14 +912,19 @@ class OpenShellExecutor(SandboxExecutor):
         self._tasks.clear()
         name, self._name = self._name, None
         plane = self._control_plane
-        if self._owns_plane:
-            # Closed once its sandbox is deleted; a restart builds a fresh one.
-            self._control_plane = None
         if name is not None and plane is not None:
-            _spawn_delete(plane, name, close=self._owns_plane)
+            _spawn_delete(plane, name)
             logger.info("OpenShell sandbox %s stopping", name)
-        elif plane is not None and self._owns_plane:
-            _close_plane(plane)
+        self._let_go_of_plane()
+
+    def _let_go_of_plane(self) -> None:
+        """Release a plane this executor built, to close after every delete queued on it; a restart builds a fresh one.
+
+        A plane handed in stays its caller's.
+        """
+        if self._owns_plane and self._control_plane is not None:
+            plane, self._control_plane = self._control_plane, None
+            _release_plane(plane)
 
 
 def build_sandbox_spec(*, image: str, policy: dict, driver_config: dict, resources: dict) -> Any:

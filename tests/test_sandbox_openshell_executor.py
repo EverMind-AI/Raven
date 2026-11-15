@@ -1047,6 +1047,96 @@ class TestStop:
         await ex.stop()
         await ox.drain_pending_deletes()
 
+    @staticmethod
+    def _closing_planes(monkeypatch, **attrs) -> list:
+        """Planes the executor builds, each logging its deletes and its close; a delete on a
+        closed one fails, as an RPC on a closed gRPC channel does, and one named in ``held``
+        waits for its event."""
+
+        class Plane(FakeControlPlane):
+            def __init__(self):
+                super().__init__()
+                self.events: list[str] = []
+                self.held: dict[str, threading.Event] = {}
+                self.__dict__.update(attrs)
+
+            def delete(self, name):
+                if name in self.held:
+                    assert self.held[name].wait(5)
+                if "close" in self.events:
+                    raise ValueError("Cannot invoke RPC on closed channel!")
+                super().delete(name)
+                self.events.append(f"delete {name}")
+
+            def close(self):
+                self.events.append("close")
+
+        planes: list[Plane] = []
+
+        def build(*, gateway, workspace):
+            planes.append(Plane())
+            return planes[-1]
+
+        monkeypatch.setattr(ox, "SDKControlPlane", build)
+        return planes
+
+    @staticmethod
+    def _never_ready(name, timeout_seconds):
+        raise RuntimeError("image pull timed out")
+
+    async def test_a_failed_start_then_stop_deletes_its_sandbox_before_closing_the_plane(self, tmp_path, monkeypatch):
+        """The design renderer stops its executor after a failed start; the sandbox was
+        made, and its pid label names this live process, so nothing else would delete it."""
+        failing = [True]
+
+        def first_never_ready(name, timeout_seconds):
+            if failing:
+                self._never_ready(name, timeout_seconds)
+
+        planes = self._closing_planes(monkeypatch, wait_ready=first_never_ready)
+        ex = OpenShellExecutor(image="i", workspace=tmp_path, network_source=lambda: {})
+        with pytest.raises(SandboxInitError, match="image pull timed out"):
+            await ex.start()
+        await ex.stop()
+        await ox.drain_pending_deletes()
+        name = planes[0].created[0]["name"]
+        assert planes[0].events == [f"delete {name}", "close"]
+        failing.clear()
+        await ex.start()
+        assert len(planes) == 2, "a start after a failed one builds a fresh plane"
+        await ex.stop()
+        await ox.drain_pending_deletes()
+
+    async def test_a_failed_start_closes_its_plane_without_a_stop(self, tmp_path, monkeypatch):
+        """``async with executor`` never reaches ``stop()`` when ``start()`` raises."""
+        planes = self._closing_planes(monkeypatch, wait_ready=self._never_ready)
+        with pytest.raises(SandboxInitError):
+            async with OpenShellExecutor(image="i", workspace=tmp_path, network_source=lambda: {}):
+                pass
+        await ox.drain_pending_deletes()
+        name = planes[0].created[0]["name"]
+        assert planes[0].events == [f"delete {name}", "close"]
+
+    async def test_a_plane_closes_only_after_the_orphan_deletes_queued_on_it(self, tmp_path, monkeypatch):
+        """The first start in a process queues the orphans' deletes on its plane; an
+        executor stopped before they end must not close it under them."""
+        gate = threading.Event()
+        planes = self._closing_planes(
+            monkeypatch, listed=[("rvorphan", {ox._PID_LABEL: "2147483646"})], held={"rvorphan": gate}
+        )
+        monkeypatch.setattr(ox, "pid_alive", lambda pid: False)
+        ex = OpenShellExecutor(image="i", workspace=tmp_path, network_source=lambda: {})
+        await ex.start()
+        name = planes[0].created[0]["name"]
+        await ex.stop()
+        deadline = time.monotonic() + 5
+        while f"delete {name}" not in planes[0].events and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        assert planes[0].events == [f"delete {name}"], "the orphan's delete is still running"
+        gate.set()
+        await ox.drain_pending_deletes()
+        assert planes[0].events == [f"delete {name}", "delete rvorphan", "close"]
+
     async def test_stop_without_start_and_a_second_stop_are_no_ops(self, tmp_path):
         cp = FakeControlPlane()
         ex = _executor(tmp_path, cp)
