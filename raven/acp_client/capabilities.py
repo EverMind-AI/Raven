@@ -449,19 +449,23 @@ def _executable_identity(cfg: Any) -> list[Any] | None:
     is that directory's file. Windows' spawn resolves such a program the same
     way, through ``windows._program``: against the row's directory, with
     ``.exe`` added for a name that has no extension of its own, so this digest
-    reads the file the spawn will run. A row that sets no cwd names this
-    process's own directory on either platform, which is where the spawn looks
-    either way. An absolute path is its own file, and a bare name is looked up
-    on the PATH -- where, on Windows, this process's own directory comes first,
-    as it does for the launch's own lookup (``resolve_program`` reads a PATH
-    the same way).
+    reads the file the spawn will run. A row that sets no cwd falls back to
+    this process's own directory, where the verify/Test launch starts; the
+    pooled dispatch starts in its task's workspace instead, so a relative
+    command in such a row resolves there. This digest reads the launcher the
+    measurement ran -- the process-directory file -- and the workspace file a
+    dispatch runs is not knowable here. An absolute path is read as written --
+    on Windows an extensionless one gains the ``.exe`` the spawn appends --
+    and a bare name is looked up on the PATH -- where, on Windows, this
+    process's own directory comes first, as it does for the launch's own
+    lookup (``resolve_program`` reads a PATH the same way).
 
     ``None`` for an ``npx`` launcher, for a row on another machine (that install
     is not this one's to read), for a command this process cannot resolve, for
-    a launcher missing from the directory the spawn resolves it in, and for a
-    bare command while no launch PATH has been captured yet: each leaves the
-    digest exactly as it was, which keeps every snapshot measured before this
-    function existed valid.
+    a launcher missing from the directory this reads it in, and for a bare
+    command while no launch PATH has been captured yet: each leaves the digest
+    exactly as it was, which keeps every snapshot measured before this function
+    existed valid.
 
     A Windows ``.cmd``/``.bat`` shim is read as the file PATH resolves, not as
     the package entry it points at. npm can rewrite a package without
@@ -500,8 +504,10 @@ def _executable_identity(cfg: Any) -> list[Any] | None:
     elif os.path.dirname(program):
         base = getattr(cfg, "cwd", None)
         if not base:
-            # No cwd: the spawn starts in this process's own directory, on
-            # either platform, and a relative launcher is that directory's file.
+            # No cwd: the verify/Test launch starts in this process's own
+            # directory, and a relative launcher is that directory's file. The
+            # pooled dispatch starts in the task's workspace instead, which
+            # this digest cannot see.
             try:
                 base = os.getcwd()
             except OSError:  # a service can outlive the directory it started in
