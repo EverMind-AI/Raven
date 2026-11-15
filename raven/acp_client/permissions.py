@@ -262,6 +262,7 @@ __all__ = [
     "PERMISSION_METHOD",
     "auto_approver",
     "host_refusal",
+    "needs_person",
     "permission_outcome",
     "refusal_outcome",
     "request_dispatcher",
