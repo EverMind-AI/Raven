@@ -3,12 +3,14 @@
  * Three greys carry the text a reader scans rather than reads -- the steps of a
  * turn (--chat-quiet), the rail's group labels and the composer's chips
  * (--rail-quiet), and the counts, timestamps and notes everywhere else
- * (--faint) -- plus the composer's placeholder (--composer-ph). Each was once a
- * single #9d9587, about 2.9:1 on the light page: legible as a shape, not as
- * words. The digits on the amber count badges (--ink-on-badge) are held to the
- * same line; white on the light amber was 3.7:1. WCAG AA asks 4.5:1 of text this size, and this holds each grey to it
- * on every ground the table names, in all four theme blocks: the light default,
- * the dark one prefers-color-scheme brings, and the two an explicit pick sets.
+ * (--faint) -- plus the composer's placeholder (--composer-ph) and the size
+ * line under a delivered file's card (--chat-file-meta). Each was once a single
+ * #9d9587, about 2.9:1 on the light page: legible as a shape, not as words.
+ * The digits on the amber count badges (--ink-on-badge) are held to the same
+ * line; white on the light amber was 3.7:1. WCAG AA asks 4.5:1 of text this
+ * size, and this holds each grey to it on every ground the table names, in all
+ * four theme blocks: the light default, the dark one prefers-color-scheme
+ * brings, and the two an explicit pick sets.
  *
  * The numbers are the tokens' own, not the pixels': a translucent ground is
  * composited over the block's --page, while the page itself lays the blue and
@@ -26,6 +28,7 @@ const GROUNDS = {
   '--chat-quiet': ['--paper', '--card-glass'],
   '--rail-quiet': ['--side-bg', '--composer-bg'],
   '--composer-ph': ['--composer-bg'],
+  '--chat-file-meta': ['--ink'],
   '--faint': ['--page', '--paper', '--surface', '--card-glass'],
   '--ink-on-badge': ['--amber'],
 }

@@ -154,7 +154,7 @@
   --chat-head:      #f7f7f7;
   --chat-head-ink:  #6f675c;
   --chat-file-ink:  #3b342a;
-  --chat-file-meta: #9d9587;
+  --chat-file-meta: #7b7468;
   --bubble-att:     rgba(255, 255, 255, .2);
   --bubble-att-on:  rgba(255, 255, 255, .3);
   --bubble-att-ink: #f0f0f0;
@@ -653,7 +653,7 @@
   --bubble-me: #333333; --bubble-me-fg: #ffffff;
   --chat-ink: #2b2620; --chat-quiet: #7b7468; --chat-shine: #e6e6e6; --chat-danger: #d84520;
   --chat-rule: #e0e0e0; --chat-head: #f7f7f7; --chat-head-ink: #6f675c;
-  --chat-file-ink: #3b342a; --chat-file-meta: #9d9587;
+  --chat-file-ink: #3b342a; --chat-file-meta: #7b7468;
   --bubble-att: rgba(255, 255, 255, .2); --bubble-att-on: rgba(255, 255, 255, .3); --bubble-att-ink: #f0f0f0;
   --code-keyword: #94129d; --code-property: #b8812c; --code-string: #488c4b; --code-tag: #1b6ed5;
   --code-comment: #8a8a88; --code-deleted: #d84520;
