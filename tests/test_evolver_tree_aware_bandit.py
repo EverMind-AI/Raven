@@ -9,6 +9,10 @@ will rely on rather than a behaviour the loop observes today.
 from __future__ import annotations
 
 import math
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -330,6 +334,62 @@ def test_choose_is_reproducible_from_the_same_seed() -> None:
         return [s.choose("a", K=3), s.choose("a", K=3)]
 
     assert run() == run()
+
+
+def test_choose_from_pool_scores_in_registered_order() -> None:
+    # Cold-start tasks tie exactly, so the seeded jitter decides the order.
+    # With the full pool the two entry points must therefore agree:
+    # choose_from_pool has to score tasks in registered order, not set order.
+    pooled, chosen = scheduler(seed=42), scheduler(seed=42)
+    for s in (pooled, chosen):
+        s.add_node("root", parent_id=None)
+    assert pooled.choose_from_pool("root", TASKS, K=3) == chosen.choose("root", K=3)
+
+
+@pytest.mark.slow
+def test_choose_from_pool_is_reproducible_under_different_hash_seeds() -> None:
+    """A seeded scheduler rebuilds the same pool selection in a fresh process.
+
+    The pool arrives as an iterable and is intersected into a set. If the
+    score loop iterated that set, the jitter draw each task receives would
+    follow string-hash order, which PYTHONHASHSEED changes per process: the
+    same seed could pick a different task after a resume. Both calls below
+    run in clean interpreters with different hash seeds.
+    """
+    script = """
+from evolver.scheduler.tree_aware_bandit import TreeAwareTaskScheduler
+
+TASKS = ["t1", "t2", "t3"]
+
+def fresh():
+    s = TreeAwareTaskScheduler(TASKS, rng_seed=42)
+    s.add_node("root", parent_id=None)
+    return s
+
+print(",".join(fresh().choose("root", K=3)))
+print(",".join(fresh().choose_from_pool("root", TASKS, K=3)))
+"""
+    repo_root = Path(__file__).resolve().parents[1]
+    inherited = os.environ.get("PYTHONPATH")
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(repo_root) + (os.pathsep + inherited if inherited else ""),
+    }
+    runs: list[tuple[str, str]] = []
+    for hash_seed in ("0", "1"):
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=repo_root,
+            env={**env, "PYTHONHASHSEED": hash_seed},
+        )
+        assert result.returncode == 0, result.stderr
+        chosen, pooled = result.stdout.splitlines()
+        assert pooled == chosen, f"hash seed {hash_seed}: {result.stdout!r}"
+        runs.append((chosen, pooled))
+    assert runs[0] == runs[1]
 
 
 def test_choose_from_pool_skips_tasks_the_scheduler_does_not_know() -> None:
