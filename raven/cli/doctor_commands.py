@@ -9,6 +9,8 @@ Exit codes:
        unparseable, or not a JSON object / schema invalid / unresolved routing)
   2  — static checks ok but ``--probe`` failed, or the memory backend is
        missing or reports faults (lets CI distinguish from 1)
+
+``raven doctor --help`` states the same three codes for the user.
 """
 
 from __future__ import annotations
@@ -1106,6 +1108,12 @@ def register(app: typer.Typer) -> None:
         ),
     ) -> None:
         """Health-check Raven config, routing, and (optionally) the LLM.
+
+        Exit codes: 0 all green (and the probe ok if requested); 1 a static
+        check failed (install incomplete / config missing, empty, unparseable,
+        or not a JSON object / schema invalid / unresolved routing); 2 the
+        static checks passed but the probe failed, or the memory backend is
+        missing or reports faults.
 
         ``--fix`` is consent, not a mode: without it the config findings are
         reported and nothing is written, because each one is a value somebody

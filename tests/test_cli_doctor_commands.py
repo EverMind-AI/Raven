@@ -84,6 +84,13 @@ def test_doctor_help_lists_all_flags() -> None:
         assert flag in r.stdout, f"missing flag in help: {flag}"
 
 
+def test_doctor_help_states_the_exit_codes() -> None:
+    """The exit codes are the contract a CI script reads, so ``--help`` states them."""
+    r = runner.invoke(app, ["doctor", "--help"])
+    assert r.exit_code == 0, r.stdout
+    assert "Exit codes" in r.stdout, r.stdout
+
+
 # --------------------------------------------------------------------------- default mode
 
 
