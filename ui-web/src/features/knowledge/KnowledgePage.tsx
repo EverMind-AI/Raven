@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 
+import { PageBar } from '../../components/PageBar'
 import { t } from '../../i18n/t'
 import { assetStamp } from '../../lib/assetStamp'
 import { md } from '../../lib/prose'
@@ -1631,7 +1632,14 @@ export function KnowledgeApp(): JSX.Element {
 
   return (
     <div className="knowledge-page">
-      <div className="knowledge-bar">
+      <PageBar
+        title={t('gui.knowledge.title')}
+        end={(
+          <button className="mini knowledge-new" onClick={() => store.openCreate()}>
+            {t('gui.knowledge.create')}
+          </button>
+        )}
+      >
         <div className="knowledge-tabs" role="tablist">
           {TABS.map((tab) => (
             <button
@@ -1645,10 +1653,7 @@ export function KnowledgeApp(): JSX.Element {
             </button>
           ))}
         </div>
-        <button className="mini knowledge-new" onClick={() => store.openCreate()}>
-          {t('gui.knowledge.create')}
-        </button>
-      </div>
+      </PageBar>
 
       {s.failed ? (
         <div className="empty-note">

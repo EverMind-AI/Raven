@@ -253,6 +253,8 @@ section#connectionsPage.page[data-open=false]
     h2
   div.work
     div#connectionsBody.wrap
+      div.page-bar
+        h2.page-bar-title
       div.hub-head
         button.hub-head-tab
         button.hub-head-tab

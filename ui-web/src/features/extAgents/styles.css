@@ -160,7 +160,7 @@
 .extAgents-tn::before { content: "("; }
 .extAgents-tn::after { content: ")"; }
 
-/* The column is the composer's width (`#extAgentsPage .wrap` in page.css).
+/* The column is the module page frame (`#extAgentsPage .wrap` in page.css).
    Four cards a row at most -- the track floor is a quarter of the row less its
    three gaps -- and never narrower than 200px, so a narrow window steps down
    to three, two, one rather than squeezing four. */

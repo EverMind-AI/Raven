@@ -4185,6 +4185,14 @@ details[open] summary { margin-bottom: 8px; }
    by a scrollbar's width. */
 .page .work { flex: 1; overflow-y: auto; min-height: 0; scrollbar-gutter: stable; }
 .wrap { max-width: 1080px; margin: 0 auto; padding: 24px 26px 60px; }
+/* The title row every module page starts with (components/PageBar.tsx): the
+   page's name, what it offers beside it, and the actions at the far end. The
+   height is the task board's, which its Board / List segments set, so a page
+   with shorter controls still keeps its name where the board has it. The
+   frame around it is the board's too (scripts/gates/module-page-frame-css). */
+.page-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-height: 33px; flex: none; }
+.page-bar-title { margin: 0; font-size: 18px; font-weight: 600; color: var(--text); }
+.page-bar-end { display: flex; align-items: center; gap: 12px; margin-left: auto; }
 
 /* extension page: tabs + tool rows */
 .tabs { display: flex; gap: 4px; margin-left: 8px; }
@@ -4329,7 +4337,7 @@ details[open] summary { margin-bottom: 8px; }
    and no counts beside them.
    Both tabs keep one weight so the row does not shift when the pick moves;
    the colour and the rule under the current one are the whole difference. */
-.hub-head { display: flex; gap: 28px; margin: 10px 0 16px; border-bottom: 1px solid var(--line-soft); }
+.hub-head { display: flex; gap: 28px; margin: 18px 0 16px; border-bottom: 1px solid var(--line-soft); }
 @media (max-width: 639px) { .hub-head { gap: 18px; } }
 .hub-head-tab {
   position: relative; padding: 0 0 11px; border: 0; background: none; cursor: pointer;
@@ -7060,10 +7068,13 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
    `.wrap` is every page's centred reading column, and the pages that really
    are documents want to keep it. */
 #kbPage .work { overflow: hidden; }
-/* The agent connector's column is the composer's: the same `--col` cap and
-   the same 36px gutters `.dock` gives it, so the grid's edges line up with the
-   input box the reader just left rather than sitting inside a narrower one. */
-#extAgentsPage .wrap, #connectionsPage .wrap { max-width: calc(var(--col) + 72px); padding-left: 36px; padding-right: 36px; }
+/* The connector pages used to take the composer's column -- its `--col` cap
+   and its 36px gutters -- so the grid's edges lined up with the input box the
+   reader had just left. They take the task board's frame now, as every module
+   page does (scripts/gates/module-page-frame-css): a reader moves between the
+   pages on the rail far more than between a page and the chat, and edges that
+   moved with every page read as drift. */
+#extAgentsPage .wrap, #connectionsPage .wrap { max-width: none; }
 /* The task board is a workspace too: its columns are the content, and the
    reading column's cap left a wide window's sides empty while they squeezed
    into the middle. */

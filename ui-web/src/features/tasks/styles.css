@@ -1285,11 +1285,10 @@
 .tkbfold[aria-expanded="true"] svg { transform: none; }
 @media (prefers-reduced-motion: reduce) { .tkbfold svg { transition: none; } }
 
-/* The page around both views, and its toolbar: the title, the conversation
-   filter, the completed switch at the right, and the Board / List segments. */
+/* The page around both views. Its toolbar is the module pages' title row
+   (components/PageBar.tsx): the title and the conversation filter, then the
+   completed switch and the Board / List segments at the far end. */
 .tkbpage { display: flex; flex-direction: column; gap: 18px; }
-.tkbbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.tkbh { margin: 0; font-size: 18px; font-weight: 600; color: var(--text); }
 .tkbconvsel {
   max-width: 220px;
   padding: 4px 8px;
@@ -1305,7 +1304,6 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  margin-left: auto;
   padding: 0;
   border: 0;
   background: none;

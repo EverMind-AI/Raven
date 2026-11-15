@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { t } from '../../i18n/t'
 import * as menu from '../../state/menu'
 import { resetSources, sources } from '../../state/sources'
 import { KnowledgeApp } from './KnowledgePage'
@@ -265,6 +266,14 @@ afterEach(() => {
 })
 
 describe('the knowledge page', () => {
+  it('starts with the title row every module page starts with', async () => {
+    await mount([base({ id: 'a' })])
+    const bar = document.querySelector('.knowledge-page > .page-bar')!
+    expect(bar.querySelector('.page-bar-title')!.textContent).toBe(t('gui.knowledge.title'))
+    expect(bar.querySelector('.knowledge-tabs')).not.toBeNull()
+    expect(bar.querySelector('.page-bar-end .knowledge-new')).not.toBeNull()
+  })
+
   it('draws a card for every base', async () => {
     await mount([base({ id: 'a', name: 'handbook' }), base({ id: 'b', name: 'runbook' })])
 
