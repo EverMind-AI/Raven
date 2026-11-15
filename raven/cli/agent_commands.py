@@ -106,10 +106,11 @@ def _report_unanswered(questions: list) -> None:
 
 
 async def _wait_for_background_work(agent_loop, scheduler, conversation: str) -> None:
-    """Wait for sub-agents and their follow-up turns before one-shot teardown.
+    """Wait for running sub-agents and their already-submitted follow-up turns.
 
     A sub-agent completion submits a ``SUBAGENT`` turn after its running count
-    drops, so the short second check closes that hand-off gap.
+    drops, so the short second check closes that hand-off gap. A held
+    unprompted report still inside its debounce window is not counted here.
     """
     subagents = getattr(agent_loop, "subagents", None)
     if subagents is None:
@@ -477,8 +478,9 @@ def register(app: typer.Typer) -> None:
                 )
                 # Wire submit so a sub-agent's completion can schedule its
                 # follow-up turn. There is no hard exit here: the one-shot
-                # awaits the turn, the wait below drains the sub-agent work
-                # (and the turns it submits), and only then does teardown run.
+                # awaits the turn, the wait below drains the running sub-agent
+                # work and the turns already submitted, and only then does
+                # teardown run.
                 agent_loop.subagents.set_submit(scheduler.submit)
                 with _thinking_ctx():
                     handle = scheduler.submit(

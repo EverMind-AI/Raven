@@ -5,8 +5,10 @@ chat exchange via :func:`raven.core.provider_stack.send_probe`.
 
 Exit codes:
   0  — all green (and probe ok if requested)
-  1  — static check failed (config missing / unparseable / schema invalid / unresolved routing)
-  2  — static checks ok but ``--probe`` failed (lets CI distinguish from 1)
+  1  — static check failed (install incomplete / config missing, empty,
+       unparseable, or not a JSON object / schema invalid / unresolved routing)
+  2  — static checks ok but ``--probe`` failed, or the memory backend is
+       missing or reports faults (lets CI distinguish from 1)
 """
 
 from __future__ import annotations
