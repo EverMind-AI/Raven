@@ -57,7 +57,8 @@ from typing import Optional
 class _NodeInfo:
     """Per-node tree topology + accumulated outcomes.
 
-    ``parent_id`` is None only for the tree root.
+    ``parent_id`` is None for a root node; multiple roots are allowed, so
+    the structure may be a forest (ancestry is only defined within a tree).
     ``outcomes`` maps task_id → list[bool] (supports multi-attempt nodes
     such as a k=3 paired root anchor).
     """
@@ -325,7 +326,9 @@ class TreeAwareTaskScheduler:
 
         Identical scoring to :meth:`choose` (variance + γ × exploration
         bonus + jitter) but restricted to ``pool`` rather than the full
-        registered task pool.
+        registered task pool. Tasks are scored in ``all_task_ids`` order,
+        as :meth:`choose` does, so a seeded scheduler reproduces the same
+        selection in a fresh process even when ``pool`` is a set.
 
         Use case (β+α task selection per
         [[project-task-subset-selection-v2]]):
@@ -361,8 +364,12 @@ class TreeAwareTaskScheduler:
             return []
 
         scored: list[tuple[float, str]] = []
-        for task_id in valid_pool:
-            scored.append((self.score(task_id, v_new_id), task_id))
+        # Score in registered-task order, as ``choose`` does: which jitter
+        # draw a task receives must not depend on the pool's set iteration
+        # order, which PYTHONHASHSEED changes from process to process.
+        for task_id in self._task_ids:
+            if task_id in valid_pool:
+                scored.append((self.score(task_id, v_new_id), task_id))
         scored.sort(reverse=True)
         return [t for _, t in scored[:K]]
 
