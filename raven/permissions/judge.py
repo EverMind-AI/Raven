@@ -161,7 +161,8 @@ _MAX_REASON = 80
 _MAX_COMMAND = 2000
 
 
-def _tail(text: str, limit: int) -> str:
+def tail(text: str, limit: int) -> str:
+    """``text`` cut to ``limit`` characters from its end, marked when cut: a program path keeps its name."""
     return text if len(text) <= limit else "..." + text[-(limit - 3) :]
 
 
@@ -169,7 +170,7 @@ def _network_text(targets: list[dict[str, Any]], command: str) -> str:
     # The address is never shortened: it is what is decided. The program keeps
     # its end, where its name is, and the reason its start.
     lines = [
-        f"- {_tail(str(target.get('binary', '')), _MAX_PROGRAM)} -> {target.get('host', '')}:{target.get('port', '')} "
+        f"- {tail(str(target.get('binary', '')), _MAX_PROGRAM)} -> {target.get('host', '')}:{target.get('port', '')} "
         f"({str(target.get('reason', ''))[:_MAX_REASON]})"
         for target in targets
     ]
@@ -224,4 +225,4 @@ async def _judged(
     return outcome
 
 
-__all__ = ["JudgeOutcome", "review", "review_network"]
+__all__ = ["JudgeOutcome", "review", "review_network", "tail"]

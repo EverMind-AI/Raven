@@ -29,7 +29,7 @@ from loguru import logger
 
 from raven.config.update import allow_network_rule
 from raven.contracts.permissions import DecisionSource
-from raven.permissions.judge import JudgeOutcome, review_network
+from raven.permissions.judge import JudgeOutcome, review_network, tail
 from raven.permissions.network_grants import GRANTS
 from raven.permissions.runtime import RuntimeAnswer, RuntimeChoice, current_gate, deadline_stopped
 from raven.permissions.turn import current_turn, note_refusal
@@ -186,7 +186,7 @@ async def _prompt(
     keys = tuple(f"net:{grant.binary}@{grant.host}:{grant.port}" for grant in _grants(denials))
     targets = [
         {
-            "binary": _tail(denial.binary, _MAX_EVIDENCE_PROGRAM),
+            "binary": tail(denial.binary, _MAX_EVIDENCE_PROGRAM),
             "host": denial.host,
             "port": denial.port,
             "reason": denial.reason[:_MAX_REASON],
@@ -384,11 +384,7 @@ def _shown(denial: NetworkDenial) -> str:
     if not denial.binary:
         return target
     room = max(_MAX_LINE - len(target) - len(" -> "), _MIN_PROGRAM)
-    return f"{_tail(denial.binary, room)} -> {target}"
-
-
-def _tail(text: str, limit: int) -> str:
-    return text if len(text) <= limit else "..." + text[-(limit - 3) :]
+    return f"{tail(denial.binary, room)} -> {target}"
 
 
 def _listed(denials: Sequence[NetworkDenial]) -> str:

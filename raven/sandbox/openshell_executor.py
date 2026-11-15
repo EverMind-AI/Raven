@@ -133,7 +133,6 @@ class DraftChunk:
     """
 
     id: str
-    binary: str
     binaries: tuple[str, ...]
     targets: tuple[tuple[str, int], ...]
     review_token: str
@@ -360,10 +359,6 @@ class OpenShellExecutor(SandboxExecutor):
 
     @property
     def supports_process_spawning(self) -> bool:
-        return True
-
-    @property
-    def supports_network_grants(self) -> bool:
         return True
 
     def _plane(self) -> OpenShellControlPlane:
@@ -1102,7 +1097,6 @@ class SDKControlPlane:
         return [
             DraftChunk(
                 id=chunk.id,
-                binary=chunk.binary,
                 binaries=tuple(binary.path for binary in chunk.proposed_rule.binaries),
                 widened=_widened(chunk.proposed_rule),
                 targets=tuple(

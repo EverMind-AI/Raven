@@ -83,11 +83,6 @@ class SandboxExecutor(ABC):
         """
         return False
 
-    @property
-    def supports_network_grants(self) -> bool:
-        """True if a running executor can open a blocked host (``grant_network``)."""
-        return False
-
     async def grant_network(self, grants: Sequence[NetworkGrant]) -> bool:
         """Open ``grants`` in this executor only; False where there is no network policy to change."""
         return False

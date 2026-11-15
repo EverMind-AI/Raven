@@ -917,7 +917,7 @@ class TestLiveNetwork:
         from raven.sandbox.openshell_executor import DraftChunk
 
         fields = {"binaries": (binary,), "targets": ((host, port),), "widened": False, **wider}
-        return DraftChunk(id="chunk-1", binary=binary, review_token="token-1", **fields)
+        return DraftChunk(id="chunk-1", review_token="token-1", **fields)
 
     @pytest.mark.parametrize(
         "wider",
@@ -1460,9 +1460,8 @@ class TestSDKControlPlane:
         client._stub.draft = [chunk, wide, credentialed]
         proposal, widened, also_widened = plane.draft_chunks("rvx")
         assert also_widened.widened is True
-        assert (proposal.id, proposal.binary, proposal.binaries, proposal.targets, proposal.review_token) == (
+        assert (proposal.id, proposal.binaries, proposal.targets, proposal.review_token) == (
             "c1",
-            "/usr/bin/curl",
             ("/usr/bin/curl",),
             (("example.com", 443),),
             "tok",
