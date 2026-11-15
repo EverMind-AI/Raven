@@ -125,8 +125,9 @@ def resolve_program(
     where CreateProcess looks anyway, and ``argv`` is left as it is.
 
     The path is built by :func:`raven.utils.paths.resolve_directory_program`,
-    which the acp lane's own launcher resolution builds it with as well, so the
-    two cannot answer "which file does this relative launcher name" differently.
+    which the acp lane's own launcher resolution and the parent-death wrapper's
+    build it with as well, so the three cannot answer "which file does this
+    relative launcher name" differently.
     """
     if not _on_windows() or not argv:
         return argv
