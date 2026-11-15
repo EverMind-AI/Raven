@@ -243,7 +243,7 @@ class SandboxRenderBackend:
             workspace=job_root,
             cpus=self.cpus,
             memory_mib=self.memory_mib,
-            # A render job runs no agent command; it stays offline (decision D11).
+            # A render job runs no agent command, so it stays offline.
             network_source=lambda: {},
             default_timeout=self.config.timeout_seconds,
             create_timeout=self.create_timeout_seconds,

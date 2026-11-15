@@ -18,14 +18,13 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 if TYPE_CHECKING:
     from raven.config.schema import NetworkPermissions, NetworkRule
 
-# OpenShell has no allow-any-host selector (NVIDIA/OpenShell#3856): "*", "**"
-# and two-label wildcards are rejected, hostless allowed_ips endpoints do not
-# match names under the Docker driver's policy DNS, and an "a*.*"-style
-# pattern passes the gateway but stops the sandbox from activating. "Open"
-# is therefore every host of three or more labels on every port, plus the
-# two-label names developer tooling reaches directly. One all-ports endpoint
-# already takes most of the gateway's 256 KiB policy budget, so the apex names
-# get the common ports only.
+# OpenShell has no allow-any-host selector: "*", "**" and two-label wildcards
+# are rejected, hostless allowed_ips endpoints do not match names under the
+# Docker driver's policy DNS, and an "a*.*"-style pattern passes the gateway
+# but stops the sandbox from activating. "Open" is therefore every host of
+# three or more labels on every port, plus the two-label names developer
+# tooling reaches directly. One all-ports endpoint already takes most of the
+# gateway's 256 KiB policy budget, so the apex names get the common ports only.
 _OPEN_WILDCARD = "**.*.*"
 _ALL_PORTS = list(range(1, 65536))
 COMMON_PORTS = [22, 80, 443, 8080, 8443, 9418]

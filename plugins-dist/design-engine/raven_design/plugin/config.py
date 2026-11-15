@@ -118,8 +118,8 @@ class SelectorConfig:
 #: exact attribute set it has always read; the shipped slice spells five.
 _OFFICE_BACKENDS = ("onlyoffice", "libreoffice", "graph")
 
-# The renderer's own network switch, retired (decision D11): a render job runs
-# no agent command and stays offline, and a switch of its own read as a second
+# The renderer's own network switch, retired: a render job runs no agent
+# command and stays offline, and a switch of its own read as a second
 # permission set beside permissions.network. An old key is ignored, once said.
 _RETIRED_RENDER_KEYS = ("allowNetwork", "networkAllowlist")
 _warned_retired: set[str] = set()

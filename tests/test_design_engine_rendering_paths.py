@@ -334,7 +334,7 @@ def test_the_renderer_sandbox_can_read_the_worker_images_browsers(tmp_path: Path
 
 
 def test_the_renderer_sandbox_has_no_network(tmp_path: Path) -> None:
-    """Decision D11: a render job runs no agent command, so it stays offline and has no switch of its own."""
+    """A render job runs no agent command, so it stays offline and has no switch of its own."""
     import dataclasses
 
     assert "allow_network" not in {field.name for field in dataclasses.fields(RenderConfig)}
