@@ -185,7 +185,9 @@ stops, which for the main agent's sandbox is until Raven restarts.
 
 The main agent's sandbox is shared by every conversation the gateway serves,
 so what is allowed in it reaches all of them until Raven restarts. The
-approval prompt says so when it applies.
+approval prompt says so when it applies. In this sandbox a target opens
+without asking only at the mode in `permissions.mode`, so a conversation
+switched to a looser mode of its own is asked.
 
 A sandboxed MCP server is handled the same way, for the connections refused
 while one of its tools ran. The card names "a process in the sandbox", since

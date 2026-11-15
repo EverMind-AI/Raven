@@ -234,6 +234,9 @@ async def _prompt(
             # A deny rule names hosts, so an address or an internal name (a
             # cloud metadata endpoint among them) is never opened without a person.
             needs_person=any(_needs_person(denial.host) for denial in denials),
+            # Opened here, it is opened for every conversation, so no
+            # conversation's own looser mode opens it on their behalf.
+            shared=shared,
         )
         return answer
     finally:

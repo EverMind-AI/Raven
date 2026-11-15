@@ -53,7 +53,7 @@ from raven.permissions.rules import (
     user_tier,
     validate_exec_pattern,
 )
-from raven.permissions.runtime import RuntimeAnswer, RuntimeChoice, deadline_stopped
+from raven.permissions.runtime import RuntimeAnswer, RuntimeChoice, current_mode_floor, deadline_stopped
 from raven.permissions.session import remember_allowed, session_allows, session_mode
 from raven.permissions.turn import current_tool_call_id, current_turn, note_refusal
 from raven.tracing import trace
@@ -89,6 +89,21 @@ def _clamped(evidence: dict[str, Any]) -> dict[str, Any]:
         else:
             out[key] = value
     return out
+
+
+#: From the mode that asks most to the one that asks least.
+_MODES_STRICTEST_FIRST = (PermissionMode.ASK, PermissionMode.SMART, PermissionMode.FULL)
+
+
+def _no_looser_than(mode: PermissionMode, floor: str | None) -> PermissionMode:
+    """``mode``, held to ``floor`` when the floor asks more; an unknown floor asks."""
+    if floor is None:
+        return mode
+    try:
+        held = PermissionMode(floor)
+    except ValueError:
+        held = PermissionMode.ASK
+    return min(mode, held, key=_MODES_STRICTEST_FIRST.index)
 
 
 class PermissionGate:
@@ -393,6 +408,7 @@ class PermissionGate:
         suggested_pattern: str,
         review: Callable[[Any, PermissionsConfig], Awaitable[JudgeOutcome]] | None,
         needs_person: bool = False,
+        shared: bool = False,
     ) -> RuntimeAnswer:
         """Ask about an action ``tool_name`` found while it ran, the way ``enforce`` asks before dispatch.
 
@@ -402,7 +418,12 @@ class PermissionGate:
         reviewer, then the person. ``review`` says what the reviewer is shown:
         it is called with the judge provider and the permission set, and the
         gate resolves the provider, as it does before dispatch. Full mode grants for the
-        session, as a person choosing that would. ``needs_person`` takes the
+        session, as a person choosing that would. The mode is held to the one a
+        plugin gate over the call declared when that one asks more
+        (``raven.permissions.runtime.current_mode_floor``), and with ``shared``
+        -- an action whose grant reaches every conversation -- to the configured
+        mode: a conversation's own looser mode speaks for that conversation
+        alone. ``needs_person`` takes the
         mode and the reviewer out of it, for an action no rule of the user's
         can name (an address given as an IP). A person deciding stops the
         tool's deadline (``raven.permissions.runtime.deadline_stopped``).
@@ -429,10 +450,14 @@ class PermissionGate:
         if session_allows(turn.session_key, session_keys):
             self._annotate_runtime(kind, "allow", DecisionSource.SESSION.value)
             return RuntimeAnswer(RuntimeChoice.SESSION)
+        configured = self._config_source().mode
         try:
-            mode = PermissionMode(session_mode(turn.session_key) or self._config_source().mode)
+            mode = PermissionMode(session_mode(turn.session_key) or configured)
         except ValueError:
             mode = PermissionMode.ASK
+        mode = _no_looser_than(mode, current_mode_floor())
+        if shared:
+            mode = _no_looser_than(mode, configured)
         if mode is PermissionMode.FULL and not needs_person:
             remember_allowed(turn.session_key, session_keys)
             self._annotate_runtime(kind, "allow", DecisionSource.MODE.value)

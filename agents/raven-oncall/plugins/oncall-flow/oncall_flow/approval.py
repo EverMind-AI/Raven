@@ -645,6 +645,11 @@ class OncallApprovalGate:
     def mode(self) -> str:
         return self._mode
 
+    @property
+    def permission_mode(self) -> str:
+        """The owner's mode, which the trunk's run-time asks are held to (contracts/tool_gate.py)."""
+        return self._mode
+
     async def adjudicate(self, name: str, params: Mapping[str, Any], *, session_workdir: Path | None) -> str | None:
         from raven.permissions.rules import Tier, default_tier
 

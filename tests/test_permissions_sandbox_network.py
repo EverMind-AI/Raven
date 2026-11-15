@@ -243,6 +243,29 @@ async def test_a_prompt_about_the_shared_sandbox_says_so_in_its_description(gran
     assert call["evidence"]["shared"] is True
 
 
+@pytest.mark.parametrize("registered", [None, "conv-own"], ids=["shared", "own"])
+async def test_a_conversations_own_looser_mode_does_not_open_the_shared_sandbox(grants, monkeypatch, registered):
+    """One conversation switched to full speaks for its own sandbox; the one every
+    conversation shares is opened automatically only at the mode they all run at."""
+    monkeypatch.setattr(session_module, "_MODES", {"conv-own": "full"})
+    responder, sandbox = Responder(ApprovalChoice.DENY), FakeSandbox()
+    grants.register(sandbox, registered)
+    await _handle(responder, [CURL], sandbox, config=PermissionsConfig(mode="ask"), conversation="conv-own")
+    if registered is None:
+        (call,) = responder.calls
+        assert SHARED_NOTE in call["description"], "the person deciding is told every conversation shares it"
+        assert sandbox.granted == [] and grants.grants_for(None) == frozenset()
+    else:
+        assert responder.calls == [] and sandbox.granted, "the conversation's own sandbox follows its own mode"
+
+
+async def test_the_shared_sandbox_still_opens_automatically_at_the_configured_mode(grants):
+    responder, sandbox = Responder(ApprovalChoice.DENY), FakeSandbox()
+    grants.register(sandbox, None)
+    await _handle(responder, [CURL], sandbox, config=PermissionsConfig(mode="full"))
+    assert responder.calls == [] and sandbox.granted
+
+
 async def test_a_prompt_about_a_conversation_sandbox_leaves_the_note_out(grants):
     responder, sandbox = Responder(ApprovalChoice.ALLOW), FakeSandbox()
     grants.register(sandbox, "conv")

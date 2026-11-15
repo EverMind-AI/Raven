@@ -1852,6 +1852,33 @@ class TestRuntimeApproval:
         assert responder.calls == []
 
     @pytest.mark.asyncio
+    async def test_a_plugin_gates_own_mode_holds_a_full_trunk_to_it(self):
+        """A launcher renders the trunk at full when a plugin gate applies the owner's
+        mode per call (raven-oncall); a run-time ask is decided at that mode, not at full."""
+        from raven.permissions.runtime import RuntimeChoice, tool_body
+
+        async def approve(provider, cfg):
+            from raven.permissions.judge import JudgeOutcome
+
+            return JudgeOutcome(allow=True, reason="the install needs its index")
+
+        responder = Responder(ApprovalOutcome(ApprovalChoice.DENY))
+        _fresh_turn(responder)
+        gate = gate_for(PermissionsConfig(mode="full"), judge=lambda: object())
+        with tool_body(gate, mode_floor="ask"):
+            asked = await gate.authorize_runtime(**_runtime())
+        with tool_body(gate, mode_floor="smart"):
+            reviewed = await gate.authorize_runtime(**_runtime(review=approve, digest="other"))
+        with tool_body(gate, mode_floor="full"):
+            granted = await gate.authorize_runtime(**_runtime(digest="third", session_keys=("net:third",)))
+        assert (asked.choice, reviewed.choice, granted.choice) == (
+            RuntimeChoice.DENY,
+            RuntimeChoice.ONCE,
+            RuntimeChoice.SESSION,
+        )
+        assert len(responder.calls) == 1, "only the ask floor reaches the person"
+
+    @pytest.mark.asyncio
     async def test_an_action_that_needs_a_person_is_not_granted_by_the_mode(self):
         from raven.permissions.runtime import RuntimeChoice
 

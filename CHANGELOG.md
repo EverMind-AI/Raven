@@ -61,9 +61,12 @@ All notable changes to Raven are documented here.
   first load moves an `allowNet` there with a notice, and a change reaches a
   running sandbox before its next command.
 
-- Raven's own agents (Raven-Code and the rest) run under the host's whole
-  permission set, the mode and the ask, allow and network rules as well as its
-  refusals, and in the host's OpenShell sandbox where the platform supports it.
+- Raven's own agents (Raven-Code and the rest) run under the host's ask, allow
+  and network rules as well as its refusals, and in the host's OpenShell
+  sandbox where the platform supports it. They take the host's mode too, except
+  where their hosting pins one: Raven-Code asks in an editor and runs a
+  one-shot turn at full, and Raven-Oncall holds connections a sandbox refuses
+  to the owner's approval mode.
 
 - The design engine's renderer always runs offline; `render.allowNetwork` and
   `render.networkAllowlist` are retired and ignored with a notice.

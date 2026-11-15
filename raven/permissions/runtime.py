@@ -10,6 +10,12 @@ together with the deadline the body runs under, and a tool reaches the gate
 through :func:`current_gate` rather than holding it. A person deciding stops
 that deadline: an approval asked before dispatch is never timed by the tool's
 ceiling, and one asked from inside the body must not be either.
+
+A plugin gate that applies a permission mode of its own over the same calls
+declares it, and the registry binds the strictest one declared beside the gate
+(:func:`current_mode_floor`): an ask from inside the body is decided no looser
+than that mode, so a trunk rendered at ``full`` for such a gate to carry the
+owner's mode does not grant what the owner's mode would ask about.
 """
 
 from __future__ import annotations
@@ -53,6 +59,7 @@ class RuntimeAnswer:
 
 _GATE: ContextVar[PermissionGate | None] = ContextVar("runtime_permission_gate", default=None)
 _DEADLINE: ContextVar[asyncio.Timeout | None] = ContextVar("runtime_tool_deadline", default=None)
+_MODE_FLOOR: ContextVar[str | None] = ContextVar("runtime_mode_floor", default=None)
 
 
 def current_gate() -> PermissionGate | None:
@@ -60,14 +67,23 @@ def current_gate() -> PermissionGate | None:
     return _GATE.get()
 
 
+def current_mode_floor() -> str | None:
+    """The strictest mode a plugin gate over this tool body declared; None when none did."""
+    return _MODE_FLOOR.get()
+
+
 @contextmanager
-def tool_body(gate: PermissionGate | None, deadline: asyncio.Timeout | None = None) -> Iterator[None]:
-    """Bind ``gate`` and the body's ``deadline`` for the length of one tool body."""
+def tool_body(
+    gate: PermissionGate | None, deadline: asyncio.Timeout | None = None, mode_floor: str | None = None
+) -> Iterator[None]:
+    """Bind ``gate``, the body's ``deadline`` and its ``mode_floor`` for the length of one tool body."""
     gate_token = _GATE.set(gate)
     deadline_token = _DEADLINE.set(deadline)
+    floor_token = _MODE_FLOOR.set(mode_floor)
     try:
         yield
     finally:
+        _MODE_FLOOR.reset(floor_token)
         _DEADLINE.reset(deadline_token)
         _GATE.reset(gate_token)
 
@@ -89,4 +105,4 @@ def deadline_stopped() -> Iterator[None]:
         deadline.reschedule(loop.time() + left)
 
 
-__all__ = ["RuntimeAnswer", "RuntimeChoice", "current_gate", "deadline_stopped", "tool_body"]
+__all__ = ["RuntimeAnswer", "RuntimeChoice", "current_gate", "current_mode_floor", "deadline_stopped", "tool_body"]

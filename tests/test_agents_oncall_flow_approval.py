@@ -94,6 +94,18 @@ async def test_the_oncalls_own_tools_pass_in_every_mode(tmp_path, mode):
     assert ApprovalStore(tmp_path).pending() == []
 
 
+@pytest.mark.parametrize("mode", ["full", "smart", "ask"])
+def test_the_gate_declares_the_owners_mode_for_the_trunks_run_time_asks(tmp_path, mode):
+    """The trunk runs at full while this gate carries the owner's mode; a connection a
+    sandboxed command was refused is asked about through the trunk, held to this mode."""
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.permissions.runtime import current_mode_floor
+
+    registry = ToolRegistry(permission_gate=object(), tool_gates=[_gate(tmp_path, mode)])
+    with registry._tool_body():
+        assert current_mode_floor() == mode
+
+
 @pytest.mark.asyncio
 async def test_a_trunk_default_read_passes_even_in_ask_mode(tmp_path):
     assert await _ask(_gate(tmp_path, "ask"), "read_file", {"path": "/tmp/x"}) is None
