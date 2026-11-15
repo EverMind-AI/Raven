@@ -141,7 +141,7 @@ next tool call to an MCP server running in it.
 | Key | Meaning |
 | --- | --- |
 | `default` | `open` (the default): every host name of three or more labels on every port, plus common package, code-hosting and model-provider names on common ports. `closed`: only what a rule allows. |
-| `rules[].host` | A host name. `*.example.com` matches one label, `**.example.com` any number. |
+| `rules[].host` | A host name. `*.example.com` matches one label, `**.example.com` any number. A wildcard stands for whole labels. |
 | `rules[].ports` | Ports. Left empty, an allow rule takes 22, 80, 443, 8080, 8443 and 9418, and a deny rule refuses every port. |
 | `rules[].binary` | The program, by its absolute path in the sandbox, such as `/usr/bin/curl`. Left empty, any program. |
 | `rules[].tier` | `allow` (the default) or `deny`. |
@@ -149,7 +149,9 @@ next tool call to an MCP server running in it.
 A config that still sets `tools.sandbox.allowNet` has it moved here on its
 first load, with a notice: `true` is the open default, `false` is closed, a
 host list allows those hosts on ports 80 and 443 with the default closed, and
-a list with `"*"` keeps the open default and adds the other hosts.
+a list with `"*"` keeps the open default and adds the other hosts. An entry
+written as `host:port` becomes a rule for that port. An entry no rule can
+hold, such as an address range, is left out, and the notice names it.
 
 ### When a connection is blocked
 

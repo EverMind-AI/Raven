@@ -2344,6 +2344,21 @@ def test_an_allowlist_keeps_its_hosts_and_its_two_ports(tmp_path: Path) -> None:
     assert cfg.permissions.network.default == "closed"
 
 
+def test_old_allowlist_entries_no_rule_can_hold_are_left_out_and_named(tmp_path: Path) -> None:
+    """The old field took any string; a host and port becomes a rule for that port,
+    and what is still no host name is left out, which only narrows a closed list."""
+    entries = ["localhost:8080", "10.0.0.0/8", "*.io", "https://example.com", "pypi.org"]
+    on_disk, notices, cfg = _sandbox_network_floor(tmp_path, {"allowNet": entries})
+    assert [(r["host"], r["ports"]) for r in on_disk["permissions"]["network"]["rules"]] == [
+        ("localhost", [8080]),
+        ("pypi.org", [80, 443]),
+    ]
+    assert cfg.permissions.network.default == "closed"
+    (notice,) = [n for n in notices if "allowNet" in n]
+    for left_out in ("10.0.0.0/8", "*.io", "https://example.com"):
+        assert left_out in notice
+
+
 def test_a_star_list_keeps_the_open_default_and_adds_the_rest(tmp_path: Path) -> None:
     on_disk, _, _ = _sandbox_network_floor(tmp_path, {"allow_net": ["*", "example.com"]})
     assert on_disk["permissions"]["network"]["default"] == "open"

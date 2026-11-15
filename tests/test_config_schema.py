@@ -219,6 +219,11 @@ def test_network_defaults_to_open_with_no_rules():
         ({"host": "*"}, "host"),
         ({"host": "**"}, "host"),
         ({"host": "*.com"}, "host"),
+        # A wildcard is a whole label: matched against a refused host, a partial
+        # one would never name it, and a deny rule would refuse nothing.
+        ({"host": "api*.example.com"}, "host"),
+        ({"host": "*api.example.com"}, "host"),
+        ({"host": "a.b**c.example.com"}, "host"),
         ({"host": "https://example.com"}, "host"),
         ({"host": "example.com:443"}, "host"),
         ({"host": ""}, "host"),

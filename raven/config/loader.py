@@ -6,7 +6,7 @@ import os
 import re
 import shutil
 import sys
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
@@ -706,6 +706,31 @@ def _migrate_retired_sandbox_backend(data: dict[str, Any], *, notify: bool = Fal
     return bool(notices)
 
 
+def _allow_net_rules(entries: Iterable[Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    """The ``permissions.network`` rules an old allowlist's entries become, and the entries none can hold.
+
+    The old field took any string. ``host:port`` becomes a rule for that port;
+    anything else a rule refuses (a range, a scheme, a two-label wildcard) is
+    left out, which only narrows a list that names what is allowed.
+    """
+    from raven.config.schema import NetworkRule
+
+    rules: list[dict[str, Any]] = []
+    left_out: list[str] = []
+    for entry in entries:
+        host, ports = str(entry.host).strip(), list(entry.ports)
+        name, colon, port = host.rpartition(":")
+        if colon and name and ":" not in name and port.isdigit():
+            host, ports = name, [int(port)]
+        try:
+            rule = NetworkRule(host=host, ports=ports)
+        except ValidationError:
+            left_out.append(str(entry.host))
+            continue
+        rules.append({"host": rule.host, "ports": list(rule.ports)})
+    return rules, left_out
+
+
 def _migrate_sandbox_network(data: dict[str, Any], *, notify: bool = False) -> bool:
     """Move ``tools.sandbox.allowNet`` into ``permissions.network``.
 
@@ -736,14 +761,17 @@ def _migrate_sandbox_network(data: dict[str, Any], *, notify: bool = False) -> b
         except ValidationError:
             allow_net = False
         network = network_from_allow_net(allow_net)
-        permissions["network"] = {
-            "default": network.default,
-            "rules": [{"host": rule.host, "ports": list(rule.ports)} for rule in network.rules],
-        }
+        rules, left_out = _allow_net_rules(network.rules)
+        permissions["network"] = {"default": network.default, "rules": rules}
         notice = (
             f"Moved `tools.sandbox.{keys[0]}` to `permissions.network`: what sandboxes may reach is now part of "
             "the permission set every agent and sandbox shares."
         )
+        if left_out:
+            notice += (
+                f" Left out {', '.join(repr(entry) for entry in left_out)}: a rule names a host, with its ports "
+                "under `ports`, and a wildcard covers three labels or more."
+            )
     else:
         notice = (
             f"Removed `tools.sandbox.{keys[0]}` from your config: `permissions.network` already sets what "

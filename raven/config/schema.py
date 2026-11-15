@@ -1517,8 +1517,11 @@ class NetworkRule(Base):
             raise ValueError("a host is required")
         if "/" in host or ":" in host:
             raise ValueError(f"{host!r} is not a host name; put the port under ports and leave out the scheme")
-        if "*" in host and (len(host.split(".")) < 3 or not all(host.split("."))):
+        labels = host.split(".")
+        if "*" in host and (len(labels) < 3 or not all(labels)):
             raise ValueError(f"{host!r}: a wildcard host needs three labels or more, such as *.example.com")
+        if any("*" in label and label not in ("*", "**") for label in labels):
+            raise ValueError(f"{host!r}: a wildcard stands for whole labels, as in *.example.com or **.example.com")
         return host
 
     @field_validator("ports")
