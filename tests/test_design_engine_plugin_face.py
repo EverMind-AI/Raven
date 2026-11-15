@@ -946,9 +946,14 @@ async def test_a_clean_checkout_still_answers_and_a_plain_directory_passes_untou
     assert decision.modified_content is None
 
 
-def test_a_retired_render_network_key_is_ignored_with_one_warning(caplog) -> None:
+def test_a_retired_render_network_key_is_ignored_with_one_warning(caplog, monkeypatch) -> None:
     """The renderer runs offline; its own network switch left settings so it is not read as a second permission set."""
     import logging
+
+    import raven_design.plugin.config as config_mod
+
+    # Warned once per process: a slice parsed earlier in the worker must not have spent it.
+    monkeypatch.setattr(config_mod, "_warned_retired", set())
 
     retired = {"enabled": True, "render": {"allowNetwork": True, "networkAllowlist": ["cdn.example.com"]}}
     with caplog.at_level(logging.WARNING):

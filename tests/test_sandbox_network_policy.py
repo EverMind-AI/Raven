@@ -121,7 +121,7 @@ def test_a_deny_rule_with_ports_takes_only_those_ports_from_an_apex_host():
     assert endpoints["gitlab.com"] == COMMON_PORTS
 
 
-def test_a_deny_rule_the_wildcard_covers_is_reported_as_unenforced(caplog):
+def test_a_deny_rule_the_wildcard_covers_is_reported_as_unenforced(fresh_warnings, caplog):
     import logging
 
     from raven.sandbox.network_policy import unenforced_denials
