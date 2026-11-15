@@ -1007,6 +1007,46 @@ class TestStop:
         await ox.drain_pending_deletes()
         assert cp.deleted == [name]
 
+    async def test_a_plane_the_executor_built_is_closed_once_its_sandbox_is_deleted(self, tmp_path, monkeypatch):
+        """The SDK client holds a gRPC channel and any OIDC refresher; sub-agents, DAG
+        nodes and render jobs each build one, and an unclosed one leaks until GC."""
+        events: list[str] = []
+
+        class Plane(FakeControlPlane):
+            def delete(self, name):
+                events.append("delete")
+
+            def close(self):
+                events.append("close")
+
+        planes: list[Plane] = []
+
+        def build(*, gateway, workspace):
+            planes.append(Plane())
+            return planes[-1]
+
+        monkeypatch.setattr(ox, "SDKControlPlane", build)
+        ex = OpenShellExecutor(image="i", workspace=tmp_path, network_source=lambda: {})
+        await ex.start()
+        await ex.stop()
+        await ox.drain_pending_deletes()
+        assert events == ["delete", "close"]
+        await ex.start()
+        assert len(planes) == 2, "a restarted executor builds a fresh plane"
+        await ex.stop()
+        await ox.drain_pending_deletes()
+        never = OpenShellExecutor(image="i", workspace=tmp_path, network_source=lambda: {})
+        await never.stop()
+        assert len(planes) == 2, "stopping an executor that never started builds nothing"
+
+    async def test_a_plane_handed_in_is_left_open(self, tmp_path):
+        cp = FakeControlPlane()
+        cp.close = lambda: pytest.fail("the caller owns this plane")
+        ex = _executor(tmp_path, cp)
+        await ex.start()
+        await ex.stop()
+        await ox.drain_pending_deletes()
+
     async def test_stop_without_start_and_a_second_stop_are_no_ops(self, tmp_path):
         cp = FakeControlPlane()
         ex = _executor(tmp_path, cp)
@@ -1201,6 +1241,9 @@ class _FakeSDKClient:
     def create(self, **kw):
         self.calls.append(("create", kw))
 
+    def close(self):
+        self.calls.append(("close",))
+
     def wait_ready(self, name, **kw):
         self.calls.append(("wait_ready", name, kw))
         if self.ready_error:
@@ -1259,6 +1302,11 @@ def sdk(monkeypatch):
 
 
 class TestSDKControlPlane:
+    def test_close_releases_the_clients_channel(self, sdk):
+        plane, client = sdk
+        plane.close()
+        assert client.calls == [("close",)]
+
     def test_exec_sends_one_request_and_decodes_the_events(self, sdk):
         plane, client = sdk
         client._stub.events = [_event("stdout", b"hi"), _event("stderr", b"warn"), _event("exit", 3)]

@@ -237,16 +237,29 @@ async def drain_pending_deletes() -> None:
         await asyncio.gather(*mine, return_exceptions=True)
 
 
-def _spawn_delete(control_plane: OpenShellControlPlane, name: str) -> None:
+def _spawn_delete(control_plane: OpenShellControlPlane, name: str, *, close: bool = False) -> None:
+    """Delete ``name`` in the background, then close ``control_plane`` when ``close`` says it is done with."""
+
     async def run() -> None:
         try:
             await asyncio.to_thread(control_plane.delete, name)
         except Exception as exc:
             logger.warning("Could not delete OpenShell sandbox %s: %s", name, exc)
+        finally:
+            if close:
+                _close_plane(control_plane)
 
     task = asyncio.get_running_loop().create_task(run())
     _pending_deletes.add(task)
     task.add_done_callback(_pending_deletes.discard)
+
+
+def _close_plane(control_plane: Any) -> None:
+    """Release a control plane's client; a failure to is only logged."""
+    try:
+        control_plane.close()
+    except Exception as exc:  # noqa: BLE001 - a channel that will not close is only logged
+        logger.debug("Could not close an OpenShell client: %s", exc)
 
 
 def _drain(stream: ExecStream) -> ExecResult:
@@ -329,6 +342,8 @@ class OpenShellExecutor(SandboxExecutor):
         self._verify_timeout = verify_timeout
         self._create_timeout = create_timeout
         self._control_plane = control_plane
+        # A plane built here is closed at stop(); one handed in is its caller's.
+        self._owns_plane = control_plane is None
         self._gateway = gateway
         self._gateway_workspace = gateway_workspace
         self._name: str | None = None
@@ -875,9 +890,15 @@ class OpenShellExecutor(SandboxExecutor):
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
         name, self._name = self._name, None
-        if name is not None:
-            _spawn_delete(self._plane(), name)
+        plane = self._control_plane
+        if self._owns_plane:
+            # Closed once its sandbox is deleted; a restart builds a fresh one.
+            self._control_plane = None
+        if name is not None and plane is not None:
+            _spawn_delete(plane, name, close=self._owns_plane)
             logger.info("OpenShell sandbox %s stopping", name)
+        elif plane is not None and self._owns_plane:
+            _close_plane(plane)
 
 
 def build_sandbox_spec(*, image: str, policy: dict, driver_config: dict, resources: dict) -> Any:
@@ -938,6 +959,10 @@ class SDKControlPlane:
             ) from exc
         self._client = SandboxClient.from_active_cluster(cluster=gateway)
         self._workspace = workspace
+
+    def close(self) -> None:
+        """Release the client's gRPC channel and any OIDC refresher it holds."""
+        self._client.close()
 
     def create(self, *, name, image, policy, driver_config, resources, labels) -> None:
         spec = build_sandbox_spec(image=image, policy=policy, driver_config=driver_config, resources=resources)
