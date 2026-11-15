@@ -24,6 +24,7 @@ from io import StringIO
 from pathlib import Path
 
 import pytest
+import typer
 from rich.console import Console
 from typer.testing import CliRunner
 
@@ -187,6 +188,18 @@ def test_tracing_stop_never_kills_unverified_pid(tmp_path, monkeypatch):
     assert not pidfile.exists()
 
 
+def test_tracing_stop_drops_an_unreadable_pidfile(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text("{not json", encoding="utf-8")
+
+    r = runner.invoke(app, ["tracing", "stop"])
+
+    assert r.exit_code == 0
+    assert "not running" in r.output.lower()
+    assert not pidfile.exists()
+
+
 def test_tracing_reuses_live_instance_from_pidfile(tmp_path, monkeypatch):
     monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
     (tmp_path / "viewer.pid").write_text(json.dumps({"pid": 4242, "port": 5555}), encoding="utf-8")
@@ -199,10 +212,40 @@ def test_tracing_reuses_live_instance_from_pidfile(tmp_path, monkeypatch):
         raise AssertionError("must reuse the live viewer, not spawn a new one")
 
     monkeypatch.setattr(tc.subprocess, "Popen", no_spawn)
+    buf = StringIO()
+    monkeypatch.setattr(tc, "console", Console(file=buf, width=200))
 
     tc._open_dashboard(4318)
 
     assert opened == ["http://127.0.0.1:5555/"]
+    assert "already running" in buf.getvalue()
+    assert "no pid record" not in buf.getvalue()
+
+
+def test_tracing_keeps_a_live_viewer_record_when_its_health_probe_fails(tmp_path, monkeypatch):
+    """A viewer this CLI started but that stopped answering is not replaced.
+
+    `raven tracing stop` only signals pids named in viewer.pid, so dropping the
+    record to start a second viewer would orphan the first one.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    entry = {"pid": 4242, "port": 4318}
+    pidfile.write_text(json.dumps(entry), encoding="utf-8")
+    monkeypatch.setattr(tc, "_pid_is_viewer", lambda pid: pid == 4242)
+    monkeypatch.setattr(tc, "_viewer_health", lambda port: False)
+    monkeypatch.setattr(tc.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("started a second viewer"))
+    buf = StringIO()
+    monkeypatch.setattr(tc, "console", Console(file=buf, width=200))
+
+    with pytest.raises(typer.Exit) as exc:
+        tc._open_dashboard(4318)
+
+    assert exc.value.exit_code == 1
+    assert json.loads(pidfile.read_text(encoding="utf-8")) == entry
+    out = buf.getvalue()
+    assert "not answering" in out
+    assert "raven tracing stop" in out
 
 
 def test_tracing_adopts_unrecorded_viewer_and_says_stop_will_not_manage_it(tmp_path, monkeypatch):
@@ -231,6 +274,26 @@ def test_tracing_adopts_unrecorded_viewer_and_says_stop_will_not_manage_it(tmp_p
     assert opened == ["http://127.0.0.1:4318/"]
     assert "no pid record" in out
     assert "will not manage" in out
+
+
+def test_tracing_drops_an_unreadable_pidfile_before_adopting(tmp_path, monkeypatch):
+    """A malformed record cannot be signalled, so it is removed, not left behind."""
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(tc, "_port_live", lambda port: True)
+    monkeypatch.setattr(tc, "_viewer_health", lambda port: True)
+    opened = []
+    monkeypatch.setattr(tc.webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setattr(tc.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("must adopt the live viewer"))
+    buf = StringIO()
+    monkeypatch.setattr(tc, "console", Console(file=buf, width=200))
+
+    tc._open_dashboard(4318)
+
+    assert opened == ["http://127.0.0.1:4318/"]
+    assert not pidfile.exists()
+    assert "no pid record" in buf.getvalue()
 
 
 def test_pid_is_viewer_rejects_foreign_process():

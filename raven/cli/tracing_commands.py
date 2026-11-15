@@ -32,6 +32,7 @@ import subprocess
 import time
 import urllib.request
 import webbrowser
+from contextlib import suppress
 from pathlib import Path
 
 import typer
@@ -125,19 +126,25 @@ def _pid_file() -> Path:
 
 
 def _read_pid_file() -> dict | None:
+    path = _pid_file()
     try:
-        data = json.loads(_pid_file().read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return None
+        data = None
     if isinstance(data, dict) and isinstance(data.get("pid"), int) and isinstance(data.get("port"), int):
         return data
+    # A malformed or unreadable record is not a record: drop it so the launcher
+    # and `stop` agree that nothing is recorded. A removal that fails (a
+    # permission error) leaves the file for the next run to retry.
+    with suppress(OSError):
+        path.unlink()
     return None
 
 
 def _write_pid_file(pid: int, port: int) -> None:
-    path = _pid_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"pid": pid, "port": port}), encoding="utf-8")
+    from raven.utils.atomic_io import atomic_replace
+
+    atomic_replace(_pid_file(), json.dumps({"pid": pid, "port": port}))
 
 
 def _clear_pid_file() -> None:
@@ -230,11 +237,23 @@ def _server_js() -> Path:
 def _open_dashboard(port: int) -> None:
     entry = _read_pid_file()
     if entry is not None:
-        if _checked_viewer(entry["pid"]) and _viewer_health(entry["port"]):
-            url = f"http://127.0.0.1:{entry['port']}/"
-            console.print(f"Tracing dashboard already running at [cyan]{url}[/cyan]")
-            webbrowser.open(url)
-            return
+        if _checked_viewer(entry["pid"]):
+            if _viewer_health(entry["port"]):
+                url = f"http://127.0.0.1:{entry['port']}/"
+                console.print(f"Tracing dashboard already running at [cyan]{url}[/cyan]")
+                webbrowser.open(url)
+                return
+            # The record names a live viewer of ours, but it is not answering:
+            # it may be hung, or its assets were replaced under it. Starting a
+            # second viewer would leave this process unreachable, because
+            # `raven tracing stop` only signals pids named in this file. Keep
+            # the record and send the user to stop it.
+            console.print(
+                f"[yellow]Tracing viewer (pid {entry['pid']}) is not answering on "
+                f"http://127.0.0.1:{entry['port']}/. "
+                "Run [cyan]raven tracing stop[/cyan] to stop it, then retry.[/yellow]"
+            )
+            raise typer.Exit(1)
         _clear_pid_file()
 
     if _port_live(port):
