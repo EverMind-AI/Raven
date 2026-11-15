@@ -68,6 +68,7 @@ class SandboxRenderBackend:
         cpus: int,
         memory_mib: int,
         create_timeout_seconds: int,
+        gateway: str | None = None,
     ) -> None:
         self.config = config
         self.path_policy = path_policy
@@ -75,6 +76,8 @@ class SandboxRenderBackend:
         self.cpus = cpus
         self.memory_mib = memory_mib
         self.create_timeout_seconds = create_timeout_seconds
+        # The host's sandbox gateway; None is the CLI's active one.
+        self.gateway = gateway
 
     async def run(self, request: RenderRequest, *, preview_limit: int) -> RenderOutcome:
         if not self.image:
@@ -244,6 +247,7 @@ class SandboxRenderBackend:
             network_source=lambda: {},
             default_timeout=self.config.timeout_seconds,
             create_timeout=self.create_timeout_seconds,
+            gateway=self.gateway,
             # The worker finds Chromium there inside the sandbox (worker.py).
             read_only_paths=(str(_VM_BROWSER_ROOT),),
         )

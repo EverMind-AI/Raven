@@ -38,6 +38,7 @@ class RenderService:
         worker_memory_mib: int = 4096,
         worker_create_timeout_seconds: int = 300,
         max_concurrency: int = 2,
+        worker_gateway: str | None = None,
     ) -> None:
         self.config = config or RenderConfig.discover()
         workspace = Path.cwd().resolve()
@@ -53,6 +54,7 @@ class RenderService:
             worker_cpus=worker_cpus,
             worker_memory_mib=worker_memory_mib,
             worker_create_timeout_seconds=worker_create_timeout_seconds,
+            worker_gateway=worker_gateway,
         )
         startup_budget = worker_create_timeout_seconds if backend in _SANDBOXED_BACKENDS else 0
         self.tool_timeout_seconds = startup_budget + self.config.timeout_seconds + 30
@@ -67,6 +69,7 @@ class RenderService:
         media_root: Path,
         runtime_root: Path,
         restrict_to_workspace: bool,
+        gateway: str | None = None,
     ) -> RenderService:
         binary_overrides = {
             name: value
@@ -121,6 +124,7 @@ class RenderService:
             worker_memory_mib=tool_config.worker_memory_mib,
             worker_create_timeout_seconds=tool_config.worker_create_timeout_seconds,
             max_concurrency=tool_config.max_concurrency,
+            worker_gateway=gateway,
         )
 
     async def render(
@@ -206,6 +210,7 @@ class RenderService:
         worker_cpus: int,
         worker_memory_mib: int,
         worker_create_timeout_seconds: int,
+        worker_gateway: str | None = None,
     ) -> RenderExecutionBackend:
         if backend == "direct":
             return DirectRenderBackend(self.config, self.path_policy)
@@ -217,6 +222,7 @@ class RenderService:
                 cpus=worker_cpus,
                 memory_mib=worker_memory_mib,
                 create_timeout_seconds=worker_create_timeout_seconds,
+                gateway=worker_gateway,
             )
         raise ValueError(f"Unsupported render backend: {backend}")
 

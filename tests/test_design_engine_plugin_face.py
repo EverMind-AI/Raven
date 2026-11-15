@@ -185,7 +185,7 @@ def test_the_render_fence_is_closed_by_default_and_opened_by_the_shipped_slice(m
 
     captured = {}
 
-    def fake_from_tool_config(settings, *, workspace, media_root, runtime_root, restrict_to_workspace):
+    def fake_from_tool_config(settings, *, workspace, media_root, runtime_root, restrict_to_workspace, gateway=None):
         captured[str(workspace)] = restrict_to_workspace
         return SimpleNamespace(config=settings)
 
@@ -194,6 +194,24 @@ def test_the_render_fence_is_closed_by_default_and_opened_by_the_shipped_slice(m
     plugin._Shared.for_context(_fresh(SHIPPED_SLICE)).service_for(tmp_path / "open")
     assert captured[str(tmp_path / "closed")] is True
     assert captured[str(tmp_path / "open")] is False
+
+
+def test_the_render_service_runs_on_the_hosts_sandbox_gateway(tmp_path, monkeypatch):
+    import raven_design.plugin as plugin
+    import raven_design.rendering.service as service_mod
+
+    captured = {}
+
+    def fake_from_tool_config(settings, *, workspace, media_root, runtime_root, restrict_to_workspace, gateway=None):
+        captured[str(workspace)] = gateway
+        return SimpleNamespace(config=settings)
+
+    monkeypatch.setattr(service_mod.RenderService, "from_tool_config", fake_from_tool_config)
+    lent = _fresh(SHIPPED_SLICE)
+    lent.services = SimpleNamespace(workspace=tmp_path / "home-lab", sandbox_gateway="lab")
+    plugin._Shared.for_context(lent).service_for(tmp_path / "lab")
+    plugin._Shared.for_context(_fresh(SHIPPED_SLICE)).service_for(tmp_path / "older-host")
+    assert captured == {str(tmp_path / "lab"): "lab", str(tmp_path / "older-host"): None}
 
 
 def test_a_custom_preview_cap_reaches_the_advertised_schema(monkeypatch):

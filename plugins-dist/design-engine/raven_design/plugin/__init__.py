@@ -117,6 +117,8 @@ class _Shared:
                 media_root=get_media_dir(),
                 runtime_root=get_runtime_subdir("render"),
                 restrict_to_workspace=self.cfg.render.restrict_to_workspace,
+                # Where the host's sandbox runs; a host that predates the grant lends none.
+                gateway=getattr(getattr(self._ctx, "services", None), "sandbox_gateway", None),
             )
             self._services[key] = service
         return service

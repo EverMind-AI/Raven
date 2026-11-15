@@ -113,7 +113,7 @@ execution happens only when the backend is `"none"`.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `backend` | `"none"` \| `"openshell"` | `"none"` | `"none"` runs commands on the host with no isolation. |
-| `gateway` | string \| null | `null` | Name of a gateway registered with the `openshell` CLI; `null` uses the active one. |
+| `gateway` | string \| null | `null` | Name of a gateway registered with the `openshell` CLI; `null` uses the active one. The design engine's isolated rendering runs there too. |
 | `image` | string | `"ubuntu:22.04"` | Container image each sandbox starts from. |
 | `cpus` | int | `2` | CPU limit per sandbox. |
 | `memoryMib` | int | `2048` | Memory limit per sandbox, in MiB. |

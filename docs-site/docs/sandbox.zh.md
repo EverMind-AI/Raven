@@ -98,7 +98,7 @@ Raven 不会自行退回宿主机执行；只有 backend 为 `"none"` 时才在�
 | 键 | 类型 | 默认值 | 说明 |
 |-----|------|---------|-------------|
 | `backend` | `"none"` \| `"openshell"` | `"none"` | `"none"` 在宿主机上运行命令，没有隔离。 |
-| `gateway` | 字符串 \| null | `null` | 在 `openshell` CLI 中登记的 gateway 名称；`null` 表示使用当前激活的那个。 |
+| `gateway` | 字符串 \| null | `null` | 在 `openshell` CLI 中登记的 gateway 名称；`null` 表示使用当前激活的那个。设计引擎的隔离渲染也在这里运行。 |
 | `image` | 字符串 | `"ubuntu:22.04"` | 每个沙箱启动所用的容器镜像。 |
 | `cpus` | 整数 | `2` | 每个沙箱的 CPU 上限。 |
 | `memoryMib` | 整数 | `2048` | 每个沙箱的内存上限，单位 MiB。 |
