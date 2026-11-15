@@ -20,7 +20,7 @@
   --line-soft:#f0ebe0;
   --text:     #2b2620;
   --muted:    #6f675c;
-  --faint:    #9d9587;
+  --faint:    #736c61;
   --link:     #3b6fd4;
   --amber:    #b5791c;
   --amber-dp: #f1e3c4;
@@ -112,7 +112,7 @@
      heading and an idle row action, and the two grounds a row steps through. */
   --rail-ink:    #3b342a;
   --rail-ink-on: #2b2620;
-  --rail-quiet:  #9d9587;
+  --rail-quiet:  #797166;
   --rail-hover:  rgba(181, 121, 28, .06);
   --rail-on:     rgba(255, 255, 253, .95);
   --rail-tip:    #2b2620;
@@ -126,7 +126,7 @@
   --composer-line:  #e6e6e6;
   --composer-sh:    rgba(0, 0, 0, .08);
   --composer-ink:   #2b2620;
-  --composer-ph:    #9d9587;
+  --composer-ph:    #797166;
   --composer-hover: #f7f7f7;
   --att-bg:         #f0f0f0;
   --send-off:       rgba(160, 150, 130, .45);
@@ -147,7 +147,7 @@
      listing is boxed in, the two greys of a delivered file's name and size,
      and the tag a sent file wears inside the bubble. */
   --chat-ink:       #2b2620;
-  --chat-quiet:     #9d9587;
+  --chat-quiet:     #7b7468;
   --chat-shine:     #e6e6e6;
   --chat-danger:    #d84520;
   --chat-rule:      #e0e0e0;
@@ -288,6 +288,9 @@
      --ink-on-amber is the text on an amber fill; it is dark in the dark theme,
      where the lit amber is too light for white. */
   --ink-on-amber: #fff;
+  /* A count on an amber badge is 9.5-11px text, and white on this amber is
+     3.7:1; dark ink is 4.8:1. Buttons keep --ink-on-amber. */
+  --ink-on-badge: #1c1814;
   --rail-edge: rgba(255, 255, 255, .6);
   --rail-on-lift: inset 0 0 0 1px rgba(255, 255, 255, .7), 0 4px 12px -8px rgba(60, 45, 20, .25);
   --card-glass: rgba(255, 255, 255, .8);
@@ -368,7 +371,7 @@
     --line-soft:#25211b;
     --text:     #f1e9da;
     --muted:    #a2988a;
-    --faint:    #7c7367;
+    --faint:    #9c9386;
 
     /* The settings dialog under a lamp: the same warm room the light set is,
        lit from one corner. The black is a warm near-black rather than the
@@ -455,7 +458,7 @@
     --composer-line:  #333333;
     --composer-sh:    rgba(0, 0, 0, .45);
     --composer-ink:   #f1e9da;
-    --composer-ph:    #7c7367;
+    --composer-ph:    #8e8578;
     --composer-hover: #2e2e2e;
     --att-bg:         #303030;
     --send-off:       #38322a;
@@ -467,7 +470,7 @@
     --bubble-me:    #343434;
     --bubble-me-fg: #ededeb;
     --chat-ink:       #f1e9da;
-    --chat-quiet:     #8f8578;
+    --chat-quiet:     #908679;
     --chat-shine:     #d6d6d4;
     --chat-danger:    #e0775e;
     --chat-rule:      #333333;
@@ -496,6 +499,7 @@
 
     /* The page's glass, under the lamp: see the base block. */
     --ink-on-amber: #241b0c;
+    --ink-on-badge: #241b0c;
     --rail-edge: rgba(255, 225, 180, .06);
     --rail-on-lift: inset 0 0 0 1px rgba(255, 225, 180, .07);
     --card-glass: rgba(29, 29, 29, .82);
@@ -512,7 +516,7 @@
   --stage-bg: #0e0e11;
   --mark-plate: #ecebe7; --mark-plate-line: #ecebe7;
   --ink: #1a1713; --surface: #211d18; --raised: #2e2d2a; --line: #2f2a23;
-  --line-soft: #25211b; --text: #f1e9da; --muted: #a2988a; --faint: #7c7367;
+  --line-soft: #25211b; --text: #f1e9da; --muted: #a2988a; --faint: #9c9386;
   --link: #86abe4; --amber: #e9b44c; --amber-dp: #c99a3c; --warm: #f5c46a; --moss: #7fbf6a;
   --clay: #d96a5b; --gold: #e9b44c; --sky: #6fa8d6; --shadow: 0 18px 40px -24px #000c;
 
@@ -569,10 +573,10 @@
   --rail-hover: rgba(255, 225, 180, .05); --rail-on: rgba(255, 235, 200, .08); --rail-tip: #1a1a1a; --rail-tip-ink: #ffffff;
   --snav-bg: #262626; --settings-nav-on: #333333; --settings-nav-ico: #999999;
   --composer-bg: rgba(32, 32, 32, .85); --composer-line: #333333; --composer-sh: rgba(0, 0, 0, .45);
-  --composer-ink: #f1e9da; --composer-ph: #7c7367; --composer-hover: #2e2e2e; --att-bg: #303030;
+  --composer-ink: #f1e9da; --composer-ph: #8e8578; --composer-hover: #2e2e2e; --att-bg: #303030;
   --send-off: #38322a; --send-off-ink: #7c7367; --send-on: #e9b44c; --send-on-ink: #241b0c;
   --bubble-me: #343434; --bubble-me-fg: #ededeb;
-  --chat-ink: #f1e9da; --chat-quiet: #8f8578; --chat-shine: #d6d6d4; --chat-danger: #e0775e;
+  --chat-ink: #f1e9da; --chat-quiet: #908679; --chat-shine: #d6d6d4; --chat-danger: #e0775e;
   --chat-rule: #333333; --chat-head: #262626; --chat-head-ink: #a2988a;
   --chat-file-ink: #f1e9da; --chat-file-meta: #8f8578;
   --bubble-att: rgba(255, 255, 255, .12); --bubble-att-on: rgba(255, 255, 255, .2); --bubble-att-ink: #ededeb;
@@ -586,7 +590,7 @@
   --scrim-detail: rgba(6, 6, 8, .55);
 
   /* The page's glass, same as the media query's. */
-  --ink-on-amber: #241b0c;
+  --ink-on-amber: #241b0c; --ink-on-badge: #241b0c;
   --rail-edge: rgba(255, 225, 180, .06);
   --rail-on-lift: inset 0 0 0 1px rgba(255, 225, 180, .07);
   --card-glass: rgba(29, 29, 29, .82);
@@ -600,7 +604,7 @@
   --mark-plate: #f7f7f7; --mark-plate-line: #f0f0f0;
   --bdg-ink: #faf7ee;
   --ink: #ffffff; --surface: #f8f5ec; --raised: #f1f0ec; --line: #e8e1d2;
-  --line-soft: #f0ebe0; --text: #2b2620; --muted: #6f675c; --faint: #9d9587;
+  --line-soft: #f0ebe0; --text: #2b2620; --muted: #6f675c; --faint: #736c61;
   --link: #3b6fd4; --amber: #b5791c; --amber-dp: #f1e3c4; --warm: #e0a63a; --moss: #3f7d2c;
   --clay: #b4402f; --gold: #9a6516; --sky: #2f6d9e;
   --page: #fbf9f4; --side-bg: rgba(253, 252, 249, .84); --paper: #ffffff; --hover: #f1ece0;
@@ -616,7 +620,7 @@
     radial-gradient(40% 45% at 70% 90%, rgba(239, 226, 200, .55) 0%, rgba(239, 226, 200, 0) 70%),
     linear-gradient(180deg, #f6f5f0 0%, #f1f0ea 100%);
   --selected: #ece5d6; --text-3: #8a8275; --ph: #bdb5a6; --black: #2b2620;
-  --rail-ink: #3b342a; --rail-ink-on: #2b2620; --rail-quiet: #9d9587;
+  --rail-ink: #3b342a; --rail-ink-on: #2b2620; --rail-quiet: #797166;
   --rail-hover: rgba(181, 121, 28, .06); --rail-on: rgba(255, 255, 253, .95); --rail-tip: #2b2620; --rail-tip-ink: #fdfbf5;
   --snav-bg: #fafafa; --settings-nav-on: #f0f0f0; --settings-nav-ico: #666666;
   /* The settings dialog, same as the base block's: an explicit light theme
@@ -644,10 +648,10 @@
   --set-go:       var(--set-ink);
   --set-go-ink:   var(--set-paper);
   --composer-bg: rgba(255, 255, 255, .8); --composer-line: #e6e6e6; --composer-sh: rgba(0, 0, 0, .08);
-  --composer-ink: #2b2620; --composer-ph: #9d9587; --composer-hover: #f7f7f7; --att-bg: #f0f0f0;
+  --composer-ink: #2b2620; --composer-ph: #797166; --composer-hover: #f7f7f7; --att-bg: #f0f0f0;
   --send-off: rgba(160, 150, 130, .45); --send-off-ink: #fdfbf5; --send-on: #2b2620; --send-on-ink: #fdfbf5;
   --bubble-me: #333333; --bubble-me-fg: #ffffff;
-  --chat-ink: #2b2620; --chat-quiet: #9d9587; --chat-shine: #e6e6e6; --chat-danger: #d84520;
+  --chat-ink: #2b2620; --chat-quiet: #7b7468; --chat-shine: #e6e6e6; --chat-danger: #d84520;
   --chat-rule: #e0e0e0; --chat-head: #f7f7f7; --chat-head-ink: #6f675c;
   --chat-file-ink: #3b342a; --chat-file-meta: #9d9587;
   --bubble-att: rgba(255, 255, 255, .2); --bubble-att-on: rgba(255, 255, 255, .3); --bubble-att-ink: #f0f0f0;
@@ -664,7 +668,7 @@
   --ctx-conversation: #8fa9ab; --ctx-files: #5f7595; --ctx-memory: #9c7a38;
   --ctx-ink: #6c551e; --ctx-ink-bg: #e8dfb0; --ctx-muted: #4f5a63; --ctx-chip: #eef1f3;
   /* The page's glass, same as the base block's. */
-  --ink-on-amber: #fff;
+  --ink-on-amber: #fff; --ink-on-badge: #1c1814;
   --rail-edge: rgba(255, 255, 255, .6);
   --rail-on-lift: inset 0 0 0 1px rgba(255, 255, 255, .7), 0 4px 12px -8px rgba(60, 45, 20, .25);
   --card-glass: rgba(255, 255, 255, .8);
@@ -1218,7 +1222,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    in the strip, so it takes the accent rather than the row's quiet ink. */
 .chrome-nav-badge {
   margin-left: auto; min-width: 18px; padding: 0 6px; border-radius: 999px;
-  background: var(--amber); color: var(--ink-on-amber);
+  background: var(--amber); color: var(--ink-on-badge);
   font-size: 11px; font-weight: 600; line-height: 17px; text-align: center;
   font-variant-numeric: tabular-nums;
 }
@@ -1661,7 +1665,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 #atBtn { font-size: 15px; font-weight: 600; }
 #atBtn.chrome-at-set { color: var(--amber); }
 .chrome-at-n { position: absolute; top: -1px; right: -2px; min-width: 13px; height: 13px; padding: 0 3px;
-  border-radius: 999px; background: var(--amber); color: var(--ink-on-amber); font-size: 9.5px; font-weight: 600;
+  border-radius: 999px; background: var(--amber); color: var(--ink-on-badge); font-size: 9.5px; font-weight: 600;
   line-height: 13px; text-align: center; }
 /* A base's row: the tick, the name, and how many documents are in it. The tick
    holds its width whether or not it is set, so a list does not shuffle as it
