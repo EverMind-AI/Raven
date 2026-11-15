@@ -72,6 +72,7 @@ class FakeControlPlane:
         self.merge_error: Exception | None = None
         self.policy_loads = True
         self.waited: list[int] = []
+        self.wait_timeouts: list[float] = []
         self.chunks: list = []
         self.draft_reads = 0
         self.approved: list[tuple[str, str]] = []
@@ -106,6 +107,7 @@ class FakeControlPlane:
 
     def wait_policy(self, name, version, timeout):
         self.waited.append(version)
+        self.wait_timeouts.append(timeout)
         return self.policy_loads
 
     def draft_chunks(self, name):
@@ -772,6 +774,79 @@ class TestLiveNetwork:
         result = await ex.exec("curl https://example.com")
         assert len(cp.execs) == ran
         assert result.exit_code != 0 and "was not run" in result.stderr
+
+    async def test_commands_running_together_send_one_merge_for_one_change(self, tmp_path):
+        cp, ex, state = await self._started(tmp_path, {"raven_rule_a": {"name": "raven_rule_a"}})
+        state["policies"] = {}
+        await asyncio.gather(ex.exec("true"), ex.exec("true"), ex.sync_network())
+        assert cp.merges == [({}, ["raven_rule_a"])]
+
+    async def test_a_merge_that_landed_but_did_not_load_is_waited_on_rather_than_sent_again(self, tmp_path):
+        """The gateway holds the merged version; sending its removals again would ask it
+        to remove rules that are already gone, and wait the whole load timeout again."""
+        cp, ex, state = await self._started(tmp_path, {"raven_rule_a": {"name": "raven_rule_a"}})
+        state["policies"] = {}
+        cp.policy_loads = False
+        refused = await ex.exec("true")
+        cp.policy_loads = True
+        ran = len(cp.execs)
+        result = await ex.exec("true")
+        assert "was not run" in refused.stderr
+        assert cp.merges == [({}, ["raven_rule_a"])], "the change the gateway holds is not sent twice"
+        assert len(cp.waited) == 2 and cp.waited[0] == cp.waited[1], "the same version is waited on again"
+        assert cp.wait_timeouts == [ox._POLICY_WAIT_SECONDS, ox._POLICY_RECHECK_SECONDS], (
+            "a version already waited on in full is only checked again, so commands queued on it do not each wait"
+        )
+        assert result.exit_code == 0 and len(cp.execs) == ran + 1
+        await ex.exec("true")
+        assert len(cp.waited) == 2, "a loaded version is not waited on again"
+
+    async def test_an_opening_change_on_top_of_an_unloaded_narrowing_still_keeps_commands_out(self, tmp_path):
+        cp, ex, state = await self._started(tmp_path, {"raven_rule_a": {"name": "raven_rule_a"}})
+        state["policies"] = {}
+        cp.policy_loads = False
+        await ex.exec("true")
+        state["policies"] = {"raven_rule_b": {"name": "raven_rule_b"}}
+        ran = len(cp.execs)
+        result = await ex.exec("true")
+        assert len(cp.execs) == ran and "was not run" in result.stderr
+
+    async def test_a_grant_made_while_a_sync_is_in_flight_is_still_merged(self, tmp_path):
+        """The sync in flight finishes with what it read before the grant; the grant's own
+        sync must not take that for its own and report a rule it never sent as loaded."""
+        from raven.sandbox.network_policy import NetworkGrant
+
+        cp, ex, state = await self._started(tmp_path, {})
+        release = threading.Event()
+        merge = cp.merge_rules
+
+        def held_first(name, add, remove):
+            if not cp.merges:
+                release.wait(5)
+            return merge(name, add, remove)
+
+        cp.merge_rules = held_first
+        state["policies"] = {"raven_rule_a": {"name": "raven_rule_a"}}
+        first = asyncio.create_task(ex.sync_network())
+        await asyncio.sleep(0.05)
+        grant = asyncio.create_task(ex.grant_network([NetworkGrant("/usr/bin/curl", "example.com", 443)]))
+        await asyncio.sleep(0.05)
+        release.set()
+        assert (await first, await grant) == (True, True)
+        assert any(rule.startswith("raven_grant_") for added, _ in cp.merges for rule in added)
+
+    async def test_a_restarted_sandbox_does_not_wait_on_a_version_its_predecessor_left(self, tmp_path):
+        cp, ex, state = await self._started(tmp_path, {"raven_rule_a": {"name": "raven_rule_a"}})
+        state["policies"] = {}
+        cp.policy_loads = False
+        await ex.exec("true")
+        await ex.stop()
+        await ox.drain_pending_deletes()
+        cp.policy_loads = True
+        waited = len(cp.waited)
+        await ex.start()
+        result = await ex.exec("true")
+        assert result.exit_code == 0 and len(cp.waited) == waited
 
     async def test_an_unreadable_network_source_keeps_the_command_from_running(self, tmp_path):
         cp = FakeControlPlane()

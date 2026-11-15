@@ -73,6 +73,9 @@ _RELAY_CLOSE_SLACK = 0.25
 # How long a changed network policy may take to load in a running sandbox:
 # about 1 s with the gateway's push delivery, about 11 s with poll.
 _POLICY_WAIT_SECONDS = 15.0
+# A version already waited on in full is only checked again: commands queued
+# behind one that never loads must not each wait the full time.
+_POLICY_RECHECK_SECONDS = 1.0
 _POLICY_POLL_SECONDS = 0.25
 _SERVER_TIMEOUT_EXIT = 124
 _OWNER_LABEL = "raven.owner"
@@ -326,6 +329,13 @@ class OpenShellExecutor(SandboxExecutor):
         self._gateway_workspace = gateway_workspace
         self._name: str | None = None
         self._start_lock = asyncio.Lock()
+        # One policy change in flight at a time: two commands that each see the
+        # same change would otherwise both send it.
+        self._policy_lock = asyncio.Lock()
+        # A merged version the sandbox has not loaded yet, and what its not
+        # loading means ("behind" or "narrower"): the gateway holds it, so it is
+        # waited on again rather than sent again.
+        self._pending: tuple[int, str] | None = None
         self._processes: list[InteractiveStream] = []
         self._tasks: list[asyncio.Task] = []
 
@@ -399,6 +409,8 @@ class OpenShellExecutor(SandboxExecutor):
         self._name = name
         self._applied_policies = dict(network_policies)
         self._last_source = network_policies
+        # A version the previous sandbox left unloaded is not this one's.
+        self._pending = None
         logger.info("OpenShell sandbox %s started (image=%s)", name, self._image)
 
     def _not_ready_advice(self, name: str, exc: Exception) -> str:
@@ -528,9 +540,12 @@ class OpenShellExecutor(SandboxExecutor):
             left = await self._approve_proposals(plane, name, left)
         if not left:
             return True
-        self._local_rules.update(grant_rules(left))
-        self._last_source = None
-        return await self._sync_network(plane, name)
+        # Under the lock: a sync in flight finishes with what it read before
+        # these rules, and must not leave its source standing as if it had them.
+        async with self._policy_lock:
+            self._local_rules.update(grant_rules(left))
+            self._last_source = None
+            return await self._sync_locked(plane, name) == "loaded"
 
     async def _approve_proposals(
         self, plane: OpenShellControlPlane, name: str, grants: list[NetworkGrant]
@@ -577,20 +592,31 @@ class OpenShellExecutor(SandboxExecutor):
         "behind" when what did not load only adds rules, so the policy in force
         is narrower than the source; "narrower" when it removes or changes one,
         or the source cannot be read, so the policy in force may allow what the
-        source no longer does. Either is retried before the next command.
+        source no longer does. Either is retried before the next command: a
+        merge that failed is sent again, and one the gateway took but the
+        sandbox did not load in time is waited on again.
         """
+        async with self._policy_lock:
+            return await self._sync_locked(plane, name)
+
+    async def _sync_locked(self, plane: OpenShellControlPlane, name: str) -> str:
         try:
             source = self._network_source()
         except Exception as exc:  # noqa: BLE001 - nothing is known of what the user allows now
             logger.warning("Could not read the network policy for OpenShell sandbox %s: %s", name, exc)
             return "narrower"
-        if source is self._last_source:
+        if source is self._last_source and self._pending is None:
             return "loaded"
         desired = {**source, **self._local_rules}
         # Compared as dicts, not by a digest: the open rule's port list is one
         # shared object, so an unchanged policy compares without walking its
         # 65,535 ports, which serializing it on every command would.
         if desired == self._applied_policies:
+            if self._pending is not None:
+                version, failed = self._pending
+                if not await self._loaded(plane, name, version, _POLICY_RECHECK_SECONDS):
+                    return failed
+                self._pending = None
             self._last_source = source
             return "loaded"
         add = {rule: body for rule, body in desired.items() if self._applied_policies.get(rule) != body}
@@ -598,19 +624,33 @@ class OpenShellExecutor(SandboxExecutor):
         # an added rule into one of the same name, so a narrowed rule sent as an
         # add alone would keep what it dropped.
         remove = [rule for rule in self._applied_policies if rule not in desired or rule in add]
-        failed = "narrower" if remove else "behind"
+        # A narrowing still unloaded stays one until a later version loads.
+        narrowing = remove or (self._pending is not None and self._pending[1] == "narrower")
+        failed = "narrower" if narrowing else "behind"
         try:
             version = await asyncio.to_thread(plane.merge_rules, name, add, remove)
-            loaded = await asyncio.to_thread(plane.wait_policy, name, version, _POLICY_WAIT_SECONDS)
         except Exception as exc:  # noqa: BLE001 - retried before the next command
             logger.warning("Could not update the network policy of OpenShell sandbox %s: %s", name, exc)
             return failed
-        if not loaded:
-            logger.warning("OpenShell sandbox %s did not load network policy version %s in time", name, version)
-            return failed
+        # The gateway holds it from here; only its loading is left to wait for.
         self._applied_policies = desired
+        self._pending = (version, failed)
+        if not await self._loaded(plane, name, version, _POLICY_WAIT_SECONDS):
+            return failed
+        self._pending = None
         self._last_source = source
         return "loaded"
+
+    async def _loaded(self, plane: OpenShellControlPlane, name: str, version: int, wait: float) -> bool:
+        """Whether the sandbox loaded policy ``version`` within ``wait`` seconds."""
+        try:
+            loaded = await asyncio.to_thread(plane.wait_policy, name, version, wait)
+        except Exception as exc:  # noqa: BLE001 - waited on again before the next command
+            logger.warning("Could not read the network policy status of OpenShell sandbox %s: %s", name, exc)
+            return False
+        if not loaded:
+            logger.warning("OpenShell sandbox %s did not load network policy version %s in time", name, version)
+        return bool(loaded)
 
     async def denials_since(
         self, since: float, *, until: float | None = None, wait: bool = False
