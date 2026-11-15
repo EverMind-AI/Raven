@@ -61,9 +61,27 @@ def test_the_schema_is_the_small_face_both_actions_share(sessions):
     assert params["properties"]["action"]["enum"] == ["recall", "update", "carry"]
     assert set(params["properties"]) == {"action", "query", "group_id", "include_turns", "steps", "groups"}
     # The update's shape is the post-turn instruction's to state, once per turn,
-    # not this schema's to carry on every call of every turn.
-    assert params["properties"]["steps"] == {"type": "array", "items": {"type": "object"}}
-    assert params["properties"]["groups"] == {"type": "array", "items": {"type": "object"}}
+    # not this schema's to carry on every call of every turn -- all but its lists.
+    strings = {"type": "array", "items": {"type": "string"}}
+    step = {"type": "object", "properties": {"tasks": strings, "questions": strings}}
+    assert params["properties"]["steps"] == {"type": "array", "items": step}
+    assert params["properties"]["groups"] == {
+        "type": "array",
+        "items": {"type": "object", "properties": {"questions": strings}},
+    }
+
+
+def test_every_list_an_entry_carries_is_typed(sessions):
+    """A provider that builds the call's JSON from the model's XML by this schema (MiniMax)
+    tells a list from text only by its declared type, and sends an undeclared one as
+    ``{"item": ...}`` -- which the board refuses, so no update that placed work or asked
+    anything could land. Every list the update and carry rules read is declared here."""
+    properties = _tool(sessions).parameters["properties"]
+    strings = {"type": "array", "items": {"type": "string"}}
+
+    assert properties["steps"]["items"]["properties"]["tasks"] == strings
+    assert properties["steps"]["items"]["properties"]["questions"] == strings
+    assert properties["groups"]["items"]["properties"]["questions"] == strings
 
 
 def test_the_description_keeps_the_model_off_update(sessions):
