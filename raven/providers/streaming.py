@@ -351,7 +351,7 @@ async def stream_llm_call(
         and a thinking block keeps a signature belonging to a generation that no
         longer exists.
         """
-        nonlocal final_usage, thinking_blocks, record, upstream_finish_reason
+        nonlocal final_usage, thinking_blocks, record, upstream_finish_reason, upstream_truncation_reason
         nonlocal think_t0, reasoning_ms, content_released
         content_buf.clear()
         content_released = False
@@ -361,6 +361,7 @@ async def stream_llm_call(
         thinking_blocks = None
         record = None
         upstream_finish_reason = None
+        upstream_truncation_reason = None
         # Left standing, the clock spans the ladder's waits and reports a minute
         # of sleep as a minute of thought -- the only evidence of how long a
         # round that showed nothing actually thought for.
@@ -377,6 +378,7 @@ async def stream_llm_call(
     error_content: str | None = None
     error_classification: ErrorClassification | None = None
     upstream_finish_reason: str | None = None
+    upstream_truncation_reason: str | None = None
     transport_evidence: str | None = None
 
     def produced() -> _Produced:
@@ -433,6 +435,9 @@ async def stream_llm_call(
                             finish_made_up = True
                         else:
                             upstream_finish_reason = _finish_after(upstream_finish_reason, delta.finish_reason)
+                            upstream_truncation_reason = (
+                                getattr(delta, "truncation_reason", None) or upstream_truncation_reason
+                            )
                     reasoning_delta = getattr(delta, "reasoning_content", None)
                     if reasoning_delta:
                         if think_t0 is None:
@@ -662,6 +667,7 @@ async def stream_llm_call(
             getattr(provider, "generation", None),
             getattr(provider, "wire_model_id", lambda m: m)(model or getattr(provider, "default_model", "") or ""),
         ),
+        truncation_reason=upstream_truncation_reason,
     )
 
     # No terminal reason arrived means none may be fabricated: a reply that died
@@ -694,6 +700,7 @@ async def stream_llm_call(
         reasoning_content=reasoning_content,
         thinking_blocks=thinking_blocks,
         truncated=truncated,
+        truncation_reason=upstream_truncation_reason,
         max_tokens=sent_max_tokens,
         reasoning_ms=reasoning_ms,
         call_record=record,

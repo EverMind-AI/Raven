@@ -83,6 +83,7 @@ class TruncationInfo:
     """Where the output stopped, on a call that never finished arriving."""
 
     at_tokens: int | None = None
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -196,6 +197,7 @@ class LLMResponse:
     # whose arguments were cut mid-JSON is truncated no matter what the
     # backend claims.
     truncated: bool = False
+    truncation_reason: str | None = None
     # The ceiling that produced it, for the message shown to the model.
     max_tokens: int | None = None
     # How long this call spent thinking: the first reasoning delta to the first
@@ -236,6 +238,7 @@ class ChatDelta:
     # carried on the terminal delta only, like `usage`.
     thinking_blocks: list[dict[str, Any]] | None = None
     finish_reason: str | None = None
+    truncation_reason: str | None = None
     error_classification: ErrorClassification | None = None
     # True when ``finish_reason`` was supplied by the client library because the
     # upstream closed the stream without sending one; the consumer then knows

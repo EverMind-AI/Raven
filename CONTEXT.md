@@ -1038,7 +1038,8 @@ Recovery**'s, and `no_output` its failure; "silent" for a failed turn that happe
 **Empty-Response Recovery** (`agent/loop/recovery.py`):
 The policy for a model reply that carries no tool call. `reply_kind` reads the reply as one
 kind -- text, a Silence Marker, a refusal, a stream cut mid-answer, thinking with no answer, a
-reply cut at the output ceiling with nothing in it, nothing right after tools, or nothing --
+reply cut at the output ceiling with nothing in it, one cut at the context window before any
+text, nothing right after tools, or nothing --
 and `decide` names the move from that kind and what the turn has already spent
 (`RecoveryState`), under `RecoveryLimits`. Text completes; a Silence Marker ends the turn as a
 **Silent Turn**; a refusal (a `refusal` or `content_filter` finish) outranks the text that came
@@ -1089,7 +1090,13 @@ the rungs skipped that the wire cannot tell apart (`LLMProvider.reasoning_wire_k
 cut at the ceiling with nothing in it is CONTINUEd
 with `OUTPUT_LIMIT_CONTINUATION` and a doubling `max_tokens` (held by the loop to the model's own
 ceiling, through `send_max_tokens` pinned for the model it goes to, whatever the provider clamps,
-and near the window to the room its prompt leaves), the effort untouched, then fails. Nothing right
+and near the window to the room its prompt leaves), the effort untouched, then fails. A reply cut
+at the context window before any text (`truncation_reason` `context_window`, which the Anthropic
+Messages provider reports for `model_context_window_exceeded`) is a cut whatever it thought, since
+re-feeding the thought or thinking less sends the same full window back: the prompt is shrunk as a
+refused one is (`WindowPressure.OVERFLOW`) and the reply CONTINUEd with
+`CONTEXT_WINDOW_CONTINUATION` and no larger `max_tokens`, and a prompt that cannot shrink ends the
+turn at once with `CONTEXT_WINDOW_FAILURE`. Nothing right
 after tools is NUDGEd once, then treated as nothing.
 An empty reply is RETRYed: the same request resent unchanged, up to `empty_content_max_retries`
 times, after a jittered backoff. On a streamed turn the first resend of a plain empty reply (not one

@@ -665,6 +665,12 @@ def _merge_usage(target: dict[str, Any], raw: Any) -> None:
     )
 
 
+def _truncation_reason(reason: Any) -> str | None:
+    if str(reason or "") == "model_context_window_exceeded":
+        return "context_window"
+    return None
+
+
 def _finish_reason(reason: Any) -> str:
     # Absent is not a normal end: a reply that never said how it ended must stay
     # distinguishable from one that did. Anything unmapped (``refusal``) is the
@@ -716,7 +722,9 @@ def parse_message(payload: dict[str, Any]) -> LLMResponse:
                     run_meta=RunMeta(arguments_repaired=True) if repaired else None,
                 )
             )
-    finish_reason = _finish_reason(payload.get("stop_reason"))
+    raw_stop = payload.get("stop_reason")
+    finish_reason = _finish_reason(raw_stop)
+    truncation_reason = _truncation_reason(raw_stop)
     # A tool call beside a cut finish is not a completed call: the streaming path
     # already reports ``length`` beside tool calls, and ``flag_truncation`` refuses
     # the last call only when it sees that. Keep both paths telling the same story.
@@ -726,6 +734,7 @@ def parse_message(payload: dict[str, Any]) -> LLMResponse:
         content="".join(text) or None,
         tool_calls=calls,
         finish_reason=finish_reason,
+        truncation_reason=truncation_reason,
         usage=_usage(payload.get("usage")),
         reasoning_content="".join(reasoning) or None,
         thinking_blocks=thinking_blocks or None,
@@ -870,6 +879,7 @@ async def consume_message_stream(
                 content=None,
                 usage=usage or None,
                 finish_reason=reason,
+                truncation_reason=_truncation_reason(reason_value),
                 thinking_blocks=list(thinking.values()) or None,
             )
             continue

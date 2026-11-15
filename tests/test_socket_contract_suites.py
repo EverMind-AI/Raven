@@ -87,6 +87,7 @@ class _Resp:
     finish_reason = "stop"
     error_classification = None
     truncated = False
+    truncation_reason = None
     max_tokens = None
     reasoning_ms = None
     call_record = None
