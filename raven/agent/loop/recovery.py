@@ -120,7 +120,7 @@ TRUNCATED_UNCONTINUED_FAILURE = (
 )
 CONTEXT_WINDOW_FAILURE = (
     "Processing stopped: the request hit the model's context window and could not fit even after trimming context. "
-    "Start a new session or compact the conversation before continuing."
+    "Start a new session to continue."
 )
 REFUSAL_FAILURE = "The model declined to respond to this request (a safety refusal, not a Raven failure)."
 REFUSAL_EXPLANATION = " The model's explanation: {text}"
