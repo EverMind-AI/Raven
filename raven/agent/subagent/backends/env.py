@@ -59,6 +59,8 @@ from collections.abc import Mapping
 
 from loguru import logger
 
+from raven.utils.paths import resolve_directory_program
+
 # Held for the length of every capture, so they run one at a time and the one
 # that lands last is the one that read the shell last.
 _CAPTURE_LOCK = threading.Lock()
@@ -121,16 +123,17 @@ def resolve_program(
     searched rather than a bare name CreateProcess looked for somewhere else.
     Without a ``cwd`` the child starts in this process's own directory, which is
     where CreateProcess looks anyway, and ``argv`` is left as it is.
+
+    The path is built by :func:`raven.utils.paths.resolve_directory_program`,
+    which the acp lane's own launcher resolution builds it with as well, so the
+    two cannot answer "which file does this relative launcher name" differently.
     """
     if not _on_windows() or not argv:
         return argv
     if ntpath.dirname(argv[0]):
         if not cwd:
             return argv
-        program = os.path.abspath(os.path.join(cwd, argv[0]))
-        if not os.path.splitext(program)[1]:
-            program += ".exe"
-        return [program, *argv[1:]]
+        return [resolve_directory_program(argv[0], cwd), *argv[1:]]
     batch = _BATCH_SUFFIXES if batch_files else ()
     suffix = ntpath.splitext(argv[0])[1].lower()
     if suffix:

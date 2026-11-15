@@ -1,4 +1,4 @@
-"""Filesystem names and places: safe filenames, path segments, the project slug."""
+"""Filesystem names and places: safe filenames, path segments, the project slug, the program a launch names."""
 
 import os
 import re
@@ -9,6 +9,30 @@ from pathlib import Path
 def ensure_dir(path: Path) -> Path:
     """Ensure directory exists, return it."""
     path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def resolve_directory_program(program: str, cwd: str | None) -> str:
+    """The absolute path of a program that names a directory, as the child starts it.
+
+    A program that names a directory (``./agent-acp``, ``bin/agent``) is on no
+    PATH, so the platform resolves it in the directory the child starts in:
+    POSIX starts the child there and execs it, while Windows' ``CreateProcess``
+    looks for it in the *caller's* own directory and never in the child's --
+    which is why a relative launcher has to be made absolute before that spawn.
+    ``cwd`` is the directory the child starts in; without one the child starts
+    in this process's own, which is where Windows looks anyway.
+
+    A name with no extension means ``.exe`` on Windows, the rule
+    ``CreateProcess`` follows for a program it is handed by path; POSIX has no
+    such rule and runs the file as named.
+
+    One place answers this, so a launch and the probe that judges whether the
+    launcher is there cannot disagree about which file it names.
+    """
+    path = os.path.abspath(os.path.join(cwd or os.getcwd(), program))
+    if os.name == "nt" and not os.path.splitext(path)[1]:
+        path += ".exe"
     return path
 
 

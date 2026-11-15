@@ -32,6 +32,8 @@ import threading
 import time
 from typing import Any
 
+from raven.utils.paths import resolve_directory_program
+
 _KILL_ON_JOB_CLOSE = 0x2000
 _EXTENDED_LIMIT_INFORMATION = 9
 _PROCESS_TERMINATE = 0x0001
@@ -437,9 +439,7 @@ def _handoff() -> _HandoffServer | None:
 def _program(argv: list[str], cwd: str | None) -> list[str]:
     program = argv[0]
     if os.path.dirname(program):
-        program = os.path.abspath(os.path.join(cwd or os.getcwd(), program))
-        if not os.path.splitext(program)[1]:
-            program += ".exe"
+        program = resolve_directory_program(program, cwd)
         if not os.path.isfile(program):
             raise FileNotFoundError(f"program does not exist: {argv[0]}")
     else:
