@@ -12,7 +12,7 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
-def resolve_directory_program(program: str, cwd: str | None) -> str:
+def resolve_directory_program(program: str, cwd: str | None, *, platform: str | None = None) -> str:
     """The absolute path of a program that names a directory, as the child starts it.
 
     A program that names a directory (``./agent-acp``, ``bin/agent``) is on no
@@ -25,13 +25,25 @@ def resolve_directory_program(program: str, cwd: str | None) -> str:
 
     A name with no extension means ``.exe`` on Windows, the rule
     ``CreateProcess`` follows for a program it is handed by path; POSIX has no
-    such rule and runs the file as named.
+    such rule and runs the file as named. ``platform`` names the rules that
+    apply -- ``"nt"`` or ``"posix"`` -- and is this host's own unless a caller
+    is exercising another platform's branch; the path itself is built with this
+    host's rules, which are the ones the launch runs under.
+
+    A program that is already absolute is its own file and needs no directory
+    at all, which also keeps it answerable when this process's own directory
+    is gone.
 
     One place answers this, so a launch and the probe that judges whether the
     launcher is there cannot disagree about which file it names.
     """
-    path = os.path.abspath(os.path.join(cwd or os.getcwd(), program))
-    if os.name == "nt" and not os.path.splitext(path)[1]:
+    if platform is None:
+        platform = os.name
+    if os.path.isabs(program):
+        path = os.path.abspath(program)
+    else:
+        path = os.path.abspath(os.path.join(cwd or os.getcwd(), program))
+    if platform == "nt" and not os.path.splitext(path)[1]:
         path += ".exe"
     return path
 

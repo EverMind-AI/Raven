@@ -134,7 +134,7 @@ def resolve_program(
     if ntpath.dirname(argv[0]):
         if not cwd:
             return argv
-        return [resolve_directory_program(argv[0], cwd), *argv[1:]]
+        return [resolve_directory_program(argv[0], cwd, platform="nt"), *argv[1:]]
     batch = _BATCH_SUFFIXES if batch_files else ()
     suffix = ntpath.splitext(argv[0])[1].lower()
     if suffix:

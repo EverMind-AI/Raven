@@ -439,7 +439,7 @@ def _handoff() -> _HandoffServer | None:
 def _program(argv: list[str], cwd: str | None) -> list[str]:
     program = argv[0]
     if os.path.dirname(program):
-        program = resolve_directory_program(program, cwd)
+        program = resolve_directory_program(program, cwd, platform="nt")
         if not os.path.isfile(program):
             raise FileNotFoundError(f"program does not exist: {argv[0]}")
     else:
