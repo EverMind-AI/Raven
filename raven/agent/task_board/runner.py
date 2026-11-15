@@ -337,7 +337,8 @@ def _message_tool_words(call: Any, answered: Collection[str]) -> str:
 
 # The loop writes this assistant text only to keep a tool result from being followed by a
 # user message (a 400 on most providers); nobody read it as the reply. `turn_path.py` writes
-# it for the post-tool nudge and for a reply cut at the output ceiling with nothing in it.
+# it for the post-tool nudge and for a reply cut before any text, at the output ceiling or at
+# the context window.
 _EMPTY_PLACEHOLDER = "(empty)"
 
 

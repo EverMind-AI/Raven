@@ -1038,7 +1038,8 @@ Recovery**'s, and `no_output` its failure; "silent" for a failed turn that happe
 **Empty-Response Recovery** (`agent/loop/recovery.py`):
 The policy for a model reply that carries no tool call. `reply_kind` reads the reply as one
 kind -- text, a Silence Marker, a refusal, a stream cut mid-answer, thinking with no answer, a
-reply cut at the output ceiling with nothing in it, nothing right after tools, or nothing --
+reply cut at the output ceiling with nothing in it, one cut at the context window before any
+text, nothing right after tools, or nothing --
 and `decide` names the move from that kind and what the turn has already spent
 (`RecoveryState`), under `RecoveryLimits`. Text completes; a Silence Marker ends the turn as a
 **Silent Turn**; a refusal (a `refusal` or `content_filter` finish) outranks the text that came

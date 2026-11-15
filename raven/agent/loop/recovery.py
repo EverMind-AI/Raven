@@ -14,6 +14,7 @@ matches wins:
   silence marker       the model chose to say nothing          SILENT
   refusal              the upstream declined                   FALLBACK once, then FAIL
   text                 a reply to deliver                      COMPLETE
+  cut at the window    the context window filled, no text      shrink and CONTINUE, then FAIL
   thinking only        reasoning and no answer                 PREFILL, STEP_DOWN, FALLBACK, FAIL
   cut, nothing in it   stopped at the ceiling, empty           CONTINUE with more room, then FAIL
   empty after a tool   nothing right after tool results        NUDGE once, then as an empty reply
@@ -24,7 +25,10 @@ the model's explanation. A stream that died mid-answer (``STREAM_CUT``) is asked
 go on from what it sent, up to ``MAX_CONTINUATIONS`` times; one that closed cleanly
 without a terminal chunk, and a body that names no finish, are whole answers. A cut
 at the output ceiling is asked again with more room for the answer, and the effort is
-left alone because nothing in it names the reasoning as the cause.
+left alone because nothing in it names the reasoning as the cause. A cut at the context
+window is one whatever it thought: more room for the answer, a re-fed thought or a lower
+effort would each send the same full window back, so the prompt is shrunk and the reply
+continued with no larger ceiling, and a prompt that cannot shrink fails the turn at once.
 
 PREFILL re-feeds the model its own reasoning so it continues into the answer. A
 provider that refuses a trailing assistant message (its
