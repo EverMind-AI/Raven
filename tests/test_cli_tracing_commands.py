@@ -196,7 +196,9 @@ def test_tracing_stop_drops_an_unreadable_pidfile(tmp_path, monkeypatch):
     r = runner.invoke(app, ["tracing", "stop"])
 
     assert r.exit_code == 0
-    assert "not running" in r.output.lower()
+    # The record was unreadable, so the viewer may still be running: the
+    # message must not claim there is none.
+    assert "may still be running" in r.output.lower()
     assert not pidfile.exists()
 
 
@@ -287,6 +289,27 @@ def test_tracing_starts_a_viewer_on_another_port_when_the_recorded_one_is_stuck(
     assert "4242" in out, out
     assert "5555" in out, out
     assert json.loads(pidfile.read_text(encoding="utf-8")) == {"pid": 31337, "port": 4318}
+
+
+def test_tracing_records_the_viewer_in_a_state_dir_it_creates(tmp_path, monkeypatch):
+    """The record lands even when the state directory does not exist yet."""
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path / "traces"))
+
+    tc._write_pid_file(31337, 4318)
+
+    record = tmp_path / "traces" / "viewer.pid"
+    assert json.loads(record.read_text(encoding="utf-8")) == {"pid": 31337, "port": 4318}
+
+
+def test_tracing_drops_a_record_whose_pid_is_not_a_number(tmp_path, monkeypatch):
+    """A bool is not a pid: `isinstance(True, int)` would let one through."""
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": True, "port": 4318}), encoding="utf-8")
+
+    assert tc._read_pid_file() is None
+    assert not pidfile.exists()
+
 
 def test_tracing_adopts_unrecorded_viewer_and_says_stop_will_not_manage_it(tmp_path, monkeypatch):
     """A viewer this CLI did not start has no pid record, so stop cannot reach it.

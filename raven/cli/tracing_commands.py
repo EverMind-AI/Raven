@@ -12,9 +12,11 @@ so it needs the same Node >= 22 that ``raven tui`` already requires.
 
 The background viewer's pid + port are recorded in ``<state_dir>/viewer.pid``
 so a later ``raven tracing`` reuses the live instance instead of stacking
-orphans, and ``raven tracing stop`` can shut it down. The stop path only
-signals a pid whose command line still matches the node viewer — a recycled
-pid is never killed.
+orphans, and ``raven tracing stop`` can shut it down. The record is replaced
+atomically: a reader that caught a half-written file would read it as "no
+record" and drop it, and a live viewer would be left with no handle. The stop
+path only signals a pid whose command line still matches the node viewer — a
+recycled pid is never killed.
 
 Registered as a top-level leaf command (not a subcommand group) so the TUI
 command catalog lists it as a plain ``/tracing`` slash under "(top-level)".
@@ -125,13 +127,22 @@ def _pid_file() -> Path:
     return tracing_config.state_dir() / "viewer.pid"
 
 
+def _is_json_int(value: object) -> bool:
+    """True for a JSON integer, and false for a bool.
+
+    ``isinstance(True, int)`` is true in Python, and a record naming pid 1
+    would send ``raven tracing stop`` after whatever holds pid 1.
+    """
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def _read_pid_file() -> dict | None:
     path = _pid_file()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = None
-    if isinstance(data, dict) and isinstance(data.get("pid"), int) and isinstance(data.get("port"), int):
+    if isinstance(data, dict) and _is_json_int(data.get("pid")) and _is_json_int(data.get("port")):
         return data
     # A malformed or unreadable record is not a record: drop it so the launcher
     # and `stop` agree that nothing is recorded. A removal that fails (a
@@ -142,6 +153,13 @@ def _read_pid_file() -> dict | None:
 
 
 def _write_pid_file(pid: int, port: int) -> None:
+    """Record the viewer, replacing the file atomically.
+
+    A reader that caught a half-written record would read it as "no record",
+    drop the file, and leave a live viewer with no handle -- so the write goes
+    through ``atomic_replace`` rather than straight to the file. That helper
+    also creates the state directory, which is why this does not do it itself.
+    """
     from raven.utils.atomic_io import atomic_replace
 
     atomic_replace(_pid_file(), json.dumps({"pid": pid, "port": port}))
@@ -191,9 +209,17 @@ def _checked_viewer(pid: int) -> bool:
 
 
 def _stop_viewer() -> None:
+    had_record = _pid_file().exists()
     entry = _read_pid_file()
     if entry is None:
-        console.print("Tracing viewer is not running.")
+        if had_record:
+            # There was a file and it could not be used, so `_read_pid_file`
+            # dropped it. A viewer may still be running -- a record written by
+            # an older CLI could be truncated by a crash mid-write -- so do not
+            # claim there is none.
+            console.print("No usable tracing viewer record; a viewer may still be running. Stop it by hand.")
+        else:
+            console.print("Tracing viewer is not running.")
         return
     pid = entry["pid"]
     if not _checked_viewer(pid):
