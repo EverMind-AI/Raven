@@ -353,21 +353,29 @@ class OpenShellExecutor(SandboxExecutor):
             await self._reap_orphans(plane)
             name = f"rv{secrets.token_hex(6)}"
             network_policies = self._network_source()
-            await asyncio.to_thread(
-                plane.create,
-                name=name,
-                image=self._image,
-                policy=sandbox_policy(
-                    network_policies=network_policies,
-                    mounts=self._mounts.mounts(),
-                    uid=_host_uid(),
-                    gid=_host_gid(),
-                    read_only_paths=self._read_only_paths,
-                ),
-                driver_config=self._driver_config(),
-                resources={"limits": {"cpu": str(self._cpus), "memory": f"{self._memory_mib}Mi"}},
-                labels={_OWNER_LABEL: _owner_digest(), _PID_LABEL: str(os.getpid())},
+            policy = sandbox_policy(
+                network_policies=network_policies,
+                mounts=self._mounts.mounts(),
+                uid=_host_uid(),
+                gid=_host_gid(),
+                read_only_paths=self._read_only_paths,
             )
+            try:
+                await asyncio.to_thread(
+                    plane.create,
+                    name=name,
+                    image=self._image,
+                    policy=policy,
+                    driver_config=self._driver_config(),
+                    resources={"limits": {"cpu": str(self._cpus), "memory": f"{self._memory_mib}Mi"}},
+                    labels={_OWNER_LABEL: _owner_digest(), _PID_LABEL: str(os.getpid())},
+                )
+            except BaseException:
+                # The gateway may have made it before the call failed (a client
+                # deadline, a dropped connection), and its pid label names this
+                # live process, so no orphan sweep would collect it.
+                _spawn_delete(plane, name)
+                raise
         except SandboxInitError:
             raise
         except Exception as exc:
@@ -406,14 +414,19 @@ class OpenShellExecutor(SandboxExecutor):
 
     async def _verify(self, plane: OpenShellControlPlane, name: str) -> None:
         probe = f"if test -w {WORKSPACE_MOUNT}; then echo ok; else id -u; echo not-writable; fi"
-        stream = await asyncio.to_thread(
-            plane.exec, name, ["sh", "-c", probe], workdir="/", env={}, timeout_seconds=self._verify_timeout
-        )
+        try:
+            stream = await asyncio.to_thread(
+                plane.exec, name, ["sh", "-c", probe], workdir="/", env={}, timeout_seconds=self._verify_timeout
+            )
+        except Exception as exc:
+            raise SandboxInitError(f"OpenShell sandbox {name} could not run its startup check: {exc}") from exc
         try:
             result = await asyncio.wait_for(asyncio.to_thread(_drain, stream), self._verify_timeout)
         except asyncio.TimeoutError as exc:
             stream.cancel()
             raise SandboxInitError(f"OpenShell sandbox {name} did not answer within {self._verify_timeout}s") from exc
+        except Exception as exc:
+            raise SandboxInitError(f"OpenShell sandbox {name} broke off its startup check: {exc}") from exc
         lines = result.stdout.split()
         if lines == ["ok"]:
             return

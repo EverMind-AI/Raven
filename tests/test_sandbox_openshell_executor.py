@@ -322,6 +322,43 @@ class TestStart:
         await ox.drain_pending_deletes()
         assert cp.deleted == [cp.created[0]["name"]]
 
+    @pytest.mark.parametrize("where", ["exec", "stream"])
+    async def test_a_gateway_error_during_the_verify_probe_fails_start_as_a_sandbox_error(self, tmp_path, where):
+        """The agent loop keeps the process up on a SandboxInitError and on nothing else."""
+        cp = FakeControlPlane()
+
+        class Broken(FakeStream):
+            def __iter__(self):
+                raise ConnectionError("UNAVAILABLE: the stream broke")
+                yield
+
+        def probe(argv):
+            if where == "exec":
+                raise ConnectionError("UNAVAILABLE: no route to the gateway")
+            return Broken()
+
+        cp.exec_script = probe
+        with pytest.raises(SandboxInitError, match="UNAVAILABLE"):
+            await _executor(tmp_path, cp).start()
+        await ox.drain_pending_deletes()
+        assert cp.deleted == [cp.created[0]["name"]]
+
+    async def test_a_create_that_fails_after_the_gateway_made_it_still_deletes_it(self, tmp_path):
+        """A client deadline can expire after the gateway created the sandbox; its pid
+        label names this live process, so no orphan sweep would ever collect it."""
+        cp = FakeControlPlane()
+        named: list[str] = []
+
+        def late(**kwargs):
+            named.append(kwargs["name"])
+            raise TimeoutError("Deadline Exceeded")
+
+        cp.create = late
+        with pytest.raises(SandboxInitError, match="Deadline Exceeded"):
+            await _executor(tmp_path, cp).start()
+        await ox.drain_pending_deletes()
+        assert cp.deleted == named and len(named) == 1
+
     async def test_an_unexpected_verify_answer_is_quoted(self, tmp_path):
         cp = FakeControlPlane()
         cp.exec_script = lambda argv: FakeStream([("stderr", b"sh: not found\n"), ("exit", 127)])
