@@ -31,10 +31,10 @@ class ApprovalResponder(Protocol):
     wording, ``origin`` / ``origin_name`` say who is asking (the main agent or
     a named sub-agent), and ``evidence`` is the tool's own account of the call
     (the command and its directory, a path and a diff, an MCP tool's input). A
-    transport may ignore all of them. The outcome distinguishes a refusal that
-    continues the turn from the one click that ends it
-    (:class:`~raven.contracts.permissions.ApprovalChoice`); every transport
-    failure and timeout must come back as a deny, never as an exception.
+    transport may ignore all of them but ``needs_person``, which one answering on
+    nobody's behalf refuses. A refusal that continues the turn and the one click that
+    ends it are told apart (:class:`~raven.contracts.permissions.ApprovalChoice`); every
+    transport failure and timeout must come back as a deny, never as an exception.
     """
 
     async def await_approval(
@@ -51,6 +51,7 @@ class ApprovalResponder(Protocol):
         origin: str = "",
         origin_name: str = "",
         evidence: dict[str, Any] | None = None,
+        needs_person: bool = False,
     ) -> ApprovalOutcome: ...
 
 

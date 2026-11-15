@@ -167,7 +167,9 @@ tool call:
 
 An address given as an IP, or an internal name such as `localhost` or
 `metadata.google.internal`, is never opened by the mode or by the reviewer:
-only you can allow it. After an approval Raven does not run the command again
+only you can allow it. When one Raven runs another as a sub-agent, the
+sub-agent's request for such a target is refused, since nobody is there to
+answer it. After an approval Raven does not run the command again
 by itself; the agent is told it may. When several agents of one conversation
 hit the same address at once, you are asked once.
 

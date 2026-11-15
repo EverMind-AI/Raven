@@ -135,6 +135,7 @@ class ApprovalBroker:
         origin: str = "",
         origin_name: str = "",
         evidence: dict[str, Any] | None = None,
+        needs_person: bool = False,
     ) -> ApprovalOutcome:
         """Wait for an approval decision and fail closed on every error path.
 

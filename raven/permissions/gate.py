@@ -493,6 +493,7 @@ class PermissionGate:
                     origin=turn.origin,
                     origin_name=turn.origin_name,
                     evidence=_clamped(evidence),
+                    needs_person=needs_person,
                 )
         except Exception as exc:  # noqa: BLE001 - a broken transport must refuse, not allow
             logger.exception("permissions: runtime approval transport failed for {}", tool_name)

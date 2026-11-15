@@ -15,13 +15,14 @@ All notable changes to Raven are documented here.
   opens it in that sandbox and "allow for this session" in every sandbox of
   the conversation, applied to running sandboxes without restarting them; the
   agent is told to run the command again. An address given as an IP or an
-  internal name is never opened without you. The same goes for the
+  internal name is never opened without you, also when another Raven runs the
+  agent as a sub-agent. The same goes for the
   connections a sandboxed MCP server is refused, and agents of one
   conversation that hit the same address share one prompt. A deny rule wins
   over an allow rule for the same target, also one added while a sandbox
   runs. In a sandbox whose
   network is closed, OpenShell's own reviewed proposal is approved when it
-  opens exactly the same thing.
+  opens exactly the same thing. `CONTRACTS_VERSION` moves to 44.
 
 - Delivered files carry a download link in the tile, the desk's deliverables
   shelf, and the viewer header; a missing delivery draws no control.

@@ -216,6 +216,19 @@ class TestTheRequest:
         assert params["_meta"] == {"raven.turnId": "turn-1"}
         assert "turnId" not in params
 
+    async def test_an_action_only_a_person_may_answer_is_marked_in_meta(self):
+        """A raven host answers its sub-agents' requests itself; the mark is how it
+        knows to refuse an address no mode may open rather than approve it."""
+        client, _, broker = _rig(_allow)
+
+        await _ask(broker, kind="sandbox.network", needs_person=True)
+        await _ask(broker, kind="sandbox.network")
+        marked, plain = (f["params"] for f in client.frames if f.get("method") == "session/request_permission")
+
+        assert marked["_meta"] == {"raven.turnId": "turn-1", "raven.needsPerson": True}
+        assert plain["_meta"] == {"raven.turnId": "turn-1"}
+        validate_def("RequestPermissionRequest", marked)
+
     async def test_no_meta_key_at_all_when_there_is_no_turn_id(self):
         client, _, broker = _rig(_allow)
 

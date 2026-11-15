@@ -43,6 +43,7 @@ from loguru import logger
 
 from raven.acp_client import elicitation
 from raven.acp_client.client import UNHANDLED
+from raven.acp_client.protocol import NEEDS_PERSON_META
 
 PERMISSION_METHOD = "session/request_permission"
 
@@ -166,11 +167,23 @@ def host_refusal(params: dict[str, Any]) -> str | None:
     return None
 
 
+def needs_person(params: dict[str, Any]) -> bool:
+    """Whether a raven agent marked this request as one only a person may answer.
+
+    Its own gate leaves such an action -- an address given as an IP, an
+    internal name -- to a person whatever its mode, and this approver answers
+    on nobody's behalf.
+    """
+    meta = params.get("_meta")
+    return isinstance(meta, dict) and meta.get(NEEDS_PERSON_META) is True
+
+
 def auto_approver(name: str, observe: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None) -> "Any":
     """An ``on_request`` handler that approves permissions and refuses the rest.
 
     A permission whose command the host's deny rules refuse is the exception
-    (:func:`host_refusal`) and is answered with a reject option. A check that
+    (:func:`host_refusal`) and is answered with a reject option, and so is one a
+    raven agent marked as a person's to answer (:func:`needs_person`). A check that
     raises refuses too: the request still has to be answered, and approving a
     command nobody could check is the failure this exception exists to stop.
 
@@ -189,7 +202,7 @@ def auto_approver(name: str, observe: Callable[[str, dict[str, Any]], Awaitable[
         if method != PERMISSION_METHOD:
             return UNHANDLED
         try:
-            refusal = host_refusal(params)
+            refusal = "only a person may allow this" if needs_person(params) else host_refusal(params)
         except Exception:  # noqa: BLE001 - an unanswered request cancels the turn
             logger.exception("acp agent {!r}: checking the host's deny rules failed; refusing", name)
             refusal = "the host's deny rules could not be checked"

@@ -1897,6 +1897,17 @@ class TestRuntimeApproval:
         assert len(responder.calls) == 2
 
     @pytest.mark.asyncio
+    async def test_the_responder_is_told_when_only_a_person_may_answer(self):
+        """A responder that answers on nobody's behalf (a host approving a sub-agent's
+        requests) must be able to tell an action no mode may grant from the rest."""
+        responder = Responder(ApprovalOutcome(ApprovalChoice.DENY))
+        _fresh_turn(responder)
+        gate = gate_for(PermissionsConfig(mode="ask"))
+        await gate.authorize_runtime(**_runtime(), needs_person=True)
+        await gate.authorize_runtime(**_runtime(digest="other"))
+        assert [call.get("needs_person") for call in responder.calls] == [True, False]
+
+    @pytest.mark.asyncio
     async def test_smart_mode_lets_the_reviewer_allow_once(self):
         from raven.permissions.runtime import RuntimeChoice
 

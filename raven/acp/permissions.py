@@ -47,6 +47,7 @@ from raven.acp.outbound import (
     RequestFailedError,
 )
 from raven.acp.updates import UpdateTranslator
+from raven.acp_client.protocol import NEEDS_PERSON_META
 from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
 from raven.security import redact
 
@@ -116,6 +117,7 @@ class AcpPermissionBroker:
         origin: str = "",
         origin_name: str = "",
         evidence: dict[str, Any] | None = None,
+        needs_person: bool = False,
     ) -> ApprovalOutcome:
         """Ask, and return the grant the client's user chose.
 
@@ -164,6 +166,10 @@ class AcpPermissionBroker:
             # declares a home for it.
             "_meta": {"raven.turnId": turn_id} if turn_id else None,
         }
+        if needs_person:
+            # The client may be a raven host that answers its sub-agents itself;
+            # this is how it tells an action only a person may allow.
+            request["_meta"] = {**(request["_meta"] or {}), NEEDS_PERSON_META: True}
         if request["_meta"] is None:
             del request["_meta"]
         shell_command = (evidence or {}).get("command") if kind == EXEC_KIND else None
