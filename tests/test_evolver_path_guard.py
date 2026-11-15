@@ -70,11 +70,29 @@ def test_relative_repo_paths_are_allowed(path: str):
     "path",
     [
         "EVOLVER/x.py",
+        "Evolver/x.py",
         "Raven/agent/loop/main.py",
         "raven/agent/loop/MAIN.PY",
+        "raven/eval_engine/ENGINE.py",
+        "Benchmarks/AppWorld/Evolve/grade.py",
     ],
 )
 def test_immutable_paths_are_case_insensitive(path: str):
+    """The same file reached through another case must be refused at the door."""
     assert is_immutable(path) is True
     with pytest.raises(ImmutablePathError):
         assert_patch_allowed([path])
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "skills/foo/SKILL.md",
+        "raven/agent/loop/other.py",
+        "RAVEN/agent/loop/other.py",
+        "docs/CONTRIBUTING.md",
+    ],
+)
+def test_case_folding_does_not_make_a_mutable_path_immutable(path: str):
+    """Folding may over-refuse on POSIX; these neighbours must stay mutable."""
+    assert not is_immutable(path)
