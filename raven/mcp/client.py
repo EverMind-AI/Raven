@@ -23,6 +23,11 @@ from raven.utils import mirrors
 if TYPE_CHECKING:
     from raven.sandbox import SandboxExecutor
 
+_NOT_NARROWED = (
+    "Error: the MCP tool was not run: its sandbox has not loaded a network change that allows less than before. "
+    "It is retried before the next call; if this repeats, tell the user."
+)
+
 
 class MCPToolWrapper(Tool):
     """Wraps a single MCP server tool as an Raven Tool."""
@@ -76,6 +81,10 @@ class MCPToolWrapper(Tool):
         return self._parameters
 
     async def execute(self, **kwargs: Any) -> str | ToolResult:
+        if self._executor is not None and not await self._executor.ready_network():
+            # The server's process has no command of its own to sync before, so
+            # its calls do: a change that takes something away reaches it first.
+            return ToolResult(model_text=_NOT_NARROWED, ok=False)
         started = time.time()
         outcome = await self._call(**kwargs)
         if self._executor is None:

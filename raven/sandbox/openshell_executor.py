@@ -68,6 +68,10 @@ _NOT_NARROWED = (
     "The command was not run: the sandbox has not loaded a network change that allows less than before. "
     "It is retried before the next command; if this repeats, tell the user."
 )
+_NOT_STARTED = (
+    "The process was not started: the sandbox has not loaded a network change that allows less than before. "
+    "It is retried before the next start; if this repeats, tell the user."
+)
 # How much earlier than the caller sees a command end the sandbox may log its close.
 _RELAY_CLOSE_SLACK = 0.25
 # How long a changed network policy may take to load in a running sandbox:
@@ -523,6 +527,12 @@ class OpenShellExecutor(SandboxExecutor):
             return False
         return await self._sync_network(self._plane(), self._name)
 
+    async def ready_network(self) -> bool:
+        # A sandbox that is not running starts under the source as it stands.
+        if self._name is None:
+            return True
+        return await self._sync(self._plane(), self._name) != "narrower"
+
     async def grant_network(self, grants: Sequence[NetworkGrant]) -> bool:
         """Open ``grants`` in this sandbox only, until it stops; False when it is not running or did not load.
 
@@ -772,6 +782,8 @@ class OpenShellExecutor(SandboxExecutor):
 
         workdir = self._mounts.translate_process_cwd(cwd)
         plane, name = await self._running()
+        if await self._sync(plane, name) == "narrower":
+            raise SandboxInitError(_NOT_STARTED)
         translate = self._mounts.translate_process_path
         argv = [translate(command), *(translate(arg) for arg in args)]
         guest_env = {key: translate(value) for key, value in (env or {}).items()}

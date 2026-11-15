@@ -294,6 +294,10 @@ class _Sandbox:
     async def sync_network(self) -> bool:
         return True
 
+    async def ready_network(self) -> bool:
+        self.readied = getattr(self, "readied", 0) + 1
+        return getattr(self, "ready", True)
+
 
 def _sandboxed(session: _Session, sandbox: _Sandbox) -> MCPToolWrapper:
     tool_def = SimpleNamespace(name="fetch", description="fetch", input_schema={"type": "object", "properties": {}})
@@ -312,6 +316,20 @@ async def test_a_sandboxed_servers_refused_connection_is_named_with_its_result()
         "[sandbox] The sandbox network policy blocked: /usr/bin/node -> registry.example.com:443." in result.model_text
     )
     assert sandbox.reads == [True]
+
+
+async def test_a_sandboxed_call_is_not_placed_while_a_narrowing_change_has_not_loaded() -> None:
+    """The server's process has no command of its own to sync before, so its calls do:
+    a change that takes something away reaches it before its next call, or the call waits."""
+    sandbox = _Sandbox([])
+    sandbox.ready = False
+    session = _Session(_result(is_error=False, text="all good"))
+    result = await _sandboxed(session, sandbox).execute()
+    assert isinstance(result, ToolResult) and result.ok is False
+    assert "was not run" in result.model_text and session.calls == []
+    sandbox.ready = True
+    assert await _sandboxed(session, sandbox).execute() == "all good"
+    assert sandbox.readied == 2
 
 
 async def test_a_clean_sandboxed_call_reads_its_denials_without_waiting() -> None:

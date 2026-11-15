@@ -249,7 +249,8 @@ Raven's own web tools run on the host and are not affected by this policy. It
 applies to commands in the sandbox (`pip`, `npm`, `git`, `curl`) and to stdio
 MCP servers.
 
-A rule or an approval reaches a running sandbox before its next command. The
+A rule or an approval reaches a running sandbox before its next command or MCP
+tool call. The
 gateway delivers a policy change by polling, which takes about 10 seconds. Push
 delivery makes it about a second: add this line to
 `~/.config/openshell/gateway.env` and restart the gateway.

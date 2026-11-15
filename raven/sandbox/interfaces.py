@@ -96,6 +96,16 @@ class SandboxExecutor(ABC):
         """Bring a running executor's network policy up to date; False where there is none."""
         return False
 
+    async def ready_network(self) -> bool:
+        """Sync the network policy before something runs that no ``exec`` carries; False to keep it from running.
+
+        For a call into a long-lived process (a stdio MCP server): False only
+        while a change that takes something away has not loaded, so the call
+        would run under a policy wider than the user's. True where there is no
+        network policy to change.
+        """
+        return True
+
     async def denials_since(
         self, since: float, *, until: float | None = None, wait: bool = False
     ) -> list[NetworkDenial]:

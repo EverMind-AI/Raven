@@ -60,7 +60,7 @@ All notable changes to Raven are documented here.
   allow or deny rules by host, port and program), which every sandbox reads:
   the main agent's, sub-agents', DAG nodes' and sandboxed MCP servers'. The
   first load moves an `allowNet` there with a notice, and a change reaches a
-  running sandbox before its next command.
+  running sandbox before its next command or MCP tool call.
 
 - Raven's own agents (Raven-Code and the rest) run under the host's ask, allow
   and network rules as well as its refusals, and in the host's OpenShell

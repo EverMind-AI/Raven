@@ -121,7 +121,8 @@ again unchanged in the same turn.
 What a sandboxed command may reach belongs to the same permission set, under
 `permissions.network`. Every sandbox Raven starts reads it: the main agent's,
 a sub-agent's, a DAG node's, and a sandboxed MCP server's. A change to it
-reaches a running sandbox before that sandbox's next command.
+reaches a running sandbox before that sandbox's next command, and before the
+next tool call to an MCP server running in it.
 
 ```json
 {

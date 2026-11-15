@@ -206,8 +206,8 @@ OpenShell 拒绝所有没有规则放行的出网，并按每个连接所访问�
 Raven 自己的网页工具在宿主机上运行，不受此策略影响。策略作用于沙箱里的命令（`pip`、`npm`、
 `git`、`curl`）和 stdio MCP 服务。
 
-规则或授权会在运行中的沙箱执行下一条命令之前生效。网关默认用轮询下发策略改动，大约要 10 秒；
-改用推送大约 1 秒：在 `~/.config/openshell/gateway.env` 里加上这一行，然后重启网关。
+规则或授权会在运行中的沙箱执行下一条命令或 MCP 工具调用之前生效。网关默认用轮询下发策略
+改动，大约要 10 秒；改用推送大约 1 秒：在 `~/.config/openshell/gateway.env` 里加上这一行，然后重启网关。
 
 ```
 OPENSHELL_CONFIG_DELIVERY_MODE=push

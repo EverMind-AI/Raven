@@ -811,6 +811,34 @@ class TestLiveNetwork:
         result = await ex.exec("true")
         assert len(cp.execs) == ran and "was not run" in result.stderr
 
+    async def test_a_changed_source_reaches_the_sandbox_before_a_process_starts(self, tmp_path):
+        cp, ex, state = await self._started(tmp_path, {"raven_rule_a": {"name": "raven_rule_a"}})
+        cp.interactive_stream = FakeStream([])
+        state["policies"] = {}
+        await ex.start_process("srv", [])
+        assert cp.merges == [({}, ["raven_rule_a"])] and len(cp.interactives) == 1
+        await ex.stop()
+
+    async def test_a_process_does_not_start_while_a_narrowing_change_has_not_loaded(self, tmp_path):
+        cp, ex, state = await self._started(tmp_path, {"raven_rule_a": {"name": "raven_rule_a"}})
+        state["policies"] = {}
+        cp.policy_loads = False
+        with pytest.raises(SandboxInitError, match="has not loaded a network change"):
+            await ex.start_process("srv", [])
+        assert cp.interactives == []
+
+    async def test_ready_network_is_false_only_while_a_narrowing_change_has_not_loaded(self, tmp_path):
+        """What a long-lived process's next call asks before it is placed."""
+        cp, ex, state = await self._started(tmp_path, {"raven_rule_a": {"name": "raven_rule_a"}})
+        state["policies"] = {"raven_rule_a": {"name": "raven_rule_a"}, "raven_rule_b": {"name": "raven_rule_b"}}
+        cp.policy_loads = False
+        opening = await ex.ready_network()
+        state["policies"] = {}
+        narrowing = await ex.ready_network()
+        cp.policy_loads = True
+        loaded = await ex.ready_network()
+        assert (opening, narrowing, loaded) == (True, False, True)
+
     async def test_a_grant_made_while_a_sync_is_in_flight_is_still_merged(self, tmp_path):
         """The sync in flight finishes with what it read before the grant; the grant's own
         sync must not take that for its own and report a rule it never sent as loaded."""
