@@ -20,6 +20,7 @@ import * as settingsChrome from './features/settings/wire'
 import * as subagents from './features/subagents/store'
 import * as workspace from './features/workspace/store'
 import { WorkspaceApp } from './features/workspace/WorkspacePage'
+import { warm as warmHighlighter } from './lib/highlight'
 import * as session from './lib/session'
 import { chooseTransport } from './rpc/chooseTransport'
 import { setGateway } from './rpc/gateway'
@@ -199,3 +200,7 @@ boot()
    call made during that handshake is held rather than rejected. The history is
    not part of the first frame, so it is not awaited. */
 composer.initHistory()
+/* Last, and in background tasks of its own: nothing on the first frame needs
+   the code highlighter, and the first listing to close should not have to
+   build it (lib/highlight.ts). */
+warmHighlighter()

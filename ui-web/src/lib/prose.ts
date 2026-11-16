@@ -323,6 +323,7 @@ export function md(src: string): string {
       const lines: string[] = []
       i++
       while (i < L.length && !closes(L[i]!)) lines.push(flat(L[i++]!))
+      const closed = i < L.length
       i++
       /* A command is there to be run somewhere else, so it gets a one-click
          copy rather than asking the reader to sweep-select it by hand. The
@@ -340,9 +341,13 @@ export function md(src: string): string {
         + ` aria-label="${esc(t('gui.code.copy'))}">${ICON_CP}</button>`
       /* Coloured when the fence names a language the highlighter reads, and
          the text as it was otherwise: the spans carry the same characters, so
-         the copy button's read of the block is the source either way. */
+         the copy button's read of the block is the source either way.
+         Only once the fence has closed: a streamed answer repaints on every
+         frame, and a listing still growing is new source each time, so the
+         highlighter's cache never answers and every frame re-colours the whole
+         block -- for a few hundred lines that is longer than the frame. */
       const body = lines.join('\n')
-      const pre = `<pre>${(lang && highlight(body, lang)) || esc(body)}</pre>`
+      const pre = `<pre>${(lang && closed && highlight(body, lang)) || esc(body)}</pre>`
       o.push(lang
         ? `<div class="cblk lang"><div class="cbhd"><span class="cblang">${esc(lang)}</span>${cp}</div>${pre}</div>`
         : `<div class="cblk">${pre}${cp}</div>`)

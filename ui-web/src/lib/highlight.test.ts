@@ -55,6 +55,17 @@ describe('a fenced listing in prose', () => {
     expect(html).toContain('var(--code-')
   })
 
+  it('stays plain until its closing fence arrives', () => {
+    const open = '```python\ndef f():\n    return "x" < 1'
+    const html = md(open)
+    expect(html).toContain('<div class="cblk lang">')
+    expect(html).not.toContain('var(--code-')
+    const box = document.createElement('div')
+    box.innerHTML = html
+    expect(box.querySelector('pre')?.textContent).toBe('def f():\n    return "x" < 1')
+    expect(md(`${open}\n\`\`\``)).toContain('var(--code-')
+  })
+
   it('stays plain text without one, or with one the highlighter lacks', () => {
     expect(md('```\nls -la <dir>\n```')).toContain('<pre>ls -la &lt;dir&gt;</pre>')
     expect(md('```klingon\nQapla <x>\n```')).toContain('<pre>Qapla &lt;x&gt;</pre>')
