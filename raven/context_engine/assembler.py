@@ -4,7 +4,7 @@ Assembles a uniform list of :class:`SegmentBuilder` into the turn's
 message array. Two phases:
 
 - **Phase A (parallel)** — every builder with ``needs_prefix=False``
-  (seg1–5: identity / bootstrap / active-skills / memory / skills) runs
+  (seg1–4: identity / bootstrap / active-skills / memory) runs
   concurrently. Their ``text`` joins into the system prefix; their
   ``meta`` merges into the assembled metadata. Under turn scratch (the
   default) the text of a builder that declares ``stable = False`` goes to

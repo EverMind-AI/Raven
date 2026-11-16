@@ -177,7 +177,7 @@ explicit task brief or a source file that the agent can re-read.
 | A skill is listed but unused | Whether its body was fetched, required tools, blocklist, and selected agent |
 | No skill appeared after a task | Actual backend extraction support; `skillForge.extraction` alone does not activate a host pipeline |
 | Long task lost a detail | Archived versus in-window history, compaction, and a retrievable source |
-| Unexpected model cost | Backend extraction, embedding, Curator slow path, and skill rewrite/gating where enabled |
+| Unexpected model cost | Backend extraction, embedding, and the Curator slow path |
 
 Memory views may expose private sessions and inferred preferences.
 Backend-specific deletion and retention controls must be checked separately;

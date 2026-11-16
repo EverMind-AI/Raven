@@ -6,8 +6,7 @@ summary).
 
 Retrieval is **not** here: it lives in :class:`LocalSkillSource`, which reuses
 this catalog's ``pool`` and ``registry``, and is fused with the remote sources
-by :class:`SkillForgeRouter`, with the LLM gate and query rewriter downstream
-of the fusion.
+by :class:`SkillForgeRouter`.
 """
 
 from __future__ import annotations

@@ -146,7 +146,7 @@ slow path 可消耗有限模型调用生成计划，无有效计划时使用确�
 | Skill 已列出但未使用 | 正文是否读取、所需工具、blocklist 和当前 Agent |
 | 任务完成后没有新技能 | 后端实际提炼支持；`skillForge.extraction` 本身不启动宿主管线 |
 | 长任务丢失细节 | 归档与当前窗口的区别、compaction、可重新读取的来源 |
-| 模型成本增加 | 后端提炼、embedding、Curator slow path，以及启用时的技能 rewrite/gating |
+| 模型成本增加 | 后端提炼、embedding 和 Curator slow path |
 
 记忆视图可能暴露私有会话和推断偏好。应另行检查后端的删除与保留控制；
 删除宿主 session 或屏蔽 skill 不证明所有后端记录也已删除。

@@ -417,8 +417,7 @@ class ContextConfig(_Base):
 
     drop_segments: list[str] = Field(default_factory=list)
     """Host prompt segments this agent does without, by builder name
-    (``identity``, ``bootstrap``, ``memory``, ``active_skills``, ``skills``,
-    ``curator``). A product with its own identity and contract in its bootstrap
+    (``identity``, ``bootstrap``, ``memory``, ``active_skills``, ``curator``). A product with its own identity and contract in its bootstrap
     files drops ``identity`` so the model is not told it is two things; a
     research agent that keeps no long-term memory drops ``memory``. Unknown
     names are ignored. Empty renders every segment, as before."""

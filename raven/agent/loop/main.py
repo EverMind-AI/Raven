@@ -1210,9 +1210,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
 
         This is where a session's model becomes the one thing everything under
         the turn reads: the loop's own ``provider``/``model``, the context
-        engine's LLM-backed segments, the skill gate and rewriter, the
-        consolidator, and anything the turn detaches (a subagent inherits the
-        context it was created in).
+        engine's LLM-backed segments, the consolidator, and anything the turn
+        detaches (a subagent inherits the context it was created in).
 
         Resolving once here is also what makes a mid-turn switch harmless
         without any parking. The binding is captured before the first read and
