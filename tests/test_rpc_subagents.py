@@ -307,6 +307,55 @@ async def test_a_route_reports_whether_the_picture_search_it_needs_is_ready(tmp_
     assert rows["Raven-Design"]["routes"] == [{"to": "Raven-Deck", "image_search_ready": True}]
 
 
+async def test_a_route_reads_the_host_file_the_launcher_renders_from(tmp_path: Path, monkeypatch) -> None:
+    """The launcher reads the host's ``config.json`` as written, so a key spelled
+    ``api_key`` -- which the schema accepts -- is not one it carries into the
+    lane, and the lane keeps the schema default Serper. The card must read the
+    same file the router and the launcher read, or it shows an open route the
+    router keeps closed."""
+    from raven.agent.subagent.vendored_agents import picture_search_ready
+    from raven.config.schema import Config
+
+    root = tmp_path / "agents"
+    folder = root / "raven-deck"
+    folder.mkdir(parents=True)
+    (folder / "subagent.json").write_text(
+        json.dumps({"name": "Raven-Deck", "kind": "acp", "description": "builds decks", "command": "x"}),
+        encoding="utf-8",
+    )
+    (folder / "config.json").write_text(
+        json.dumps({"plugins": {"config": {"ppt-engine": {"imageSearch": {"provider": "host"}}}}}),
+        encoding="utf-8",
+    )
+    host = {
+        "subagents": {
+            "agents": [
+                {
+                    "name": "Raven-Design",
+                    "kind": "acp",
+                    "command": "x",
+                    "routes": [{"to": "Raven-Deck", "needs": ["image_search"]}],
+                }
+            ]
+        },
+        "tools": {"web": {"search": {"provider": "brave"}, "providers": {"brave": {"api_key": "snake-brave"}}}},
+    }
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(host), encoding="utf-8")
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.agent.subagent.vendored_agents.agents_root", lambda: root)
+    for name in ("SERPER_API_KEY", "BRAVE_API_KEY", "PPT_SERPER_API_KEY", "DECK_SERPER_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    config = Config.model_validate(host)
+    router = picture_search_ready("Raven-Deck", "brave", config.effective_web_vendor_key, host=host)
+
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+
+    assert router is False
+    assert rows["Raven-Design"]["routes"] == [{"to": "Raven-Deck", "image_search_ready": router}]
+
+
 def _unknown_vendor_route(tmp_path: Path, monkeypatch) -> None:
     """A deck folder pinning a vendor this build does not ship, routed to."""
     root = tmp_path / "agents"
