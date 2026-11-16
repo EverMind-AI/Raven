@@ -425,13 +425,15 @@ class Sandbox:
                 pass
 
     def _write_bytes(self, path: Path, content: bytes) -> None:
-        """Replace a file's content, keeping its mode."""
+        """Replace a file's content atomically, keeping its mode."""
         try:
             mode = path.stat().st_mode & 0o777
         except OSError:
             mode = 0o644
-        path.write_bytes(content)
-        os.chmod(path, mode)
+        tmp = path.with_name(f"{path.name}.raven-restore")
+        tmp.write_bytes(content)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
 
     def _restore_subject(self, before: _SubjectState, after: _SubjectState) -> list[str]:
         """Put the subject checkout back the way the command found it.
@@ -442,7 +444,12 @@ class Sandbox:
         problems: list[str] = []
         # The index defines what `git checkout --` restores from, so it goes first.
         if before.index_bytes is not None:
-            self._write_bytes(before.git_dir / "index", before.index_bytes)
+            if (before.git_dir / "index.lock").exists():
+                # Another git process is writing the index right now; replacing
+                # it under it would corrupt both.
+                problems.append("the index (a git process holds it)")
+            else:
+                self._write_bytes(before.git_dir / "index", before.index_bytes)
         if before.head_file is not None:
             self._write_bytes(before.git_dir / "HEAD", before.head_file)
         if before.config is not None:
