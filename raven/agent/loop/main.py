@@ -948,6 +948,9 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                     if source is not None:
                         router.remove_source(source)
                 elif source is not None:
+                    # Rewritten in place, so nothing on the remove path runs:
+                    # forget the old backend's held hits before the name moves.
+                    router.forget(source)
                     source._backend = backend
                     source._agent_id = agent_id
                     if name:

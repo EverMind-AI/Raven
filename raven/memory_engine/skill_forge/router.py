@@ -80,10 +80,18 @@ class SkillForgeRouter:
         """Drop one source by identity, for a switch that turns memory off.
 
         Identity rather than equality: two backend sources can carry the same
-        name and weight, and the one this router holds is the one to drop. Its
-        held hits go by name: a memory switched off must stop serving bodies.
+        name and weight, and the one this router holds is the one to drop.
         """
         self._sources = [s for s in self._sources if s is not source]
+        self.forget(source)
+
+    def forget(self, source: ForgeSkillSource) -> None:
+        """Drop the held hits a source returned, by its current name.
+
+        A memory switched off must stop serving bodies, and so must one rebound
+        in place to another backend or agent: call this before the source's name
+        changes, or the old prefix's hits stay readable.
+        """
         prefix = f"{source.name}/"
         for qualified_id in [q for q in self._held if q.startswith(prefix)]:
             del self._held[qualified_id]

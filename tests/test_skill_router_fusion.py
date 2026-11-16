@@ -369,3 +369,15 @@ class TestHeldHits:
 
         assert router.held_hit("everos/1") is None
         assert router.held_hit("local/x") is not None
+
+    async def test_forgetting_a_source_drops_only_its_held_hits(self) -> None:
+        everos = _StubSource("everos", 0.9, [_hit("everos/1", "one")])
+        local = _StubSource("local", 1.0, [_hit("local/x", "x")])
+        router = SkillForgeRouter([local, everos])
+        await router.select("q", history=[], k=5)
+
+        router.forget(everos)
+
+        assert router.held_hit("everos/1") is None
+        assert router.held_hit("local/x") is not None
+        assert everos in router._sources
