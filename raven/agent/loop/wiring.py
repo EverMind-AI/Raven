@@ -1487,10 +1487,10 @@ class WiringMixin:
                 measure_writes(self._command_shadow)
             self.tools.register(tool)
 
-        # Skill retrieval tools (body -> scripts). Both are source-agnostic and
-        # both serve local/everos straight from the registry, so both register
-        # whenever the registry is reachable; a Hub endpoint only adds their
-        # ``hub/`` branch. Gating ``read_skill`` on the client would take the
+        # Skill retrieval tools (body -> scripts). Both are source-agnostic: they
+        # serve local ids straight from the registry and memory-backend ids from
+        # the hits the router returned, so both register whenever the registry is
+        # reachable; a Hub endpoint only adds their ``hub/`` branch. Gating ``read_skill`` on the client would take the
         # body-fetch route away from the skills that ship with Raven, whose
         # ``inject: description`` entry advertises exactly that route.
         skill_registry = getattr(
@@ -1499,8 +1499,11 @@ class WiringMixin:
             None,
         )
         if skill_registry is not None or self._skill_hub_client is not None:
-            from raven.agent.tools.skill_hub import FindSkillTool, ReadSkillTool, UseSkillTool
+            from raven.agent.tools.skill_hub import FindSkillTool, ReadSkillTool, UseSkillTool, router_held_hit
             from raven.config.live import skill_hub_enabled
+
+            def skills_router():
+                return getattr(self.context_engine, "skills_router", None)
 
             self.tools.register(
                 ReadSkillTool(
@@ -1510,13 +1513,14 @@ class WiringMixin:
                     blocklist=self._skill_blocklist,
                     blocklist_reader=self._skill_blocklist_reader,
                     enabled_reader=lambda: skill_hub_enabled(self._live_config),
+                    held_hit=router_held_hit(skills_router),
                 ),
             )
             # Discovery on the model's own terms, through the same router the
             # scent menu reads.
             self.tools.register(
                 FindSkillTool(
-                    lambda: getattr(self.context_engine, "skills_router", None),
+                    skills_router,
                     hub_wired=self._skill_hub_client is not None,
                     enabled_reader=lambda: skill_hub_enabled(self._live_config),
                     min_safety=self._skill_min_safety,
@@ -1533,6 +1537,7 @@ class WiringMixin:
                     blocklist_reader=self._skill_blocklist_reader,
                     enabled_reader=lambda: skill_hub_enabled(self._live_config),
                     auto_install=self._skill_auto_install,
+                    held_hit=router_held_hit(skills_router),
                     install_audit_path=(
                         self.workspace / "skills" / "hub" / "installs.jsonl"
                         if self._skill_hub_client is not None

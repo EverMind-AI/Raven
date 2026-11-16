@@ -1870,8 +1870,12 @@ rides the user envelope: on a *fat* turn (rule-judged — length, function-word
 residue, character-bigram novelty against the recent user window), one
 `SkillForgeRouter.select` renders a few `qualified_id: description` lines, and the
 model fetches bodies itself through `find_skill` (intent-bearing search over the
-same router) and `read_skill`. The system prefix carries only the `always` skills
-(`# Active Skills`), and no model call is spent choosing skills. The push pipeline
+same router) and `read_skill`. A local id reads from the registry; a memory-backend id
+(an evolved skill or a case from the agent track) has no file, so the router holds the
+hits it returned and `read_skill` / `use_skill` serve that hit's text, verbatim, until a
+restart or a memory switch drops it, after which `find_skill` puts it back. The system
+prefix carries only the `always` skills (`# Active Skills`), and no model call is spent
+choosing skills. The push pipeline
 (an LLM query rewriter and gate, selected bodies in the prompt) and its
 `skillForge.discovery` / `llmGate*` / `rewrite*` / `injectionMode` settings were
 retired 2026-11-13; the config loader drops those keys from older files. A built-in
