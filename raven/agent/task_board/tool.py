@@ -25,7 +25,10 @@ REFUSED_UPDATE = "The board is updated for you after this turn ends; use action=
 
 # The update's shape -- fields, statuses, handles -- is stated by the post-turn
 # instruction, paid once per turn, rather than nested here, where every model call
-# of every turn would pay for it.
+# of every turn would pay for it. Only an entry's lists are typed: a provider that
+# builds the call's JSON from the model's XML by this schema (MiniMax) can tell a
+# list from text by nothing else, and sends an undeclared one as {"item": ...}.
+_STRINGS: dict[str, Any] = {"type": "array", "items": {"type": "string"}}
 PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -33,8 +36,11 @@ PARAMETERS: dict[str, Any] = {
         "query": {"type": "string"},
         "group_id": {"type": "string"},
         "include_turns": {"type": "boolean"},
-        "steps": {"type": "array", "items": {"type": "object"}},
-        "groups": {"type": "array", "items": {"type": "object"}},
+        "steps": {
+            "type": "array",
+            "items": {"type": "object", "properties": {"tasks": _STRINGS, "questions": _STRINGS}},
+        },
+        "groups": {"type": "array", "items": {"type": "object", "properties": {"questions": _STRINGS}}},
     },
     "required": ["action"],
 }

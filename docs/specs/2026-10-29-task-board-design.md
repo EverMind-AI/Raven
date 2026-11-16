@@ -190,12 +190,16 @@ product agent the host runs never sees the tool; the five product configs also s
 resident under tool-search compaction (`DEFAULT_ALWAYS_VISIBLE`,
 `raven/agent/tools/tool_search.py`): the post-turn call forces it by name.
 
-**Schema.** One description and six bare properties: `action` (`"recall" | "update"`),
-`query`, `group_id`, `include_turns`, and `steps` / `groups` as arrays of objects with no
-nested fields. The schema rides in every host call: nested, the update's shape cost about 514
-tokens a call; bare, about 240, pinned as an increment beside A2A's in
-`tests/test_agent_loop_token_budget.py`. The shape is stated instead by the post-turn
-instruction (3), once per turn. The description also tells the model never to call `update`
+**Schema.** One description and six properties: `action` (`"recall" | "update"`),
+`query`, `group_id`, `include_turns`, and `steps` / `groups` as arrays of objects whose only
+declared fields are their lists -- `tasks` and `questions` on a step, `questions` on a carry
+entry -- each an array of strings. The schema rides in every host call: nested, the update's
+shape cost about 514 tokens a call; with only the lists typed, about 280, pinned as an
+increment beside A2A's in `tests/test_agent_loop_token_budget.py`. The rest of the shape is
+stated instead by the post-turn instruction (3), once per turn. The lists cannot be left to
+it: a provider that builds a call's JSON from the model's XML by the schema (MiniMax) tells
+a list from text by nothing else, and sends an undeclared one as `{"item": ...}`, which the
+update and carry rules refuse every time. The description also tells the model never to call `update`
 itself -- a live model did, mid-turn, when it only said the board was kept for it.
 
 The update's shape, as the post-turn instruction states it:
