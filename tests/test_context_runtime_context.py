@@ -683,6 +683,29 @@ class TestNotesAReclaimTookAwayAreToldAgain:
         assert retell_notices([older, question], after) is after
 
 
+class TestTheQuestionWithoutItsLines:
+    """A reclaim may retell a note into the question's block without touching the
+    words it opened with, so a comparison has to read the words, not the block."""
+
+    def test_a_string_question_loses_the_lines_it_recorded(self) -> None:
+        from raven.context_engine.runtime_context import without_runtime_context
+
+        question = {"role": "user", "content": with_runtime_context(_LINES, "hi"), RUNTIME_CONTEXT_KEY: _LINES}
+
+        assert without_runtime_context(question) == "\n\nhi"
+
+    def test_a_block_list_question_loses_the_block_it_recorded(self) -> None:
+        from raven.context_engine.runtime_context import without_runtime_context
+
+        question = {
+            "role": "user",
+            "content": with_runtime_context(_LINES, [{"type": "text", "text": "look"}]),
+            RUNTIME_CONTEXT_KEY: _LINES,
+        }
+
+        assert without_runtime_context(question) == [{"type": "text", "text": ""}, {"type": "text", "text": "look"}]
+
+
 class TestAPluginNameKeysItsOwnLine:
     """A line is keyed by the plugin name it carries, so the name has to read back
     exactly, whatever it contains."""

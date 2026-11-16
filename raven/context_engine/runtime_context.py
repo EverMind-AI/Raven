@@ -167,6 +167,21 @@ def retell_notices(before: list[dict[str, Any]], after: list[dict[str, Any]]) ->
     return after
 
 
+def without_runtime_context(message: dict[str, Any]) -> Any:
+    """``message``'s content with the lines its own record holds taken out.
+
+    A reclaim may retell a plugin note into the question's block without
+    touching the words it opened with, so a comparison reads those words and
+    not the block.
+    """
+    content = message.get("content")
+    lines = message.get(RUNTIME_CONTEXT_KEY)
+    if not isinstance(lines, str) or not lines:
+        return content
+    stripped = _replaced(content, lines, "")
+    return content if stripped is None else stripped
+
+
 def _replaced(content: Any, lines: str, told: str) -> Any:
     """``content`` with the ``lines`` it holds told as ``told``; ``None`` when it does not hold them."""
     if isinstance(content, str):

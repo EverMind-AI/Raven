@@ -46,6 +46,7 @@ from raven.agent.harness.participants import Intake, compose_addendum, compose_i
 from raven.agent.window import compaction, shrink
 from raven.agent.window.images import ATTACHED_IMAGE_KEY
 from raven.context_engine import headroom
+from raven.context_engine.runtime_context import without_runtime_context
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.harness import MemoryModule, ShrinkResult, WindowPressure, WindowState
 from raven.contracts.participant import AgentParticipant, StepView
@@ -455,7 +456,9 @@ def _keeps_the_question(sent: list[dict[str, Any]], reclaimed: list[dict[str, An
     """Whether ``reclaimed`` still holds the latest user message ``sent`` held.
 
     A message carrying only pictures a tool showed (``ATTACHED_IMAGE_KEY``) is the
-    loop's, not the user's, and is not the question.
+    loop's, not the user's, and is not the question. The lines each side recorded
+    for itself are left out of the comparison: a reclaim may retell a plugin note
+    into the question's block without touching the words it opened with.
     """
     question = next(
         (m for m in reversed(sent) if m.get("role") == "user" and not m.get(ATTACHED_IMAGE_KEY)),
@@ -463,7 +466,9 @@ def _keeps_the_question(sent: list[dict[str, Any]], reclaimed: list[dict[str, An
     )
     if question is None:
         return True
-    return any(m.get("role") == "user" and m.get("content") == question.get("content") for m in reclaimed)
+    return any(
+        m.get("role") == "user" and without_runtime_context(m) == without_runtime_context(question) for m in reclaimed
+    )
 
 
 def bind(memory: DefaultMemory) -> MemoryModule:
