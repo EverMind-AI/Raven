@@ -18,8 +18,8 @@
  *   static   -- at the body from the page root's first commit, and the writer
  *               only fills it (src/App.tsx renders it with no children).
  *   reparent -- born inside a page, moved to the body on first open, and never
- *               moved back. None today: the composer's popovers hang off their
- *               chips with the stylesheet since the bar was reworked.
+ *               moved back. None today: the composer's popovers hang off the
+ *               bar with the stylesheet since the bar was reworked.
  *   append   -- created at runtime and appended to the body.
  */
 

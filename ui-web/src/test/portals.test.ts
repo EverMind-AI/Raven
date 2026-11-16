@@ -165,7 +165,7 @@ describe('the portal table', () => {
   it('gives the model picker its place among the standing layers, and reparents nothing', () => {
     const picker = PORTALS.find((p) => p.id === 'pickHost')!
     expect(picker.at).toBe(15)
-    /* The composer's popovers hang off their chips with the stylesheet now, so
+    /* The composer's popovers hang off the bar with the stylesheet now, so
        no portal leaves the card it was born in. */
     expect(PORTALS.filter((p) => p.kind === 'reparent')).toEqual([])
   })
@@ -237,7 +237,7 @@ describe('the portal table', () => {
 
 /* The popover stays put, on the live module rather than on the markup: the
    permission popover is rendered beside its chip (src/chrome/PermPopover.tsx)
-   and hangs off it with the stylesheet, so an open moves nothing. */
+   and hangs off the bar with the stylesheet, so an open moves nothing. */
 describe('a popover that has been opened', () => {
   let unmount = (): void => {}
 

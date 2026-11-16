@@ -171,6 +171,48 @@ describe('the dock', () => {
     expect(el('permChip').getAttribute('aria-label')).toBe('t:gui.perm.title: t:gui.perm.full')
   })
 
+  /* The bar shows the permission as its glyph alone, so the mode's name has to
+     reach a sighted reader some other way than the label it hides: the hover
+     pill says it. Served with none, like the ring, so the boot golden holds. */
+  it('names the permission mode in its hover pill once a mode is drawn', () => {
+    render()
+    expect(el('permChip').dataset.tip).toBe(undefined)
+    perm.setFromConfig('full')
+    expect(el('permChip').dataset.tip).toBe('t:gui.perm.full')
+  })
+
+  /* The pill stands just above the chip, which is where an open popover ends:
+     it would sit on the list's last line. Each chip in the segment drops its
+     label while its popover is up, and the pill (state/tooltip.ts) goes down
+     with the attribute it watches. The accessible name stays. */
+  it('drops the hover pill of a segment chip while its popover is up', () => {
+    render()
+    perm.setFromConfig('full')
+    ctx.set(68_000, 100_000)
+    act(() => { el('permChip').click() })
+    expect(el('permChip').dataset.tip).toBe(undefined)
+    expect(el('permChip').getAttribute('aria-label')).toBe('t:gui.perm.title: t:gui.perm.full')
+    act(() => { el('permChip').click() })
+    expect(el('permChip').dataset.tip).toBe('t:gui.perm.full')
+    act(() => { el('ctxChip').click() })
+    expect(el('ctxChip').dataset.tip).toBe(undefined)
+    expect(el('ctxChip').getAttribute('aria-label')).toBe('t:gui.ctx.tip')
+    act(() => { el('ctxChip').click() })
+    expect(el('ctxChip').dataset.tip).toBe('t:gui.ctx.tip')
+  })
+
+  /* What runs the session -- the permission, the model, the context window --
+     is one segment beside the send button, apart from the "+" and the "@",
+     which are about the message being written. */
+  it('groups the permission, the model and the context into one segment beside send', () => {
+    render()
+    const kids = (n: Element): string[] => Array.from(n.children).map((c) =>
+      c.id || (c.firstElementChild as Element | null)?.id || c.className)
+    const bar = document.querySelector('.dock-in > .under') as Element
+    expect(kids(bar)).toEqual(['plusBtn', 'atBtn', 'envChip', 'meter', 'chrome-seg', 'go'])
+    expect(kids(bar.querySelector(':scope > .chrome-seg') as Element)).toEqual(['permChip', 'modelChip', 'ctxChip'])
+  })
+
   /* The "+" is the same two rows in a draft and in a conversation: a file or a
      deck template can go with any message. The composer's repaint is what tells
      it which of the two the page can honour. */
@@ -248,11 +290,22 @@ describe('the dock', () => {
     expect(el('ctxChip').dataset.tip).toBe(undefined)
     expect(el('ctxChip').getAttribute('aria-label')).toBe(null)
     expect(el('ctxChip').querySelector('.fg')!.getAttribute('stroke-dashoffset')).toBe(null)
+    expect(el('ctxChip').querySelector('.chrome-ctx-num')).toBe(null)
     ctx.set(100_000, 200_000)
     expect(el('ctxChip').hidden).toBe(false)
     expect(el('ctxChip').dataset.tip).toBe('t:gui.ctx.tip')
     expect(el('ctxChip').getAttribute('aria-label')).toBe('t:gui.ctx.tip')
     expect(Number(el('ctxChip').querySelector('.fg')!.getAttribute('stroke-dashoffset'))).toBeCloseTo(47.75 / 2, 5)
+  })
+
+  /* A ring alone read as a loading spinner, so the chip says its fill as a
+     number beside it -- the store's own rounding, the one the popover shows. */
+  it('says the fill as a number beside the ring', () => {
+    render()
+    ctx.set(68_000, 100_000)
+    expect(el('ctxChip').querySelector('.chrome-ctx-num')?.textContent).toBe('68%')
+    ctx.set(250_000, 100_000)
+    expect(el('ctxChip').querySelector('.chrome-ctx-num')?.textContent).toBe('100%')
   })
 
   /* Empty as served. The sheet rack, the composer's own three roots and the two
@@ -451,6 +504,7 @@ describe('the bar under the field', () => {
 
   const style = (n: Element): CSSStyleDeclaration => getComputedStyle(n)
   const bar = (): Element => document.querySelector('.dock-in > .under') as Element
+  const seg = (): HTMLElement => document.querySelector('.dock-in > .under > .chrome-seg') as HTMLElement
 
   /* Every box from a label up to the bar: each is as wide as the label until
      it is told it may be less. */
@@ -467,7 +521,7 @@ describe('the bar under the field', () => {
 
   it('lets every box between a label and the bar give, and ends the label in an ellipsis', () => {
     styled()
-    for (const id of ['permName', 'modelName', 'meter']) {
+    for (const id of ['modelName', 'meter']) {
       for (const n of upTo(id)) {
         const at = `${id} at ${n.id || n.className}`
         expect(style(n).minWidth, at).toMatch(/^0(px)?$/)
@@ -485,8 +539,8 @@ describe('the bar under the field', () => {
      width -- a short name stays whole while a long one gives. */
   it('shares what the controls leave equally, each at most its own width', () => {
     styled()
-    for (const n of [anchor('permChip'), el('modelChip'), el('meter')]) {
-      const at = n.id || (n.firstElementChild as Element).id
+    for (const n of [seg(), el('meter')]) {
+      const at = n.id || n.className
       expect([style(n).flexGrow, style(n).maxWidth], at).toEqual(['1', 'max-content'])
       expect(style(n).flexBasis, at).toMatch(/^0(px|%)?$/)
     }
@@ -494,8 +548,65 @@ describe('the bar under the field', () => {
 
   it('keeps the controls that are not text at their own size', () => {
     styled()
-    for (const n of [el('plusBtn'), el('ctxChip'), el('go')]) expect(style(n).flexShrink, n.id).toBe('0')
+    for (const n of [el('plusBtn'), el('permChip'), el('ctxChip'), el('go')]) expect(style(n).flexShrink, n.id).toBe('0')
+    for (const n of [anchor('permChip'), anchor('ctxChip')]) {
+      expect(style(n).flexShrink, (n.firstElementChild as Element).id).toBe('0')
+    }
     expect(style(anchor('plusBtn')).minWidth).not.toMatch(/^0/)
+  })
+
+  /* In the segment the permission is its glyph: the name is the hover pill's
+     and the accessible name's, and stays in the tree for the store to write. */
+  it('shows the permission as its glyph alone', () => {
+    styled()
+    expect(style(el('permName')).display).toBe('none')
+  })
+
+  /* A chip's hover and open ground fills its section of the segment and
+     nothing else: flat where a hairline divides it from its neighbour,
+     rounded only where it meets the segment's own rounded end. A pill of its
+     own read as a box floating between two straight dividers. Read in the open
+     state, which shares the hover rules and which happy-dom can set. */
+  it('shapes each chip\'s ground to its section of the segment', () => {
+    styled()
+    perm.setFromConfig('full')
+    ctx.set(68_000, 100_000)
+    const corners = (id: string): [string, string, string, string] => {
+      const c = style(el(id))
+      return [c.borderTopLeftRadius, c.borderTopRightRadius, c.borderBottomRightRadius, c.borderBottomLeftRadius]
+    }
+    const ROUND = '999px'
+    const FLAT = /^0(px)?$/
+    for (const id of ['permChip', 'modelChip', 'ctxChip']) {
+      el(id).setAttribute('aria-expanded', 'true')
+      const [tl, tr, br, bl] = corners(id)
+      const left = id === 'permChip'
+      const right = id === 'ctxChip'
+      expect([tl, bl].every((r) => (left ? r === ROUND : FLAT.test(r))), `${id} left ${tl} ${bl}`).toBe(true)
+      expect([tr, br].every((r) => (right ? r === ROUND : FLAT.test(r))), `${id} right ${tr} ${br}`).toBe(true)
+      el(id).setAttribute('aria-expanded', 'false')
+    }
+    /* No horizontal inset: a section's ground reaches the segment's edge. */
+    expect([style(seg()).paddingLeft, style(seg()).paddingRight].every((p) => /^0(px)?$/.test(p))).toBe(true)
+  })
+
+  /* Before a window is known the ring is hidden, and the model is the last
+     section: it takes the right-hand rounding. */
+  it('rounds the model\'s right end while the ring is hidden', () => {
+    styled()
+    expect(el('ctxChip').hidden).toBe(true)
+    const c = style(el('modelChip'))
+    expect([c.borderTopRightRadius, c.borderBottomRightRadius]).toEqual(['999px', '999px'])
+    expect(c.borderTopLeftRadius).toMatch(/^0(px)?$/)
+  })
+
+  /* Both popovers in the segment hang off the segment, not off their own
+     chips: the permission chip sits near the card's right edge now, and a list
+     hung off its left edge would run out of the card. */
+  it('hangs the segment\'s popovers off the segment', () => {
+    styled()
+    expect(style(seg()).position).toBe('relative')
+    for (const id of ['permChip', 'ctxChip']) expect(style(anchor(id)).position, id).toBe('static')
   })
 })
 
@@ -534,7 +645,8 @@ describe('a queued message', () => {
  * the band cannot see: where each stands.
  *
  * Each is rendered beside its chip, inside an anchor the two share, and hangs
- * off the chip's top edge with the stylesheet. Nothing measures, nothing moves:
+ * off the bar with the stylesheet: off the chip's top edge, or for the
+ * permission modes off the session segment's. Nothing measures, nothing moves:
  * the fixed-coordinate popovers before them left the card for the body because
  * the card's entrance animation re-based their coordinates, and that whole
  * dance is gone with the coordinates.

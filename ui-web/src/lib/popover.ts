@@ -1,8 +1,8 @@
 /* Where a panel opened from a settings row lands.
  *
  * The composer's own popovers -- the "+" menu, the workspace, the permission
- * modes -- hang off their chips with the stylesheet (`.chrome-anch` and `.pop` in
- * page.css) and measure nothing; the model picker opened from the composer
+ * modes -- hang off the bar with the stylesheet (`.chrome-anch`, `.chrome-seg` and
+ * `.pop` in page.css) and measure nothing; the model picker opened from the composer
  * chip measures its own chip (features/model/ModelPicker.tsx). What is left
  * here is the one placement that has to know about a dialog: `anchorRow`
  * serves `components/ModelPicker`, whose last caller is the agents page.
