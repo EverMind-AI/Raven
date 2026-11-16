@@ -8,9 +8,8 @@ to be believed was to quit.
 So these are about the read: that it notices a change, that it does not re-parse
 when nothing changed, and that a missing file answers differently from one that
 is unreadable or briefly unparseable while something rewrites it. These failures
-must keep the previous answer, because withholding
-every tool for one turn because a file was mid-write is worse than being one
-second stale.
+must keep the previous answer, because withholding every tool for one turn
+because a file was mid-write is worse than being one second stale.
 """
 
 from __future__ import annotations
