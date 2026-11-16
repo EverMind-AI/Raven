@@ -75,6 +75,13 @@ MCP_NOTICE_HEADER = "MCP plugin changes since the last note (an earlier note sta
 """Opens a turn's MCP lines, so a plugin no line names reads as unchanged rather than resolved."""
 
 _MCP_SUBJECT = re.compile(r"MCP plugin '(?P<name>(?:[^'\\]|\\.)*)': ")
+_LEGACY_MCP_SUBJECT = re.compile(r"MCP plugin '(?P<name>.+?)': ")
+"""The name a line filed before the escaping held: the raw text up to the first ``': ``.
+
+Read when the strict pattern above does not describe a line :func:`mcp_notice` wrote,
+which is how a raw name holding a quote or a lone backslash is still recovered.
+"""
+
 _CLEARED = "the earlier note about it no longer applies; this turn's tool definitions show what it offers."
 
 
@@ -89,9 +96,40 @@ def mcp_notice(name: str, text: str) -> str:
 
 
 def notice_subject(line: str) -> str | None:
-    """The plugin ``line`` speaks of, or ``None`` for a line that names none."""
+    """The plugin ``line`` speaks of, or ``None`` for a line that names none.
+
+    A line :func:`mcp_notice` wrote is read back through its escapes. A line a
+    session filed before that escaping existed is read the way it was written, up
+    to the first ``': ``. The two formats are ambiguous for a raw name holding a
+    backslash: it can look escaped, and the escaped reading wins there.
+    """
     match = _MCP_SUBJECT.match(line)
-    return re.sub(r"\\(.)", r"\1", match["name"]) if match else None
+    if match is not None and _written_escaped(match["name"]):
+        return re.sub(r"\\(.)", r"\1", match["name"])
+    legacy = _LEGACY_MCP_SUBJECT.match(line)
+    return legacy["name"] if legacy else None
+
+
+def _written_escaped(name: str) -> bool:
+    """Whether ``name`` is the escaped form :func:`mcp_notice` writes.
+
+    Every backslash it wrote begins an escape of ``\\`` or ``'``; a raw name filed
+    before the escaping can hold a lone backslash, which means the line is old.
+    """
+    at = 0
+    while at < len(name):
+        if name[at] == "\\":
+            if at + 1 == len(name) or name[at + 1] not in "\\'":
+                return False
+            at += 2
+        else:
+            at += 1
+    return True
+
+
+def _clears(name: str, line: str) -> bool:
+    """Whether ``line`` clears ``name``: in the escaped form, or the raw one filed before it."""
+    return line == mcp_notice(name, _CLEARED) or line == f"MCP plugin '{name}': {_CLEARED}"
 
 
 def told_notices(messages: list[dict[str, Any]]) -> dict[str, str]:
@@ -107,7 +145,7 @@ def told_notices(messages: list[dict[str, Any]]) -> dict[str, str]:
             name = notice_subject(line)
             if name is None:
                 continue
-            if line == mcp_notice(name, _CLEARED):
+            if _clears(name, line):
                 told.pop(name, None)
             else:
                 told[name] = line
