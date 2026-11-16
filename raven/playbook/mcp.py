@@ -204,11 +204,10 @@ async def preflight_mcp_source(
     manager = MCPConnectionManager(registry, allow_auth_park=False, credential_scope=scope_of)
     # The playbook's servers run under the one permission set, and the grants
     # of the conversation that started the playbook.
-    network = network_on_disk()
     sandbox = build_executor(
         sandbox_config,
         workspace,
-        network_source=network_source_for(lambda: network, current_turn().session_key),
+        network_source=network_source_for(network_on_disk, current_turn().session_key),
     )
 
     async def executor_provider():
