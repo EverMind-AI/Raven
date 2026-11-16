@@ -227,7 +227,6 @@ class OrganGlueMixin:
         # the ``_collect_injected_skill_ids`` path rather than accidentally consuming a previous turn's
         # injected ids. Only successful assemble repopulates the stash.
         self._last_injected_skill_ids = None
-        self._last_injected_skill_sources = {}
         self._last_window_parts = {}
         self._last_degraded_segments: list[str] = []
         session_messages = self._context_messages_for_session(session)
@@ -254,8 +253,6 @@ class OrganGlueMixin:
         # to the SkillMeta-based path.
         meta_ids = assembled.metadata.get("injected_skill_ids") if assembled.metadata else None
         self._last_injected_skill_ids = list(meta_ids) if meta_ids else None
-        meta_sources = assembled.metadata.get("injected_skill_sources") if assembled.metadata else None
-        self._last_injected_skill_sources = dict(meta_sources) if meta_sources else {}
         meta_degraded = assembled.metadata.get("degraded_segments") if assembled.metadata else None
         self._last_degraded_segments = list(meta_degraded) if meta_degraded else []
         # The parts of the window that are not the talk, for the same reason
@@ -465,84 +462,6 @@ class OrganGlueMixin:
         for meta in always:
             _add(meta)
         return ids
-
-    def set_skills_sink(self, sink) -> None:
-        """Late-bind the sink that reports SkillForge-injected skills to the web
-        UI (the host wires it to the page's emitter). ``sink`` is an async
-        callable ``(conversation, name, payload)`` matching the DAG sink."""
-        self._skills_sink = sink
-
-    async def _emit_injected_skills(self, session_key: str) -> None:
-        """Push this turn's SkillForge-injected skills to the web UI's skill
-        panel as a ``skills_injected`` custom event.
-
-        The id's prefix is the *addressing* namespace, which is ``local`` for
-        every on-disk skill, so origin comes from
-        ``_last_injected_skill_sources`` (the registry source the engine
-        reported) and falls back to the prefix only when that is absent. No-op
-        when there is no sink (CLI/IM) or nothing was injected this turn."""
-        if self._skills_sink is None:
-            return
-        ids = self._last_injected_skill_ids or []
-        if not ids:
-            return
-        skills = []
-        for qid in ids:
-            prefix, _, name = str(qid).partition("/")
-            skills.append(
-                {
-                    "id": str(qid),
-                    "source": self._last_injected_skill_sources.get(str(qid)) or prefix,
-                    "name": name or str(qid),
-                    "kind": "injected",
-                }
-            )
-        await self._emit_skills(session_key, skills)
-
-    async def _emit_skills(self, session_key: str, skills: list[dict[str, Any]]) -> None:
-        """Send one ``skills_injected`` payload, swallowing any failure."""
-        try:
-            await self._skills_sink(session_key, "skills_injected", {"skills": skills})
-        except Exception:  # never break a turn on a telemetry/UI push
-            logger.exception("skills_injected emit failed")
-
-    async def _report_skill_read(self, session_key: str, tool_name: str, args: dict[str, Any]) -> None:
-        """Report a skill the model loaded itself to the web UI's skill panel.
-
-        ``read_skill`` / ``use_skill`` are how a skill advertised by description
-        alone actually gets loaded -- notably the builtin orchestration guide,
-        whose id the DAG tool names in its own description. Those never pass
-        through SkillForge injection, so without this the panel shows nothing
-        for a turn that demonstrably used a skill.
-
-        The model passes the addressing id (``local/<name>``); the registry is
-        what knows the real source. An unresolvable id is still reported, with
-        the addressed namespace as source, rather than dropped -- the call
-        happened."""
-        if self._skills_sink is None:
-            return
-        qid = str(args.get("skill_id") or "").strip()
-        if not qid:
-            return
-        namespace, native = qid.partition("/")[0], qid.partition("/")[2]
-        registry = getattr(getattr(self.context, "skills", None), "registry", None)
-        try:
-            # The same split and resolver ``read_skill`` itself uses, so the id
-            # grammar -- including "a bare id addresses the Hub" -- and "local
-            # spans every on-disk source" stay defined in exactly one place.
-            from raven.agent.tools.skill_hub import lookup_on_disk, split_qualified_id
-
-            namespace, native = split_qualified_id(qid)
-            meta = lookup_on_disk(registry, namespace, native)
-            source = str(meta.source) if meta is not None and getattr(meta, "source", None) else namespace
-        except Exception:  # noqa: BLE001 - a registry hiccup must not lose the report
-            logger.debug("skill source lookup failed for %s", qid)
-            source = namespace
-        name = native or qid
-        await self._emit_skills(
-            session_key,
-            [{"id": qid, "source": source, "name": name, "kind": tool_name}],
-        )
 
     # The judgement is one flash call -- seconds on every model measured -- and
     # a turn pays it once. A model that runs away on it (2026-09-08: 222k chars
