@@ -85,10 +85,26 @@ def test_doctor_help_lists_all_flags() -> None:
 
 
 def test_doctor_help_states_the_exit_codes() -> None:
-    """The exit codes are the contract a CI script reads, so ``--help`` states them."""
+    """The exit codes are the contract a CI script reads, so ``--help`` states them.
+
+    The heading alone is not the contract: the three codes and the states each
+    one covers are what a caller branches on, so those are pinned here.
+    """
     r = runner.invoke(app, ["doctor", "--help"])
     assert r.exit_code == 0, r.stdout
-    assert "Exit codes" in r.stdout, r.stdout
+    plain = re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;]*m", "", r.stdout))
+    assert "Exit codes: 0" in plain, plain
+    assert "1 a static check failed" in plain, plain
+    for branch in (
+        "install incomplete",
+        "unparseable",
+        "not a JSON object",
+        "schema invalid",
+        "unresolved routing",
+    ):
+        assert branch in plain, f"exit code 1 does not name {branch}: {plain}"
+    assert "2 the static checks passed" in plain, plain
+    assert "memory backend is missing or reports faults" in plain, plain
 
 
 # --------------------------------------------------------------------------- default mode
