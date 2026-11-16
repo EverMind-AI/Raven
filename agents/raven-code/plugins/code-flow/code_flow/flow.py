@@ -182,8 +182,8 @@ class CodeParticipant(AgentParticipant):
                     note = snapshot
             except Exception:  # noqa: BLE001 - a checklist failure must not discard repository instructions
                 logger.exception("code-flow: could not restore the checklist for {}", step.session_key)
-        # What the sizing below must count: the note lands on the prompt in
-        # the same call the addendum does.
+        # What the sizing below must count: the note lands in the same call
+        # the addendum does.
         self._pending_note = note
         return note
 

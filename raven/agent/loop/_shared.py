@@ -129,6 +129,18 @@ _REPLIED_VIA_TOOL_KEY = "_replied_via_tool"
 # reload, which is how those internals reached a screen.
 _ORIGIN_KEY = "_origin"
 
+# Marks the user row a hook wrote -- the note a hook left for the model as a
+# message of its own. The underscore keeps it out of the live provider payload,
+# and the row is scaffolding: ``_save_turn`` drops it before the turn is filed,
+# the way it drops the recovery nudges.
+#
+# The row is runtime prose, not a person's typing, and it reads as a user turn
+# to everything downstream. Filed, a reader cannot tell it apart from what the
+# user said, and draws it as the user's own words -- the same failure the
+# ``_origin`` mark exists for, on the other side of the turn. The model still
+# reads it: it is in the payload, which is where the trace keeps it.
+_HOOK_NOTE_KEY = "_hook_note"
+
 
 def _runtime_origin(origin: "Origin | None") -> str | None:
     """The mark for a turn the runtime opened, or ``None`` for a person's.
@@ -548,19 +560,22 @@ class SessionPolicy:
 def append_hook_note(messages: list[dict[str, Any]] | None, note: str) -> bool:
     """Land a hook's ``append_note`` in the transcript the model reads.
 
-    After a tool round the last row is a tool result, which is fenced as
-    untrusted input: guidance written into one reaches the model as something a
-    tool told it. So the note becomes a message of its own there. Every other
-    body gains it after a blank line (or as a text block), which reads as part
-    of what the model was already about to read. False when there is nothing to
-    land on or the body's shape is one the loop does not know -- the note is
-    dropped rather than guessed into place, and the caller logs that.
+    Two rows are not the model's to write on. A tool result is fenced as
+    untrusted input, so guidance written into one reaches the model as
+    something a tool told it. The person's own message is the person's words,
+    so guidance written into one reaches the model as something the user said.
+    So the note becomes a message of its own in both places, marked as the
+    runtime's prose. Every other body gains it after a blank line (or as a text
+    block), which reads as part of what the model was already about to read.
+    False when there is nothing to land on or the body's shape is one the loop
+    does not know -- the note is dropped rather than guessed into place, and the
+    caller logs that.
     """
     if not messages or not note:
         return False
     last = messages[-1]
-    if last.get("role") == "tool":
-        messages.append({"role": "user", "content": note})
+    if last.get("role") in ("tool", "user"):
+        messages.append({"role": "user", "content": note, _HOOK_NOTE_KEY: True})
         return True
     body = last.get("content")
     if isinstance(body, str):

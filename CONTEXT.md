@@ -213,8 +213,10 @@ The turn-loop extension point: an `AgentHook` ABC with six async phases
 short-circuit, modify outbound content, or roll the iteration back and re-sample (with
 injected messages and generation overrides for that one call); `before_iteration` may also
 withhold tools for the iteration, the iteration phases may leave the model a harness note
-(`append_note` -- on the last message, or as a message of its own after a tool round, since
-a tool result is fenced as untrusted input), and `before_user_inbound` may rewrite the inbound text
+(`append_note` -- on the last message, or as a message of its own on a tool result or on the
+person's own message, since a tool result is fenced as untrusted input and a user message is
+the user's words; a note of its own is the runtime's prose, shown to the model and not filed
+with the turn), and `before_user_inbound` may rewrite the inbound text
 (`modified_content`, chained through `inbound_content`). `after_send` also fires on a **Silent
 Turn**, with `outbound_content` None (hook surface version 4). Multiple hooks chain via `CompositeHook`; the EvalEngine
 wires three concrete implementations. It remains the loop's *timing* contract and stays open to

@@ -252,6 +252,13 @@ def _generation_attrs(facts: dict[str, Any]) -> dict[str, Any]:
     return attrs
 
 
+#: The mark ``raven.agent.loop._shared`` puts on a hook's note row: the
+#: runtime's own prose, riding as a user message. Spelled out here rather than
+#: imported, because this shelf must not reach into the agent loop; a test
+#: holds the two spellings equal.
+_HOOK_NOTE_KEY = "_hook_note"
+
+
 def _llm_input_payload(
     provider: str,
     model: str | None,
@@ -298,9 +305,15 @@ def _llm_input_payload(
             break
     for index in range(len(msgs) - 1, -1, -1):
         m = msgs[index]
-        if isinstance(m, dict) and m.get("role") == "user":
-            prompt_ref = refs[index]
-            break
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        if m.get(_HOOK_NOTE_KEY):
+            # A hook's note, riding as a user row: the runtime's own prose the
+            # model read. The prompt a reader means is the question the person
+            # asked, so this row is passed over for it.
+            continue
+        prompt_ref = refs[index]
+        break
     return {
         "artifactFormat": artifact_v2.ARTIFACT_FORMAT,
         "provider": provider,

@@ -265,7 +265,7 @@ def plain_first_notice(request_tool: str = "request_research") -> str:
     """The note the plain-first gate leaves on the first model call of a turn.
 
     Lives here rather than beside the gate so the strict recogniser below can name it:
-    it persists into history through ``append_note``, so a model that echoes it back as
+    it reaches the model through ``append_note``, so a model that echoes it back as
     its whole answer is the ``hle-256`` failure again. The tool name is the gate's one
     parameter, and its default is the gate's shipped name, which is what the recogniser
     compares against.

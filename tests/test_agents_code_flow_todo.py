@@ -557,9 +557,10 @@ async def test_through_the_loop_a_plan_without_its_receipt_is_restored_once_and_
     tmp_path,
 ):
     """A restart that lost the transcript (or a head summary) leaves the saved
-    plan with no receipt in view: the first call carries one snapshot appended
-    to the user's message, the transcript's own copy of that message keeps the
-    user's words, and the next call does not repeat the snapshot."""
+    plan with no receipt in view: the first call carries one snapshot, as a
+    message of its own rather than inside the person's own words, the
+    transcript's own copy keeps the user's words, and the next call does not
+    repeat the snapshot."""
     home = tmp_path / "home"
     home.mkdir()
     seed = TodoStore(home)
@@ -572,11 +573,14 @@ async def test_through_the_loop_a_plan_without_its_receipt_is_restored_once_and_
     with workdir.bind(tmp_path / "repo"):
         out = await loop._process_message(_req("continue the work"))
     assert out is not None
-    first_last = provider.calls[0]["messages"][-1]
+    sent = provider.calls[0]["messages"]
     # The loop prefixes the user text with its runtime-context header; the
-    # user's words and the appended snapshot are both in the same message.
-    assert first_last["role"] == "user" and "continue the work" in first_last["content"]
-    assert todo.SNAPSHOT_HEAD in first_last["content"] and f"revision {seed.revision}" in first_last["content"]
+    # user's words stay in their own message, and the snapshot the harness
+    # wrote rides beside them as a message of its own.
+    question = next(m for m in sent if m.get("role") == "user" and "continue the work" in str(m.get("content")))
+    assert todo.SNAPSHOT_HEAD not in str(question["content"]), "the question is the person's own"
+    snapshot = next(m for m in sent if todo.SNAPSHOT_HEAD in str(m.get("content")))
+    assert f"revision {seed.revision}" in str(snapshot["content"])
     assert sum(todo.SNAPSHOT_HEAD in str(m.get("content")) for m in provider.calls[1]["messages"]) == 1
     session = loop.sessions.get_or_create("cli:c")
     users = [m for m in session.messages if m.get("role") == "user"]

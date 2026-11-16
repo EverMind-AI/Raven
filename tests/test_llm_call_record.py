@@ -499,3 +499,30 @@ def test_a_scrubbed_body_still_reports_that_its_scan_was_truncated():
     assert record.body_truncated is True
     assert len(record.body) < call_record.MAX_BODY_CHARS
     assert call_record.REPLACEMENT in record.body
+
+
+def test_the_prompt_reference_is_the_question_not_a_hook_note():
+    """A hook's note rides as a user row -- the runtime's own prose the model
+    read. The prompt a reader means is the question the person asked, so the
+    note is passed over for it."""
+    from raven.tracing import artifact_v2
+
+    question = {"role": "user", "content": "what is here"}
+    note = {"role": "user", "content": "check the second table", "_hook_note": True}
+    payload = semconv.llm_input_payload(
+        provider="test",
+        model="test-model",
+        messages=[{"role": "system", "content": "you are raven"}, question, note],
+        tools=[],
+    )
+
+    assert payload["prompt"] == artifact_v2.make_ref(artifact_v2.message_sha1(question))
+    assert payload["prompt"] != artifact_v2.make_ref(artifact_v2.message_sha1(note))
+
+
+def test_the_hook_note_mark_is_the_string_the_agent_loop_writes():
+    """The observability shelf spells the mark out rather than importing it
+    from the agent loop, so the two spellings are held equal here."""
+    from raven.agent.loop._shared import _HOOK_NOTE_KEY
+
+    assert semconv._HOOK_NOTE_KEY == _HOOK_NOTE_KEY

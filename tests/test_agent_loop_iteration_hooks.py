@@ -143,6 +143,58 @@ async def test_generated_advice_is_said_once_across_a_turns_iterations(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_a_hook_note_on_the_persons_own_message_is_a_message_of_its_own(tmp_path):
+    """The person's message is their words, so guidance written into one
+    reaches the model as something they said. The note becomes a message of
+    its own instead, and the question is left exactly as it was."""
+
+    class NoteOnTheQuestion(AgentHook):
+        async def before_iteration(self, ctx):
+            if ctx.iteration == 1:
+                return HookDecision(append_note="check the second table")
+            return HookDecision()
+
+    provider = _ScriptedProvider([_text("done")])
+    loop = _loop(tmp_path, provider, [NoteOnTheQuestion()])
+
+    await loop._process_message(_req("what is here"))
+
+    sent = provider.calls[0]["messages"]
+    question = next(m for m in sent if m.get("role") == "user" and "what is here" in str(m.get("content")))
+    assert "check the second table" not in str(question["content"]), "the question is the person's own"
+    assert any(m.get("role") == "user" and m.get("content") == "check the second table" for m in sent)
+
+
+@pytest.mark.asyncio
+async def test_a_hook_note_is_shown_to_the_model_and_not_filed_with_the_turn(tmp_path):
+    """A note of its own rides as a user row, and a user row is the person's
+    words to everything that reads the record. So it is marked as the runtime's
+    prose and kept out of the turn: the model reads it, and nothing downstream
+    draws it as something the person typed."""
+
+    class NoteOnTheQuestion(AgentHook):
+        async def before_iteration(self, ctx):
+            if ctx.iteration == 1:
+                return HookDecision(append_note="check the second table")
+            return HookDecision()
+
+    provider = _ScriptedProvider([_text("done")])
+    loop = _loop(tmp_path, provider, [NoteOnTheQuestion()])
+
+    await loop._process_message(_req("what is here"), session_key="s1")
+
+    sent = provider.calls[0]["messages"]
+    note = next(m for m in sent if m.get("content") == "check the second table")
+    assert note.get("_hook_note") is True, "the row says whose prose it is"
+
+    rows = loop.sessions.get_or_create("s1").messages
+    assert not any("check the second table" in str(m.get("content")) for m in rows), (
+        "the note is the runtime's prose, not part of the conversation"
+    )
+    assert any("what is here" in str(m.get("content")) for m in rows), "the question is still filed"
+
+
+@pytest.mark.asyncio
 async def test_before_execute_tools_rollback_discards_the_proposal_and_does_not_consume_an_iteration(tmp_path):
     class BounceOnce(AgentHook):
         def __init__(self) -> None:

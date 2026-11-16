@@ -200,7 +200,11 @@ class HookDecision:
 
     ``append_note`` is the second grant: text the loop writes before the next
     call, in the three iteration phases -- on the last message after a blank
-    line, or, after a tool round, as a message of its own. Chained in order.
+    line, or as a message of its own when the last message is a tool result or
+    the person's own message, since guidance written into either reaches the
+    model as something a tool told it or something the user said. A note that
+    is a message of its own is the runtime's prose, not the conversation: it is
+    shown to the model and not filed with the turn. Chained in order.
 
     ``notes`` is the diagnostic trail: free-form strings a hook leaves about
     what it saw and decided. The loop deliberately does not act on them;
@@ -324,7 +328,8 @@ class AgentHook(ABC):
           - Bouncing a draft back with feedback (``rollback`` +
             ``rollback_inject``) or replacing it (``short_circuit_result``).
           - Leaving the model a note before the next call (``append_note``);
-            after a tool round it is written as a message of its own.
+            on a tool result or on the person's own message it is written as
+            a message of its own rather than into that message.
 
         Fires twice per iteration shape: after tool results are in (the
         response carried tool calls) and, for a text response, before that

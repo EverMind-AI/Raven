@@ -14,6 +14,7 @@ from raven.agent.loop._shared import (
     _CONTEXT_USED_KEY,
     _DELEGATED_KEY,
     _HOOK_INJECTED_KEY,
+    _HOOK_NOTE_KEY,
     _MAX_ITER_STATIC_FALLBACK,
     _MAX_ITER_SYNTHESIS_PROMPT,
     _MID_TURN_USER_KEY,
@@ -364,10 +365,11 @@ _SAID_LOG_MAX_CHARS = 2000
 
 
 # The scaffolding a turn raises and does not keep: empty-response recovery marks
-# its nudges and prefills, and an attached image rides its own key. They are
-# dropped before persistence, so a reader asking what the turn ended on has to
-# drop them too, or it answers about a message nobody is going to keep.
-_TURN_TRANSIENT_KEYS = ("_recovery_synthetic", ATTACHED_IMAGE_KEY)
+# its nudges and prefills, an attached image rides its own key, and a hook's note
+# is the runtime's own prose the model read. They are dropped before persistence,
+# so a reader asking what the turn ended on has to drop them too, or it answers
+# about a message nobody is going to keep.
+_TURN_TRANSIENT_KEYS = ("_recovery_synthetic", ATTACHED_IMAGE_KEY, _HOOK_NOTE_KEY)
 
 
 def _stamp_context_used_on_kept(messages: list[dict[str, Any]], response: Any) -> None:
@@ -1319,10 +1321,11 @@ class TurnPathMixin:
 
         def _land_hook_note(decision) -> None:
             """Honor a hook's ``append_note``: the note joins the last message
-            the model is about to read, except after a tool round, where the
-            last message is a fenced tool result and the note becomes a message
-            of its own. A body shape the loop does not know drops the note with
-            a warning rather than guessing it into place."""
+            the model is about to read, except on a tool result or on the
+            person's own message, where the note becomes a message of its own
+            rather than prose the model reads as a tool's or the user's. A body
+            shape the loop does not know drops the note with a warning rather
+            than guessing it into place."""
             if decision.append_note and not append_hook_note(messages, decision.append_note):
                 logger.warning("Hook note dropped: no transcript message to land it on")
 
@@ -4247,6 +4250,11 @@ class TurnPathMixin:
                 entry["content"] = content
             if entry.get("_recovery_synthetic"):
                 continue  # #1a synthetic recovery nudge — never persist scaffolding
+            if entry.get(_HOOK_NOTE_KEY):
+                # A hook's note, riding as a user row: the runtime's own prose
+                # the model read, not the conversation. Filed, every reader
+                # downstream takes it for something the person typed.
+                continue
             if entry.get(ATTACHED_IMAGE_KEY):
                 # Already filtered upstream; kept because this is the last gate
                 # before a write that cannot be undone, unlike the code above it.

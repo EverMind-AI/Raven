@@ -113,8 +113,8 @@ class FetchFloorObserver(Gate):
             state["notes"],
             self._max_notes,
         )
-        # The note travels as ``append_note``: the loop lands it on the newest
-        # tool result, a blank line between.
+        # The note travels as ``append_note``: the loop writes it as a message
+        # of its own, beside that tool result.
         return HookDecision(append_note=note, notes=[f"fetch_floor_note {state['notes']}"])
 
 

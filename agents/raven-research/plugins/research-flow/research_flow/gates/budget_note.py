@@ -89,8 +89,8 @@ class BudgetNoteObserver(Gate):
             note = f"{note}\n{_CONVERGE_WARNING}"
             logger.info("budget-note: converge warning injected at iteration %s", ctx.iteration)
 
-        # The note travels as ``append_note``: the loop lands it on the newest
-        # tool result, a blank line between.
+        # The note travels as ``append_note``: the loop writes it as a message
+        # of its own, beside that tool result.
         return HookDecision(append_note=note)
 
 

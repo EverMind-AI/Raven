@@ -143,9 +143,9 @@ class FetchGateObserver(Gate):
             # true with the sufficiency knob on, so every measured arm is
             # byte-identical.
             #
-            # The notice travels as ``append_note``: the loop lands it on that
-            # same newest tool result, a blank line between, so the transcript
-            # is never mutated from inside the hook.
+            # The notice travels as ``append_note``: the loop writes it as a
+            # message of its own, beside that same newest tool result, so the
+            # transcript is never mutated from inside the hook.
             if messages and messages[-1].get("role") == "tool":
                 body = messages[-1].get("content") or ""
                 if SUFFICIENCY_PREFIX not in body:

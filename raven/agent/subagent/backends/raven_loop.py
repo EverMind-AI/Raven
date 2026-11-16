@@ -76,14 +76,21 @@ def _append_participant_note(messages: list[dict[str, Any]], note: str, delivere
     Two rules, both about what the transcript ends up saying. A tool result is
     fenced as untrusted input, so guidance appended into one reaches the model
     as something a tool told it: a note that lands after a tool round is a
-    message of its own. And the advice is asked for every round while a
-    generated function is stateless, so the same words are delivered once
-    rather than once per round.
+    message of its own. The task row is the run's own question, so guidance
+    appended into one reaches the model as something the caller said, and it
+    is a message of its own for the same reason. And the advice is asked for
+    every round while a generated function is stateless, so the same words are
+    delivered once rather than once per round.
+
+    No provenance mark rides this row: a sub-agent's transcript is never filed
+    as a session, so nothing reads it back as the user's own words. The main
+    loop's note is filed with the turn, and the mark on it is what keeps it
+    out of the record.
     """
     if not messages or not note or note in delivered:
         return
     delivered.add(note)
-    if messages[-1].get("role") == "tool":
+    if messages[-1].get("role") in ("tool", "user"):
         messages.append({"role": "user", "content": note})
         return
     body = messages[-1].get("content")

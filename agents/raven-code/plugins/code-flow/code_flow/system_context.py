@@ -42,8 +42,7 @@ def sized_addendum(
 
     ``transcript`` is the prompt as the call will send it, without any earlier
     addition of this participant's (the adapter strips that before asking).
-    ``pending_note`` is counted in the sizing because it lands on the prompt in
-    the same call. Nothing to add answers nothing; a prompt with no system
+    ``pending_note`` is counted in the sizing because it lands in the same call. Nothing to add answers nothing; a prompt with no system
     message to splice into ends the turn with the fix named.
     """
     if not repository and not concurrency:
