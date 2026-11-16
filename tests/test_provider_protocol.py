@@ -1154,6 +1154,12 @@ async def test_responses_model_overrides_unwrap_extra_body(monkeypatch) -> None:
     assert sent[0]["reasoning"] == {"effort": "high"}
     assert "extra_body" not in sent[0]
 
+    provider.model_overrides = {"deepseek-v4.1": {"max_output_tokens": 123}}
+    await provider.chat(messages=[{"role": "user", "content": "hello again"}], model=provider.default_model)
+
+    assert sent[1]["max_output_tokens"] == 123
+    assert "extra_body" not in sent[1]
+
 
 async def test_openai_responses_replays_another_vendors_call_under_an_id_it_accepts(monkeypatch) -> None:
     """OpenAI's own endpoint polices the item id the way the Codex backend does."""
