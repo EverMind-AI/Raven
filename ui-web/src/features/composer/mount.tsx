@@ -323,11 +323,32 @@ export function install(): void {
      would ignore the popover, and worse, keep whatever offset it was last
      given. Safe against a loop -- dockLift writes to .chat, outside .dock. */
   if (typeof MutationObserver === 'function') {
-    new MutationObserver(() => store.dockLift()).observe(dock, {
-      subtree: true, childList: true, attributes: true,
+    new MutationObserver((records) => { if (dockChanged(records, store.field())) store.dockLift() }).observe(dock, {
+      subtree: true, childList: true, attributes: true, attributeOldValue: true,
       attributeFilter: ['data-open', 'hidden', 'style', 'class'],
     })
   }
+}
+
+/* Whether a batch of records changed anything docked. A write of the value an
+   attribute already had is a record too, and the send button's class is
+   written on every keystroke; each attribute is compared from its first old
+   value in the batch, so one written twice and back where it started is no
+   change. The field's height is the field's to lift (store.fitField). */
+export function dockChanged(records: MutationRecord[], ta: Element | null): boolean {
+  const before = new Map<Element, Map<string, string | null>>()
+  for (const r of records) {
+    if (r.type === 'childList') return true
+    const node = r.target as Element
+    if (!r.attributeName || (node === ta && r.attributeName === 'style')) continue
+    const seen = before.get(node) ?? new Map<string, string | null>()
+    before.set(node, seen)
+    if (!seen.has(r.attributeName)) seen.set(r.attributeName, r.oldValue)
+  }
+  for (const [node, seen] of before) {
+    for (const [name, was] of seen) if (node.getAttribute(name) !== was) return true
+  }
+  return false
 }
 
 /* Test seam only: the roots and the listeners survive between tests. */

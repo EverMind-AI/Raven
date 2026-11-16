@@ -209,6 +209,18 @@ const ICON_SENDING = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none
   + ' stroke-width="1.5" stroke-linecap="round" aria-hidden="true">'
   + Loading03Icon.map(([, a]) => `<path d="${(a as { d: string }).d}"/>`).join('') + '</svg>'
 
+/* Which icon each button draws now. Every keystroke paints the button, and
+   rewriting the same icon is a change inside the dock, which the dock's
+   observer answers by measuring the page (mount.tsx); keyed by element so a
+   remounted button starts over. */
+const drawnIcon = new WeakMap<HTMLElement, string>()
+
+function drawIcon(b: HTMLElement, svg: string): void {
+  if (drawnIcon.get(b) === svg) return
+  b.innerHTML = svg
+  drawnIcon.set(b, svg)
+}
+
 /* The send/stop button. Written imperatively rather than rendered: it is one
    static element in page.html that half the page reaches by id, and the whole
    of its get() is four attributes. */
@@ -227,14 +239,14 @@ export function goPaint(): void {
     b.disabled = false
     b.classList.add('halt')
     b.dataset.state = sending ? 'sending' : 'stop'
-    b.innerHTML = sending ? ICON_SENDING : ICON_STOP
+    drawIcon(b, sending ? ICON_SENDING : ICON_STOP)
     b.setAttribute('aria-label', t('gui.stop'))
     return
   }
   b.disabled = !(ta && ta.value.trim()) && !hasAtts()
   b.classList.remove('halt')
   delete b.dataset.state
-  b.innerHTML = ICON_SEND
+  drawIcon(b, ICON_SEND)
   b.setAttribute('aria-label', t('gui.send'))
 }
 
@@ -281,15 +293,19 @@ function fieldBounds(e: HTMLTextAreaElement): { max: number; min: number } {
 export function fitField(): void {
   const e = field()
   if (!e) return
+  const was = e.style.height
   if (manualHeight === null) {
     e.style.height = 'auto'
     e.style.height = Math.min(fieldCeiling(), e.scrollHeight) + 'px'
-    dockLift()
-    return
+  } else {
+    const { max, min } = fieldBounds(e)
+    e.style.height = Math.round(Math.max(min, Math.min(manualHeight, max))) + 'px'
   }
-  const { max, min } = fieldBounds(e)
-  e.style.height = Math.round(Math.max(min, Math.min(manualHeight, max))) + 'px'
-  dockLift()
+  /* Only a height that moved moves what is docked over the field, and the lift
+     is a forced layout of the whole page: most keystrokes leave the field as
+     tall as it was. Every other change to the dock is the two observers'
+     (mount.tsx). */
+  if (e.style.height !== was) dockLift()
 }
 
 /* A drag step: the field's new height, clamped and written at once so the
@@ -410,7 +426,6 @@ export function dockLift(): void {
     if (r.height > 0) top = Math.min(top, r.top)
   })
   const lift = chat.getBoundingClientRect().bottom - top
-  publish(chat, '--lift', Math.round(lift))
   /* Everything measured above rides on top of the field -- the sheets and the
      chip in flow, the slash popover off the card's top edge -- so the field's
      growth over its floor is exactly how far it pushed the highest of them up.
@@ -418,6 +433,9 @@ export function dockLift(): void {
      nothing. */
   const ta = field()
   const grown = ta ? Math.max(0, ta.getBoundingClientRect().height - fieldFloor(ta)) : 0
+  /* Both published after every read: a write to .chat between two reads would
+     lay the page out a second time. */
+  publish(chat, '--lift', Math.round(lift))
   publish(chat, '--lift-rest', Math.round(lift - grown))
 }
 
