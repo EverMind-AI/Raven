@@ -107,6 +107,25 @@ def test_doctor_help_states_the_exit_codes() -> None:
     assert "memory backend is missing or reports faults" in plain, plain
 
 
+def test_doctor_module_docstring_states_the_same_exit_codes() -> None:
+    """The module table and ``--help`` both document the contract, so both are pinned.
+
+    Two copies of one table drift; the branches named here are the ones
+    ``Report.exit_code()`` can actually return.
+    """
+    module_doc = re.sub(r"\s+", " ", doctor_commands.__doc__ or "")
+    for branch in (
+        "install incomplete",
+        "config missing",
+        "unparseable",
+        "not a JSON object",
+        "schema invalid",
+        "unresolved routing",
+        "memory backend is missing or reports faults",
+    ):
+        assert branch in module_doc, f"the module table does not name {branch}: {module_doc}"
+
+
 # --------------------------------------------------------------------------- default mode
 
 
