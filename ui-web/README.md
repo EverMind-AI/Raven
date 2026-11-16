@@ -138,6 +138,7 @@ conventions they are written to are `CONTRIBUTING.md` section 8.
 | `state-dom-touch` | how often each module in `state/` and `app/` may reach for an element -- counted per match, the page's own `$` included -- how often the page frame -- `chrome/`, `App.tsx`, `main.tsx` -- may, zero for `lib/` and `components/`, and how many text, class and markup writes each of those files still holds |
 | `seam-assignment` | only `app/install.ts` puts a source on the data seam -- under any name a file bound to it, and through a destructuring target or `defineProperty` too -- plus the first frame's one pinned exception, held to exactly one assignment; `setSources` stays the test seam, named nowhere else |
 | `island-lang` | every island's root subscribes to the language store |
+| `quiet-text-contrast` | the quiet greys, the composer placeholder, a file card's size line and the count badges' digits hold 4.5:1 on the grounds they are set on, in all four theme blocks |
 | `i18n-keys` | every literal key exists in the catalogue, sits under a namespace, and the namespace belongs to one domain |
 | `first-frame-literals` | the words the page shows without a `t(key)` behind them -- the served first frame and today's literals -- counted per file as unbroken CJK runs, escaped or not, and shrink-only |
 | `file-names` | what a file may be called: PascalCase components, camelCase modules, `<module>.test.ts`, kebab-case gates |
