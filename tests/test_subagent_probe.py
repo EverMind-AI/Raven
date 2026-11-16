@@ -2355,3 +2355,24 @@ async def test_cli_probe_reports_unknown_for_a_relative_launcher_with_no_cwd(
 
     assert res.status == "unknown"
     assert "cwd" in res.detail
+
+
+async def test_acp_probe_finds_a_relative_launcher_in_the_rows_own_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The acp launch starts the server in the row's cwd, so the probe looks there too."""
+    here = tmp_path / "here"
+    here.mkdir()
+    monkeypatch.chdir(here)
+    row = tmp_path / "row"
+    row.mkdir()
+    launcher = row / ("server.exe" if os.name == "nt" else "server")
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    cfg = ThirdPartyAcpSubagentConfig(name="rowacp", command="./server", cwd=str(row))
+
+    res = await probe_one(cfg, source="config", path=str(tmp_path))
+
+    assert res.status == "attention"
+    assert res.target == str(launcher)
+    assert "installed at" in res.detail

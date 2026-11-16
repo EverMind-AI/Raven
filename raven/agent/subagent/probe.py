@@ -725,8 +725,18 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
         return _probe_remote(cfg, machine_id, done)
     exe = argv[0]
     cfg_path = (getattr(cfg, "env", None) or {}).get("PATH")
-    resolved = shutil.which(exe, path=cfg_path or path)
+    base = (getattr(cfg, "cwd", None) or "").strip()
+    in_row_cwd = bool(base) and bool(os.path.dirname(exe))
+    # The acp launch starts the server in the row's cwd (AcpClient.launch hands
+    # it cfg.cwd), so a directory-named program is resolved there; shutil.which
+    # would answer for this process's own directory instead.
+    resolved = shutil.which(
+        resolve_directory_program(exe, base) if in_row_cwd else exe,
+        path=cfg_path or path,
+    )
     if resolved is None:
+        if in_row_cwd:
+            return replace(done("missing", f"{exe} is not in {base}", exe), absent=exe)
         off = _installed_outside_login_path(exe, cfg_path or path)
         if off is not None:
             return done(
