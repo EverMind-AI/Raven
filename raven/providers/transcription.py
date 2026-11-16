@@ -11,6 +11,11 @@ _NO_KEY_DIAGNOSIS = (
     "Run: raven provider set groq --api-key <KEY>, then restart the gateway."
 )
 
+_INVALID_KEY_DIAGNOSIS = (
+    "Groq rejected the API key for transcription. "
+    "Run: raven provider set groq --api-key <NEW-KEY>, then restart the gateway."
+)
+
 
 def transcription_api_key(config) -> str:
     """The key channels transcribe voice with: the configured groq provider's."""
@@ -38,7 +43,7 @@ class GroqTranscriptionProvider:
 
         Returns:
             Transcribed text, or a one-line diagnosis naming the fix when no
-            API key is configured.
+            API key is configured or the key is rejected.
         """
         if not self.api_key:
             logger.warning(_NO_KEY_DIAGNOSIS)
@@ -67,5 +72,8 @@ class GroqTranscriptionProvider:
                     return data.get("text", "")
 
         except Exception as e:
+            if isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 401:
+                logger.warning(_INVALID_KEY_DIAGNOSIS)
+                return _INVALID_KEY_DIAGNOSIS
             logger.error("Groq transcription error: {}", e)
             return ""

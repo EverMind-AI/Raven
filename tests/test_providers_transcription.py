@@ -1,7 +1,8 @@
-"""Tests for the Groq transcription provider's missing-key behaviour."""
+"""Tests for the Groq transcription provider's missing-key and rejected-key behaviour."""
 
 import asyncio
 
+import httpx
 from loguru import logger
 
 from raven.providers.transcription import GroqTranscriptionProvider, transcription_api_key
@@ -11,6 +12,24 @@ def _captured_warnings() -> tuple[list[str], int]:
     said: list[str] = []
     sink_id = logger.add(lambda message: said.append(message.record["message"]), level="WARNING")
     return said, sink_id
+
+
+def _response(status: int) -> httpx.Response:
+    return httpx.Response(status, request=httpx.Request("POST", "https://api.groq.com/openai/v1/audio/transcriptions"))
+
+
+def _client_returning(response: httpx.Response):
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return response
+
+    return _Client
 
 
 def test_a_missing_key_returns_a_diagnosis_naming_the_fix(monkeypatch):
@@ -26,6 +45,41 @@ def test_a_missing_key_returns_a_diagnosis_naming_the_fix(monkeypatch):
     assert "raven provider set groq --api-key" in text
     assert "restart the gateway" in text
     assert said and "restart the gateway" in said[0]
+
+
+def test_a_rejected_key_returns_a_diagnosis_naming_the_fix(monkeypatch, tmp_path):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    audio = tmp_path / "audio.ogg"
+    audio.write_bytes(b"audio")
+    provider = GroqTranscriptionProvider(api_key="bad")
+
+    monkeypatch.setattr("raven.providers.transcription.httpx.AsyncClient", _client_returning(_response(401)))
+    said, sink_id = _captured_warnings()
+    try:
+        text = asyncio.run(provider.transcribe(audio))
+    finally:
+        logger.remove(sink_id)
+
+    assert "raven provider set groq --api-key <NEW-KEY>" in text
+    assert "restart the gateway" in text
+    assert said and "rejected the API key" in said[0]
+
+
+def test_a_server_error_still_returns_empty(monkeypatch, tmp_path):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    audio = tmp_path / "audio.ogg"
+    audio.write_bytes(b"audio")
+    provider = GroqTranscriptionProvider(api_key="k")
+
+    monkeypatch.setattr("raven.providers.transcription.httpx.AsyncClient", _client_returning(_response(500)))
+    said, sink_id = _captured_warnings()
+    try:
+        text = asyncio.run(provider.transcribe(audio))
+    finally:
+        logger.remove(sink_id)
+
+    assert text == ""
+    assert not any("rejected the API key" in message for message in said)
 
 
 def test_a_configured_key_still_reports_a_missing_file_as_empty(monkeypatch):
