@@ -341,6 +341,8 @@ def _transcript_says(transcript: Any, note: str) -> bool:
     not delivered guidance.
     """
     for row in transcript or ():
+        if not isinstance(row, Mapping):
+            continue
         content = row.get("content")
         if isinstance(content, str):
             texts: tuple[str, ...] = (content,)
