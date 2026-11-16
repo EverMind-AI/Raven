@@ -530,6 +530,53 @@ def test_a_refused_generated_function_is_cached_as_silence(monkeypatch) -> None:
         charter_mod._COMPILED.clear()
 
 
+@pytest.mark.asyncio
+async def test_generated_advice_says_the_same_words_once_per_transcript() -> None:
+    """A generated function is stateless, so asked at every phase it answers
+    the same words. Once the transcript carries them they have been delivered;
+    a rollback that popped the note leaves the transcript without it, so it
+    is delivered again."""
+    from raven.agent.subagent.charter import CharterParticipant
+    from raven.contracts.participant import StepView
+
+    source = "def advise(step):\n    return 'check the second table'"
+
+    def step(transcript):
+        return StepView(
+            session_key="s",
+            iteration=1,
+            response=None,
+            transcript=tuple(transcript),
+            history=(),
+            turn_base=0,
+            question="do it",
+            rollbacks=0,
+            mode=None,
+            mode_overlay=None,
+            phase="iteration",
+        )
+
+    with charter_scope(Charter(functions=(("advise", source),))):
+        participant = CharterParticipant()
+        first = await participant.advise(step([{"role": "user", "content": "do it"}]))
+        assert first == "check the second table"
+        again = await participant.advise(
+            step([{"role": "user", "content": "do it"}, {"role": "user", "content": first}])
+        )
+        assert again is None, "the transcript already carries it"
+        blocks = await participant.advise(step([{"role": "assistant", "content": [{"type": "text", "text": first}]}]))
+        assert blocks is None, "block-shaped content is read the same way"
+        assert await participant.advise(step([{"role": "user", "content": "do it"}])) == first, (
+            "a rollback popped the note, so the transcript no longer says it"
+        )
+        assert (
+            await participant.advise(
+                step([{"role": "assistant", "content": None}, {"role": "tool", "content": [{"type": "image"}]}])
+            )
+            == first
+        ), "rows and blocks with no text are skipped"
+
+
 def test_a_plugins_own_rules_speak_before_the_dispatchs() -> None:
     """Participant order is product first: a veto needs one voice, and the
     wording the model reads should be the product's own where both would
