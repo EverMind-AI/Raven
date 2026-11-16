@@ -2,7 +2,8 @@
 provider (:mod:`raven.providers.transcription`).
 
 An empty ``api_key`` is passed through so the provider can fall back to the
-``GROQ_API_KEY`` env var and decide for itself; returns "" on any failure.
+``GROQ_API_KEY`` env var and decide for itself; a missing key comes back as a
+one-line diagnosis, and every other failure as "".
 """
 
 from __future__ import annotations
