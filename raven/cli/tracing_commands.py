@@ -128,13 +128,21 @@ def _pid_file() -> Path:
     return tracing_config.state_dir() / "viewer.pid"
 
 
-def _is_json_int(value: object) -> bool:
-    """True for a JSON integer, and false for a bool.
+_PID_MAX = 2**31 - 1  # pid_t is a signed 32-bit int; real Windows pids stay far below it.
 
-    ``isinstance(True, int)`` is true in Python, and a record naming pid 1
-    would send ``raven tracing stop`` after whatever holds pid 1.
-    """
+
+def _is_json_int(value: object) -> bool:
+    """True for a JSON integer, and false for a bool (``isinstance(True, int)``)."""
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_pid(value: object) -> bool:
+    """True for a pid the OS can answer about.
+
+    A bool would name pid 1, and an int too large for ``os.kill`` raises
+    OverflowError instead of answering "not running".
+    """
+    return isinstance(value, int) and not isinstance(value, bool) and 0 < value <= _PID_MAX
 
 
 def _parse_pid_record(text: str | None) -> dict | None:
@@ -145,7 +153,7 @@ def _parse_pid_record(text: str | None) -> dict | None:
         data = json.loads(text)
     except ValueError:
         return None
-    if isinstance(data, dict) and _is_json_int(data.get("pid")) and _is_json_int(data.get("port")):
+    if isinstance(data, dict) and _is_pid(data.get("pid")) and _is_json_int(data.get("port")):
         return data
     return None
 

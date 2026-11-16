@@ -202,6 +202,19 @@ def test_tracing_stop_drops_an_unreadable_pidfile(tmp_path, monkeypatch):
     assert not pidfile.exists()
 
 
+def test_tracing_stop_reports_an_out_of_range_pid_as_unusable(tmp_path, monkeypatch):
+    """The command a user runs to recover from a bad record must not crash on it."""
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 10**100, "port": 4318}), encoding="utf-8")
+
+    r = runner.invoke(app, ["tracing", "stop"])
+
+    assert r.exit_code == 0, r.output
+    assert "may still be running" in r.output.lower()
+    assert not pidfile.exists()
+
+
 def test_tracing_stop_keeps_a_record_another_launcher_rewrote(tmp_path, monkeypatch):
     """Clearing the record the stop handled must not delete a newer one.
 
@@ -343,6 +356,22 @@ def test_tracing_drops_a_record_whose_pid_is_not_a_number(tmp_path, monkeypatch)
     monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
     pidfile = tmp_path / "viewer.pid"
     pidfile.write_text(json.dumps({"pid": True, "port": 4318}), encoding="utf-8")
+
+    assert tc._read_pid_file() is None
+    assert not pidfile.exists()
+
+
+@pytest.mark.parametrize("pid", [0, -5, 2**31, 10**100])
+def test_tracing_drops_a_record_whose_pid_is_out_of_range(tmp_path, monkeypatch, pid):
+    """An int the OS cannot hold as a pid is not a pid.
+
+    `pid_alive` asks with `os.kill(pid, 0)`, which raises OverflowError for a
+    value no C long can carry, so the record would crash `stop` and the
+    launcher instead of being read as the unusable record it is.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": pid, "port": 4318}), encoding="utf-8")
 
     assert tc._read_pid_file() is None
     assert not pidfile.exists()
