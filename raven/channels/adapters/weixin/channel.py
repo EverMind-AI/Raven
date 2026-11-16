@@ -31,7 +31,7 @@ from raven.channels.base import ChannelBase
 from raven.channels.contract import Capabilities
 from raven.channels.errors import retryable_http
 from raven.channels.media import save_media_bytes
-from raven.channels.transcribe import transcribe_audio
+from raven.channels.transcribe import transcribe_audio, transcription_marker
 from raven.config.paths import get_runtime_subdir
 from raven.i18n import t
 from raven.utils.atomic_io import atomic_replace
@@ -746,8 +746,14 @@ class WeixinChannel(ChannelBase):
                 parts.append("[voice]")
                 return
             media.append(path)
-            transcription = await transcribe_audio(path, self.transcription_api_key, channel=self.name)
-            parts.append(f"[voice] {transcription}" if transcription else f"[voice]\n[Audio: source: {path}]")
+            result = await transcribe_audio(path, self.transcription_api_key, channel=self.name)
+            marker = transcription_marker(result)
+            if result.text:
+                parts.append(f"[voice] {result.text}")
+            elif marker:
+                parts.append(f"[voice]\n{marker}")
+            else:
+                parts.append(f"[voice]\n[Audio: source: {path}]")
         elif kind == p.ITEM_FILE:
             name = typed.get("file_name", "unknown")
             path = await self._download_media(typed, "file", name)

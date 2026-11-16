@@ -26,7 +26,7 @@ from telegram.request import HTTPXRequest
 from raven.channels.base import ChannelBase
 from raven.channels.contract import Capabilities, RetryDeliveryError
 from raven.channels.errors import retryable_http, transient_network
-from raven.channels.transcribe import transcribe_audio
+from raven.channels.transcribe import transcribe_audio, transcription_marker
 from raven.config.paths import get_media_dir
 from raven.utils.messages import split_message
 
@@ -436,8 +436,8 @@ class TelegramChannel(ChannelBase):
             else:
                 media_paths.append(saved)
                 if kind in ("voice", "audio"):
-                    text = await transcribe_audio(saved, self.transcription_api_key, channel=self.name)
-                    parts.append(f"[transcription: {text}]" if text else f"[{kind}: {saved}]")
+                    result = await transcribe_audio(saved, self.transcription_api_key, channel=self.name)
+                    parts.append(transcription_marker(result) or f"[{kind}: {saved}]")
                 else:
                     parts.append(f"[{kind}: {saved}]")
 

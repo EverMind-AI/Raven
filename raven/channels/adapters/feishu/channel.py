@@ -22,7 +22,7 @@ from raven.channels.base import ChannelBase
 from raven.channels.contract import Capabilities
 from raven.channels.errors import transient_network
 from raven.channels.media import save_media_bytes
-from raven.channels.transcribe import transcribe_audio
+from raven.channels.transcribe import TranscriptionResult, transcribe_audio, transcription_marker
 
 _MSG_TYPE_LABEL = {"image": "[image]", "audio": "[audio]", "file": "[file]", "sticker": "[sticker]"}
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".tiff", ".tif"}
@@ -373,7 +373,7 @@ class FeishuChannel(ChannelBase):
 
     # ── transcription ─────────────────────────────────────────────────
 
-    async def _transcribe(self, path: str) -> str:
+    async def _transcribe(self, path: str) -> TranscriptionResult:
         """Transcribe a voice file, preferring Feishu's own speech-to-text
         (no external key) and falling back to the base Whisper provider.
 
@@ -384,7 +384,7 @@ class FeishuChannel(ChannelBase):
             loop = asyncio.get_running_loop()
             native = await loop.run_in_executor(None, self._lark_stt_sync, path)
             if native:
-                return native
+                return TranscriptionResult(text=native)
         return await transcribe_audio(path, self.transcription_api_key, channel=self.name)
 
     def _lark_stt_sync(self, path: str) -> str | None:
@@ -528,8 +528,7 @@ class FeishuChannel(ChannelBase):
             if path:
                 media.append(path)
             if msg_type == "audio" and path:
-                if transcription := await self._transcribe(path):
-                    label = f"[transcription: {transcription}]"
+                label = transcription_marker(await self._transcribe(path)) or label
             parts.append(label)
         elif msg_type in ("share_chat", "share_user", "interactive", "share_calendar_event", "system", "merge_forward"):
             if text := content.extract_share_card(payload, msg_type):

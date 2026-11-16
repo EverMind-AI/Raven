@@ -6,7 +6,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from raven.channels.intake import Intake
-from raven.channels.transcribe import transcribe_audio
+from raven.channels.transcribe import transcribe_audio, transcription_marker
+from raven.providers.transcription import _NO_KEY_DIAGNOSIS, TranscriptionResult
 
 # ── Intake: permission ────────────────────────────────────────────────
 
@@ -99,10 +100,10 @@ def test_transcribe_audio_delegates(monkeypatch):
             pass
 
         async def transcribe(self, path):
-            return "hello world"
+            return TranscriptionResult(text="hello world")
 
     monkeypatch.setattr("raven.providers.transcription.GroqTranscriptionProvider", _FakeProvider)
-    assert asyncio.run(transcribe_audio("/a.ogg", api_key="k")) == "hello world"
+    assert asyncio.run(transcribe_audio("/a.ogg", api_key="k")) == TranscriptionResult(text="hello world")
 
 
 def test_transcribe_audio_swallows_errors(monkeypatch):
@@ -111,7 +112,7 @@ def test_transcribe_audio_swallows_errors(monkeypatch):
             raise RuntimeError("nope")
 
     monkeypatch.setattr("raven.providers.transcription.GroqTranscriptionProvider", _Boom)
-    assert asyncio.run(transcribe_audio("/a.ogg")) == ""  # failure -> empty string
+    assert asyncio.run(transcribe_audio("/a.ogg")) == TranscriptionResult()  # failure -> empty result
 
 
 def test_transcribe_audio_empty_key_becomes_none(monkeypatch):
@@ -122,7 +123,7 @@ def test_transcribe_audio_empty_key_becomes_none(monkeypatch):
             seen["key"] = api_key
 
         async def transcribe(self, path):
-            return ""
+            return TranscriptionResult()
 
     monkeypatch.setattr("raven.providers.transcription.GroqTranscriptionProvider", _Rec)
     asyncio.run(transcribe_audio("/a.ogg", api_key=""))  # empty -> None (provider env fallback)
@@ -133,6 +134,12 @@ def test_transcribe_audio_empty_key_becomes_none(monkeypatch):
 
 def test_transcribe_audio_reports_the_missing_key_diagnosis(monkeypatch):
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
-    text = asyncio.run(transcribe_audio("/a.ogg", api_key=""))
-    assert "raven provider set groq --api-key" in text
-    assert "restart the gateway" in text
+    result = asyncio.run(transcribe_audio("/a.ogg", api_key=""))
+    assert result == TranscriptionResult(diagnosis=_NO_KEY_DIAGNOSIS)
+    assert transcription_marker(result) == f"[transcription unavailable: {_NO_KEY_DIAGNOSIS}]"
+
+
+def test_transcription_marker_distinguishes_text_from_a_diagnosis():
+    assert transcription_marker(TranscriptionResult(text="hello")) == "[transcription: hello]"
+    assert transcription_marker(TranscriptionResult(diagnosis="why")) == "[transcription unavailable: why]"
+    assert transcription_marker(TranscriptionResult()) == ""
