@@ -97,13 +97,16 @@ class Sandbox:
         tree), .git/config, .git/hooks and anything else small under the common
         git dir. Index flags from `git ls-files -v` are included because
         assume-unchanged / skip-worktree make `git status` skip a modified
-        tracked file. Large objects under .git/objects are not hashed -- wiping
-        them corrupts the repository loudly, which no silent-write case looks
-        like.
+        tracked file. The symbolic HEAD is included because _origin_state
+        compares the resolved sha, which cannot see a checkout to another
+        branch at the same commit. Large objects under .git/objects are not
+        hashed -- wiping them corrupts the repository loudly, which no
+        silent-write case looks like.
         """
         try:
             refs = self._git("for-each-ref").stdout
             index_flags = self._git("ls-files", "-v").stdout
+            head_ref = self._git("symbolic-ref", "-q", "HEAD").stdout
             common = self._git("rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
         except (OSError, subprocess.SubprocessError):
             return None
@@ -113,6 +116,7 @@ class Sandbox:
         # ls-files -v exposes assume-unchanged / skip-worktree flags, which make
         # `git status` stop reporting a modified tracked file.
         digest.update(index_flags.encode("utf-8", "replace"))
+        digest.update(head_ref.encode("utf-8", "replace"))
         base = Path(common) if common else None
         if base is None:
             return None
@@ -134,7 +138,11 @@ class Sandbox:
         return digest.hexdigest()
 
     def _origin_state(self) -> tuple[str, str, str] | None:
-        """Origin HEAD, working-tree status and .git internals, or None on failure."""
+        """Origin HEAD, working-tree status and .git internals, or None on failure.
+
+        ``git status`` covers tracked and untracked paths; ignored paths are not
+        compared.
+        """
         try:
             head = self._git("rev-parse", "HEAD").stdout.strip()
             status = self._git("status", "--porcelain", "-uall").stdout
@@ -164,7 +172,11 @@ class Sandbox:
 
     @staticmethod
     def _kill_process_group(proc: subprocess.Popen[str]) -> None:
-        """Kill the process group started by ``bash`` so no child outlives it."""
+        """Kill the process group started by ``bash`` so no same-group child outlives it.
+
+        A child that leaves the group (``setsid``, shell job control) is out of
+        reach; containing the whole tree is a jail concern, not this guard's.
+        """
         if os.name == "posix":
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
@@ -173,6 +185,8 @@ class Sandbox:
             return
         if os.name == "nt":
             try:
+                # taskkill walks the live process tree; once bash has exited,
+                # reparented descendants are not reachable.
                 subprocess.run(
                     ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
                     capture_output=True,
@@ -238,8 +252,10 @@ class Sandbox:
             error_text = f"[bash error: {type(e).__name__}: {str(e)[:150]}]"
         finally:
             if proc is not None:
-                # A background child can outlive bash; kill the group on every
-                # exit path so it cannot write the origin after the snapshot.
+                # A background child that stays in bash's process group can
+                # outlive bash; kill the group on every exit path so it cannot
+                # write the origin after the snapshot. A child that leaves the
+                # group (setsid / job control) is outside this guard.
                 self._kill_process_group(proc)
                 try:
                     proc.wait(timeout=5)

@@ -145,6 +145,13 @@ class TestBashBoundary:
         with pytest.raises(RuntimeError, match="origin repository"):
             sandbox.bash("git update-ref -d refs/evolver/probe")
 
+    def test_symbolic_head_change_to_another_branch_is_detected(self, sandbox, subject):
+        repo, _sha = subject
+        subprocess.run(["git", "branch", "other"], cwd=repo, check=True, env=_ENV)
+        command = "d=$(sed -n 's/^gitdir: //p' .git); git -C \"$d/../../..\" checkout -q other"
+        with pytest.raises(RuntimeError, match="origin repository"):
+            sandbox.bash(command)
+
     def test_relative_gitdir_resolves_against_worktree(self, subject, tmp_path):
         repo, sha = subject
         subprocess.run(["git", "config", "worktree.useRelativePaths", "true"], cwd=repo, check=True, env=_ENV)
