@@ -1058,6 +1058,7 @@ _NOT_THE_QUESTION_KEYS = (
     _ATTACHED_IMAGE_KEY,
     "_recovery_synthetic",
     "_hook_injected",
+    "_hook_note",
     HISTORY_CHECKPOINT_KEY,
 )
 

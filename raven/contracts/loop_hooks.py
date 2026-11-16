@@ -41,10 +41,10 @@ Design choices:
    ``modified_tools`` (``before_iteration``) is not a mode but a grant: the
    tool schemas the model is shown for this one iteration. ``append_note``
    (the three iteration phases) is the other grant: a short harness-authored
-   note the loop appends to the last transcript message before the next
-   model call -- a budget warning, a gate notice -- chained across hooks in
-   order. The note is data the model reads, never a message the user sent;
-   the transcript keeps it where it landed. On ``before_user_inbound``,
+   note the loop writes before the next model call -- a budget warning, a
+   gate notice -- chained across hooks in order. The note is data the model
+   reads, never a message the user sent; one of its own is not filed with
+   the turn. On ``before_user_inbound``,
    ``modified_content`` rewrites the inbound text before the loop dispatches
    it (a memo prepended, a reminder appended), chained through
    ``ctx.inbound_content``.
@@ -200,11 +200,7 @@ class HookDecision:
 
     ``append_note`` is the second grant: text the loop writes before the next
     call, in the three iteration phases -- on the last message after a blank
-    line, or as a message of its own when the last message is a tool result or
-    the person's own message, since guidance written into either reaches the
-    model as something a tool told it or something the user said. A note that
-    is a message of its own is the runtime's prose, not the conversation: it is
-    shown to the model and not filed with the turn. Chained in order.
+    line, or as a message of its own on a tool result or the person's message.
 
     ``notes`` is the diagnostic trail: free-form strings a hook leaves about
     what it saw and decided. The loop deliberately does not act on them;
@@ -327,9 +323,8 @@ class AgentHook(ABC):
             via memory_engine.
           - Bouncing a draft back with feedback (``rollback`` +
             ``rollback_inject``) or replacing it (``short_circuit_result``).
-          - Leaving the model a note before the next call (``append_note``);
-            on a tool result or on the person's own message it is written as
-            a message of its own rather than into that message.
+          - Leaving the model a note before the next call (``append_note``); on
+            a tool result or the person's own message it is a message of its own.
 
         Fires twice per iteration shape: after tool results are in (the
         response carried tool calls) and, for a text response, before that
