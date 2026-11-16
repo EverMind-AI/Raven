@@ -77,8 +77,9 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         # configured for that provider, and the name is checked against the ones
         # whose image API the tool can call. It names no address and carries no key.
         "tools.media.image.provider",
-        # The video tool's, on the same terms, checked against the providers whose
-        # video API the tool can call.
+        # Speech and video use the same terms, checked against the providers whose
+        # direct API each tool can call.
+        "tools.media.speech.provider",
         "tools.media.video.provider",
         "channels.sendProgress",
         "channels.sendToolHints",
@@ -2355,6 +2356,14 @@ async def test_the_video_provider_takes_only_a_provider_the_video_tool_runs_on(s
     with pytest.raises(console_module.ConfigValidationError):
         await console_module.settings_set({"key": "tools.media.video.provider", "value": value})
     assert settings_cfg.read_bytes() == before
+
+
+@pytest.mark.parametrize("value", ["minimax", "minimax_cn_api"])
+async def test_the_speech_provider_takes_a_minimax_voice_provider(settings_cfg, value):
+    import json
+
+    await console_module.settings_set({"key": "tools.media.speech.provider", "value": value})
+    assert json.loads(settings_cfg.read_text())["tools"]["media"]["speech"]["provider"] == value
 
 
 @pytest.mark.parametrize(
