@@ -16,6 +16,7 @@ import ast
 import hashlib
 import os
 import signal
+import stat
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -78,67 +79,77 @@ class Sandbox:
         return {rel: p.read_bytes() for rel, p in self._iter_whitelist()}
 
     def _git(self, *args: str) -> subprocess.CompletedProcess[str]:
-        # encoding="utf-8", errors="replace" keeps a GBK-locale host (non-ASCII
-        # names with core.quotePath=false) from raising UnicodeDecodeError out of
-        # an origin probe, which is outside every guard here.
+        # Preserve path bytes so NUL-delimited ls-files output can be used to
+        # fingerprint files even when a name is not valid UTF-8.
         return subprocess.run(
             ["git", "-C", str(self.repo_root), *args],
             capture_output=True,
             encoding="utf-8",
-            errors="replace",
+            errors="surrogateescape",
+            check=True,
             timeout=30,
             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
         )
 
-    def _git_internals_fingerprint(self) -> str | None:
-        """Hash the small parts of .git that refs/worktree status cannot see.
+    @staticmethod
+    def _path_fingerprint(path: Path) -> bytes:
+        """Hash contents and permissions without following symbolic links."""
+        digest = hashlib.sha256()
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError:
+            digest.update(b"missing")
+            return digest.digest()
+        digest.update(f"{mode}\0".encode("ascii"))
+        if stat.S_ISREG(mode):
+            with path.open("rb") as stream:
+                digest.update(hashlib.file_digest(stream, "sha256").digest())
+        elif stat.S_ISLNK(mode):
+            digest.update(os.fsencode(os.readlink(path)))
+        return digest.digest()
 
-        Covers refs (all of loose and packed refs via for-each-ref plus the ref
-        tree), .git/config, .git/hooks and anything else small under the common
-        git dir. Index flags from `git ls-files -v` are included because
-        assume-unchanged / skip-worktree make `git status` skip a modified
-        tracked file. The symbolic HEAD is included because _origin_state
-        compares the resolved sha, which cannot see a checkout to another
-        branch at the same commit. Large objects under .git/objects are not
-        hashed -- wiping them corrupts the repository loudly, which no
-        silent-write case looks like.
+    def _origin_fingerprint(self) -> str | None:
+        """Hash origin files, index entries, refs, configuration and hook modes.
+
+        File contents catch writes to already-dirty or untracked paths and to
+        files already marked assume-unchanged or skip-worktree. Index entries
+        cover staged changes, and the symbolic HEAD distinguishes branches at
+        the same commit. Ignored files and the object database are excluded.
         """
         try:
             refs = self._git("for-each-ref").stdout
-            index_flags = self._git("ls-files", "-v").stdout
-            head_ref = self._git("symbolic-ref", "-q", "HEAD").stdout
+            index_entries = self._git("ls-files", "--stage", "-v", "-z").stdout
+            head_ref = self._git("rev-parse", "--symbolic-full-name", "HEAD").stdout
+            paths = self._git("ls-files", "--cached", "--others", "--exclude-standard", "-z").stdout.split("\0")
             common = self._git("rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            return None
+            if not common:
+                return None
 
-        digest = hashlib.sha256()
-        digest.update(refs.encode("utf-8", "replace"))
-        # ls-files -v exposes assume-unchanged / skip-worktree flags, which make
-        # `git status` stop reporting a modified tracked file.
-        digest.update(index_flags.encode("utf-8", "replace"))
-        digest.update(head_ref.encode("utf-8", "replace"))
-        base = Path(common) if common else None
-        if base is None:
-            return None
-        try:
+            digest = hashlib.sha256()
+            for output in (refs, index_entries, head_ref):
+                digest.update(hashlib.sha256(output.encode("utf-8", "surrogateescape")).digest())
+            for rel in sorted(set(paths) - {""}):
+                digest.update(b"worktree\0" + os.fsencode(rel) + b"\0")
+                digest.update(self._path_fingerprint(self.repo_root / rel))
+            base = Path(common)
             files = []
             for pattern in ("config", "packed-refs"):
                 candidate = base / pattern
-                if candidate.is_file():
+                if candidate.is_file() or candidate.is_symlink():
                     files.append(candidate)
             for dirname in ("hooks", "refs", "info"):
                 root_dir = base / dirname
                 if root_dir.is_dir():
-                    files.extend(p for p in root_dir.rglob("*") if p.is_file() and p.stat().st_size <= 1_000_000)
+                    files.extend(p for p in root_dir.rglob("*") if p.is_file() or p.is_symlink())
             for file in sorted(files, key=lambda p: p.relative_to(base).as_posix()):
-                digest.update(file.relative_to(base).as_posix().encode("utf-8"))
-                digest.update(file.read_bytes())
-        except (OSError, ValueError):
+                digest.update(b"git\0" + os.fsencode(file.relative_to(base).as_posix()) + b"\0")
+                digest.update(self._path_fingerprint(file))
+        except (OSError, ValueError, subprocess.SubprocessError):
             return None
         return digest.hexdigest()
 
     def _origin_state(self) -> tuple[str, str, str] | None:
-        """Origin HEAD, working-tree status and .git internals, or None on failure.
+        """Origin HEAD, status and content fingerprint, or None on probe failure.
 
         ``git status`` covers tracked and untracked paths; ignored paths are not
         compared.
@@ -148,7 +159,7 @@ class Sandbox:
             status = self._git("status", "--porcelain", "-uall").stdout
         except (OSError, subprocess.SubprocessError):
             return None
-        fingerprint = self._git_internals_fingerprint()
+        fingerprint = self._origin_fingerprint()
         if fingerprint is None:
             return None
         return head, status, fingerprint
@@ -222,7 +233,7 @@ class Sandbox:
         if before is None:
             # Fail closed: without a snapshot there is no way to detect an
             # origin write this command is about to make.
-            return "[refused: origin repository state unavailable (git rev-parse/status failed); command not run]"
+            return "[refused: origin repository state unavailable (git or file probe failed); command not run]"
         timed_out = False
         proc: subprocess.Popen[str] | None = None
         out, err = "", ""
@@ -264,7 +275,7 @@ class Sandbox:
             after = self._origin_state()
         if after is None:
             raise RuntimeError(
-                "sandbox command left the origin repository unverifiable (git probe failed); round aborted"
+                "sandbox command left the origin repository unverifiable (git or file probe failed); round aborted"
             )
         if after != before:
             raise RuntimeError(

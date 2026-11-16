@@ -128,6 +128,88 @@ class TestBashBoundary:
         with pytest.raises(RuntimeError, match="origin repository"):
             sandbox.bash(cmd)
 
+    @pytest.mark.parametrize(
+        ("rel", "index_flag"),
+        [
+            ("grader.py", None),
+            ("existing-untracked.py", None),
+            ("grader.py", "--assume-unchanged"),
+            ("grader.py", "--skip-worktree"),
+        ],
+    )
+    def test_existing_file_content_write_is_detected(self, sandbox, rel, index_flag):
+        (sandbox.repo_root / rel).write_text("score = 2\n")
+        if index_flag:
+            subprocess.run(["git", "update-index", index_flag, rel], cwd=sandbox.repo_root, check=True, env=_ENV)
+        command = f"cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && printf 'score = 999\\n' > {rel}"
+        with pytest.raises(RuntimeError, match="origin repository"):
+            sandbox.bash(command)
+        assert (sandbox.repo_root / rel).read_text() == "score = 999\n"
+
+    def test_failed_status_probe_refuses_command(self, sandbox):
+        index = sandbox.repo_root / ".git/index"
+        original = index.read_bytes()
+        try:
+            index.write_bytes(b"invalid index\n")
+            out = sandbox.bash("touch command-was-run")
+            assert "refused" in out and "state unavailable" in out
+            assert not (sandbox.root / "command-was-run").exists()
+        finally:
+            index.write_bytes(original)
+
+    @pytest.mark.parametrize("probe", ["for-each-ref", "ls-files"])
+    def test_failed_internal_probe_refuses_command(self, sandbox, monkeypatch, probe):
+        run_git = sandbox._git
+
+        def fail_probe(*args):
+            if args[0] == probe:
+                return run_git("rev-parse", "--verify", "refs/heads/nonexistent-probe-ref")
+            return run_git(*args)
+
+        monkeypatch.setattr(sandbox, "_git", fail_probe)
+        out = sandbox.bash("touch command-was-run")
+        assert "refused" in out and "state unavailable" in out
+        assert not (sandbox.root / "command-was-run").exists()
+
+    def test_failed_after_probe_aborts_round(self, sandbox):
+        index = sandbox.repo_root / ".git/index"
+        original = index.read_bytes()
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && printf 'invalid index\\n' > .git/index"
+        try:
+            with pytest.raises(RuntimeError, match="origin repository unverifiable"):
+                sandbox.bash(command)
+        finally:
+            index.write_bytes(original)
+
+    def test_hook_executable_mode_change_is_detected(self, sandbox):
+        if sys.platform == "win32":
+            pytest.skip("executable hook permissions require POSIX")
+        hook = sandbox.repo_root / ".git/hooks/post-checkout"
+        hook.write_text("#!/bin/sh\nexit 0\n")
+        hook.chmod(0o644)
+        command = "d=$(sed -n 's/^gitdir: //p' .git); chmod +x \"$d/../../hooks/post-checkout\""
+        with pytest.raises(RuntimeError, match="origin repository"):
+            sandbox.bash(command)
+        assert hook.stat().st_mode & 0o111
+
+    def test_detached_origin_head_allows_commands(self, sandbox):
+        subprocess.run(["git", "checkout", "--detach", "-q"], cwd=sandbox.repo_root, check=True, env=_ENV)
+        assert "[exit 0]" in sandbox.bash("echo healthy")
+
+    def test_missing_tracked_and_unusual_untracked_paths_allow_commands(self, sandbox):
+        (sandbox.repo_root / "grader.py").unlink()
+        name = "untracked file.txt" if sys.platform == "win32" else "untracked file\nname.txt"
+        (sandbox.repo_root / name).write_text("unchanged\n")
+        assert "[exit 0]" in sandbox.bash("echo healthy")
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="non-UTF-8 filenames require POSIX")
+    def test_non_utf8_untracked_file_write_is_detected(self, sandbox):
+        name = "untracked-\udcff.txt"
+        (sandbox.repo_root / name).write_text("original\n")
+        command = f"cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && printf changed > {name}"
+        with pytest.raises(RuntimeError, match="origin repository"):
+            sandbox.bash(command)
+
     def test_missing_bash_is_reported_not_raised(self, sandbox, monkeypatch):
         monkeypatch.setattr(sandbox, "_origin_state", lambda: ("h", "", "f"))
 
