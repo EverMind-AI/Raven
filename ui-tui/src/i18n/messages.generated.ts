@@ -2721,6 +2721,10 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       "Deck generation cannot use this search API's pictures and no Serper key is configured, so it cannot run.",
     'gui.settings.tools.ppt_image_fallback':
       "Deck generation cannot use this search API's pictures. It will use {name} instead.",
+    'gui.settings.tools.ppt_image_no_key':
+      'Deck generation has no picture search key it can use. Set the {name} key here to enable it.',
+    'gui.settings.tools.ppt_image_no_key_or_serper':
+      'Deck generation has no picture search key it can use. Set the {name} key here, or a Serper key, to enable it.',
     'gui.settings.tools.fetch_vendor': 'Fetch service',
     'gui.settings.tools.vendor_key': '{name} API key',
     'gui.settings.tools.key_first': 'Enter the key first',
@@ -6239,6 +6243,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.tools.ppt_image_missing':
       '当前搜索 API 的图片结果无法用于 PPT 制作，且未配置 Serper Key，无法启用 PPT 制作引擎。',
     'gui.settings.tools.ppt_image_fallback': '当前搜索 API 的图片结果无法用于 PPT 制作，将改用 {name}。',
+    'gui.settings.tools.ppt_image_no_key': 'PPT 制作引擎没有可用的搜图 Key，在此设置 {name} Key 即可启用。',
+    'gui.settings.tools.ppt_image_no_key_or_serper':
+      'PPT 制作引擎没有可用的搜图 Key，在此设置 {name} Key 或 Serper Key 即可启用。',
     'gui.settings.tools.fetch_vendor': '抓取服务',
     'gui.settings.tools.vendor_key': '{name} API key',
     'gui.settings.tools.key_first': '先填入 Key',

@@ -168,6 +168,21 @@ describe('settings source', () => {
     expect(off.settingsSnapshot().skillHub).toEqual({ on: false })
   })
 
+  it('a gateway that predates the picture status draws no deck warning', async () => {
+    /* An absent answer is not a refusal: reading it as one put a red "deck
+       generation cannot run" under every search vendor on an older gateway. */
+    const older = await load({ 'settings.get': { settings: {}, config_path: '/c.json', skill_hub_on: true } })
+    await older.loadSettings()
+    expect(older.settingsSnapshot().pictureSearch).toEqual({ vendor: '', ready: true, fallback: false })
+
+    const answer = { vendor: '', ready: false, fallback: false, reason: 'not_ready' }
+    const current = await load({
+      'settings.get': { settings: {}, config_path: '/c.json', skill_hub_on: true, picture_search: answer },
+    })
+    await current.loadSettings()
+    expect(current.settingsSnapshot().pictureSearch).toEqual(answer)
+  })
+
   it('a draft that picked a mode keeps it when the chip is re-read', async () => {
     /* With no session the read is default-scoped, so its answer is the
        configured default. Painting that over a staged pick made the chip claim

@@ -201,6 +201,28 @@ describe('tools page', () => {
     expect(screen.getByText('gui.settings.tools.ppt_image_missing')).toBeTruthy()
   })
 
+  it('a deck vendor with no usable key is told to set its key, not that its pictures do not fit', async () => {
+    const data = snap()
+    data.pictureSearch = { vendor: '', ready: false, fallback: false }
+    ;(data.raw.tools as Record<string, unknown>).web = { search: { provider: 'brave' } }
+    install(data)
+    await mount('tools')
+    await act(async () => { fireEvent.click(screen.getByText('web_search')) })
+    expect(screen.getByText('gui.settings.tools.ppt_image_no_key_or_serper {"name":"Brave Search"}')).toBeTruthy()
+    expect(screen.queryByText('gui.settings.tools.ppt_image_missing')).toBeNull()
+  })
+
+  it('Serper with no key names Serper alone', async () => {
+    const data = snap()
+    data.pictureSearch = { vendor: '', ready: false, fallback: false }
+    ;(data.raw.tools as Record<string, unknown>).web = { search: { provider: 'serper' } }
+    install(data)
+    await mount('tools')
+    await act(async () => { fireEvent.click(screen.getByText('web_search')) })
+    expect(screen.getByText('gui.settings.tools.ppt_image_no_key {"name":"Serper"}')).toBeTruthy()
+    expect(screen.queryByText('gui.settings.tools.ppt_image_missing')).toBeNull()
+  })
+
   it('the search panel says when deck generation will fall back to Serper', async () => {
     const data = snap()
     data.pictureSearch = { vendor: 'serper', ready: true, fallback: true }

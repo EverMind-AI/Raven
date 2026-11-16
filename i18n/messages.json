@@ -9199,6 +9199,14 @@
       "en": "Deck generation cannot use this search API's pictures. It will use {name} instead.",
       "zh": "当前搜索 API 的图片结果无法用于 PPT 制作，将改用 {name}。"
     },
+    "gui.settings.tools.ppt_image_no_key": {
+      "en": "Deck generation has no picture search key it can use. Set the {name} key here to enable it.",
+      "zh": "PPT 制作引擎没有可用的搜图 Key，在此设置 {name} Key 即可启用。"
+    },
+    "gui.settings.tools.ppt_image_no_key_or_serper": {
+      "en": "Deck generation has no picture search key it can use. Set the {name} key here, or a Serper key, to enable it.",
+      "zh": "PPT 制作引擎没有可用的搜图 Key，在此设置 {name} Key 或 Serper Key 即可启用。"
+    },
     "gui.settings.tools.fetch_vendor": {
       "en": "Fetch service",
       "zh": "抓取服务"
