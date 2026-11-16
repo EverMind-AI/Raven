@@ -13,6 +13,7 @@ live-repo writes; eval checks the commit out into its own worktree).
 from __future__ import annotations
 
 import ast
+import hashlib
 import os
 import subprocess
 from pathlib import Path
@@ -76,22 +77,65 @@ class Sandbox:
         return {rel: p.read_bytes() for rel, p in self._iter_whitelist()}
 
     def _git(self, *args: str) -> subprocess.CompletedProcess[str]:
+        # encoding="utf-8", errors="replace" keeps a GBK-locale host (non-ASCII
+        # names with core.quotePath=false) from raising UnicodeDecodeError out of
+        # an origin probe, which is outside every guard here.
         return subprocess.run(
             ["git", "-C", str(self.repo_root), *args],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
         )
 
-    def _origin_state(self) -> tuple[str, str] | None:
-        """Origin HEAD plus working-tree status, or None when git is unavailable."""
+    def _git_internals_fingerprint(self) -> str | None:
+        """Hash the small parts of .git that refs/worktree status cannot see.
+
+        Covers refs (all of loose and packed refs via for-each-ref plus the ref
+        tree), .git/config, .git/hooks and anything else small under the common
+        git dir. Large objects under .git/objects are not hashed -- wiping them
+        corrupts the repository loudly, which no silent-write case looks like.
+        """
+        try:
+            refs = self._git("for-each-ref").stdout
+            common = self._git("rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+        digest = hashlib.sha256()
+        digest.update(refs.encode("utf-8", "replace"))
+        base = Path(common) if common else None
+        if base is None:
+            return None
+        try:
+            files = []
+            for pattern in ("config", "packed-refs"):
+                candidate = base / pattern
+                if candidate.is_file():
+                    files.append(candidate)
+            for dirname in ("hooks", "refs", "info"):
+                root_dir = base / dirname
+                if root_dir.is_dir():
+                    files.extend(p for p in root_dir.rglob("*") if p.is_file() and p.stat().st_size <= 1_000_000)
+            for file in sorted(files, key=lambda p: p.relative_to(base).as_posix()):
+                digest.update(file.relative_to(base).as_posix().encode("utf-8"))
+                digest.update(file.read_bytes())
+        except (OSError, ValueError):
+            return None
+        return digest.hexdigest()
+
+    def _origin_state(self) -> tuple[str, str, str] | None:
+        """Origin HEAD, working-tree status and .git internals, or None on failure."""
         try:
             head = self._git("rev-parse", "HEAD").stdout.strip()
             status = self._git("status", "--porcelain", "-uall").stdout
         except (OSError, subprocess.SubprocessError):
             return None
-        return head, status
+        fingerprint = self._git_internals_fingerprint()
+        if fingerprint is None:
+            return None
+        return head, status, fingerprint
 
     def _origin_gitdir(self) -> Path | None:
         """The origin gitdir named by this worktree's .git file, if it is one."""
@@ -102,10 +146,13 @@ class Sandbox:
             return None
         if not text.startswith("gitdir:"):
             return None
-        try:
-            return Path(text.split(":", 1)[1].strip()).resolve()
-        except OSError:
-            return None
+        path = Path(text.split(":", 1)[1].strip())
+        if not path.is_absolute():
+            # A relative gitdir is relative to this worktree, not to the process cwd.
+            path = (self.root / path).resolve()
+        else:
+            path = path.resolve()
+        return path
 
     def bash(self, command: str, timeout: float = 60.0) -> str:
         # The candidate is the diff of THIS worktree vs base; a command that
@@ -131,28 +178,57 @@ class Sandbox:
                 "a different checkout and out of bounds.]"
             )
         before = self._origin_state()
+        if before is None:
+            # Fail closed: without a snapshot there is no way to detect an
+            # origin write this command is about to make.
+            return "[refused: origin repository state unavailable (git rev-parse/status failed); command not run]"
+        timed_out = False
+        proc = subprocess.Popen(
+            ["bash", "-c", command],
+            cwd=str(self.root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            encoding="utf-8",
+            errors="replace",
+            # Its own process group, so a surviving grandchild can be killed
+            # with the group before the origin is re-snapshotted.
+            start_new_session=(os.name == "posix"),
+        )
+        out, err = "", ""
+        error_text = None
         try:
-            r = subprocess.run(
-                ["bash", "-c", command],
-                cwd=str(self.root),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
+            try:
+                out, err = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                self._kill_process_group(proc)
+                try:
+                    out, err = proc.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    out, err = "", ""
+        except Exception as e:  # noqa: BLE001 — a bad command must not crash the run
+            error_text = f"[bash error: {type(e).__name__}: {str(e)[:150]}]"
+        finally:
+            after = self._origin_state()
+        if after is None:
+            raise RuntimeError(
+                "sandbox command left the origin repository unverifiable (git probe failed); round aborted"
             )
-        except subprocess.TimeoutExpired:
+        if after != before:
+            raise RuntimeError(
+                "sandbox command modified the origin repository (working tree, HEAD, refs, config or hooks); round aborted"
+            )
+        if timed_out:
             return (
                 f"[TIMEOUT after {timeout:.0f}s — command too slow, aborted. Do NOT scan the "
                 "whole filesystem (no `find /`); you are at the repo root, use relative paths "
                 "like benchmarks/appworld/agent_cli.py.]"
             )
-        except Exception as e:  # noqa: BLE001 — a bad command must not crash the run
-            return f"[bash error: {type(e).__name__}: {str(e)[:150]}]"
-        after = self._origin_state()
-        if before is not None and after != before:
-            raise RuntimeError("sandbox command modified the origin repository; candidate aborted")
-        out = (r.stdout or "")[-4000:]
-        err = (r.stderr or "")[-1500:]
-        return f"[exit {r.returncode}]\n{out}" + (f"\n[stderr]\n{err}" if err else "")
+        if error_text is not None:
+            return error_text
+        out = (out or "")[-4000:]
+        err = (err or "")[-1500:]
+        return f"[exit {proc.returncode}]\n{out}" + (f"\n[stderr]\n{err}" if err else "")
 
     def write_text(self, rel: str, content: str) -> str:
         """Write a whole file (the editor's ``write_file`` action) — bypasses

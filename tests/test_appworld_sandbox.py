@@ -84,6 +84,32 @@ class TestBashBoundary:
         out = sandbox.bash(f"ls {alt}")
         assert "refused" in out and "origin repo" in out
 
+    def test_timeout_after_origin_write_is_detected(self, sandbox, tmp_path):
+        cmd = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && touch timeout-poison && sleep 5"
+        try:
+            with pytest.raises(RuntimeError, match="origin repository"):
+                sandbox.bash(cmd, timeout=1)
+            assert (sandbox.repo_root / "timeout-poison").exists()
+        finally:
+            (sandbox.repo_root / "timeout-poison").unlink(missing_ok=True)
+
+    def test_ref_deletion_in_common_dir_is_detected(self, sandbox, subject):
+        repo, _sha = subject
+        subprocess.run(["git", "update-ref", "refs/evolver/probe", "HEAD"], cwd=repo, check=True, env=_ENV)
+        with pytest.raises(RuntimeError, match="origin repository"):
+            sandbox.bash("git update-ref -d refs/evolver/probe")
+
+    def test_relative_gitdir_resolves_against_worktree(self, subject, tmp_path):
+        repo, sha = subject
+        subprocess.run(["git", "config", "worktree.useRelativePaths", "true"], cwd=repo, check=True, env=_ENV)
+        sb = Sandbox(repo, tmp_path / "wt-rel", sha)
+        try:
+            gitdir = sb._origin_gitdir()
+            assert gitdir is not None and gitdir.exists()
+            assert str(repo.resolve()) in str(gitdir)
+        finally:
+            sb.close()
+
     def test_gitdir_command_substitution_is_detected(self, sandbox):
         poison = sandbox.repo_root / "sandbox-escape"
         command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && touch sandbox-escape"
