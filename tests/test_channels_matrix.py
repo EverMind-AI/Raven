@@ -13,6 +13,7 @@ pytest.importorskip("nio")
 
 from raven.channels.adapters.matrix import content
 from raven.channels.adapters.matrix.channel import MatrixChannel
+from raven.providers.transcription import TranscriptionResult
 
 
 def _event(cnt=None, **attrs):
@@ -304,3 +305,24 @@ async def test_a_turn_that_ended_without_a_reply_stops_typing_the_way_send_does(
     await ch.end_turn("!room")
 
     ch._stop_typing.assert_awaited_once_with("!room", clear=True)
+
+
+@pytest.mark.asyncio
+async def test_on_media_labels_a_transcription_diagnosis_as_unavailable(monkeypatch):
+    ch = _channel()
+    ch._should_process = lambda _room, _event: True
+    ch._fetch_attachment = AsyncMock(return_value=({"type": "audio", "path": "/m/a.ogg"}, "[audio: a.ogg]"))
+    ch._start_typing = AsyncMock()
+    ch.intake.publish = AsyncMock()
+    room = SimpleNamespace(room_id="!room", display_name="Room")
+    event = SimpleNamespace(sender="@user:x", body=None, event_id="$e", source={"content": {}})
+    monkeypatch.setattr(
+        "raven.channels.adapters.matrix.channel.transcribe_audio",
+        AsyncMock(return_value=TranscriptionResult(diagnosis="no key")),
+    )
+
+    await ch._on_media(room, event)
+
+    published = ch.intake.publish.await_args.kwargs
+    assert published["content"] == "[transcription unavailable: no key]"
+    assert published["media"] == ["/m/a.ogg"]

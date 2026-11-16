@@ -200,6 +200,17 @@ def test_transcribe_skips_native_once_disabled(monkeypatch):
     assert calls == []  # native STT not attempted when disabled
 
 
+def test_extract_audio_labels_a_transcription_diagnosis(monkeypatch):
+    ch = _channel()
+    ch._download_media = AsyncMock(return_value=("/m/a.opus", "[audio: a.opus]"))
+    ch._transcribe = AsyncMock(return_value=TranscriptionResult(diagnosis="no key"))
+
+    text, media = asyncio.run(ch._extract("audio", SimpleNamespace(content="{}"), "m1"))
+
+    assert text == "[transcription unavailable: no key]"
+    assert media == ["/m/a.opus"]
+
+
 # ── inbound early gate (reject before side effects) ───────────────────
 
 
