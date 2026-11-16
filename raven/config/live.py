@@ -159,10 +159,13 @@ class LiveConfig:
         path = self.path()
         try:
             data = path.read_bytes()
-        except OSError:
+        except FileNotFoundError:
             # Absent is a real answer and a stable one: no file, no preferences.
             # Distinguished from a failed parse below, which keeps what it had.
             self._bytes, self._raw, self._loaded, self._answered = None, {}, True, True
+            return self._raw
+        except OSError as exc:
+            logger.debug("live config: {} is not readable right now ({})", path, exc)
             return self._raw
         if self._loaded and data == self._bytes:
             return self._raw
