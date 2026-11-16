@@ -155,8 +155,11 @@ describe('the permission popover', () => {
       const label = document.getElementById(r.getAttribute('aria-labelledby')!)
       return label?.classList.contains('nm') && label.textContent !== r.querySelector('.sub')!.textContent
     })).toBe(true)
-    expect(pop().querySelector('.hd .lab')!.textContent).toBe('gui.perm.title')
+    expect(pop().querySelector('.hd .chrome-perm-title')!.textContent).toBe('gui.perm.title')
     expect(pop().querySelector('.chrome-perm-note')!.textContent).toBe('gui.perm.note')
+    /* Each row names its tier, so the stylesheet can give the three glyphs
+       the colours that say how much freedom each one allows. */
+    expect(rows().map((r) => r.dataset.tier)).toEqual(['ask', 'smart', 'full'])
   })
 
   it('reads the heading and the note in the language in force', async () => {
@@ -166,7 +169,7 @@ describe('the permission popover', () => {
     resetTranslator()
     act(() => { lang.set('en') })
     perm.open()
-    const heading = pop().querySelector('.hd .lab')!
+    const heading = pop().querySelector('.hd .chrome-perm-title')!
     const note = pop().querySelector('.chrome-perm-note')!
     const en = [heading.textContent, note.textContent]
     act(() => { lang.set('zh') })
