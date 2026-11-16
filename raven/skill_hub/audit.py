@@ -70,13 +70,15 @@ def _installed_at(skill_dir: Path) -> str:
     cached before stamping existed is first observed long after it was
     installed. The directory's mtime is the last time its entries changed,
     which is the closest known approximation of the install date; the
-    observation time is the fallback for a directory that cannot be read.
+    observation time is the fallback for a directory that cannot be read or
+    whose timestamp the platform cannot convert (Windows rejects mtimes
+    outside roughly 1970..3000 with ``OSError``).
     """
     try:
         mtime = skill_dir.stat().st_mtime
-    except OSError:
+        return datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds")
+    except (OSError, OverflowError, ValueError):
         return datetime.now(timezone.utc).isoformat(timespec="seconds")
-    return datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds")
 
 
 def write_install_meta(

@@ -307,6 +307,29 @@ class TestWriteInstallMeta:
         record = json.loads((skill_dir / ".install-meta.json").read_text(encoding="utf-8"))
         assert record["installed_at"][:10] == datetime.now(timezone.utc).date().isoformat()
 
+    def test_an_unconvertible_mtime_falls_back_to_the_clock(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        skill_dir = tmp_path / "bundle"
+        skill_dir.mkdir()
+
+        class _UnconvertibleDateTime:
+            @classmethod
+            def fromtimestamp(cls, *_args: object, **_kwargs: object) -> datetime:
+                raise OSError(22, "Invalid argument")
+
+            @classmethod
+            def now(cls, tz: timezone | None = None) -> datetime:
+                return datetime.now(tz)
+
+        monkeypatch.setattr("raven.skill_hub.audit.datetime", _UnconvertibleDateTime)
+
+        write_install_meta(skill_dir, slug="foo", version="v1", trigger="auto_inject")
+
+        record = json.loads((skill_dir / ".install-meta.json").read_text(encoding="utf-8"))
+        installed = datetime.fromisoformat(record["installed_at"])
+        assert abs((installed - datetime.now(timezone.utc)).total_seconds()) < 60
+
 
 class TestRecordInstall:
     def test_none_path_is_noop(self) -> None:
