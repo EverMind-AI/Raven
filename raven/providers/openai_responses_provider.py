@@ -16,6 +16,7 @@ from raven.providers.base import (
     LLMResponse,
     format_llm_error,
 )
+from raven.providers.call_timeout import call_timeout
 from raven.providers.first_byte import httpx_timeout, stream_first_byte_budget
 from raven.providers.openai_codex_provider import (
     _consume_sse,
@@ -126,9 +127,12 @@ class OpenAIResponsesProvider(LLMProvider):
         raw_usage: dict[str, Any] = {}
         relaxed = False
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx_timeout(self.generation) or self.generation.timeout, verify=self.tls_verify
-            ) as client:
+            async with (
+                call_timeout(self.generation.timeout),
+                httpx.AsyncClient(
+                    timeout=httpx_timeout(self.generation) or self.generation.timeout, verify=self.tls_verify
+                ) as client,
+            ):
                 while True:
                     async with client.stream(
                         "POST",

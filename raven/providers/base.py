@@ -31,6 +31,7 @@ from raven.contracts.llm_provider import (  # noqa: F401
 from raven.contracts.llm_provider import LLMProvider as _LLMProviderPaper
 from raven.observability import semconv
 from raven.providers import call_record, usage_record
+from raven.providers.call_timeout import CallTimeoutError
 from raven.providers.first_byte import FirstByteTimeoutError, StreamIdleTimeoutError
 from raven.tracing import trace
 
@@ -524,6 +525,8 @@ class LLMProvider(_LLMProviderPaper):
         # branches below. Named here, no substring ever sees it.
         if isinstance(exc, StreamIdleTimeoutError):
             return ErrorClassification("stream_idle_timeout", retryable=True, should_fallback=True)
+        if isinstance(exc, CallTimeoutError):
+            return ErrorClassification("network", retryable=True, should_fallback=True)
 
         # Context-window overflow → compress and retry, NOT fallback (a smaller
         # window won't help; the same model after compaction will). Detected by
