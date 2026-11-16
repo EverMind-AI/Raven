@@ -376,7 +376,9 @@ async def test_a_transparent_request_asks_for_a_green_screen_and_keys_it_out(mon
 
 
 def test_the_deck_image_tool_says_what_references_do_on_the_provider_it_runs_on(tmp_path: Path) -> None:
-    """The deck's own words follow the provider its image tool runs on.
+    """The deck's own words follow the provider its image tool runs on, through
+    the seam production registers: the factory hands the loop a SessionTool, and
+    what the model is served is what that wrapper reports to the registry.
 
     MiniMax keeps the character one input image shows and takes one per request,
     so a schema that offers six pictures to match or vary is a promise the
@@ -384,14 +386,27 @@ def test_the_deck_image_tool_says_what_references_do_on_the_provider_it_runs_on(
     first, and the rest vanish. The section can change between turns, so the
     registry has to serve the answer live rather than the shape it admitted.
     """
-    from types import SimpleNamespace
-
     from raven.agent.tools.registry import ToolRegistry
+    from raven.plugins.context import PluginContext, ServiceLocator
+    from raven_ppt import plugin as plugin_module
 
-    section = SimpleNamespace(provider="", api_base="", api_key="k", model="")
-    media = ImageGenerateTool(lambda: section, workspace=tmp_path)
+    section: dict[str, ImageToolConfig | None] = {
+        "now": ImageToolConfig(api_key="k", model="openai/gpt-image-2"),
+    }
+    ctx = PluginContext(
+        config={"enabled": True, "profile": "script_author"},
+        services=ServiceLocator(
+            workspace=tmp_path,
+            user_id="u",
+            agent_id="a",
+            media_config=lambda kind: section["now"],
+            media_proxy=None,
+        ),
+    )
+    tool = plugin_module.make_ppt_generate_image(ctx)
+    assert tool is not None
     registry = ToolRegistry()
-    registry.register(PptGenerateImageTool(tmp_path, media))
+    registry.register(tool)
 
     def offered() -> dict:
         return next(d["function"] for d in registry.get_definitions() if d["function"]["name"] == "ppt_generate_image")
@@ -400,7 +415,12 @@ def test_the_deck_image_tool_says_what_references_do_on_the_provider_it_runs_on(
     assert "MiniMax" not in json.dumps(served)
     assert "Up to six" in served["parameters"]["properties"]["references"]["description"]
 
-    section.provider, section.api_base = "minimax", "https://api.minimax.io/v1"
+    section["now"] = ImageToolConfig(
+        provider="minimax",
+        api_base="https://api.minimax.io/v1",
+        api_key="k",
+        model="image-01",
+    )
     served = offered()
     assert "character" in served["description"]
     references = served["parameters"]["properties"]["references"]["description"]
