@@ -907,8 +907,7 @@ def test_a_missing_config_forgets_the_previous_network_preferences(tmp_path):
 def test_an_explicit_null_network_section_is_invalid_for_every_reader(tmp_path):
     """The loader refuses `permissions.network: null`; a reader that took it for a missing
     section would answer the open default."""
-    from raven.config.live import LiveConfig, network_on_disk, network_permissions, network_permissions_of
-    from raven.config.loader import get_config_path
+    from raven.config.live import LiveConfig, network_permissions, network_permissions_of
 
     with pytest.raises(ValueError):
         network_permissions_of({"permissions": {"network": None}})
@@ -916,29 +915,6 @@ def test_an_explicit_null_network_section_is_invalid_for_every_reader(tmp_path):
     path = tmp_path / "config.json"
     path.write_text('{"permissions": {"network": null}}')
     assert network_permissions(LiveConfig(path)).default == "closed"
-    get_config_path().write_text('{"permissions": {"network": null}}')
-    assert network_on_disk().default == "closed"
-
-
-@pytest.mark.parametrize(
-    ("body", "default"),
-    [
-        ('{"permissions": ', "closed"),
-        ('{"tools": {"sandbox": {"allowNet": false}}}', "closed"),
-        ('{"permissions": {"network": {"default": "ajar"}}}', "closed"),
-        (None, "open"),
-    ],
-)
-def test_the_network_on_disk_closes_when_the_file_cannot_be_read(body, default):
-    from raven.config.live import network_on_disk
-    from raven.config.loader import get_config_path
-
-    path = get_config_path()
-    if body is None:
-        path.unlink(missing_ok=True)
-    else:
-        path.write_text(body)
-    assert network_on_disk().default == default
 
 
 def test_a_retired_destructive_toggle_is_accepted_ignored_and_flagged():

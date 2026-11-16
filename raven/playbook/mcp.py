@@ -186,7 +186,7 @@ async def preflight_mcp_source(
     """
     from raven.agent.subagent.mcp_grant import LiveMcpSource
     from raven.agent.tools.registry import ToolRegistry
-    from raven.config.live import network_on_disk
+    from raven.config.live import LiveConfig, network_permissions
     from raven.mcp.manager import MCPConnectionManager
     from raven.permissions.network_grants import network_source_for
     from raven.permissions.turn import current_turn
@@ -204,10 +204,11 @@ async def preflight_mcp_source(
     manager = MCPConnectionManager(registry, allow_auth_park=False, credential_scope=scope_of)
     # The playbook's servers run under the one permission set, and the grants
     # of the conversation that started the playbook.
+    live = LiveConfig()
     sandbox = build_executor(
         sandbox_config,
         workspace,
-        network_source=network_source_for(network_on_disk, current_turn().session_key),
+        network_source=network_source_for(lambda: network_permissions(live), current_turn().session_key),
     )
 
     async def executor_provider():
