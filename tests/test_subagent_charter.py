@@ -111,6 +111,28 @@ def test_a_named_brief_outranks_the_legacy_prompt() -> None:
     assert charter.prompt == "only look at A"
 
 
+def test_the_real_sender_s_mirror_reads_back_once() -> None:
+    """The drop is exact equality, so it holds only while the producer keeps
+    writing both fields the same way. Drive the pair through the sender the
+    bug travelled on: build the payload the Worker Table builds, then read it
+    the way the worker reads it. The padded addendum pins the producer's own
+    strip as part of the contract -- without it the mirror and the addendum
+    differ by whitespace, the shift is silent, and the duplication returns."""
+    from raven.playbook.agent_generator import build_payload
+    from raven.playbook.agent_spec import SubPlaybook
+
+    spec = SubPlaybook(memory={"systemPrompt": "  hold the line  "})
+    charter = parse(build_payload("", spec))
+    assert charter is not None
+    assert charter.prompt == ""
+    assert charter.instruction_addendum == "hold the line"
+    assert charter.task_brief == "hold the line"
+
+    charter = parse(build_payload("only look at A", spec))
+    assert charter is not None
+    assert charter.task_brief == "only look at A\n\nhold the line"
+
+
 def test_an_empty_tool_list_survives_the_read() -> None:
     """Three-valued: absent is "whatever this worker offers", `[]` is a real
     answer, and folding one into the other reverses its meaning."""
