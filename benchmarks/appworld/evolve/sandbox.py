@@ -327,60 +327,63 @@ class Sandbox:
             return None
 
         budget = [_RESTORE_CAPTURE_FILES, _RESTORE_CAPTURE_BYTES]
-        worktree: dict[str, str] = {}
-        worktree_bytes: dict[str, bytes] = {}
-        for path in self._diff_paths(worktree_diff):
-            token, content = self._path_state(path)
-            worktree[path] = token or "missing"
-            if capture and content is not None and self._spend(budget, len(content)):
-                worktree_bytes[path] = content
+        try:
+            worktree: dict[str, str] = {}
+            worktree_bytes: dict[str, bytes] = {}
+            for path in self._diff_paths(worktree_diff):
+                token, content = self._path_state(path)
+                worktree[path] = token or "missing"
+                if capture and content is not None and self._spend(budget, len(content)):
+                    worktree_bytes[path] = content
 
-        untracked: dict[str, str] = {}
-        untracked_bytes: dict[str, bytes] = {}
-        for path in untracked_raw.split("\0"):
-            if not path:
-                continue
-            # An untracked path is compared by size and mtime: git lists an
-            # untracked directory as one entry, and its content may be large.
-            token = self._stat_token(self.repo_root / path)
-            if token is None:
-                continue
-            untracked[path] = token
-            if capture and not path.endswith("/"):
-                content = self._capture_one(self.repo_root / path, budget)
-                if content is not None:
-                    untracked_bytes[path] = content
+            untracked: dict[str, str] = {}
+            untracked_bytes: dict[str, bytes] = {}
+            for path in untracked_raw.split("\0"):
+                if not path:
+                    continue
+                # An untracked path is compared by size and mtime: git lists an
+                # untracked directory as one entry, and its content may be large.
+                token = self._stat_token(self.repo_root / path)
+                if token is None:
+                    continue
+                untracked[path] = token
+                if capture and not path.endswith("/"):
+                    content = self._capture_one(self.repo_root / path, budget)
+                    if content is not None:
+                        untracked_bytes[path] = content
 
-        uncompared: dict[str, str] = {}
-        uncompared_bytes: dict[str, bytes] = {}
-        for path in self._uncompared_paths(index_entries):
-            token, content = self._path_state(path)
-            if token is None:
-                continue
-            uncompared[path] = token
-            if capture and content is not None and self._spend(budget, len(content)):
-                uncompared_bytes[path] = content
+            uncompared: dict[str, str] = {}
+            uncompared_bytes: dict[str, bytes] = {}
+            for path in self._uncompared_paths(index_entries):
+                token, content = self._path_state(path)
+                if token is None:
+                    continue
+                uncompared[path] = token
+                if capture and content is not None and self._spend(budget, len(content)):
+                    uncompared_bytes[path] = content
 
-        git_dir = Path(git_dir_raw)
-        common_dir = Path(common_dir_raw)
-        return _SubjectState(
-            git_dir=git_dir,
-            common_dir=common_dir,
-            head=head,
-            head_ref=head_ref,
-            index_entries=index_entries,
-            worktree=worktree,
-            untracked=untracked,
-            uncompared=uncompared,
-            refs=refs,
-            config=self._read_optional(common_dir / "config"),
-            head_file=self._read_optional(git_dir / "HEAD"),
-            hooks=self._hooks(common_dir),
-            index_bytes=self._read_optional(git_dir / "index") if capture else None,
-            worktree_bytes=worktree_bytes,
-            uncompared_bytes=uncompared_bytes,
-            untracked_bytes=untracked_bytes,
-        )
+            git_dir = Path(git_dir_raw)
+            common_dir = Path(common_dir_raw)
+            return _SubjectState(
+                git_dir=git_dir,
+                common_dir=common_dir,
+                head=head,
+                head_ref=head_ref,
+                index_entries=index_entries,
+                worktree=worktree,
+                untracked=untracked,
+                uncompared=uncompared,
+                refs=refs,
+                config=self._read_optional(common_dir / "config"),
+                head_file=self._read_optional(git_dir / "HEAD"),
+                hooks=self._hooks(common_dir),
+                index_bytes=self._read_optional(git_dir / "index") if capture else None,
+                worktree_bytes=worktree_bytes,
+                uncompared_bytes=uncompared_bytes,
+                untracked_bytes=untracked_bytes,
+            )
+        except OSError:
+            return None
 
     def _subject_gitdir(self) -> Path | None:
         """The subject checkout's gitdir named by this worktree's .git file, if it is one."""
@@ -640,7 +643,7 @@ class Sandbox:
         if changes:
             try:
                 unrestored = self._restore_subject(before, after)
-            except OSError as exc:
+            except Exception as exc:  # noqa: BLE001 — the abort must happen even if the restore fails
                 unrestored = [f"the restore failed ({type(exc).__name__})"]
             raise RuntimeError(
                 "sandbox command modified the subject checkout "
