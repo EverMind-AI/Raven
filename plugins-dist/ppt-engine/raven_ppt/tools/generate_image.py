@@ -234,7 +234,11 @@ class PptGenerateImageTool(Tool):
         schema = super().to_schema()
         function = schema["function"]
         function["description"] = self._MINIMAX_DESCRIPTION
-        function["parameters"]["properties"]["references"]["description"] = self._MINIMAX_REFERENCES
+        properties = function["parameters"]["properties"]
+        # A picture asked for inside `prompts` is a request of its own, so it is
+        # held to the one reference the single-picture ask is held to.
+        for ask in (properties["references"], properties["prompts"]["items"]["properties"]["references"]):
+            ask["description"] = self._MINIMAX_REFERENCES
         return schema
 
     async def execute(

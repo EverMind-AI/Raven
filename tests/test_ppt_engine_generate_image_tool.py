@@ -414,6 +414,8 @@ def test_the_deck_image_tool_says_what_references_do_on_the_provider_it_runs_on(
     served = offered()
     assert "MiniMax" not in json.dumps(served)
     assert "Up to six" in served["parameters"]["properties"]["references"]["description"]
+    # Off it the batched ask keeps the shape it had, which carries no words of its own.
+    assert "description" not in served["parameters"]["properties"]["prompts"]["items"]["properties"]["references"]
 
     section["now"] = ImageToolConfig(
         provider="minimax",
@@ -426,6 +428,8 @@ def test_the_deck_image_tool_says_what_references_do_on_the_provider_it_runs_on(
     references = served["parameters"]["properties"]["references"]["description"]
     assert "one" in references and "Up to six" not in references
     assert "prompt" in references
+    batched = served["parameters"]["properties"]["prompts"]["items"]["properties"]["references"]
+    assert batched["description"] == references
 
 
 @pytest.mark.asyncio
