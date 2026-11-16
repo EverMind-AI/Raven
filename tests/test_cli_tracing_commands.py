@@ -202,6 +202,53 @@ def test_tracing_stop_drops_an_unreadable_pidfile(tmp_path, monkeypatch):
     assert not pidfile.exists()
 
 
+def test_tracing_stop_says_when_the_record_could_not_be_read(tmp_path, monkeypatch):
+    """A record that survives the read is not called unusable.
+
+    A Windows sharing violation leaves the file on disk, so telling the user
+    to stop the viewer by hand skips the retry that would have worked.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 4242, "port": 4318}), encoding="utf-8")
+    real_read_text = Path.read_text
+
+    def read_fails(self, *args, **kwargs):
+        if self.name == "viewer.pid":
+            raise PermissionError(13, "sharing violation", str(self))
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_fails)
+
+    r = runner.invoke(app, ["tracing", "stop"])
+
+    assert r.exit_code == 0, r.output
+    out = r.output.lower()
+    assert "could not be read" in out, out
+    assert "stop it by hand" not in out, out
+    assert pidfile.exists()
+
+
+def test_tracing_stop_reports_a_lock_it_cannot_take(tmp_path, monkeypatch):
+    """The recovery command still answers when the state dir cannot hold a lock."""
+    from raven.utils import atomic_io
+
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text("{not json", encoding="utf-8")
+
+    def no_lock(*args, **kwargs):
+        raise PermissionError(13, "cannot create the lock", str(tmp_path / ".lock"))
+
+    monkeypatch.setattr(atomic_io, "file_lock", no_lock)
+
+    r = runner.invoke(app, ["tracing", "stop"])
+
+    assert r.exit_code == 0, r.output
+    assert "could not be read" in r.output.lower(), r.output
+    assert pidfile.exists()
+
+
 def test_tracing_stop_reports_an_out_of_range_pid_as_unusable(tmp_path, monkeypatch):
     """The command a user runs to recover from a bad record must not crash on it."""
     monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
@@ -377,6 +424,30 @@ def test_tracing_drops_a_record_whose_pid_is_out_of_range(tmp_path, monkeypatch,
     assert not pidfile.exists()
 
 
+def test_tracing_keeps_the_record_when_the_lock_cannot_be_taken(tmp_path, monkeypatch):
+    """A state directory that cannot hold the lock leaves the record for the next run.
+
+    The re-read that makes the delete safe runs under the writer's lock. A
+    read-only mount or an ACL that denies the lock file must not turn
+    `raven tracing stop` into a traceback.
+    """
+    from raven.utils import atomic_io
+
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text("{not json", encoding="utf-8")
+
+    def no_lock(*args, **kwargs):
+        raise PermissionError(13, "cannot create the lock", str(tmp_path / ".lock"))
+
+    monkeypatch.setattr(atomic_io, "file_lock", no_lock)
+
+    assert tc._read_pid_file() is None
+    assert pidfile.exists()
+    tc._clear_pid_file(4242)
+    assert pidfile.exists()
+
+
 def test_tracing_clear_keeps_the_record_when_it_cannot_be_read(tmp_path, monkeypatch):
     """A clear that cannot read the record does not delete it blind."""
     monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
@@ -504,6 +575,40 @@ def test_tracing_adopts_unrecorded_viewer_and_says_stop_will_not_manage_it(tmp_p
     assert opened == ["http://127.0.0.1:4318/"]
     assert "no usable pid record" in out
     assert "will not manage" in out
+
+
+def test_tracing_adopting_a_viewer_whose_record_could_not_be_read(tmp_path, monkeypatch):
+    """An unreadable record is not proof the viewer has no record.
+
+    The file is still on disk, so a later `raven tracing stop` may manage this
+    viewer; the adoption message must not promise the opposite.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 4242, "port": 4318}), encoding="utf-8")
+    real_read_text = Path.read_text
+
+    def read_fails(self, *args, **kwargs):
+        if self.name == "viewer.pid":
+            raise PermissionError(13, "sharing violation", str(self))
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_fails)
+    monkeypatch.setattr(tc, "_port_live", lambda port: True)
+    monkeypatch.setattr(tc, "_viewer_health", lambda port: True)
+    opened = []
+    monkeypatch.setattr(tc.webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setattr(tc.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("must adopt the live viewer"))
+    buf = StringIO()
+    monkeypatch.setattr(tc, "console", Console(file=buf, width=200))
+
+    tc._open_dashboard(4318)
+
+    out = buf.getvalue()
+    assert opened == ["http://127.0.0.1:4318/"]
+    assert "could not be read" in out, out
+    assert "no usable pid record" not in out, out
+    assert pidfile.exists()
 
 
 def test_tracing_adopting_an_unrecorded_viewer_still_names_the_stuck_one(tmp_path, monkeypatch):

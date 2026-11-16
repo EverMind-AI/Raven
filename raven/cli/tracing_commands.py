@@ -181,20 +181,27 @@ def _read_pid_file() -> dict | None:
         return entry
     from raven.utils.atomic_io import write_transaction
 
-    with write_transaction(path):
-        try:
-            current = path.read_text(encoding="utf-8")
-        except OSError:
-            return None
-        except ValueError:
-            current = None
-        entry = _parse_pid_record(current)
-        if entry is not None:
-            # A launcher replaced the corrupt record while this read was
-            # failing over it: the newer record wins.
-            return entry
-        with suppress(OSError):
-            path.unlink()
+    # The delete is a read-modify-write, so it runs under the writer's lock --
+    # but taking that lock can fail too (a read-only state dir, an ACL that
+    # denies the lock file). That is not evidence the record is bad, and the
+    # recovery command must not turn it into a traceback: leave the record.
+    try:
+        with write_transaction(path):
+            try:
+                current = path.read_text(encoding="utf-8")
+            except OSError:
+                return None
+            except ValueError:
+                current = None
+            entry = _parse_pid_record(current)
+            if entry is not None:
+                # A launcher replaced the corrupt record while this read was
+                # failing over it: the newer record wins.
+                return entry
+            with suppress(OSError):
+                path.unlink()
+    except OSError:
+        return None
     return None
 
 
@@ -216,21 +223,25 @@ def _clear_pid_file(pid: int) -> None:
 
     The caller has just decided about that pid (stopped it, or found it stale).
     A launcher can replace the record in between; deleting that newer record
-    would take away the handle of a viewer the caller never saw.
+    would take away the handle of a viewer the caller never saw. A lock that
+    cannot be taken leaves the record in place: the next run reads it again.
     """
     path = _pid_file()
     from raven.utils.atomic_io import write_transaction
 
-    with write_transaction(path):
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, ValueError):
-            return
-        entry = _parse_pid_record(text)
-        if entry is None or entry["pid"] != pid:
-            return
-        with suppress(OSError):
-            path.unlink()
+    try:
+        with write_transaction(path):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, ValueError):
+                return
+            entry = _parse_pid_record(text)
+            if entry is None or entry["pid"] != pid:
+                return
+            with suppress(OSError):
+                path.unlink()
+    except OSError:
+        return
 
 
 def _pid_is_viewer(pid: int) -> bool | None:
@@ -276,7 +287,15 @@ def _stop_viewer() -> None:
     had_record = _pid_file().exists()
     entry = _read_pid_file()
     if entry is None:
-        if had_record:
+        if _pid_file().exists():
+            # The record survived the read: it could not be read this time, or
+            # its lock could not be taken. It is still there for the next run,
+            # so do not send the user to kill a pid by hand.
+            console.print(
+                "The tracing viewer record could not be read this time; a viewer may still be "
+                "running. Retry [cyan]raven tracing stop[/cyan]."
+            )
+        elif had_record:
             # There was a file and it could not be used, so `_read_pid_file`
             # dropped it. A viewer may still be running -- a record written by
             # an older CLI could be truncated by a crash mid-write -- so do not
@@ -326,6 +345,10 @@ def _server_js() -> Path:
 
 def _open_dashboard(port: int) -> None:
     entry = _read_pid_file()
+    # A record still on disk survived the read: `_read_pid_file` drops a record
+    # it read and could not use, and keeps one it could not read (or whose lock
+    # it could not take). Only the former is gone for good.
+    record_kept = entry is None and _pid_file().exists()
     stuck: dict | None = None
     if entry is not None:
         if _checked_viewer(entry["pid"]):
@@ -366,10 +389,16 @@ def _open_dashboard(port: int) -> None:
             # viewer on another port -- so nothing in the CLI can stop it
             # later. Say so instead of handing out a dashboard the user cannot
             # shut down.
-            console.print(
-                "[yellow]It has no usable pid record, so [cyan]raven tracing stop[/cyan] will "
-                "not manage it; stop that instance by hand.[/yellow]"
-            )
+            if record_kept:
+                console.print(
+                    "[yellow]Its pid record could not be read this time, so [cyan]raven tracing stop[/cyan] "
+                    "may not manage it; retry that command before stopping the instance by hand.[/yellow]"
+                )
+            else:
+                console.print(
+                    "[yellow]It has no usable pid record, so [cyan]raven tracing stop[/cyan] will "
+                    "not manage it; stop that instance by hand.[/yellow]"
+                )
             if stuck is not None:
                 # The record names the stuck viewer on the other port; that is
                 # the one `stop` still manages, so name it rather than let the
