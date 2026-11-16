@@ -1490,10 +1490,10 @@ async def test_settings_get_reads_the_deck_lanes_own_serper_key(cfg, tmp_path, m
     """Route readiness accepts the product folder's own `<PRODUCT>_<VENDOR>_API_KEY`;
     the Settings note has to read the same source or it contradicts the route.
 
-    The lane's own Serper key is a vendor it pays for, so the launcher does not
-    inherit the host's Tavily choice: the rendered selection is the schema
-    default Serper, and the note must report the vendor it configured rather
-    than a fallback the launch never takes.
+    The page shows the host's Tavily, and the deck searches pictures on the
+    lane's own Serper key instead, which is the fallback the note exists to
+    name -- whether the launcher kept Tavily as the lane's page-search vendor
+    or not.
     """
     _deck_lane(tmp_path, monkeypatch)
     (tmp_path / "agents" / "raven-ppt" / ".env").write_text("PPT_SERPER_API_KEY=sk-lane\n", encoding="utf-8")
@@ -1508,9 +1508,55 @@ async def test_settings_get_reads_the_deck_lanes_own_serper_key(cfg, tmp_path, m
     assert result["picture_search"] == {
         "vendor": "serper",
         "ready": True,
-        "fallback": False,
-        "reason": "ok",
+        "fallback": True,
+        "reason": "no_surface",
     }
+
+
+async def test_settings_get_calls_a_host_choice_the_launch_does_not_carry_a_fallback(cfg, tmp_path, monkeypatch):
+    """A host key held only in the environment does not make the launcher carry
+    the host's Brave choice into the lane, so the deck searches on Serper. The
+    page shows Brave, and saying nothing would contradict what the deck does."""
+    _deck_lane(tmp_path, monkeypatch)
+    for name in ("SERPER_API_KEY", "PPT_SERPER_API_KEY", "PPT_BRAVE_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("BRAVE_API_KEY", "env-brave")
+    cfg.write_text(
+        json.dumps({"tools": {"web": {"search": {"provider": "brave"}, "providers": {"serper": {"apiKey": "sk"}}}}}),
+        encoding="utf-8",
+    )
+
+    result = await rpc_console.settings_get({})
+
+    assert result["picture_search"] == {
+        "vendor": "serper",
+        "ready": True,
+        "fallback": True,
+        "reason": "fallback_no_key",
+    }
+
+
+async def test_settings_get_does_not_call_a_carried_host_choice_a_fallback(cfg, tmp_path, monkeypatch):
+    _deck_lane(tmp_path, monkeypatch)
+    for name in ("SERPER_API_KEY", "PPT_SERPER_API_KEY", "BRAVE_API_KEY", "PPT_BRAVE_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    cfg.write_text(
+        json.dumps(
+            {
+                "tools": {
+                    "web": {
+                        "search": {"provider": "brave"},
+                        "providers": {"brave": {"apiKey": "file-brave"}, "serper": {"apiKey": "sk"}},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = await rpc_console.settings_get({})
+
+    assert result["picture_search"] == {"vendor": "brave", "ready": True, "fallback": False, "reason": "ok"}
 
 
 async def test_settings_get_reads_the_deck_slices_own_serper_key(cfg, tmp_path, monkeypatch):

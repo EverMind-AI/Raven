@@ -5646,7 +5646,7 @@
                 },
                 "reason": {
                   "default": "not_ready",
-                  "description": "Why `vendor` is the picture vendor: `ok` when the deck searches on the vendor it is configured to use (the selected search vendor, or the deck's own pin), `fallback_no_key` when the selected vendor has a picture surface but no key, `no_surface` when the selected vendor has no picture surface for decks, `not_ready` when no vendor resolves. Absent on gateways older than this field, hence the default.",
+                  "description": "Why `vendor` is the picture vendor: `ok` when the deck searches on the vendor it is configured to use (the selected search vendor, or the deck's own pin), `fallback_no_key` when the selected vendor has a picture surface but no key the deck can use (an environment-only host key does not reach the deck lane), `no_surface` when the selected vendor has no picture surface for decks, `not_ready` when no vendor resolves. Absent on gateways older than this field, hence the default.",
                   "enum": [
                     "ok",
                     "fallback_no_key",

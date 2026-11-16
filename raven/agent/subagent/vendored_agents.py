@@ -506,6 +506,17 @@ def product_page_search_vendor(
     return dig(draft, ("tools", "web", "search", "provider")) or "serper"
 
 
+def _folder_search_vendor(row_name: str, root: Path | None = None) -> str:
+    """The page-search vendor a product's folder names itself, or ``""``."""
+    folder = product_folder(row_name, root)
+    declared = _product_config(folder) if folder is not None else None
+    if declared is None:
+        return ""
+    from raven.config.product_render import dig
+
+    return dig(declared, ("tools", "web", "search", "provider"))
+
+
 def picture_search_report(
     target: str,
     host_vendor: str,
@@ -527,11 +538,16 @@ def picture_search_report(
     :func:`product_page_search_vendor`'s answer, which runs the launcher's own
     inheritance over both.
 
-    The reason explains a fallback the settings page has to word differently:
-    ``ok`` when the vendor answering is the one the lane is configured to use,
-    ``fallback_no_key`` when the selected search vendor has a picture surface
-    but no key, ``no_surface`` when the selected vendor has none, and
-    ``not_ready`` when no vendor resolves at all.
+    The reason explains a fallback the settings page has to word differently.
+    It is judged against the selection the lane is set up to follow -- the
+    folder's own ``tools.web.search.provider``, else ``host_vendor``, which is
+    the one the page shows -- not against the rendered selection: a launcher
+    that declines the host's choice (an env-only host key, a lane key for
+    another vendor) leaves the deck on a vendor the page does not show, and
+    that is a fallback. ``ok`` when the vendor answering is that selection or
+    the deck's own keyed pin, ``fallback_no_key`` when the selection has a
+    picture surface but no key the lane can use, ``no_surface`` when it has
+    none, and ``not_ready`` when no vendor resolves at all.
     """
     from raven.agent.tools.web import (
         IMAGE_SEARCH_VENDORS,
@@ -570,9 +586,10 @@ def picture_search_report(
     ready = bool(vendor and key(vendor))
     if not ready:
         return vendor, False, "not_ready"
-    if pinned or vendor == effective:
+    configured = _folder_search_vendor(target) or host_vendor
+    if pinned or vendor == configured:
         return vendor, True, "ok"
-    if effective not in surface:
+    if configured not in surface:
         return vendor, True, "no_surface"
     return vendor, True, "fallback_no_key"
 
