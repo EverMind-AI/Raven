@@ -59,6 +59,7 @@ from loguru import logger
 
 from raven.config.paths import get_runtime_subdir
 from raven.utils.atomic_io import atomic_replace, remove_with_lock
+from raven.utils.paths import resolve_directory_program
 
 # Run by the interpreter that becomes the agent; each system's wrapper ties the
 # agent to its host and then runs the shared exec below.
@@ -170,9 +171,7 @@ def bind_to_host(argv: list[str], env: Mapping[str, str], cwd: str | None) -> li
 def _resolve(name: str, env: Mapping[str, str], cwd: str | None) -> str | None:
     try:
         if "/" in name:
-            path = name if os.path.isabs(name) else os.path.join(cwd or os.getcwd(), name)
-            if not os.path.isabs(path):
-                path = os.path.join(os.getcwd(), path)
+            path = resolve_directory_program(name, cwd)
         else:
             path = shutil.which(name, path=env.get("PATH", os.defpath)) or ""
     except OSError:
