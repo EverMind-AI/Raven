@@ -433,11 +433,11 @@ index 0000000..2222222
     def test_guards_a_non_ascii_immutable_path(self, repo):
         repo_dir, sha = repo
         diff = (
-            "diff --git a/evolver/中文.py b/evolver/中文.py\n"
+            "diff --git a/evolver/\u4e2d\u6587.py b/evolver/\u4e2d\u6587.py\n"
             "new file mode 100644\n"
             "index 0000000..2222222\n"
             "--- /dev/null\n"
-            "+++ b/evolver/中文.py\n"
+            "+++ b/evolver/\u4e2d\u6587.py\n"
             "@@ -0,0 +1 @@\n"
             "+KERNEL = 0\n"
         )
