@@ -19,9 +19,11 @@ The comparison leans on git's own view of the checkout — the resolved and
 symbolic HEAD, the index entries and their flags, the worktree against the
 index, and the refs that existed when the command started — plus the places git
 does not look: the paths marked assume-unchanged or skip-worktree, the untracked
-paths, and the configuration, HEAD and hooks under the git dir. Two limits follow
-from leaning on git: a write that keeps a file's size and mtime is invisible to
-both, and an untracked path is compared by size and mtime rather than by content.
+paths, and the configuration, HEAD and hooks under the git dir. Three limits
+follow from leaning on git: a tracked path is compared by its content, so a
+rewrite that keeps the file's size is still seen; an untracked path is compared
+by size and mtime rather than by content; and an untracked directory is listed
+as one collapsed entry, so a write below its first level is not seen at all.
 """
 
 from __future__ import annotations
@@ -56,6 +58,19 @@ _IGNORED_DIR_PARTS = ("__pycache__",)
 # partly unrestored instead of being read back on every command.
 _RESTORE_CAPTURE_FILES = 512
 _RESTORE_CAPTURE_BYTES = 32 * 1024 * 1024
+
+# The environment variables that make git ignore -C and read another
+# repository. A probe must see the subject checkout and nothing else, and the
+# driver must write to the checkout it is in.
+_GIT_REDIRECT_VARS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+)
 
 
 def _in_whitelist(rel: str) -> bool:
@@ -168,8 +183,21 @@ class Sandbox:
             errors="surrogateescape",
             check=True,
             timeout=30,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            env=self._git_env(),
         )
+
+    @staticmethod
+    def _git_env() -> dict[str, str]:
+        """The environment for anything that runs git here.
+
+        ``GIT_DIR`` and its friends override ``-C``: a harness that exports one
+        of them would make every probe read a different repository than the
+        subject checkout, and the driver write to one the guard never sees.
+        """
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        for name in _GIT_REDIRECT_VARS:
+            env.pop(name, None)
+        return env
 
     @staticmethod
     def _diff_paths(raw: str) -> tuple[str, ...]:
@@ -206,7 +234,12 @@ class Sandbox:
 
     @staticmethod
     def _file_token(path: Path) -> Optional[tuple[int, bytes]]:
-        """The mode and the bytes of ``path``, without following a symlink."""
+        """The mode and the bytes of ``path``, without following a symlink.
+
+        ``None`` means the path could not be read at all. A file this process
+        may not read must not be recorded as an empty one: the restore would
+        write that emptiness back over it.
+        """
         try:
             mode = path.lstat().st_mode
         except OSError:
@@ -215,12 +248,12 @@ class Sandbox:
             try:
                 return mode, os.fsencode(os.readlink(path))
             except OSError:
-                return mode, b""
+                return None
         if stat.S_ISREG(mode):
             try:
                 return mode, path.read_bytes()
             except OSError:
-                return mode, b""
+                return None
         return mode, b""
 
     @staticmethod
@@ -236,11 +269,15 @@ class Sandbox:
         """A comparison token for one tracked path, and its content.
 
         The token is the content, so a rewrite that keeps the file's size is
-        still seen as a change.
+        still seen as a change. A path that cannot be read is neither missing
+        nor empty: it gets a token of its own, so the two states are not
+        confused and the restore never writes emptiness over it.
         """
-        token = self._file_token(self.repo_root / path)
+        target = self.repo_root / path
+        token = self._file_token(target)
         if token is None:
-            return "missing", None
+            state = "missing" if not os.path.lexists(target) else "unreadable"
+            return state, None
         mode, payload = token
         digest = hashlib.sha256(f"{mode}\0".encode("ascii") + payload).hexdigest()
         return digest, payload
@@ -438,13 +475,14 @@ class Sandbox:
         os.chmod(tmp, mode)
         os.replace(tmp, path)
 
-    def _restore_subject(self, before: _SubjectState, after: _SubjectState) -> list[str]:
+    def _restore_subject(self, before: _SubjectState, after: _SubjectState) -> tuple[list[str], list[str]]:
         """Put the subject checkout back the way the command found it.
 
-        Returns the paths it could not put back, so the abort message can name
-        them instead of claiming a clean restore.
+        Returns the paths it could not put back and the paths it removed, so
+        the abort message can name both instead of claiming a clean restore.
         """
         problems: list[str] = []
+        removed: list[str] = []
         # The index defines what `git checkout --` restores from, so it goes first.
         if before.index_bytes is not None:
             if (before.git_dir / "index.lock").exists():
@@ -459,8 +497,8 @@ class Sandbox:
             self._write_bytes(before.common_dir / "config", before.config)
         self._restore_hooks(before, problems)
         self._restore_refs(before, after, problems)
-        self._restore_worktree(before, after, problems)
-        return problems
+        self._restore_worktree(before, after, problems, removed)
+        return problems, removed
 
     def _restore_hooks(self, before: _SubjectState, problems: list[str]) -> None:
         """Put the hooks directory back the way it was."""
@@ -472,6 +510,10 @@ class Sandbox:
             if rel in before.hooks:
                 continue
             if path.is_symlink() or path.is_file():
+                if self._file_token(path) is None:
+                    # Unreadable: the guard cannot say what was here, so it
+                    # does not remove it either.
+                    continue
                 try:
                     path.unlink()
                 except OSError:
@@ -510,7 +552,13 @@ class Sandbox:
             except subprocess.SubprocessError:
                 problems.append(f"ref {name}")
 
-    def _restore_worktree(self, before: _SubjectState, after: _SubjectState, problems: list[str]) -> None:
+    def _restore_worktree(
+        self,
+        before: _SubjectState,
+        after: _SubjectState,
+        problems: list[str],
+        removed: list[str],
+    ) -> None:
         """Put the working tree back: what the command wrote, and what was
         already dirty when it started."""
         # The untracked paths, listed again now that the index is back: a file
@@ -529,14 +577,23 @@ class Sandbox:
                 continue
             try:
                 (self.repo_root / path).unlink()
+                removed.append(path)
             except OSError:
                 problems.append(path)
+        # An untracked file the command changed: put back what was captured.
         for path, content in before.untracked_bytes.items():
             try:
-                if not (self.repo_root / path).is_file():
+                if self._stat_token(self.repo_root / path) == before.untracked.get(path):
                     continue
                 self._write_bytes(self.repo_root / path, content)
             except OSError:
+                problems.append(path)
+        # An untracked file whose content was not captured (over the capture
+        # budget): name it rather than leave the command's change in place.
+        for path in sorted(set(before.untracked) - set(before.untracked_bytes)):
+            if path.endswith("/"):
+                continue
+            if before.untracked.get(path) != after.untracked.get(path):
                 problems.append(path)
         for path, content in before.uncompared_bytes.items():
             # git skips these paths, so `git checkout --` would leave them
@@ -547,19 +604,39 @@ class Sandbox:
                     self._write_bytes(self.repo_root / path, content)
             except OSError:
                 problems.append(path)
+        # A path git skips whose content was not captured: same as above.
+        for path in sorted(set(before.uncompared) - set(before.uncompared_bytes)):
+            if before.uncompared.get(path) != after.uncompared.get(path):
+                problems.append(path)
         try:
-            dirty = self._diff_paths(self._git("diff", "--raw", "--no-renames", "-z").stdout)
+            dirty = set(self._diff_paths(self._git("diff", "--raw", "--no-renames", "-z").stdout))
         except subprocess.SubprocessError:
             problems.append("the working tree")
             return
-        for path in sorted(dirty):
+        # Both sets: the paths that are dirty now, and the paths that were
+        # dirty before the command. A command that threw the checkout's own
+        # edit away made the path clean again, and that edit is still the
+        # checkout's to lose.
+        for path in sorted(set(before.worktree) | dirty):
+            was = before.worktree.get(path)
+            now = after.worktree.get(path)
             saved = before.worktree_bytes.get(path)
             if saved is not None:
+                if was == now:
+                    continue
                 # The file was already dirty before the command started; put
                 # back the edit that predates it rather than the index version.
                 try:
                     self._write_bytes(self.repo_root / path, saved)
                 except OSError:
+                    problems.append(path)
+                continue
+            if was is not None:
+                # The path was dirty before the command and its content was not
+                # captured (over the capture budget). Restoring it from the
+                # index would drop the checkout's own edit, so it is named
+                # instead of being overwritten.
+                if was != now:
                     problems.append(path)
                 continue
             try:
@@ -611,6 +688,10 @@ class Sandbox:
                 # Its own process group, so a surviving grandchild can be killed
                 # with the group before the subject checkout is re-snapshotted.
                 start_new_session=(os.name == "posix"),
+                # The same environment the probes run in: a GIT_DIR in the
+                # harness would send the driver's git somewhere the guard
+                # does not look.
+                env=self._git_env(),
             )
             try:
                 out, err = proc.communicate(timeout=timeout)
@@ -642,13 +723,14 @@ class Sandbox:
         changes = before.differences(after)
         if changes:
             try:
-                unrestored = self._restore_subject(before, after)
+                unrestored, removed = self._restore_subject(before, after)
             except Exception as exc:  # noqa: BLE001 — the abort must happen even if the restore fails
-                unrestored = [f"the restore failed ({type(exc).__name__})"]
+                unrestored, removed = [f"the restore failed ({type(exc).__name__})"], []
             raise RuntimeError(
                 "sandbox command modified the subject checkout "
                 f"({', '.join(changes)}); round aborted"
                 + (f"; could not undo: {', '.join(unrestored)}" if unrestored else "")
+                + (f"; removed: {', '.join(removed)}" if removed else "")
             )
         if timed_out:
             return (

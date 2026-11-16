@@ -19,6 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from benchmarks.appworld.evolve import sandbox as sandbox_module  # noqa: E402
 from benchmarks.appworld.evolve.sandbox import Sandbox  # noqa: E402
 
 _ENV = {
@@ -330,6 +331,77 @@ class TestBashBoundary:
         with pytest.raises(RuntimeError, match="subject checkout"):
             sandbox.bash(command)
         assert not (sandbox.repo_root / "staged.py").exists()
+
+    def test_a_discarded_edit_is_put_back(self, sandbox):
+        # A command that throws the checkout's own edit away must not be able
+        # to lose it: the guard undoes what the command did.
+        (sandbox.repo_root / "grader.py").write_text("score = 2\n")
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && git checkout -- ."
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        assert (sandbox.repo_root / "grader.py").read_text() == "score = 2\n"
+
+    def test_the_capture_budget_names_the_paths_it_cannot_restore(self, sandbox, monkeypatch):
+        # Over the capture budget the guard has no content to put back, so it
+        # names the path instead of replacing the checkout's own edit with the
+        # index version.
+        monkeypatch.setattr(sandbox_module, "_RESTORE_CAPTURE_FILES", 0)
+        (sandbox.repo_root / "grader.py").write_text("score = 2\n")
+        (sandbox.repo_root / "raven/agent/loop.py").write_text("x = 2\n")
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && printf 'score = 999\\n' > grader.py"
+        with pytest.raises(RuntimeError, match="could not undo") as excinfo:
+            sandbox.bash(command)
+        assert "grader.py" in str(excinfo.value)
+        # The path the command changed is named; the path it did not touch
+        # keeps the checkout's own edit.
+        assert (sandbox.repo_root / "grader.py").read_text() == "score = 999\n"
+        assert (sandbox.repo_root / "raven/agent/loop.py").read_text() == "x = 2\n"
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="file permissions are POSIX-only")
+    def test_an_unreadable_file_is_not_emptied(self, sandbox):
+        # A file this process may not read must not be recorded as an empty
+        # one: the restore would write that emptiness back over it.
+        target = sandbox.repo_root / "grader.py"
+        target.write_text("score = 2\n")
+        target.chmod(0o000)
+        try:
+            token, content = sandbox._path_state("grader.py")
+            before = sandbox._subject_state(capture=True)
+            after = sandbox._subject_state(capture=True)
+        finally:
+            target.chmod(0o644)
+        assert token == "unreadable"
+        assert content is None
+        if before is not None and after is not None:
+            problems: list[str] = []
+            sandbox._restore_worktree(before, after, problems, [])
+            assert not problems
+        assert target.read_text() == "score = 2\n"
+
+    def test_a_file_created_during_the_command_is_named(self, sandbox):
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && touch appeared.txt"
+        with pytest.raises(RuntimeError, match="removed: appeared.txt"):
+            sandbox.bash(command)
+
+    def test_git_dir_in_the_environment_does_not_redirect_the_probe(self, sandbox, tmp_path, monkeypatch):
+        # GIT_DIR and its friends override -C: a harness that exports one of
+        # them would make every probe read a different repository than the
+        # subject checkout.
+        other = tmp_path / "other-repo"
+        other.mkdir()
+        (other / "other.py").write_text("value = 1\n")
+        for cmd in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-qm", "init"]):
+            subprocess.run(cmd, cwd=other, check=True, env=_ENV, capture_output=True)
+        # The context ends before the fixtures are torn down, so the teardown
+        # does not run with the variable still exported.
+        with monkeypatch.context() as patch:
+            patch.setenv("GIT_DIR", str(other / ".git"))
+            common = Path(sandbox._git("rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip())
+            assert common.resolve() == (sandbox.repo_root / ".git").resolve()
+            # A write to the subject's own configuration is still caught.
+            command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && git config core.pager evil-pager"
+            with pytest.raises(RuntimeError, match="subject checkout"):
+                sandbox.bash(command)
 
 
 class TestScopeRestore:
