@@ -55,8 +55,8 @@ class WebCache:
 
     def put(self, kind: str, key: str, body: str) -> None:
         """Store ``body`` under ``key``. Never raises: a full disk must not fail the tool call."""
-        path = self._path(kind, key)
         try:
+            path = self._path(kind, key)
             path.parent.mkdir(parents=True, exist_ok=True)
             blob = zlib.compress(json.dumps({"t": time.time(), "body": body}, ensure_ascii=False).encode("utf-8"))
             fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-")
@@ -67,7 +67,7 @@ class WebCache:
             except BaseException:
                 os.unlink(tmp)
                 raise
-        except OSError:
+        except (OSError, ValueError):  # ValueError: a lone surrogate cannot be encoded
             pass
 
     async def aget(self, kind: str, key: str) -> str | None:

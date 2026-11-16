@@ -15,9 +15,15 @@ PLUGIN_DIR = REPO / "agents" / "raven-research" / "plugins" / "research-flow"
 sys.path.insert(0, str(PLUGIN_DIR))
 
 from research_flow.config import FlowConfig  # noqa: E402
+from research_flow.support.benchmark_guard import page_refusal, url_refusal  # noqa: E402
 from research_flow.support.web_cache import WebCache  # noqa: E402
 from research_flow.tools import web  # noqa: E402
-from research_flow.tools.web import WebFetchTool, WebSearchTool, set_current_session  # noqa: E402
+from research_flow.tools.web import (  # noqa: E402
+    WebFetchTool,
+    WebSearchTool,
+    set_current_session,
+    set_current_task,
+)
 
 PAGE = "Title: Abbey Square\n\nMarkdown Content:\n" + "Enniscorthy bronze statue. " * 40
 SERP = {"organic": [{"title": "Abbey Square", "link": "https://example.org/abbey", "snippet": "statue"}]}
@@ -105,7 +111,26 @@ async def test_the_guard_still_refuses_a_host_on_a_hit(tmp_path, transport):
     url = "https://huggingface.co/datasets/x/y"
     cache.put("fetch", f"jina\n{url}", PAGE)
     out = await WebFetchTool(api_key="k", web_cache=cache, benchmark_guard=True).execute(url)
-    assert "text" not in out or PAGE not in out
+    assert out == url_refusal()
+
+
+async def test_the_question_rule_still_refuses_a_cached_copy(tmp_path, transport):
+    # The cache is shared across tasks; the page rule is judged per task, after the read.
+    question = "Which sculptor created the bronze statue of Seamus Rafter on Abbey Square in Enniscorthy?"
+    transport(_Transport())
+    cache = WebCache(tmp_path, 3600)
+    url = "https://example.org/copy"
+    cache.put("fetch", f"jina\n{url}", f"Markdown Content:\nprompt: {question}\nanswer: X\n" + "pad " * 200)
+    set_current_task(question)
+    out = await WebFetchTool(api_key="k", web_cache=cache, benchmark_guard=True).execute(url)
+    assert out == page_refusal()
+
+
+def test_put_never_raises_on_an_unencodable_key(tmp_path):
+    cache = WebCache(tmp_path, 3600)
+    cache.put("search", "abc \ud800", "{}")
+    cache.put("search", "ok", "x\ud800")
+    assert cache.get("search", "abc \ud800") is None
 
 
 async def test_an_expired_entry_is_fetched_again(tmp_path, transport):
