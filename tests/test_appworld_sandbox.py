@@ -72,25 +72,27 @@ class TestWriteRefusal:
 
 
 class TestBashBoundary:
-    def test_command_naming_origin_repo_is_refused(self, sandbox):
+    def test_command_naming_subject_checkout_is_refused(self, sandbox):
         out = sandbox.bash(f"cat {sandbox.repo_root.resolve()}/grader.py")
-        assert "refused" in out and "origin repo" in out
+        assert "refused" in out and "subject checkout" in out
 
     def test_command_runs_inside_worktree(self, sandbox):
         out = sandbox.bash("pwd")
         assert str(sandbox.root) in out and "[exit 0]" in out
 
-    def test_alternately_spelled_origin_path_is_refused(self, sandbox):
+    def test_alternately_spelled_subject_path_is_refused(self, sandbox):
         alt = str(sandbox.repo_root.resolve()).replace("\\", "/").upper()
         out = sandbox.bash(f"ls {alt}")
-        assert "refused" in out and "origin repo" in out
+        assert "refused" in out and "subject checkout" in out
 
-    def test_timeout_after_origin_write_is_detected(self, sandbox, tmp_path):
+    @pytest.mark.slow
+    def test_timeout_after_subject_write_is_detected(self, sandbox):
         cmd = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && touch timeout-poison && sleep 5"
         try:
-            with pytest.raises(RuntimeError, match="origin repository"):
+            with pytest.raises(RuntimeError, match="subject checkout"):
                 sandbox.bash(cmd, timeout=1)
-            assert (sandbox.repo_root / "timeout-poison").exists()
+            # The guard undoes what the command wrote, so nothing is left behind.
+            assert not (sandbox.repo_root / "timeout-poison").exists()
         finally:
             (sandbox.repo_root / "timeout-poison").unlink(missing_ok=True)
 
@@ -125,8 +127,19 @@ class TestBashBoundary:
             "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && "
             "printf 'score = 999\\n' > grader.py && git update-index --assume-unchanged grader.py"
         )
-        with pytest.raises(RuntimeError, match="origin repository"):
+        with pytest.raises(RuntimeError, match="subject checkout"):
             sandbox.bash(cmd)
+        # The restore puts the file and the index back the way they were.
+        assert (sandbox.repo_root / "grader.py").read_text() == "score = 1\n"
+        flags = subprocess.run(
+            ["git", "ls-files", "-v", "-z", "grader.py"],
+            cwd=sandbox.repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=_ENV,
+        ).stdout
+        assert flags.startswith("H ")
 
     @pytest.mark.parametrize(
         ("rel", "index_flag"),
@@ -142,9 +155,10 @@ class TestBashBoundary:
         if index_flag:
             subprocess.run(["git", "update-index", index_flag, rel], cwd=sandbox.repo_root, check=True, env=_ENV)
         command = f"cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && printf 'score = 999\\n' > {rel}"
-        with pytest.raises(RuntimeError, match="origin repository"):
+        with pytest.raises(RuntimeError, match="subject checkout"):
             sandbox.bash(command)
-        assert (sandbox.repo_root / rel).read_text() == "score = 999\n"
+        # The write is undone: the file is back to what it was before the command.
+        assert (sandbox.repo_root / rel).read_text() == "score = 2\n"
 
     def test_failed_status_probe_refuses_command(self, sandbox):
         index = sandbox.repo_root / ".git/index"
@@ -176,7 +190,7 @@ class TestBashBoundary:
         original = index.read_bytes()
         command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && printf 'invalid index\\n' > .git/index"
         try:
-            with pytest.raises(RuntimeError, match="origin repository unverifiable"):
+            with pytest.raises(RuntimeError, match="subject checkout unverifiable"):
                 sandbox.bash(command)
         finally:
             index.write_bytes(original)
@@ -188,9 +202,10 @@ class TestBashBoundary:
         hook.write_text("#!/bin/sh\nexit 0\n")
         hook.chmod(0o644)
         command = "d=$(sed -n 's/^gitdir: //p' .git); chmod +x \"$d/../../hooks/post-checkout\""
-        with pytest.raises(RuntimeError, match="origin repository"):
+        with pytest.raises(RuntimeError, match="subject checkout"):
             sandbox.bash(command)
-        assert hook.stat().st_mode & 0o111
+        # The restore puts the hook's mode back: it is not executable again.
+        assert not hook.stat().st_mode & 0o111
 
     def test_detached_origin_head_allows_commands(self, sandbox):
         subprocess.run(["git", "checkout", "--detach", "-q"], cwd=sandbox.repo_root, check=True, env=_ENV)
@@ -207,11 +222,12 @@ class TestBashBoundary:
         name = "untracked-\udcff.txt"
         (sandbox.repo_root / name).write_text("original\n")
         command = f"cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && printf changed > {name}"
-        with pytest.raises(RuntimeError, match="origin repository"):
+        with pytest.raises(RuntimeError, match="subject checkout"):
             sandbox.bash(command)
 
     def test_missing_bash_is_reported_not_raised(self, sandbox, monkeypatch):
-        monkeypatch.setattr(sandbox, "_origin_state", lambda: ("h", "", "f"))
+        state = sandbox._subject_state(capture=False)
+        monkeypatch.setattr(sandbox, "_subject_state", lambda capture=False: state)
 
         def _raise(*_args, **_kwargs):
             raise FileNotFoundError("bash")
@@ -224,14 +240,24 @@ class TestBashBoundary:
     def test_ref_deletion_in_common_dir_is_detected(self, sandbox, subject):
         repo, _sha = subject
         subprocess.run(["git", "update-ref", "refs/evolver/probe", "HEAD"], cwd=repo, check=True, env=_ENV)
-        with pytest.raises(RuntimeError, match="origin repository"):
+        with pytest.raises(RuntimeError, match="subject checkout"):
             sandbox.bash("git update-ref -d refs/evolver/probe")
+        # The restore puts the ref back.
+        assert (
+            subprocess.run(
+                ["git", "rev-parse", "--verify", "refs/evolver/probe"],
+                cwd=repo,
+                capture_output=True,
+                env=_ENV,
+            ).returncode
+            == 0
+        )
 
     def test_symbolic_head_change_to_another_branch_is_detected(self, sandbox, subject):
         repo, _sha = subject
         subprocess.run(["git", "branch", "other"], cwd=repo, check=True, env=_ENV)
         command = "d=$(sed -n 's/^gitdir: //p' .git); git -C \"$d/../../..\" checkout -q other"
-        with pytest.raises(RuntimeError, match="origin repository"):
+        with pytest.raises(RuntimeError, match="subject checkout"):
             sandbox.bash(command)
 
     def test_relative_gitdir_resolves_against_worktree(self, subject, tmp_path):
@@ -239,7 +265,7 @@ class TestBashBoundary:
         subprocess.run(["git", "config", "worktree.useRelativePaths", "true"], cwd=repo, check=True, env=_ENV)
         sb = Sandbox(repo, tmp_path / "wt-rel", sha)
         try:
-            gitdir = sb._origin_gitdir()
+            gitdir = sb._subject_gitdir()
             assert gitdir is not None and gitdir.exists()
             assert str(repo.resolve()) in str(gitdir)
         finally:
@@ -249,11 +275,61 @@ class TestBashBoundary:
         poison = sandbox.repo_root / "sandbox-escape"
         command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && touch sandbox-escape"
         try:
-            with pytest.raises(RuntimeError, match="origin repository"):
+            with pytest.raises(RuntimeError, match="subject checkout"):
                 sandbox.bash(command)
-            assert poison.exists()
+            # The guard undoes the write, so the escape leaves nothing behind.
+            assert not poison.exists()
         finally:
             poison.unlink(missing_ok=True)
+
+    def test_refs_created_in_the_worktree_do_not_abort_the_round(self, sandbox):
+        # A branch, a tag and a stash the driver creates in its own worktree
+        # land in the shared ref namespace; they say nothing about a write to
+        # the subject checkout, so they must not cost the round.
+        assert "[exit 0]" in sandbox.bash("git checkout -b feature")
+        assert "[exit 0]" in sandbox.bash("git tag probe-tag")
+        assert "[exit 0]" in sandbox.bash("git stash")
+        assert "[exit 0]" in sandbox.bash("echo healthy")
+
+    def test_detected_write_is_undone(self, sandbox):
+        hook = sandbox.repo_root / ".git/hooks/post-checkout"
+        hook.write_text("#!/bin/sh\nexit 0\n")
+        hook.chmod(0o644)
+        command = (
+            "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && "
+            "printf 'score = 999\\n' > grader.py && touch escape-poison && "
+            "chmod +x .git/hooks/post-checkout"
+        )
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        assert (sandbox.repo_root / "grader.py").read_text() == "score = 1\n"
+        assert not (sandbox.repo_root / "escape-poison").exists()
+        assert not hook.stat().st_mode & 0o111
+
+    def test_detected_write_restores_git_config(self, sandbox):
+        config = sandbox.repo_root / ".git/config"
+        original = config.read_bytes()
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && git config core.pager evil-pager"
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        assert config.read_bytes() == original
+
+    def test_same_size_rewrite_of_a_dirty_file_is_detected(self, sandbox):
+        # git diff names the path that changed but not what it changed to, so
+        # a rewrite that keeps the size has to be caught by the content.
+        (sandbox.repo_root / "grader.py").write_text("score = 2\n")
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && printf 'score = 3\\n' > grader.py"
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        assert (sandbox.repo_root / "grader.py").read_text() == "score = 2\n"
+
+    def test_staged_new_file_is_undone(self, sandbox):
+        command = (
+            "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && printf 'x = 1\\n' > staged.py && git add staged.py"
+        )
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        assert not (sandbox.repo_root / "staged.py").exists()
 
 
 class TestScopeRestore:
