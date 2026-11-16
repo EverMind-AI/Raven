@@ -305,7 +305,8 @@ class TestWriteInstallMeta:
         write_install_meta(skill_dir, slug="foo", version="v1", trigger="auto_inject")
 
         record = json.loads((skill_dir / ".install-meta.json").read_text(encoding="utf-8"))
-        assert record["installed_at"][:10] == datetime.now(timezone.utc).date().isoformat()
+        installed = datetime.fromisoformat(record["installed_at"])
+        assert abs((installed - datetime.now(timezone.utc)).total_seconds()) < 60
 
     def test_an_unconvertible_mtime_falls_back_to_the_clock(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
