@@ -1,4 +1,4 @@
-"""Execution backends for direct and BoxLite-isolated rendering."""
+"""Execution backends for direct and sandbox-isolated rendering."""
 
 from __future__ import annotations
 
@@ -12,8 +12,16 @@ from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
+from raven.sandbox.interfaces import SandboxInitError
 from raven_design.rendering.bundle import validate_published_bundle
-from raven_design.rendering.models import Detection, RenderConfig, RenderError, RenderOutcome, RenderRequest
+from raven_design.rendering.models import (
+    _VM_BROWSER_ROOT,
+    Detection,
+    RenderConfig,
+    RenderError,
+    RenderOutcome,
+    RenderRequest,
+)
 from raven_design.rendering.paths import RenderPathPolicy
 
 _MAX_WORKER_RESPONSE_BYTES = 16 * 1024 * 1024
@@ -48,7 +56,7 @@ class DirectRenderBackend:
         return self._engine.run(request, preview_limit=preview_limit)
 
 
-class BoxLiteRenderBackend:
+class SandboxRenderBackend:
     _REQUEST_VERSION = 1
 
     def __init__(
@@ -60,6 +68,7 @@ class BoxLiteRenderBackend:
         cpus: int,
         memory_mib: int,
         create_timeout_seconds: int,
+        gateway: str | None = None,
     ) -> None:
         self.config = config
         self.path_policy = path_policy
@@ -67,6 +76,8 @@ class BoxLiteRenderBackend:
         self.cpus = cpus
         self.memory_mib = memory_mib
         self.create_timeout_seconds = create_timeout_seconds
+        # The host's sandbox gateway; None is the CLI's active one.
+        self.gateway = gateway
 
     async def run(self, request: RenderRequest, *, preview_limit: int) -> RenderOutcome:
         if not self.image:
@@ -89,6 +100,10 @@ class BoxLiteRenderBackend:
             )
             executor = None
             try:
+                if getattr(os, "getuid", lambda: -1)() == 0:
+                    # A root host leaves the sandbox user to the image, so the
+                    # throwaway job directory must be writable by whoever that is.
+                    os.chmod(job_root, 0o777)
                 executor = self._executor(job_root)
                 await executor.start()
                 result = await executor.exec(
@@ -101,10 +116,10 @@ class BoxLiteRenderBackend:
                         "TZ": self.config.timezone,
                     },
                 )
-            except ImportError as exc:
+            except SandboxInitError as exc:
                 raise RenderError(
                     "renderer_unavailable",
-                    "BoxLite is not installed.",
+                    str(exc),
                 ) from exc
             except asyncio.CancelledError:
                 raise
@@ -221,22 +236,20 @@ class BoxLiteRenderBackend:
         }
 
     def _executor(self, job_root: Path):
-        from raven.config.paths import get_sandbox_dir
-        from raven.sandbox.boxlite_executor import BoxliteExecutor
+        from raven.sandbox.openshell_executor import OpenShellExecutor
 
-        if self.config.allow_network:
-            allow_net: bool | list[str] = list(self.config.network_allowlist) or True
-        else:
-            allow_net = False
-        return BoxliteExecutor(
+        return OpenShellExecutor(
             image=self.image,
             workspace=job_root,
             cpus=self.cpus,
             memory_mib=self.memory_mib,
-            allow_net=allow_net,
+            # A render job runs no agent command, so it stays offline.
+            network_source=lambda: {},
             default_timeout=self.config.timeout_seconds,
             create_timeout=self.create_timeout_seconds,
-            sandbox_home=get_sandbox_dir("boxlite"),
+            gateway=self.gateway,
+            # The worker finds Chromium there inside the sandbox (worker.py).
+            read_only_paths=(str(_VM_BROWSER_ROOT),),
         )
 
     @staticmethod

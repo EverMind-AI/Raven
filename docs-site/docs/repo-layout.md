@@ -65,7 +65,7 @@ repository's commit conventions.
 | `resources` | Downloads the dictionary and parser models that are too large to track |
 | `routing` | Task classification and model selection by quality and cost |
 | `rpc` | Shared typed RPC methods, streaming events, and the gateway control interface |
-| `sandbox` | Isolated execution, VM lifecycle, and debugging tools |
+| `sandbox` | Isolated execution in OpenShell sandboxes: lifecycle, mounts, and the egress policy |
 | `security` | Outbound address policy and prompt-injection fences |
 | `session` | Session storage, session resolution, titles, and transcript export |
 | `skill_hub` | SkillHub search, skill retrieval, bundle installation, and install policy |

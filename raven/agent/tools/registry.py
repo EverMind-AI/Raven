@@ -1,6 +1,7 @@
 """Tool registry for dynamic tool management."""
 
 import asyncio
+import contextlib
 import copy
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -238,6 +239,16 @@ def call_failed(result: Any) -> bool:
     return str(text if text is not None else result).startswith("Error")
 
 
+def _strictest_declared_mode(gates: "Sequence[Any]") -> str | None:
+    """The mode that asks most among the ``permission_mode`` the gates declare; None when none does.
+
+    Plain strings, in the order ``raven.permissions`` reads them, so a registry
+    without a permission gate never imports that package.
+    """
+    declared = {getattr(gate, "permission_mode", None) for gate in gates}
+    return next((mode for mode in ("ask", "smart", "full") if mode in declared), None)
+
+
 # When a running tool first says so, and how often after that. The first line is
 # late enough that ordinary calls never print one, and early enough that a reader
 # tailing the log during a slow call does not have to wait a full minute to learn
@@ -324,6 +335,9 @@ class ToolRegistry:
         self._tool_gates: tuple[Any, ...] = tuple(
             sorted(tool_gates, key=lambda g: (str(getattr(g, "name", "")), str(getattr(g, "contributed_by", ""))))
         )
+        # The strictest permission mode a gate declares it applies, which a
+        # run-time ask inside a tool body is held to (raven.permissions.runtime).
+        self._mode_floor = _strictest_declared_mode(self._tool_gates)
         # The admitted, frozen specs, keyed like ``_tools``. The registry's own
         # machinery reads data from here and calls behaviour on the body; the
         # pair is written together in register() and nowhere else.
@@ -885,6 +899,18 @@ class ToolRegistry:
             return tool.to_schema()
         return copy.deepcopy(spec.schema)
 
+    def _tool_body(self, deadline: asyncio.Timeout | None = None) -> contextlib.AbstractContextManager[None]:
+        """Bind this registry's gate, and the body's deadline, for the length of one tool body.
+
+        Imported only when there is a gate to bind: a registry without one (a
+        raven node's) must not load the permission package and what it imports.
+        """
+        if self._permission_gate is None:
+            return contextlib.nullcontext()
+        from raven.permissions.runtime import tool_body
+
+        return tool_body(self._permission_gate, deadline, self._mode_floor)
+
     @trace.instrument("tool.call", extract=semconv.tool_call)
     async def execute(
         self,
@@ -1042,16 +1068,22 @@ class ToolRegistry:
                     return verdict
 
             ceiling = (spec or tool).timeout_seconds or self.DEFAULT_TOOL_TIMEOUT_S
+            # The body sees the gate that admitted it, so an action it finds
+            # while it runs is asked about the same way (raven.permissions.runtime).
             if tool.blocking_for(params):
                 # Intentionally waits on a human — must not be timer-killed.
-                result = await tool.execute(**params)
+                with self._tool_body():
+                    result = await tool.execute(**params)
             else:
                 # The heartbeat is a bystander: it neither holds the result nor
                 # touches the deadline, so a change here cannot alter what the
                 # tool returns or when it is killed.
                 beat = asyncio.ensure_future(_heartbeat(name, ceiling))
                 try:
-                    result = await asyncio.wait_for(tool.execute(**params), timeout=ceiling)
+                    # A deadline the gate can stop while a person decides.
+                    async with asyncio.timeout(ceiling) as deadline:
+                        with self._tool_body(deadline):
+                            result = await tool.execute(**params)
                 finally:
                     beat.cancel()
 

@@ -6,6 +6,8 @@ Module-level names live in ``_shared``; method groups live in mixins
 
 from __future__ import annotations
 
+import sys
+
 from raven.agent import knowledge_scope
 from raven.agent.harness import bind_harness, default_harness_modules
 from raven.agent.loop._shared import (
@@ -62,7 +64,6 @@ if TYPE_CHECKING:
     from raven.mcp.manager import MCPConnectionManager
     from raven.providers.pool import ProviderPool
     from raven.routing.router import ModelRouter
-    from raven.sandbox.debug_server import SandboxDebugServer
     from raven.spine.runner import Drain, Emit, TurnOutcome
     from raven.spine.turn import TurnRequest
 
@@ -372,7 +373,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # backgrounded DAG submission -- including default deploys, where an
         # unset attribute would raise instead of answering "no route".
         self.tool_search_controller = None
-        from raven.config.live import permissions_config
+        from raven.config.live import network_permissions, permissions_config
         from raven.permissions import BuiltinRulings, PermissionGate
 
         # Config is read through a late-bound callable so a mode flipped on a
@@ -534,7 +535,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self._pending_recovery: dict[str, dict] = {}
 
         self._sandbox_config = sandbox_config
-        self._owned_ids: set[str] = set()
         # The catalogue's default stands in for a session that never set a tier:
         # `_apply_mode` stamps a policy only on the ACP turn path, so a terminal,
         # gateway or channel turn would otherwise resolve to no tier at all.
@@ -560,7 +560,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
             sandbox_config=sandbox_config,
-            owned_ids=self._owned_ids,
             max_concurrent=max_concurrent_subagents,
             max_spawns_per_hour=max_subagent_spawns_per_hour,
             agents=agents,
@@ -585,24 +584,25 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # parallel to _dag_progress_sink). None in non-web contexts (CLI/IM).
         self._skills_sink = None
 
-        # Executor: synchronous construction only; VM starts in _start_executor()
-        # A sandboxed VM mounts one host root at /workspace, not one per
+        # Executor: synchronous construction only; the sandbox starts in _start_executor()
+        # A sandbox mounts one host root at /workspace, not one per
         # session, so it must be wide enough to cover every working directory
         # the resolver can hand out. Agent home is usually somewhere else
         # entirely -- under PER_CHANNEL the root is ``<agent home>/../tmp``, a
         # sibling, and an explicit ``-w`` cannot be an ancestor of agent home
         # because ``validate_override`` refuses one -- so it is mounted
         # separately at /agent-home to keep memory/skills/session state
-        # reachable from inside the VM.
+        # reachable from inside the sandbox.
         #
         # The check is not dead: under LAUNCH_DIR the root is wherever the user
         # started raven, and launching from ``~`` puts agent home inside it. A
         # second mount of a directory already covered is what this avoids.
-        from raven.config.paths import PACKAGE_DATA_MOUNT, get_package_data_root, get_sandbox_dir
+        from raven.config.paths import PACKAGE_DATA_MOUNT, get_package_data_root
+        from raven.permissions.network_grants import network_source_for
 
         mount_root = self._workdir_resolver.mount_root() if self._workdir_resolver else workspace
         home_volume = () if workdir.is_within(workspace, mount_root) else ((str(workspace), "/agent-home", "rw"),)
-        # A package stdio server gets PLUGIN_DATA as a host path, and the VM
+        # A package stdio server gets PLUGIN_DATA as a host path, and the sandbox
         # reaches it only through a mount. The fixed guest path is what lets
         # the executor translate the variable with the rest of the server's
         # paths; without the volume it would stay a host path that cannot
@@ -623,15 +623,15 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             else build_executor(
                 sandbox_config,
                 mount_root,
-                self._owned_ids,
                 (*home_volume, *data_volume),
-                sandbox_dir=get_sandbox_dir,
+                # Shared by every conversation this loop serves, so it runs
+                # under no single conversation's scope (``None``).
+                network_source=network_source_for(lambda: network_permissions(self._live_config), None),
             )
         )
         self._executor_stack: AsyncExitStack | None = None
         self._executor_started: bool = False
         self._executor_start_lock = asyncio.Lock()
-        self._debug_server: SandboxDebugServer | None = None
 
         self.router = router
         self._playbooks = None
@@ -787,6 +787,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         async with self._executor_start_lock:
             if self._executor_started:
                 return
+            from raven.permissions import network_grants
+
             stack = AsyncExitStack()
             try:
                 await stack.__aenter__()
@@ -794,52 +796,37 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             except Exception:
                 await stack.aclose()
                 raise
+            # Every conversation this loop serves runs in this one sandbox, so a
+            # network grant made in any of them is synced to it at once.
+            network_grants.GRANTS.register(self._executor, None)
+            stack.callback(network_grants.GRANTS.unregister, self._executor)
             self._executor_stack = stack
             self._executor_started = True
 
-    async def _start_debug_server(self) -> None:
-        """Start the sandbox debug socket server if debug mode is enabled."""
-        cfg = self._sandbox_config
-        if cfg is None or not cfg.debug.enabled:
-            return
-        if cfg.backend == "none":
-            logger.warning(
-                "sandbox.debug.enabled=true is ignored because backend='none' (no boxlite runtime is active)"
-            )
+    @staticmethod
+    async def _drain_sandbox_deletes(budget_s: float = 20.0) -> None:
+        """Wait, briefly, for sandbox deletions this process started in the background.
+
+        A sandbox stop only starts its deletion; one still pending when the
+        process exits is collected by the next start instead.
+        """
+        module = sys.modules.get("raven.sandbox.openshell_executor")
+        if module is None:
             return
         try:
-            from raven.config.paths import get_data_dir, get_sandbox_dir
-            from raven.sandbox.debug_server import SandboxDebugServer
-
-            socket_path = SandboxDebugServer.resolve_socket_path(cfg.debug.socket, get_data_dir())
-            server = SandboxDebugServer(
-                socket_path=socket_path,
-                owned_ids=self._owned_ids,
-                max_message_bytes=cfg.debug.max_message_bytes,
-                sandbox_home=get_sandbox_dir("boxlite"),
-            )
-            await server.start()
-            self._debug_server = server
-        except Exception as exc:
-            # The user explicitly opted in to debug mode; failing silently here
-            # leaves them puzzled when `raven sandbox` later says "socket not
-            # found". Log loud so the reason is visible.
-            logger.error("Failed to start sandbox debug server: %s", exc)
+            await asyncio.wait_for(module.drain_pending_deletes(), budget_s)
+        except asyncio.TimeoutError:
+            logger.warning("Sandbox deletions still pending after {}s; the next start collects them", budget_s)
 
     async def close_executor(self) -> None:
         """Tear down the sandbox executor."""
-        if self._debug_server is not None:
-            try:
-                await self._debug_server.stop()
-            except Exception as exc:
-                logger.warning("Error stopping sandbox debug server: %s", exc)
-            self._debug_server = None
         if self._executor_stack:
             try:
                 await self._executor_stack.aclose()
             except (RuntimeError, BaseExceptionGroup):
                 pass
             self._executor_stack = None
+        await self._drain_sandbox_deletes()
         self._executor_started = False
         if self._skill_hub_client is not None:
             try:
@@ -1144,14 +1131,13 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         """Bring the agent runtime up and stay alive.
 
         Turns arrive through the spine (``run_turn``); this coroutine no longer
-        drains an inbound bus. It starts the executor / debug server / MCP, then
+        drains an inbound bus. It starts the executor / MCP, then
         idles on ``self._running`` so the gateway can gather it as a long-lived
         task and tear it down via ``stop()`` on shutdown.
         """
         self._running = True
         try:
             await self._start_executor()
-            await self._start_debug_server()
             await self._connect_mcp()
         except SandboxInitError as exc:
             logger.error("Sandbox failed to start: {}", exc)

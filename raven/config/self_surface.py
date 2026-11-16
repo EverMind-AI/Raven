@@ -453,7 +453,7 @@ SECTIONS: tuple[Section, ...] = (
                 "Sandbox for shell commands",
                 "enum",
                 _E.RELOAD,
-                choices=("none", "auto", "boxlite"),
+                choices=("none", "openshell"),
                 sensitive="changes whether shell commands run isolated",
             ),
             Setting(

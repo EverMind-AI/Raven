@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from raven.contracts.tool import ContentPart
-from raven_design.rendering.backend import BoxLiteRenderBackend, DirectRenderBackend, RenderExecutionBackend
+from raven_design.rendering.backend import DirectRenderBackend, RenderExecutionBackend, SandboxRenderBackend
 from raven_design.rendering.models import (
     DEFAULT_CAPTURE_DURATION_SECONDS,
     DEFAULT_VIEWPORT,
@@ -21,6 +21,9 @@ from raven_design.rendering.models import (
 )
 from raven_design.rendering.paths import RenderPathPolicy
 from raven_design.rendering.result import preview_tool_result, render_tool_result
+
+# "boxlite" names the retired VM backend; configs that still say it get the sandbox.
+_SANDBOXED_BACKENDS = frozenset({"auto", "sandbox", "boxlite"})
 
 
 class RenderService:
@@ -35,6 +38,7 @@ class RenderService:
         worker_memory_mib: int = 4096,
         worker_create_timeout_seconds: int = 300,
         max_concurrency: int = 2,
+        worker_gateway: str | None = None,
     ) -> None:
         self.config = config or RenderConfig.discover()
         workspace = Path.cwd().resolve()
@@ -50,8 +54,9 @@ class RenderService:
             worker_cpus=worker_cpus,
             worker_memory_mib=worker_memory_mib,
             worker_create_timeout_seconds=worker_create_timeout_seconds,
+            worker_gateway=worker_gateway,
         )
-        startup_budget = worker_create_timeout_seconds if backend in {"auto", "boxlite"} else 0
+        startup_budget = worker_create_timeout_seconds if backend in _SANDBOXED_BACKENDS else 0
         self.tool_timeout_seconds = startup_budget + self.config.timeout_seconds + 30
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
@@ -64,6 +69,7 @@ class RenderService:
         media_root: Path,
         runtime_root: Path,
         restrict_to_workspace: bool,
+        gateway: str | None = None,
     ) -> RenderService:
         binary_overrides = {
             name: value
@@ -78,8 +84,6 @@ class RenderService:
         }
         config = RenderConfig.discover(
             **binary_overrides,
-            allow_network=tool_config.allow_network,
-            network_allowlist=tuple(tool_config.network_allowlist),
             office_backend_order=tuple(tool_config.office_backend_order),
             allow_cloud_office=tool_config.allow_cloud_office,
             raster_dpi=tool_config.raster_dpi,
@@ -120,6 +124,7 @@ class RenderService:
             worker_memory_mib=tool_config.worker_memory_mib,
             worker_create_timeout_seconds=tool_config.worker_create_timeout_seconds,
             max_concurrency=tool_config.max_concurrency,
+            worker_gateway=gateway,
         )
 
     async def render(
@@ -205,17 +210,19 @@ class RenderService:
         worker_cpus: int,
         worker_memory_mib: int,
         worker_create_timeout_seconds: int,
+        worker_gateway: str | None = None,
     ) -> RenderExecutionBackend:
         if backend == "direct":
             return DirectRenderBackend(self.config, self.path_policy)
-        if backend in {"auto", "boxlite"}:
-            return BoxLiteRenderBackend(
+        if backend in _SANDBOXED_BACKENDS:
+            return SandboxRenderBackend(
                 self.config,
                 self.path_policy,
                 image=worker_image,
                 cpus=worker_cpus,
                 memory_mib=worker_memory_mib,
                 create_timeout_seconds=worker_create_timeout_seconds,
+                gateway=worker_gateway,
             )
         raise ValueError(f"Unsupported render backend: {backend}")
 

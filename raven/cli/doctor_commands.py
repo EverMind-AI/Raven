@@ -856,7 +856,7 @@ def _render_permission_and_sandbox(features: FeaturesInfo) -> None:
     """Say how the ask tier is read, and whether commands run on this machine.
 
     ``full`` skips the ask tier only: built-in denials and user deny rules
-    still hold. ``none`` runs commands here; ``auto`` and ``boxlite`` do not,
+    still hold. ``none`` runs commands here; ``openshell`` does not,
     and the remedy is the one the startup log already gives.
     """
     if features.permission_mode == "full":
@@ -871,7 +871,7 @@ def _render_permission_and_sandbox(features: FeaturesInfo) -> None:
         console.print(
             f"  Sandbox:     {features.sandbox_backend}  "
             "[yellow]⚠ commands run on this machine with no isolation[/yellow]  "
-            "[dim]set tools.sandbox.backend to auto or boxlite[/dim]"
+            "[dim]set tools.sandbox.backend to openshell[/dim]"
         )
     elif features.sandbox_backend:
         console.print(f"  Sandbox:     {features.sandbox_backend}")

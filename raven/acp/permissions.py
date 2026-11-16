@@ -47,6 +47,7 @@ from raven.acp.outbound import (
     RequestFailedError,
 )
 from raven.acp.updates import UpdateTranslator
+from raven.acp_client.protocol import NEEDS_PERSON_META
 from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
 from raven.security import redact
 
@@ -55,6 +56,10 @@ SESSION_KIND = "allow_always"
 REJECT_KIND = "reject_once"
 #: The ``approval_kind`` the shell tool declares (``ExecTool``).
 EXEC_KIND = "shell.exec"
+#: The kind a sandboxed command's refused connection is asked under
+#: (``raven.permissions.sandbox_network``); the spec's tool kind for it is a fetch.
+NETWORK_KIND = "sandbox.network"
+_TOOL_KINDS = {NETWORK_KIND: "fetch"}
 
 
 # The two outcomes that are a person's answer. Every other name in this file is
@@ -112,6 +117,7 @@ class AcpPermissionBroker:
         origin: str = "",
         origin_name: str = "",
         evidence: dict[str, Any] | None = None,
+        needs_person: bool = False,
     ) -> ApprovalOutcome:
         """Ask, and return the grant the client's user chose.
 
@@ -147,7 +153,7 @@ class AcpPermissionBroker:
             "toolCall": {
                 "toolCallId": tool_call_id or f"exec-{uuid4().hex}",
                 "title": redact.redact(f"{description}: {command}" if description else command),
-                "kind": "execute",
+                "kind": _TOOL_KINDS.get(kind, "execute"),
                 "status": "pending",
             },
             "options": [
@@ -160,6 +166,10 @@ class AcpPermissionBroker:
             # declares a home for it.
             "_meta": {"raven.turnId": turn_id} if turn_id else None,
         }
+        if needs_person:
+            # The client may be a raven host that answers its sub-agents itself;
+            # this is how it tells an action only a person may allow.
+            request["_meta"] = {**(request["_meta"] or {}), NEEDS_PERSON_META: True}
         if request["_meta"] is None:
             del request["_meta"]
         shell_command = (evidence or {}).get("command") if kind == EXEC_KIND else None
@@ -251,4 +261,4 @@ class AcpPermissionBroker:
         return ApprovalOutcome(choice=choice, answered=outcome in _ANSWERED)
 
 
-__all__ = ["ALLOW_KIND", "EXEC_KIND", "REJECT_KIND", "AcpPermissionBroker"]
+__all__ = ["ALLOW_KIND", "EXEC_KIND", "NETWORK_KIND", "REJECT_KIND", "AcpPermissionBroker"]

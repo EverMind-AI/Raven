@@ -117,6 +117,8 @@ class _Shared:
                 media_root=get_media_dir(),
                 runtime_root=get_runtime_subdir("render"),
                 restrict_to_workspace=self.cfg.render.restrict_to_workspace,
+                # Where the host's sandbox runs; a host that predates the grant lends none.
+                gateway=getattr(getattr(self._ctx, "services", None), "sandbox_gateway", None),
             )
             self._services[key] = service
         return service
@@ -142,7 +144,7 @@ class _SeatedRenderTool(Tool):
         # The advertised schema must say what the executing service will
         # enforce, so the slice's own preview and motion knobs ride into the
         # prototype config; the registration timeout mirrors the service's
-        # own margin over the slice timeout (a boxlite worker adds a startup
+        # own margin over the slice timeout (a sandboxed worker adds a startup
         # budget on top -- the seated service's tool_timeout_seconds governs
         # the real call either way).
         prototype_service = SimpleNamespace(

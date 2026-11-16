@@ -206,13 +206,13 @@ class WorkdirResolver:
         return self._session_root / (safe_path_segment(name) or "_")
 
     def mount_root(self) -> Path:
-        """The directory a sandbox VM must mount to cover every session.
+        """The directory a sandbox must mount to cover every session.
 
         The default per-channel directories share one root, so a single mount
         serves them all; a launch-directory process only ever has the one. A
         channel pointed somewhere else by config, or an explicit override,
         falls outside it -- ``check_workdir_mounted`` refuses those rather than
-        letting a turn run against a directory the VM cannot see.
+        letting a turn run against a directory the sandbox cannot see.
 
         ``explicit_workdir`` wins here exactly as it does in ``resolve()``:
         when set, every session resolves to it regardless of policy, so the

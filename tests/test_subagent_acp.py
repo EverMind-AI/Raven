@@ -6723,6 +6723,19 @@ async def test_a_parsed_segment_the_host_denies_refuses_the_whole_request(host_r
     assert answer["outcome"]["optionId"] == "no"
 
 
+async def test_a_request_only_a_person_may_answer_is_refused(host_rules) -> None:
+    """A sub-agent's sandbox refused an address or an internal name, which its own gate
+    leaves to a person; the host answers on nobody's behalf, so it refuses."""
+    from raven.acp_client.permissions import auto_approver
+
+    host_rules({"permissions": {"mode": "full"}})
+    params = _asking(None)
+    params["toolCall"]["kind"] = "fetch"
+    params["_meta"] = {"raven.turnId": "t", "raven.needsPerson": True}
+    answer = await auto_approver("raven-code")("session/request_permission", params)
+    assert answer["outcome"]["optionId"] == "no"
+
+
 async def test_the_builtin_catastrophe_list_holds_for_a_sub_agent_too(host_rules) -> None:
     from raven.acp_client.permissions import auto_approver
 

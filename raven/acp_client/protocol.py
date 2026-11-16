@@ -121,6 +121,11 @@ MENU_UNREAD_META = "modelMenuUnread"
 # it up to a cap of its own, and an agent that exits sooner ends the wait sooner.
 SHUTDOWN_GRACE_META = "raven.shutdownGraceS"
 
+# Marks a permission request only a person may answer: a raven agent's own gate
+# leaves such an action (an address given as an IP, an internal name) to a person
+# whatever its mode, and a raven client that answers on nobody's behalf refuses it.
+NEEDS_PERSON_META = "raven.needsPerson"
+
 
 class AcpError(Exception):
     """Base for every ACP transport failure."""

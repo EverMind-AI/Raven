@@ -6,11 +6,10 @@ settled at startup, the switch changed a file and nothing else, and the only way
 to be believed was to quit.
 
 So these are about the read: that it notices a change, that it does not re-parse
-when nothing changed, and that the two failure modes a file has -- absent, and
-briefly unparseable while something rewrites it -- answer differently. The last
-one matters most: a torn read must keep the previous answer, because withholding
-every tool for one turn because a file was mid-write is worse than being one
-second stale.
+when nothing changed, and that a missing file answers differently from one that
+is unreadable or briefly unparseable while something rewrites it. These failures
+must keep the previous answer, because withholding every tool for one turn
+because a file was mid-write is worse than being one second stale.
 """
 
 from __future__ import annotations
@@ -824,6 +823,97 @@ def test_permissions_node_invalid_from_the_start_answers_defaults(tmp_path):
     fresh = permissions_config(LiveConfig(path))
     assert fresh.mode == "smart"
     assert fresh.tools == {}
+
+
+def test_network_permissions_read_a_returning_allow_net_the_way_the_loader_does(tmp_path):
+    from raven.config.live import LiveConfig, network_permissions
+    from raven.config.loader import load_config
+
+    body = '{"tools": {"sandbox": {"allowNet": false}}}'
+    path, loaded = tmp_path / "config.json", tmp_path / "loaded.json"
+    path.write_text(body)
+    loaded.write_text(body)
+    assert network_permissions(LiveConfig(path)).default == "closed"
+    assert load_config(loaded).permissions.network.default == "closed"
+
+
+def test_network_permissions_keep_the_last_valid_set_and_close_when_none_ever_validated(tmp_path):
+    from raven.config.live import LiveConfig, network_permissions
+
+    path = tmp_path / "config.json"
+    path.write_text('{"permissions": {"network": {"default": "closed", "rules": [{"host": "pypi.org"}]}}}')
+    live = LiveConfig(path)
+    assert [rule.host for rule in network_permissions(live).rules] == ["pypi.org"]
+    path.write_text('{"permissions": {"network": {"default": "ajar"}}}')
+    assert [rule.host for rule in network_permissions(live).rules] == ["pypi.org"]
+    fresh = network_permissions(LiveConfig(path))
+    assert (fresh.default, fresh.rules) == ("closed", [])
+
+
+@pytest.mark.parametrize("first", ['{"permissions": ', "[]"])
+def test_network_permissions_close_when_the_first_read_is_not_a_config(tmp_path, first):
+    """A file that has never parsed as a config here holds rules nobody can read: the
+    open default is for a file that says nothing, so the network closes until one parses."""
+    from raven.config.live import LiveConfig, network_permissions
+
+    path = tmp_path / "config.json"
+    path.write_text(first)
+    live = LiveConfig(path)
+    assert network_permissions(live).default == "closed"
+    path.write_text('{"permissions": {"network": {"default": "closed", "rules": [{"host": "pypi.org"}]}}}')
+    assert [rule.host for rule in network_permissions(live).rules] == ["pypi.org"]
+    assert network_permissions(LiveConfig(tmp_path / "absent.json")).default == "open"
+
+
+@pytest.mark.parametrize("read_error", [PermissionError, IsADirectoryError, OSError])
+@pytest.mark.parametrize("read_valid_first", [False, True], ids=["first-read", "last-valid"])
+def test_network_permissions_keep_read_errors_distinct_from_a_missing_file(
+    tmp_path, monkeypatch, read_error, read_valid_first
+):
+    from raven.config.live import network_permissions
+
+    path = tmp_path / "config.json"
+    _write(path, {"permissions": {"network": {"default": "closed", "rules": [{"host": "pypi.org"}]}}})
+    live = LiveConfig(path)
+    if read_valid_first:
+        assert [rule.host for rule in network_permissions(live).rules] == ["pypi.org"]
+
+    def fail_read(_path):
+        raise read_error("the config cannot be read")
+
+    with monkeypatch.context() as unreadable:
+        unreadable.setattr(Path, "read_bytes", fail_read)
+        network = network_permissions(live)
+        expected = ["pypi.org"] if read_valid_first else []
+        assert (network.default, [rule.host for rule in network.rules]) == ("closed", expected)
+
+    _write(path, {"permissions": {"network": {"default": "closed", "rules": [{"host": "example.org"}]}}})
+    assert [rule.host for rule in network_permissions(live).rules] == ["example.org"]
+
+
+def test_a_missing_config_forgets_the_previous_network_preferences(tmp_path):
+    from raven.config.live import network_permissions
+
+    path = tmp_path / "config.json"
+    _write(path, {"permissions": {"network": {"default": "closed", "rules": [{"host": "pypi.org"}]}}})
+    live = LiveConfig(path)
+    assert network_permissions(live).default == "closed"
+    path.unlink()
+    network = network_permissions(live)
+    assert (network.default, network.rules) == ("open", [])
+
+
+def test_an_explicit_null_network_section_is_invalid_for_every_reader(tmp_path):
+    """The loader refuses `permissions.network: null`; a reader that took it for a missing
+    section would answer the open default."""
+    from raven.config.live import LiveConfig, network_permissions, network_permissions_of
+
+    with pytest.raises(ValueError):
+        network_permissions_of({"permissions": {"network": None}})
+    assert network_permissions_of({"permissions": {}}).default == "open"
+    path = tmp_path / "config.json"
+    path.write_text('{"permissions": {"network": null}}')
+    assert network_permissions(LiveConfig(path)).default == "closed"
 
 
 def test_a_retired_destructive_toggle_is_accepted_ignored_and_flagged():

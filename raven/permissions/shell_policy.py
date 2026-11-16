@@ -1303,7 +1303,7 @@ class ShellCommandPolicy:
         tripped the short-circuit in ``approval_reason`` and erased the family
         the prompt was going to name.
 
-        Sandboxed execution gets no relaxation here: the Boxlite VM mounts the
+        Sandboxed execution gets no relaxation here: the sandbox mounts the
         real workspace read-write, so a filesystem rule the sandbox supposedly
         contains still reaches host data through that mount. An executor that
         can prove it has no writable host mounts may earn a conditional back.

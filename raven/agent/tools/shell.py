@@ -333,7 +333,7 @@ class ExecTool(Tool):
             if guard_error:
                 return self._boundary_error(guard_error)
         elif self.restrict_to_workspace:
-            # Sandboxed: the microVM provides real isolation, but the workspace
+            # Sandboxed: the sandbox provides real isolation, but the workspace
             # fence is an operator-set boundary and still holds.
             workspace_error = self._check_workspace_restriction(command, cwd)
             if workspace_error:
@@ -385,8 +385,8 @@ class ExecTool(Tool):
         env: dict[str, str] | None = None
         if self.path_append:
             if self._executor.is_sandboxed:
-                # Inject path inside the VM via command wrapper; never pass os.environ
-                # to a sandboxed executor — it would leak host credentials into the VM.
+                # Inject path inside the sandbox via command wrapper; never pass os.environ
+                # to a sandboxed executor — it would leak host credentials into the sandbox.
                 command = f'export PATH="$PATH:{shlex.quote(self.path_append)}" && {command}'
             else:
                 # Pass ONLY the PATH override. Copying os.environ here would hand
@@ -403,6 +403,13 @@ class ExecTool(Tool):
             # A working_dir that is not on this disk fails here, before the command runs.
             return f"Error executing command: {str(e)}" + missing_here_note([cwd], command=command)
         text = result.as_text(self._MAX_OUTPUT)
+        stop = False
+        if result.denials:
+            from raven.permissions.sandbox_network import handle_denials
+
+            notice = await handle_denials(self._executor, result.denials, command=command)
+            text += notice.text
+            stop = notice.stop
         # `ls x || echo none` exits 0 with the miss only in its text.
         if (result.exit_code != 0 or "No such file or directory" in text) and not self._executor.is_sandboxed:
             from raven.agent.tools.machine_exec import missing_here_note
@@ -417,7 +424,14 @@ class ExecTool(Tool):
         # The exit code is the verdict a config change, a security call or a
         # syntax error share, and the text a failing command produced is not
         # token-safe to classify from -- so the caller gets it structurally.
-        return ToolOutput(text, ok=result.exit_code == 0, removed=removed, written=written)
+        return ToolOutput(
+            text,
+            ok=result.exit_code == 0,
+            removed=removed,
+            written=written,
+            # The person declined a blocked connection and asked to stop here.
+            continuation=Continuation.ABORT_TURN if stop else Continuation.CONTINUE,
+        )
 
     def _removal_watch(self, command: str, cwd: str) -> dict[str, str | None]:
         """The files this command could remove, with the text they hold now.

@@ -54,8 +54,8 @@ def _package_local_root() -> Path | None:
 
 
 def _playwright_roots() -> DiscoveryRoots:
-    # /ms-playwright is the boxlite VM image layout and worker.py re-runs
-    # discovery inside that VM, so it outranks the PLAYWRIGHT_BROWSERS_PATH
+    # /ms-playwright is the render worker image layout and worker.py re-runs
+    # discovery inside that sandbox, so it outranks the PLAYWRIGHT_BROWSERS_PATH
     # override, which in turn outranks the per-user host caches.
     roots: list[tuple[Path, tuple[tuple[str, ...], ...]]] = [(_VM_BROWSER_ROOT, _VM_PATTERN_GROUPS)]
     env_root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
@@ -165,8 +165,6 @@ class RenderConfig:
     ffmpeg_path: str | None = None
     ffprobe_path: str | None = None
     qpdf_path: str | None = None
-    allow_network: bool = False
-    network_allowlist: tuple[str, ...] = ()
     office_backend_order: tuple[str, ...] = ("onlyoffice", "libreoffice")
     allow_cloud_office: bool = False
     raster_dpi: int = 144

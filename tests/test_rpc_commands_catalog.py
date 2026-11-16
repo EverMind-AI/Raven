@@ -59,7 +59,7 @@ async def test_catalog_canon_contains_known_commands() -> None:
     result = await commands_catalog({})
     canon = result["canon"]
     # Single-token entries: one top-level (status; onboard/gateway/agent
-    # are filtered) + 6 group heads.
+    # are filtered) + 5 group heads.
     expected = [
         "/status",  # top-level
         "/skill",  # group head — TS exact match falls through; slash.exec("skill <sub>") routes via cli.dispatch
@@ -67,7 +67,6 @@ async def test_catalog_canon_contains_known_commands() -> None:
         "/channels",
         "/provider",
         "/cron",
-        "/sandbox",
     ]
     missing = [e for e in expected if e not in canon]
     assert not missing, f"expected canon entries missing: {missing}; canon keys: {sorted(canon)}"
@@ -114,7 +113,6 @@ async def test_catalog_sub_grouping() -> None:
     assert "sentinel" in sub
     assert "cron" in sub
     assert "provider" in sub
-    assert "sandbox" in sub
     # Spot-check representative subcommands
     assert "list" in sub["channels"]
     assert "status" in sub["channels"]
@@ -137,7 +135,7 @@ async def test_catalog_categories_order() -> None:
     categories = result["categories"]
     assert categories[0] == "(top-level)", f"first category must be '(top-level)', got {categories[0]!r}"
     # Live groups always present
-    for g in ("channels", "cron", "provider", "sandbox", "sentinel", "skill"):
+    for g in ("channels", "cron", "provider", "sentinel", "skill"):
         assert g in categories, f"group {g!r} missing from categories: {categories}"
     # Alphabetical ordering for the post-(top-level) tail
     tail = [c for c in categories[1:] if c not in ("(top-level)",)]
@@ -165,7 +163,6 @@ async def test_catalog_excludes_blacklist_and_repl() -> None:
     must_not_be_in_canon = [
         "/gateway",
         "/provider login",
-        "/sandbox shell",
         "/tui",
         "/onboard",
         # agent (REPL no-arg form) — special-cased separately.
@@ -177,7 +174,6 @@ async def test_catalog_excludes_blacklist_and_repl() -> None:
     # Blacklisted subgroup entries also absent from `sub`.
     # (channels login is NOT blacklisted anymore — see test_catalog_sub_grouping.)
     assert "login" not in sub.get("provider", []), "provider login leaked into sub"
-    assert "shell" not in sub.get("sandbox", []), "sandbox shell leaked into sub"
 
     # `tui` group fully filtered (only entry is the group-callback; once
     # filtered, the group has no members and disappears from categories).

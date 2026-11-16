@@ -55,7 +55,7 @@ def get_agent_plugins_ledger_path() -> Path:
 
 
 PACKAGE_DATA_MOUNT = "/plugin-data"
-"""Guest path the package data root is mounted at inside a sandboxed VM."""
+"""Guest path the package data root is mounted at inside a sandbox."""
 
 
 def package_data_root_path() -> Path:
@@ -76,16 +76,6 @@ def get_package_data_root() -> Path:
     it generates.
     """
     return ensure_dir(package_data_root_path())
-
-
-def get_sandbox_dir(backend: str) -> Path:
-    """Return the sandbox runtime home directory for the given backend.
-
-    e.g. backend='boxlite' → <data_dir>/sandbox/boxlite (used as boxlite's
-    home_dir so its DB, images, and layers live under raven's data dir
-    instead of ~/.boxlite).
-    """
-    return ensure_dir(get_runtime_subdir("sandbox") / backend)
 
 
 def get_logs_dir() -> Path:
