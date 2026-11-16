@@ -94,6 +94,44 @@ def mark_beacons_enabled(out_dir: "Path | str") -> None:
         pass
 
 
+def per_task_density(out_dirs: "list[Path | str]", task_ids: "list[str]") -> "dict[str, float] | None":
+    """Per-task mechanism-fire density over eval out-dirs.
+
+    Density is ``attempts with at least one beacon line / attempts recorded``
+    per task, so a task where the mechanism fired on one attempt of three still
+    ranks above one where it never fired. The anchor builder takes this map as
+    ``affinity`` to rank icebreaker slots toward tasks the mechanism engages
+    (round 2+); every ``<task>_k<K>`` workspace under the given out-dirs counts
+    as one attempt, including the infra-rerun ladder's siblings.
+
+    Returns None when no out-dir carries the collection marker: no
+    instrumentation means no affinity estimate, and the anchor stays
+    ledger-only (the same fail-open rule as :func:`read_fired_tasks`). Tasks
+    with no recorded attempt are omitted, which the anchor reads as density 0.
+    """
+    roots = [Path(d) / BEACONS_DIRNAME for d in out_dirs]
+    if not any((r / ENABLED_MARKER).exists() for r in roots):
+        return None
+    density: dict[str, float] = {}
+    for tid in task_ids:
+        attempts = 0
+        fired = 0
+        for root in roots:
+            if not root.is_dir():
+                continue
+            for ws in root.glob(f"{tid}_k*"):
+                attempts += 1
+                lf = ws / LEDGER_FILENAME
+                try:
+                    if lf.is_file() and lf.stat().st_size > 0:
+                        fired += 1
+                except OSError:
+                    continue
+        if attempts:
+            density[tid] = fired / attempts
+    return density
+
+
 def read_fired_tasks(out_dirs: "list[Path | str]", task_ids: "list[str]") -> "set[str] | None":
     """Which of ``task_ids`` have at least one beacon line under any of the
     given eval out-dirs (the confirm dir plus its infra-rerun ladder siblings).

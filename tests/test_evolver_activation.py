@@ -11,6 +11,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from evolver.activation import dry_query
+from evolver.activation.ledger import (
+    beacon_workspace,
+    mark_beacons_enabled,
+    per_task_density,
+)
 
 
 def test_dry_query_runs_the_real_catalog_and_router() -> None:
@@ -48,3 +53,64 @@ def test_dry_query_returns_each_name_once(tmp_path: Path) -> None:
     names = dry_query("handle an alpha task", library_root=tmp_path)
 
     assert len(names) == len(set(names))
+
+
+def _record_beacon(out_dir: Path, task_id: str, k: int, *, fired: bool) -> None:
+    ws = beacon_workspace(out_dir, task_id, k)
+    ws.mkdir(parents=True, exist_ok=True)
+    if fired:
+        (ws / "activation_ledger.jsonl").write_text('{"kind": "beacon"}\n', encoding="utf-8")
+    else:
+        (ws / "activation_ledger.jsonl").touch()
+
+
+def test_per_task_density_is_none_without_the_collection_marker(tmp_path: Path) -> None:
+    _record_beacon(tmp_path, "task_a", 0, fired=True)
+
+    assert per_task_density([tmp_path], ["task_a"]) is None
+
+
+def test_per_task_density_counts_attempts_that_fired(tmp_path: Path) -> None:
+    mark_beacons_enabled(tmp_path)
+    _record_beacon(tmp_path, "task_a", 0, fired=True)
+    _record_beacon(tmp_path, "task_a", 1, fired=False)
+    _record_beacon(tmp_path, "task_a", 2, fired=True)
+    _record_beacon(tmp_path, "task_b", 0, fired=False)
+    _record_beacon(tmp_path, "task_b", 1, fired=False)
+
+    density = per_task_density([tmp_path], ["task_a", "task_b", "task_c"])
+
+    assert density == {"task_a": 2 / 3, "task_b": 0.0}
+
+
+def test_per_task_density_omits_tasks_with_no_attempt(tmp_path: Path) -> None:
+    mark_beacons_enabled(tmp_path)
+    _record_beacon(tmp_path, "task_a", 0, fired=True)
+
+    density = per_task_density([tmp_path], ["task_a", "never_run"])
+
+    assert density == {"task_a": 1.0}
+    assert "never_run" not in density
+
+
+def test_per_task_density_reads_the_rerun_ladder(tmp_path: Path) -> None:
+    first = tmp_path / "confirm"
+    rerun = tmp_path / "confirm_rerun1"
+    mark_beacons_enabled(first)
+    mark_beacons_enabled(rerun)
+    _record_beacon(first, "task_a", 0, fired=True)
+    _record_beacon(first, "task_a", 1, fired=False)
+    _record_beacon(rerun, "task_a", 1, fired=True)
+
+    density = per_task_density([first, rerun], ["task_a"])
+
+    assert density == {"task_a": 2 / 3}
+
+
+def test_per_task_density_ignores_an_empty_beacon_file(tmp_path: Path) -> None:
+    mark_beacons_enabled(tmp_path)
+    _record_beacon(tmp_path, "task_a", 0, fired=False)
+
+    density = per_task_density([tmp_path], ["task_a"])
+
+    assert density == {"task_a": 0.0}

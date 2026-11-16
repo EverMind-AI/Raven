@@ -126,7 +126,10 @@ evolution tree structure. The two are linked by `git_commit_sha`.
    don't need it"; wire it for large task sets.
 3. **Affinity anchor lacks a data source:** `select_anchor(affinity)` accepts
    it; the appworld side has no trigger-density source (upstream's
-   `affinity_picker.py` was not ported). Anchors are currently icebreakers +
+   `affinity_picker.py` was not ported). `activation/ledger.py::per_task_density`
+   now reads the density back from the beacon ledger, but no bench passes it
+   yet: both shipped backends still compose their anchor with `simple_anchor`,
+   which includes every train task. Anchors are currently icebreakers +
    sentinels + borderline; screening still works, information efficiency is
    slightly lower.
 4. **WHERE mechanical binding has 4 tiers** (prompt/runtime/mixed/edit),

@@ -20,8 +20,8 @@ The subset mixes three roles (cold start, round 1):
 - ``borderline`` : BORDERLINE_* tasks; the high-variance discriminators that
   dominate ``sigma_screen``.
 
-Round 2+: pass an ``affinity`` map (``{task_id: mechanism-fire density}``, e.g.
-from ``affinity_task_picker.per_task_density``) to bias icebreaker slots toward
+Round 2+: pass an ``affinity`` map (``{task_id: mechanism-fire density}``, from
+``evolver.activation.ledger.per_task_density``) to bias icebreaker slots toward
 tasks where the round's mechanism actually fires. Without it the selection is
 ledger-only and mechanism-agnostic.
 

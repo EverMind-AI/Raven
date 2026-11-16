@@ -15,6 +15,7 @@ from evolver.activation.ledger import (
     WORKSPACE_ENV,
     ActivationLedger,
     activation_beacon,
+    per_task_density,
     set_activation_workspace,
 )
 from evolver.activation.routing_query import dry_query
@@ -25,6 +26,7 @@ __all__ = [
     "ActivationLedger",
     "WORKSPACE_ENV",
     "activation_beacon",
+    "per_task_density",
     "set_activation_workspace",
     "ActivationSpec",
     "evaluate_spec",
