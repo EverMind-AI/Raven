@@ -5,7 +5,7 @@ import { resetTranslator, setTranslator } from '../i18n/t'
 import * as confirmStore from '../state/confirm'
 import * as pageStore from '../state/page'
 import { resetSources, setSources } from '../state/sources'
-import { md } from './prose'
+import { md, mdBlocks } from './prose'
 
 import type { ProseSource } from './prose'
 
@@ -342,5 +342,32 @@ describe('prose renderer, mathematics', () => {
     expect(out).toContain('$')
     /* A lone opener is a dollar sign the author typed, not a block. */
     expect(md('$$\nnot closed')).not.toContain('mathblk')
+  })
+})
+
+describe('prose renderer, one block at a time', () => {
+  it('hands back what md() writes, one string per top-level block', () => {
+    wire()
+    const src = [
+      '## Head', '', 'one paragraph', 'still the same one', '', '```ts', 'const a = 1', '```', '',
+      '- a', '- b', '', '| x | y |', '|---|---|', '| 1 | 2 |', '', '$$', 'x^2', '$$', '', '> quoted', '',
+      '---', '', 'last',
+    ].join('\n')
+    const blocks = mdBlocks(src)
+    expect(blocks.join('')).toBe(md(src))
+    const box = document.createElement('template')
+    box.innerHTML = md(src)
+    expect(blocks).toHaveLength(box.content.children.length)
+    expect(blocks.map((b) => {
+      const one = document.createElement('template')
+      one.innerHTML = b
+      return one.content.children.length
+    })).toEqual(blocks.map(() => 1))
+  })
+
+  it('has nothing to hand back for an empty reply', () => {
+    wire()
+    expect(mdBlocks('')).toEqual([])
+    expect(mdBlocks('\n\n')).toEqual([])
   })
 })

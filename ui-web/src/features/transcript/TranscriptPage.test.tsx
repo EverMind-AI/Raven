@@ -41,7 +41,11 @@ let lang = 'en'
 const seen = vi.hoisted(() => ({ md: 0 }))
 vi.mock('../../lib/prose', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../lib/prose')>()
-  return { ...real, md: (src: string) => { seen.md += 1; return real.md(src) } }
+  return {
+    ...real,
+    md: (src: string) => { seen.md += 1; return real.md(src) },
+    mdBlocks: (src: string) => { seen.md += 1; return real.mdBlocks(src) },
+  }
 })
 
 function wire(over: Partial<TranscriptSource> = {}): void {
@@ -3658,6 +3662,44 @@ describe('transcript island, streaming', () => {
        stub returning the raw source did not. */
     expect($('.say')?.textContent).toContain('word99')
     expect($('.ask')).toBe(askEl)
+  })
+
+  it('leaves the blocks a streamed reply already finished alone as it grows', () => {
+    const rafQ: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { rafQ.push(cb); return rafQ.length })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+    const flush = (): void => act(() => { rafQ.splice(0).forEach((cb) => cb(0)) })
+    let st!: ReturnType<typeof mount.step>
+    act(() => {
+      mount.ask('question')
+      st = mount.step()
+      st.sayDelta('first paragraph\n\nsecond')
+    })
+    flush()
+    const first = $('.say > p')
+    expect(first?.textContent).toBe('first paragraph')
+    act(() => { st.sayDelta(' paragraph, longer\n\n- and a list') })
+    flush()
+    expect($('.say > p')).toBe(first)
+    expect([...$('.say')!.children].map((c) => c.tagName)).toEqual(['P', 'P', 'UL'])
+  })
+
+  it('leaves the blocks a typed answer already finished alone as it types', () => {
+    let typed!: ReturnType<typeof mount.answerTyped>
+    act(() => {
+      mount.ask('question')
+      typed = mount.answerTyped('first paragraph\n\nsecond paragraph')
+      typed.progress(17)
+    })
+    const first = $('.answer .prose > p')
+    expect(first?.textContent).toBe('first paragraph')
+    act(() => { typed.progress(25) })
+    expect($('.answer .prose > p')).toBe(first)
+    expect($('.answer .prose .caret')).not.toBeNull()
+    act(() => { typed.done() })
+    expect($('.answer .prose > p')).toBe(first)
+    expect($('.answer .prose .caret')).toBeNull()
+    expect($('.answer .prose')?.textContent).toBe('first paragraphsecond paragraph')
   })
 
   it('promotes the streamed prose into the answer block when the turn lands', () => {

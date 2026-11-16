@@ -152,8 +152,9 @@ export function installGlobalListeners(): void {
   window.addEventListener('resize', dropBars)
   /* Both panes re-clamp, or a narrowed window leaves the chat no floor. */
   window.addEventListener('resize', reclampPanes)
-  /* The path and artefact chips in an answer, which are replaced wholesale
-     with every answer -- so the click and the key are the document's. */
+  /* The path and artefact chips in an answer, whose nodes are replaced each
+     time the prose around them is redrawn -- so the click and the key are the
+     document's. */
   document.addEventListener('click', chipClick)
   document.addEventListener('keydown', chipKey)
   /* The context menu closes on a pointer outside it; the two popovers below
