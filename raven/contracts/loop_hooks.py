@@ -198,9 +198,11 @@ class HookDecision:
     for this one iteration. The registry is untouched, so the next
     iteration starts from the full set unless a hook decides again.
 
-    ``append_note`` is the second grant: text the loop appends to the last
-    transcript message (a blank line between) before the next model call, in
-    the three iteration phases. Chained: every hook's note lands, in order.
+    ``append_note`` is the second grant: text the loop writes into the
+    transcript before the next model call, in the three iteration phases. It
+    joins the last message after a blank line, except after a tool round, where
+    the last message is a fenced tool result and the note becomes a message of
+    its own. Chained: every hook's note lands, in order.
 
     ``notes`` is the diagnostic trail: free-form strings a hook leaves about
     what it saw and decided. The loop deliberately does not act on them;
@@ -323,8 +325,8 @@ class AgentHook(ABC):
             via memory_engine.
           - Bouncing a draft back with feedback (``rollback`` +
             ``rollback_inject``) or replacing it (``short_circuit_result``).
-          - Leaving the model a note on the tool results it is about to read
-            (``append_note``).
+          - Leaving the model a note before the next call (``append_note``);
+            after a tool round it is written as a message of its own.
 
         Fires twice per iteration shape: after tool results are in (the
         response carried tool calls) and, for a text response, before that

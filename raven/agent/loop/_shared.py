@@ -546,17 +546,22 @@ class SessionPolicy:
 
 
 def append_hook_note(messages: list[dict[str, Any]] | None, note: str) -> bool:
-    """Land a hook's ``append_note`` on the last transcript message.
+    """Land a hook's ``append_note`` in the transcript the model reads.
 
-    A blank line separates it from the body, and a block-shaped body gains a
-    text block, so the note reads as part of what the model was already about
-    to read. False when there is nothing to land on or the body's shape is one
-    the loop does not know -- the note is dropped rather than guessed into
-    place, and the caller logs that.
+    After a tool round the last row is a tool result, which is fenced as
+    untrusted input: guidance written into one reaches the model as something a
+    tool told it. So the note becomes a message of its own there. Every other
+    body gains it after a blank line (or as a text block), which reads as part
+    of what the model was already about to read. False when there is nothing to
+    land on or the body's shape is one the loop does not know -- the note is
+    dropped rather than guessed into place, and the caller logs that.
     """
     if not messages or not note:
         return False
     last = messages[-1]
+    if last.get("role") == "tool":
+        messages.append({"role": "user", "content": note})
+        return True
     body = last.get("content")
     if isinstance(body, str):
         last["content"] = f"{body}\n\n{note}" if body else note
