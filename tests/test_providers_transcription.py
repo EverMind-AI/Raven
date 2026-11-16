@@ -24,7 +24,8 @@ def test_a_missing_key_returns_a_diagnosis_naming_the_fix(monkeypatch):
         logger.remove(sink_id)
 
     assert "raven provider set groq --api-key" in text
-    assert said and "raven provider set groq --api-key" in said[0]
+    assert "restart the gateway" in text
+    assert said and "restart the gateway" in said[0]
 
 
 def test_a_configured_key_still_reports_a_missing_file_as_empty(monkeypatch):

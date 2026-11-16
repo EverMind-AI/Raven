@@ -6,7 +6,10 @@ from pathlib import Path
 import httpx
 from loguru import logger
 
-_NO_KEY_DIAGNOSIS = "Groq API key not configured for transcription. Run: raven provider set groq --api-key <KEY>"
+_NO_KEY_DIAGNOSIS = (
+    "Groq API key not configured for transcription. "
+    "Run: raven provider set groq --api-key <KEY>, then restart the gateway."
+)
 
 
 def transcription_api_key(config) -> str:
