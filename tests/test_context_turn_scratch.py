@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 from raven.agent.context import ContextBuilder
+from raven.agent.window.parts import ATTACHMENT_NOTES_KEY, CONVERSATION, FILES, measure_parts
 from raven.context_engine import ContextAssembler, TurnContext
 from raven.context_engine.scratch import (
     TURN_SCRATCH_KEY,
@@ -42,6 +43,7 @@ from raven.contracts.memory import Memory
 from raven.memory_engine.skill_forge import RouterHit, SkillForgeRouter
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.providers.prompt_cache import STABLE_PREFIX_KEY
+from raven.utils.tokens import estimate_prompt_tokens
 
 _SEP = "\n\n---\n\n"
 _MEMORY_HEADING = re.compile(r"(?m)^# Memory$")
@@ -67,6 +69,22 @@ def _whole_prompt(messages: list[dict[str, Any]]) -> str:
 
 def _envelope(content: Any, scratch: str = _SCRATCH) -> dict[str, Any]:
     return mark_turn_scratch({"role": "user", "content": content}, scratch)
+
+
+def _without_text(message: dict[str, Any], text: str) -> dict[str, Any]:
+    """The stored message with one recorded text cut out of its text blocks."""
+    content = message.get("content")
+    if isinstance(content, str):
+        return {**message, "content": content.replace(text, "")}
+    return {
+        **message,
+        "content": [
+            {**block, "text": block["text"].replace(text, "")}
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+            else block
+            for block in content
+        ],
+    }
 
 
 class _EchoBackend:
@@ -486,6 +504,93 @@ class TestSessionNeverRecordsTheScratch:
         stored, _ = self._save(tmp_path, [_envelope(f"{_RUNTIME}\n\n{_PASTED}")])
 
         assert stored[0]["content"] == _PASTED
+
+
+# ---------------------------------------------------------------------------
+# The attachment note record: written by the assembler, carried by the message
+# ---------------------------------------------------------------------------
+
+
+class TestTheAttachmentNoteRecord:
+    def _save(self, tmp_path: Path, messages: list[dict], **kw) -> None:
+        from raven.agent.loop.main import AgentLoop
+        from raven.session.manager import SessionManager
+
+        manager = SessionManager(tmp_path)
+        session = manager.get_or_create("cli:x")
+        AgentLoop._save_turn(_loop_stub(), session, messages, 0, **kw)
+        manager.save(session)
+
+    def _reload(self, tmp_path: Path) -> list[dict]:
+        from raven.session.manager import SessionManager
+
+        return SessionManager(tmp_path).get_or_create("cli:x").messages
+
+    async def test_the_assembler_records_the_notes_it_appended(self, builder: ContextBuilder, tmp_path: Path) -> None:
+        """The measure cuts the notes by this record, so the assembler must put
+        it on the message it appended them to."""
+        report = tmp_path / "report.pdf"
+        report.write_bytes(b"%PDF-1.4 not really a pdf")
+        note = f"[Attachment: report.pdf (path: {report})]"
+
+        ac = await _engine(builder).assemble(
+            "s", [], _budget(), turn=TurnContext(current_message="summarize this", media=[str(report)])
+        )
+        message = ac.messages[-1]
+
+        assert message[ATTACHMENT_NOTES_KEY] == note
+        assert note in message["content"]
+
+    async def test_a_saved_string_message_reverts_the_note_and_drops_the_record(
+        self, builder: ContextBuilder, tmp_path: Path
+    ) -> None:
+        """The string path files the user's own words, so the note is not in the
+        stored message and its record must not outlive it."""
+        report = tmp_path / "report.pdf"
+        report.write_bytes(b"%PDF-1.4 not really a pdf")
+        note = f"[Attachment: report.pdf (path: {report})]"
+        ac = await _engine(builder).assemble(
+            "s", [], _budget(), turn=TurnContext(current_message="look at this", media=[str(report)])
+        )
+        assert ac.messages[-1][ATTACHMENT_NOTES_KEY] == note
+
+        self._save(tmp_path, [ac.messages[-1]], inbound_original="look at this")
+        stored = self._reload(tmp_path)[0]
+        parts = measure_parts([stored])
+
+        assert stored["content"] == "look at this"
+        assert ATTACHMENT_NOTES_KEY not in stored
+        assert parts[FILES] == 0
+        assert parts[CONVERSATION] == estimate_prompt_tokens([{"role": "user", "content": "look at this"}])
+        assert sum(parts.values()) == estimate_prompt_tokens([stored])
+
+    async def test_a_saved_block_message_keeps_the_record_and_the_files(
+        self, builder: ContextBuilder, tmp_path: Path
+    ) -> None:
+        """The block path keeps the notes it really carried, so a reloaded turn
+        still counts them as files and takes them out of the conversation."""
+        from PIL import Image
+
+        picture = tmp_path / "cat.png"
+        Image.new("RGB", (8, 8), "red").save(picture)
+        report = tmp_path / "report.pdf"
+        report.write_bytes(b"%PDF-1.4 not really a pdf")
+        ac = await _engine(builder).assemble(
+            "s", [], _budget(), turn=TurnContext(current_message="look at this", media=[str(report), str(picture)])
+        )
+        message = ac.messages[-1]
+        record = message[ATTACHMENT_NOTES_KEY]
+        assert isinstance(record, str) and record
+        assert isinstance(message["content"], list)
+
+        self._save(tmp_path, [message], inbound_original="look at this")
+        stored = self._reload(tmp_path)[0]
+        parts = measure_parts([stored])
+
+        assert stored[ATTACHMENT_NOTES_KEY] == record
+        assert parts[FILES] == estimate_prompt_tokens([{"role": "user", "content": record}])
+        assert parts[CONVERSATION] == estimate_prompt_tokens([_without_text(stored, record)])
+        assert sum(parts.values()) == estimate_prompt_tokens([stored])
 
 
 # ---------------------------------------------------------------------------

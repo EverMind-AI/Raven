@@ -11,6 +11,8 @@ is.
 
 from __future__ import annotations
 
+import base64
+
 import pytest
 
 from raven.agent.window.parts import (
@@ -23,6 +25,7 @@ from raven.agent.window.parts import (
     TOOLS,
     measure_parts,
 )
+from raven.utils.images import estimate_content_part_tokens
 from raven.utils.tokens import estimate_prompt_tokens
 
 # The turn scratch as the assembler builds it: the tag, then the memory and
@@ -311,17 +314,75 @@ def test_the_notes_recorded_on_a_message_are_the_files_not_the_conversation() ->
     conversation.
     """
     note = "[Attachment: report.pdf (path: /tmp/report.pdf) - use the read_file tool to read its contents]"
+    content = f"summarize this\n\n{note}"
     parts = measure_parts(
         [
             {"role": "system", "content": "you are raven"},
-            {"role": "user", "content": f"summarize this\n\n{note}", ATTACHMENT_NOTES_KEY: note},
+            {"role": "user", "content": content, ATTACHMENT_NOTES_KEY: note},
         ]
     )
 
-    assert parts[FILES] > 0
-    assert parts[CONVERSATION] > 0
+    without_note = content.replace(note, "")
+    assert parts[FILES] == estimate_prompt_tokens([{"role": "user", "content": note}])
     # The note is out of the conversation: what is left is the user's words.
-    assert parts[CONVERSATION] < estimate_prompt_tokens([{"role": "user", "content": "summarize this"}]) + 30
+    assert parts[CONVERSATION] == estimate_prompt_tokens([{"role": "user", "content": without_note}])
+
+
+def test_a_note_quoted_by_the_assistant_is_not_cut() -> None:
+    """Only the message carrying the record is cut: an answer that repeats the
+    note verbatim is the assistant talking, not the request's attachment."""
+    note = "[Attachment: report.pdf (path: /tmp/report.pdf)]"
+    messages = [
+        {"role": "user", "content": f"summarize this\n\n{note}", ATTACHMENT_NOTES_KEY: note},
+        {"role": "assistant", "content": note},
+    ]
+    parts = measure_parts(messages)
+
+    assert parts[FILES] == estimate_prompt_tokens([{"role": "user", "content": note}])
+    assert parts[CONVERSATION] == estimate_prompt_tokens(
+        [
+            {"role": "user", "content": "summarize this"},
+            {"role": "assistant", "content": note},
+        ]
+    )
+    assert sum(parts.values()) == estimate_prompt_tokens(messages)
+
+
+def test_a_note_the_user_typed_on_another_message_is_not_cut() -> None:
+    """The same text in a message with no record of its own is the user's words;
+    cutting it would take the conversation down with the note."""
+    note = "[Attachment: report.pdf (path: /tmp/report.pdf)]"
+    messages = [
+        {"role": "user", "content": f"summarize this\n\n{note}", ATTACHMENT_NOTES_KEY: note},
+        {"role": "user", "content": note},
+    ]
+    parts = measure_parts(messages)
+
+    assert parts[FILES] == estimate_prompt_tokens([{"role": "user", "content": note}])
+    assert parts[CONVERSATION] == estimate_prompt_tokens(
+        [
+            {"role": "user", "content": "summarize this"},
+            {"role": "user", "content": note},
+        ]
+    )
+    assert sum(parts.values()) == estimate_prompt_tokens(messages)
+
+
+def test_a_message_cuts_its_own_note_and_the_request_wide_memory() -> None:
+    """The per-message scope is the record's alone: the memory is the request's,
+    so it still comes out of the message that carries both."""
+    note = "[Attachment: report.pdf (path: /tmp/report.pdf)]"
+    content = f"look\n\n{note}\n\n{MEMORY_TEXT}"
+    parts = measure_parts(
+        [{"role": "user", "content": content, ATTACHMENT_NOTES_KEY: note}],
+        None,
+        {"memory": MEMORY_TEXT},
+    )
+
+    residual = content.replace(note, "").replace(MEMORY_TEXT, "")
+    assert parts[FILES] == estimate_prompt_tokens([{"role": "user", "content": note}])
+    assert parts[MEMORY] == estimate_prompt_tokens([{"role": "user", "content": MEMORY_TEXT}])
+    assert parts[CONVERSATION] == estimate_prompt_tokens([{"role": "user", "content": residual}])
 
 
 def test_a_note_shaped_line_without_a_record_stays_conversation() -> None:
@@ -353,23 +414,48 @@ def test_a_picture_is_files_not_conversation() -> None:
     assert with_picture[CONVERSATION] <= without[CONVERSATION] + 5
 
 
+def test_an_inline_picture_is_file_bytes_not_conversation() -> None:
+    """A real image block is measured on its own bytes, and the talk beside it
+    is exactly the text -- not merely no larger than it."""
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+    )
+    picture = {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64," + base64.b64encode(png).decode("ascii")},
+    }
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "what is in this picture?"}, picture]},
+    ]
+    parts = measure_parts(messages)
+
+    assert parts[FILES] > 0
+    assert parts[CONVERSATION] == estimate_prompt_tokens(
+        [{"role": "user", "content": [{"type": "text", "text": "what is in this picture?"}]}]
+    )
+
+
 def test_the_parts_still_add_up_when_files_are_in_the_prompt() -> None:
     """Files are measured on their own content, so the account still closes."""
     note = "[Attachment: report.pdf (path: /tmp/report.pdf)]"
     picture = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+    text = f"look\n\n{note}"
     messages = [
         {"role": "system", "content": "you are raven"},
         {
             "role": "user",
-            "content": [{"type": "text", "text": f"look\n\n{note}"}, picture],
+            "content": [{"type": "text", "text": text}, picture],
             ATTACHMENT_NOTES_KEY: note,
         },
     ]
     parts = measure_parts(messages)
 
     whole = estimate_prompt_tokens(messages)
-    assert parts[FILES] > 0
-    assert abs(sum(parts.values()) - whole) <= 20
+    assert parts[FILES] == estimate_prompt_tokens([{"role": "user", "content": note}]) + estimate_content_part_tokens(
+        picture
+    )
+    assert parts[CONVERSATION] == estimate_prompt_tokens([{"role": "user", "content": text.replace(note, "")}])
+    assert abs(sum(parts.values()) - whole) <= 1
 
 
 def test_a_block_message_with_no_picture_is_left_whole() -> None:
