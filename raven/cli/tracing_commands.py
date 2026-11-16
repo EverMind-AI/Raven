@@ -129,11 +129,16 @@ def _pid_file() -> Path:
 
 
 _PID_MAX = 2**31 - 1  # pid_t is a signed 32-bit int; real Windows pids stay far below it.
+_PORT_MAX = 65535
 
 
-def _is_json_int(value: object) -> bool:
-    """True for a JSON integer, and false for a bool (``isinstance(True, int)``)."""
-    return isinstance(value, int) and not isinstance(value, bool)
+def _is_port(value: object) -> bool:
+    """True for a port a viewer can listen on, and false for a bool.
+
+    ``isinstance(True, int)`` would let a bool through as port 1, and an int
+    outside 1-65535 names a port nothing can bind.
+    """
+    return isinstance(value, int) and not isinstance(value, bool) and 0 < value <= _PORT_MAX
 
 
 def _is_pid(value: object) -> bool:
@@ -153,7 +158,7 @@ def _parse_pid_record(text: str | None) -> dict | None:
         data = json.loads(text)
     except ValueError:
         return None
-    if isinstance(data, dict) and _is_pid(data.get("pid")) and _is_json_int(data.get("port")):
+    if isinstance(data, dict) and _is_pid(data.get("pid")) and _is_port(data.get("port")):
         return data
     return None
 

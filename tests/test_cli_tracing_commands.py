@@ -424,6 +424,22 @@ def test_tracing_drops_a_record_whose_pid_is_out_of_range(tmp_path, monkeypatch,
     assert not pidfile.exists()
 
 
+@pytest.mark.parametrize("port", [True, 0, -1, 65536])
+def test_tracing_drops_a_record_whose_port_is_out_of_range(tmp_path, monkeypatch, port):
+    """A port nothing can listen on is not one a record can name.
+
+    The pid was bounded but the port was only checked to be a JSON int, so a
+    corrupt record stayed "usable" while no adoption could ever reach it. A
+    bool is not a port either: ``isinstance(True, int)`` would make it 1.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 4242, "port": port}), encoding="utf-8")
+
+    assert tc._read_pid_file() is None
+    assert not pidfile.exists()
+
+
 def test_tracing_keeps_the_record_when_the_lock_cannot_be_taken(tmp_path, monkeypatch):
     """A state directory that cannot hold the lock leaves the record for the next run.
 
