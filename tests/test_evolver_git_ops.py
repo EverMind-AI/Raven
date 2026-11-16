@@ -432,14 +432,15 @@ index 0000000..2222222
 
     def test_guards_a_non_ascii_immutable_path(self, repo):
         repo_dir, sha = repo
-        diff = """diff --git a/evolver/\u4e2d\u6587.py b/evolver/\u4e2d\u6587.py
-new file mode 100644
-index 0000000..2222222
---- /dev/null
-+++ b/evolver/\u4e2d\u6587.py
-@@ -0,0 +1 @@
-+KERNEL = 0
-""".encode().decode("unicode_escape")
+        diff = (
+            "diff --git a/evolver/中文.py b/evolver/中文.py\n"
+            "new file mode 100644\n"
+            "index 0000000..2222222\n"
+            "--- /dev/null\n"
+            "+++ b/evolver/中文.py\n"
+            "@@ -0,0 +1 @@\n"
+            "+KERNEL = 0\n"
+        )
         with pytest.raises(ImmutablePathError, match="evolver"):
             git_ops.apply_patch_as_commit(repo_dir, sha, diff, "candidate")
 
@@ -455,3 +456,18 @@ index 0000000..1111111 100644
 """
         child = git_ops.apply_patch_as_commit(repo_dir, sha, diff, "candidate")
         assert _git(repo_dir, "show", f"{child}:src/x.py") == "x = 2\n"
+
+    def test_guards_a_rename_deleting_an_immutable_source(self, repo):
+        repo_dir, sha = repo
+        (repo_dir / "evolver").mkdir()
+        (repo_dir / "evolver/kernel.py").write_text("KERNEL = 1\n")
+        _git(repo_dir, "add", "evolver/kernel.py")
+        _git(repo_dir, "commit", "-m", "add kernel")
+        sha = _git(repo_dir, "rev-parse", "HEAD").strip()
+        diff = """diff --git a/evolver/kernel.py b/src/kernel.py
+similarity index 100%
+rename from evolver/kernel.py
+rename to src/kernel.py
+"""
+        with pytest.raises(ImmutablePathError, match="evolver"):
+            git_ops.apply_patch_as_commit(repo_dir, sha, diff, "candidate")

@@ -379,6 +379,9 @@ def apply_patch_as_commit(
             "diff",
             "--cached",
             "--name-only",
+            # Rename detection would show only the destination of a rename,
+            # hiding the deleted immutable source; list both paths instead.
+            "--no-renames",
             "-z",
             parent_sha,
             env=env,
@@ -485,7 +488,19 @@ def commit_files_as_child(
                     link.unlink()
             _run(wt, "add", "-A")
             changed = [
-                line for line in _run(wt, "diff", "--cached", "--name-only", parent_sha).splitlines() if line.strip()
+                line
+                for line in _run(
+                    wt,
+                    "-c",
+                    "core.quotePath=false",
+                    "diff",
+                    "--cached",
+                    "--name-only",
+                    "--no-renames",
+                    "-z",
+                    parent_sha,
+                ).split("\0")
+                if line.strip()
             ]
             tree_sha = _run(wt, "write-tree").strip()
             commit_env = {
