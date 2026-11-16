@@ -202,6 +202,23 @@ def test_tracing_stop_drops_an_unreadable_pidfile(tmp_path, monkeypatch):
     assert not pidfile.exists()
 
 
+def test_tracing_stop_keeps_a_record_another_launcher_rewrote(tmp_path, monkeypatch):
+    """Clearing the record the stop handled must not delete a newer one.
+
+    `_stop_viewer` reads pid A, decides it is stale, and clears; a launcher can
+    replace the record with pid B in between, and that record is not the
+    stop's to remove.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 31337, "port": 4318}), encoding="utf-8")
+
+    tc._clear_pid_file(4242)
+
+    assert pidfile.exists()
+    assert json.loads(pidfile.read_text(encoding="utf-8")) == {"pid": 31337, "port": 4318}
+
+
 def test_tracing_reuses_live_instance_from_pidfile(tmp_path, monkeypatch):
     monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
     (tmp_path / "viewer.pid").write_text(json.dumps({"pid": 4242, "port": 5555}), encoding="utf-8")
@@ -221,7 +238,7 @@ def test_tracing_reuses_live_instance_from_pidfile(tmp_path, monkeypatch):
 
     assert opened == ["http://127.0.0.1:5555/"]
     assert "already running" in buf.getvalue()
-    assert "no pid record" not in buf.getvalue()
+    assert "no usable pid record" not in buf.getvalue()
 
 
 def test_tracing_keeps_a_live_viewer_record_when_its_health_probe_fails(tmp_path, monkeypatch):
@@ -311,6 +328,61 @@ def test_tracing_drops_a_record_whose_pid_is_not_a_number(tmp_path, monkeypatch)
     assert not pidfile.exists()
 
 
+def test_tracing_keeps_a_record_written_while_it_was_reading(tmp_path, monkeypatch):
+    """A launcher that records its viewer mid-read must not lose that record.
+
+    `_read_pid_file` drops a malformed record, and that delete is a
+    read-modify-write of the same file `_write_pid_file` replaces atomically:
+    a record written between the read and the unlink must not be the one
+    deleted.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text("{not json", encoding="utf-8")
+    fresh = {"pid": 31337, "port": 4318}
+    real_read_text = Path.read_text
+    wrote = []
+
+    def read_then_record_a_viewer(self, *args, **kwargs):
+        text = real_read_text(self, *args, **kwargs)
+        if not wrote:
+            wrote.append(True)
+            # Another `raven tracing` finishes its spawn at this instant.
+            tc._write_pid_file(**fresh)
+        return text
+
+    monkeypatch.setattr(Path, "read_text", read_then_record_a_viewer)
+
+    assert tc._read_pid_file() == fresh
+    assert json.loads(pidfile.read_text(encoding="utf-8")) == fresh
+
+
+def test_tracing_keeps_the_record_when_a_read_fails_transiently(tmp_path, monkeypatch):
+    """A transient read failure is not proof of a bad record, so the file stays.
+
+    A Windows sharing violation or a permission blip must not delete the
+    record: the next launch can read it again.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    entry = {"pid": 4242, "port": 4318}
+    pidfile.write_text(json.dumps(entry), encoding="utf-8")
+    real_read_text = Path.read_text
+    failed = []
+
+    def fail_the_first_read(self, *args, **kwargs):
+        if not failed:
+            failed.append(True)
+            raise PermissionError(13, "sharing violation", str(self))
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_the_first_read)
+
+    assert tc._read_pid_file() is None
+    assert pidfile.exists()
+    assert json.loads(pidfile.read_text(encoding="utf-8")) == entry
+
+
 def test_tracing_adopts_unrecorded_viewer_and_says_stop_will_not_manage_it(tmp_path, monkeypatch):
     """A viewer this CLI did not start has no pid record, so stop cannot reach it.
 
@@ -335,7 +407,7 @@ def test_tracing_adopts_unrecorded_viewer_and_says_stop_will_not_manage_it(tmp_p
 
     out = buf.getvalue()
     assert opened == ["http://127.0.0.1:4318/"]
-    assert "no pid record" in out
+    assert "no usable pid record" in out
     assert "will not manage" in out
 
 
@@ -356,7 +428,7 @@ def test_tracing_drops_an_unreadable_pidfile_before_adopting(tmp_path, monkeypat
 
     assert opened == ["http://127.0.0.1:4318/"]
     assert not pidfile.exists()
-    assert "no pid record" in buf.getvalue()
+    assert "no usable pid record" in buf.getvalue()
 
 
 def test_pid_is_viewer_rejects_foreign_process():

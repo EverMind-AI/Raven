@@ -13,10 +13,11 @@ so it needs the same Node >= 22 that ``raven tui`` already requires.
 The background viewer's pid + port are recorded in ``<state_dir>/viewer.pid``
 so a later ``raven tracing`` reuses the live instance instead of stacking
 orphans, and ``raven tracing stop`` can shut it down. The record is replaced
-atomically: a reader that caught a half-written file would read it as "no
-record" and drop it, and a live viewer would be left with no handle. The stop
-path only signals a pid whose command line still matches the node viewer — a
-recycled pid is never killed.
+atomically -- otherwise a reader could catch a half-written file, read it as
+"no record", and drop it -- and every read-and-delete of it runs under the same
+lock as that replacement, so a record a concurrent launcher just wrote is never
+the one deleted. The stop path only signals a pid whose command line still
+matches the node viewer — a recycled pid is never killed.
 
 Registered as a top-level leaf command (not a subcommand group) so the TUI
 command catalog lists it as a plain ``/tracing`` slash under "(top-level)".
@@ -136,19 +137,56 @@ def _is_json_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _read_pid_file() -> dict | None:
-    path = _pid_file()
+def _parse_pid_record(text: str | None) -> dict | None:
+    """The record in ``text``, or None when it is not one."""
+    if text is None:
+        return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        data = None
+        data = json.loads(text)
+    except ValueError:
+        return None
     if isinstance(data, dict) and _is_json_int(data.get("pid")) and _is_json_int(data.get("port")):
         return data
-    # A malformed or unreadable record is not a record: drop it so the launcher
-    # and `stop` agree that nothing is recorded. A removal that fails (a
-    # permission error) leaves the file for the next run to retry.
-    with suppress(OSError):
-        path.unlink()
+    return None
+
+
+def _read_pid_file() -> dict | None:
+    """Read the record, dropping only a record that was read and is not one.
+
+    A read that fails (a Windows sharing violation, a permission blip) is not
+    evidence that the record is bad: it stays for the next run. Deleting a bad
+    record is serialized with ``_write_pid_file``'s atomic replace, so a record
+    a concurrent launcher wrote between the read and the unlink is not the one
+    the delete removes.
+    """
+    path = _pid_file()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return None
+    except ValueError:
+        text = None  # not UTF-8: a corrupt record, removed below
+    entry = _parse_pid_record(text)
+    if entry is not None:
+        return entry
+    from raven.utils.atomic_io import write_transaction
+
+    with write_transaction(path):
+        try:
+            current = path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        except ValueError:
+            current = None
+        entry = _parse_pid_record(current)
+        if entry is not None:
+            # A launcher replaced the corrupt record while this read was
+            # failing over it: the newer record wins.
+            return entry
+        with suppress(OSError):
+            path.unlink()
     return None
 
 
@@ -165,8 +203,26 @@ def _write_pid_file(pid: int, port: int) -> None:
     atomic_replace(_pid_file(), json.dumps({"pid": pid, "port": port}))
 
 
-def _clear_pid_file() -> None:
-    _pid_file().unlink(missing_ok=True)
+def _clear_pid_file(pid: int) -> None:
+    """Remove the record only while it still names ``pid``.
+
+    The caller has just decided about that pid (stopped it, or found it stale).
+    A launcher can replace the record in between; deleting that newer record
+    would take away the handle of a viewer the caller never saw.
+    """
+    path = _pid_file()
+    from raven.utils.atomic_io import write_transaction
+
+    with write_transaction(path):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            return
+        entry = _parse_pid_record(text)
+        if entry is None or entry["pid"] != pid:
+            return
+        with suppress(OSError):
+            path.unlink()
 
 
 def _pid_is_viewer(pid: int) -> bool | None:
@@ -223,14 +279,14 @@ def _stop_viewer() -> None:
         return
     pid = entry["pid"]
     if not _checked_viewer(pid):
-        _clear_pid_file()
+        _clear_pid_file(pid)
         console.print("Tracing viewer is not running (cleared a stale pid file).")
         return
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
-    _clear_pid_file()
+    _clear_pid_file(pid)
     console.print(f"Stopped tracing viewer (pid {pid}).")
 
 
@@ -291,7 +347,7 @@ def _open_dashboard(port: int) -> None:
             # the new one.
             stuck = entry
         else:
-            _clear_pid_file()
+            _clear_pid_file(entry["pid"])
 
     if _port_live(port):
         if _viewer_health(port):
@@ -303,8 +359,8 @@ def _open_dashboard(port: int) -> None:
             # later. Say so instead of handing out a dashboard the user cannot
             # shut down.
             console.print(
-                "[yellow]It has no pid record, so [cyan]raven tracing stop[/cyan] will not "
-                "manage it; stop that instance by hand.[/yellow]"
+                "[yellow]It has no usable pid record, so [cyan]raven tracing stop[/cyan] will "
+                "not manage it; stop that instance by hand.[/yellow]"
             )
             webbrowser.open(url)
             return
