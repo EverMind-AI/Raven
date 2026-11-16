@@ -159,9 +159,10 @@ slow path 可消耗有限模型调用生成计划，无有效计划时使用确�
 最后才允许修改。`raven plugin auth <server>` 处理已配置 MCP 的 OAuth，不是任意
 插件安装器。
 
-网页端设置弹窗的「插件」页负责开关、重试和授权已配置的服务；页上的「新增」会把你带到
+网页端设置弹窗的「MCP」页负责开关、重试和授权已配置的服务；页上的「新增」会把你带到
 会话里，由 Raven 从 PlugHub 目录接入服务；目录里没有的服务，要手改 `config.json` 的
-`tools.mcpServers`。
+`tools.mcpServers`。旁边的「插件」页列出 [Agent 插件包](agent-plugin-packages.md)，
+它们会带来自己的技能和 MCP 服务。
 
 需要进程内工具、hook、服务或记忆后端时使用 Raven plugin。声明式
 `raven-plugin.toml` 列出贡献，代码运行于宿主信任域内。`raven plugins` 列出已安装

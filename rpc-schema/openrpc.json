@@ -4862,6 +4862,81 @@
       }
     },
     {
+      "name": "agent_plugins.list",
+      "summary": "The Agent Plugin packages this host can see, with their skills and MCP servers.",
+      "params": [],
+      "result": {
+        "name": "AgentPluginsListResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "packages": {
+              "items": {
+                "$ref": "#/components/schemas/AgentPluginRow"
+              },
+              "type": "array"
+            },
+            "problems": {
+              "description": "Configured paths that hold no usable package.",
+              "items": {
+                "$ref": "#/components/schemas/AgentPluginProblem"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "packages",
+            "problems"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "agent_plugins.set_mcp",
+      "summary": "Allow or withhold one package's MCP servers (agentPlugins.mcpPackages); applies at the next start.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "enabled",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "AgentPluginsSetMcpResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "changed": {
+              "description": "False when the package was already in the asked state.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "name",
+            "enabled",
+            "changed"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "skillhub.search",
       "summary": "Search the skill hub; installed skills are flagged.",
       "params": [
@@ -19917,6 +19992,137 @@
             "$ref": "#/components/schemas/TasksBoardUpdatedPayload"
           }
         }
+      },
+      "AgentPluginServerRow": {
+        "additionalProperties": false,
+        "description": "One MCP server an Agent Plugin package declares.",
+        "properties": {
+          "name": {
+            "description": "Composed server name, '<package>__<server>'.",
+            "type": "string"
+          },
+          "state": {
+            "description": "The connection manager's state, or 'off' when the running process does not run this server.",
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "state"
+        ],
+        "type": "object"
+      },
+      "AgentPluginMcpRow": {
+        "additionalProperties": false,
+        "properties": {
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/AgentPluginServerRow"
+            },
+            "type": "array"
+          },
+          "allowed": {
+            "description": "Named in agentPlugins.mcpPackages.",
+            "type": "boolean"
+          },
+          "live": {
+            "description": "The running process started this package's servers. Differs from allowed until the next start.",
+            "type": "boolean"
+          },
+          "problems": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "servers",
+          "allowed",
+          "live",
+          "problems"
+        ],
+        "type": "object"
+      },
+      "AgentPluginRow": {
+        "additionalProperties": false,
+        "description": "One Agent Plugins 1.0 package: a directory whose root holds a plugin.json.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "source": {
+            "description": "The package root on the host's disk.",
+            "type": "string"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "skills": {
+            "description": "The usable skills the package holds.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "skills_imported": {
+            "description": "A verified import of this package stands in the workspace.",
+            "type": "boolean"
+          },
+          "problems": {
+            "description": "Skills the package holds that cannot be used, with the reason.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "mcp": {
+            "$ref": "#/components/schemas/AgentPluginMcpRow"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "description",
+          "source",
+          "notes",
+          "skills",
+          "skills_imported",
+          "problems",
+          "mcp"
+        ],
+        "type": "object"
+      },
+      "AgentPluginProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "reason"
+        ],
+        "type": "object"
       }
     },
     "errors": {

@@ -161,7 +161,9 @@ hub marker are then real).
 | T5.4 <- A32 | yes | In the Tools page pick an image model through the row's pill; open the Model page. | The image role row shows the same model; `jq .tools.media.image.model` matches. | the two pages disagree | T E V R | |
 | T5.5 <- A33 | yes | Tool search card. | Both rows are `aria-disabled`, have no switch role in the snapshot, carry the built-in note; the counter's total equals the switchable rows (T5.1). | a working switch; the two counted | T V R | |
 
-### Plugins
+### MCP (labelled Plugins until 2026-11-14)
+
+Amended 2026-11-14: this section is labelled MCP (`pages/Mcp.tsx`, section id `mcp`). The Plugins label now names a separate section that lists Agent Plugin packages (`agent_plugins.list`, `agent_plugins.set_mcp`); `ui-web/CONTEXT.md` defines both.
 
 Seed MCP servers in `config.json`: `ctx7` (streamable HTTP, public
 context7), `dead` (`http://127.0.0.1:9/mcp`, connection refused), and one
@@ -171,7 +173,7 @@ when the case calls for it and killed at its end.
 
 | T <- A | Host | Steps | Observe (owning layer) | Red when | Rings | * |
 |---|---|---|---|---|---|---|
-| T6.1 <- A34 | yes | Plugins page after the gateway has connected. | Rows equal `jq '.tools.mcpServers \| keys'`; `ctx7` connected, `dead` failed with a retry button, `github` connected or needs setup per its key; switch `ctx7` off: its chip disappears; counter equals connected rows / total. | a row missing; a chip on a switched-off server; counter off | T E V R | |
+| T6.1 <- A34 | yes | MCP page after the gateway has connected. | Rows equal `jq '.tools.mcpServers \| keys'`; `ctx7` connected, `dead` failed with a retry button, `github` connected or needs setup per its key; switch `ctx7` off: its chip disappears; counter equals connected rows / total. | a row missing; a chip on a switched-off server; counter off | T E V R | |
 | T6.2 <- A35 | yes | Switch `ctx7` off; ask the agent to use a context7 tool; switch on; ask again. Switch `github` on with an empty key. | `jq .tools.mcpServers.ctx7.enabled` false then true; the first transcript has no `mcp_ctx7_*` call and the second has one; for `github` `enabled` is true on disk, the panel is open, and `web.log` shows no connect attempt for it. | a tool call while off; a connect attempt without a credential | T P E V R | |
 | T6.3 <- A36 | yes | With `dead` failed, start the stub MCP server on port 9's replacement (edit the URL to the stub's port first, restart, let it fail once with the stub down), then bring the stub up and press retry. | `web.log` shows the manager's explicit connect for `dead` and the chip turns connected; `enabled` on disk never changed during the step; no gateway restart (`serve.pid` unchanged, process start time unchanged). | the chip stays failed with the stub up; `enabled` flipped; the pid changed | T P E V R | |
 | T6.4 <- A37 | yes | `github` panel: paste `ghp_new`, save; then clear. | `jq .tools.mcpServers.github.headers` (or `.env`, whichever the template names) holds `ghp_new` (a value the seed never held) and the readback says only "set"; after clear the value is `""` and the chip reads needs setup; the manager reconnects (`web.log`). | the old key still on disk; the readback shows characters of the key; no reconnect | T P E V R | *5 |

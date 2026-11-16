@@ -104,16 +104,8 @@ def list_packages(
         directory is gone or replaced, or a legacy record, describes the
         ledger, not an install standing in this workspace.
         """
-        root = workspace / "skills" / name
-        if ledger.entry(name, workspace=workspace) is None:
-            if ledger.legacy_entry(name) is not None:
-                return False, "legacy"
-            return False, "none"
-        if not root.exists():
-            return False, "missing"
-        if ledger.claim(root, workspace=workspace).owned:
-            return True, "verified"
-        return False, "unverified"
+        state = ledger.install_state(name, workspace=workspace)
+        return state == "verified", state
 
     states = {package.name: install_state(package.name) for package in packages}
 
@@ -570,13 +562,7 @@ def check_packages(
         # Old records may carry a path as typed; normalize what can be
         # normalized before asking whether the package is there.
         source = Path(entry.source).expanduser().resolve()
-        install_dir = workspace / "skills" / name
-        if not install_dir.exists():
-            install = "missing"
-        elif ledger.claim(install_dir, workspace=workspace).owned:
-            install = "verified"
-        else:
-            install = "unverified"
+        install = ledger.install_state(name, workspace=workspace)
         if not source.is_dir():
             row = {"name": name, "status": "missing", "detail": f"{source} is gone", "install": install}
         else:

@@ -556,6 +556,46 @@ def set_playbook_disabled(
     return wrote
 
 
+def set_agent_plugin_mcp(
+    name: str,
+    allowed: bool,
+    *,
+    config_path: Path | None = None,
+) -> bool:
+    """Add/remove one package name on ``agentPlugins.mcpPackages``.
+
+    Returns True when the file changed (False = already in the desired
+    state). The list decides which packages' ``mcp.json`` servers start, and
+    it is read when the runtime is assembled, so a change applies to the next
+    start rather than to the running process.
+
+    Respects whichever key casing the file already uses for the block and the
+    list: the loader accepts both spellings, but writing the second one beside
+    the first leaves the config unloadable.
+    """
+    path = config_path or get_config_path()
+
+    def _apply(_text: str | None) -> tuple[str | None, bool]:
+        data = read_raw_or_raise(path)
+        block_key = key_as_written(data, "agentPlugins", top_level=True)
+        block = data.get(block_key)
+        if block is None:
+            block = data[block_key] = {}
+        elif not isinstance(block, dict):
+            raise ValueError(f"{block_key} must be an object or null")
+        list_key = key_as_written(block, "mcpPackages")
+        current = [str(x) for x in (block.get(list_key) or [])]
+        if allowed == (name in current):
+            return None, False
+        block[list_key] = [*current, name] if allowed else [x for x in current if x != name]
+        return json.dumps(data, indent=2, ensure_ascii=False), True
+
+    wrote = atomic_update(path, _apply)
+    if wrote:
+        logger.info("config/update: agentPlugins.mcpPackages {} {!r}", "added" if allowed else "removed", name)
+    return wrote
+
+
 def set_memory_backend(
     backend: str | None,
     *,

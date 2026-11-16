@@ -84,7 +84,7 @@ function WGen({ ctl, below }: { ctl: ReactNode; below?: boolean }): JSX.Element 
   )
 }
 
-/** The expandable name/switch rows the tools and plugins pages list. */
+/** The expandable name/switch rows the tools, MCP and plugins pages list. */
 function WXrows({ n, from = 0 }: { n: number; from?: number }): JSX.Element {
   return (
     <>
@@ -283,11 +283,22 @@ function ToolsWait(): JSX.Element {
   )
 }
 
-function PluginsWait(): JSX.Element {
+function McpWait(): JSX.Element {
   return (
     <Wait>
       <div className="settings-crumb"><Bar h={13} w="120px" /></div>
       <div className="settings-card"><WXrows n={6} /></div>
+    </Wait>
+  )
+}
+
+/* The plugins page asks for its packages itself once it draws, so the same
+   shape stands both while the dialog loads and while that ask is out. */
+export function PluginsWait(): JSX.Element {
+  return (
+    <Wait>
+      <div className="settings-crumb"><Bar h={13} w="120px" /></div>
+      <div className="settings-card"><WXrows n={3} /></div>
     </Wait>
   )
 }
@@ -327,6 +338,7 @@ const SHAPE: Partial<Record<SectionId, () => JSX.Element>> = {
       </div>
     </Wait>
   ),
+  mcp: McpWait,
   model: () => <Wait><WCard ctl={210} n={ROLE_ROWS} titled /></Wait>,
   plugins: PluginsWait,
   provider: ProviderWait,

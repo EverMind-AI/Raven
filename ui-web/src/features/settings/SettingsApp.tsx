@@ -3,7 +3,7 @@
    owns the veil, the modal and the two columns; this island renders into them
    and writes the section's name to #setTitle on every draw. */
 import {
-  AiContentGenerator01Icon, BrainIcon, InformationCircleIcon, Plug02Icon, Settings03Icon,
+  AiContentGenerator01Icon, BrainIcon, InformationCircleIcon, Plug02Icon, PuzzleIcon, Settings03Icon,
   Settings05Icon, TimeQuarter02Icon, Wrench01Icon,
 } from '@hugeicons/core-free-icons'
 import { useEffect, useSyncExternalStore } from 'react'
@@ -16,6 +16,7 @@ import { InlineErr } from './Fields'
 import { About } from './pages/About'
 import { Archive } from './pages/Archive'
 import { General } from './pages/General'
+import { Mcp } from './pages/Mcp'
 import { Model } from './pages/Model'
 import { Plugins } from './pages/Plugins'
 import { Provider } from './pages/Provider'
@@ -41,7 +42,8 @@ const ICON: Record<SectionId, JSX.Element> = {
   model: <Icon icon={Settings05Icon} />,
   skills: <Icon icon={AiContentGenerator01Icon} />,
   tools: <Icon icon={Wrench01Icon} />,
-  plugins: <Icon icon={Plug02Icon} />,
+  mcp: <Icon icon={Plug02Icon} />,
+  plugins: <Icon icon={PuzzleIcon} />,
   cron: <Icon icon={TimeQuarter02Icon} />,
   memory: <Icon icon={BrainIcon} />,
   archive: <ArchiveGlyph />,
@@ -56,6 +58,7 @@ const NAV: Record<SectionId, string> = {
   model: 'gui.settings.nav.model',
   skills: 'gui.settings.nav.skills',
   tools: 'gui.settings.nav.tools',
+  mcp: 'gui.settings.nav.mcp',
   plugins: 'gui.settings.nav.plugins',
   cron: 'gui.settings.nav.cron',
   memory: 'gui.settings.nav.memory',
@@ -84,7 +87,7 @@ function Nav({ tab }: { tab: SectionId }): JSX.Element {
    them. */
 const PAGE: Partial<Record<SectionId, () => JSX.Element>> = {
   general: General, usage: Usage, provider: Provider, model: Model, skills: Skills,
-  tools: Tools, plugins: Plugins, archive: Archive, about: About,
+  tools: Tools, mcp: Mcp, plugins: Plugins, archive: Archive, about: About,
 }
 
 export function SettingsApp(): JSX.Element {
