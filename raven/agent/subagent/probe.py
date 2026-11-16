@@ -91,10 +91,10 @@ class ProbeResult:
     ``target`` is what was checked: the resolved absolute path for a cli agent
     that was found, the bare ``argv[0]`` as written when it was not (so a
     ``missing`` result still names it), or the base URL for an openai agent.
-    When ``argv[0]`` contains a path separator, ``shutil.which`` resolves it
-    relative to the gateway process's own cwd, while a real spawn resolves it
-    relative to ``cfg.cwd or workspace`` -- so a relative command can resolve
-    to a different place than what the probe checked.
+    A relative program that names a directory is resolved the way the launch
+    does: against the row's ``cwd`` when it sets one, and ``unknown`` when it
+    does not, since the run then resolves it in a workspace this check cannot
+    see.
     """
 
     name: str
@@ -665,6 +665,14 @@ def _probe_cli(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     # missing that a real spawn finds just fine.
     cfg_path = (getattr(cfg, "env", None) or {}).get("PATH")
     base = (getattr(cfg, "cwd", None) or "").strip()
+    if os.path.dirname(exe) and not os.path.isabs(exe) and not base:
+        # Without a cwd the run resolves a relative launcher in its own
+        # workspace, which this check has no way to see.
+        return done(
+            "unknown",
+            f"{exe} is a relative launcher and this row sets no cwd; "
+            "the launch resolves it in the run's working directory",
+        )
     if base and os.path.dirname(exe):
         # A program that names a directory is on no PATH: the launch starts it
         # in the directory the child starts in, which is the row's own cwd.

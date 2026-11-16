@@ -2337,3 +2337,21 @@ async def test_cli_probe_names_the_directory_it_looked_in(tmp_path: Path) -> Non
 
     assert res.status == "missing"
     assert str(row) in res.detail
+
+
+async def test_cli_probe_reports_unknown_for_a_relative_launcher_with_no_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run resolves the launcher in its own workspace, which this check cannot see."""
+    here = tmp_path / "here"
+    here.mkdir()
+    launcher = here / ("agent.exe" if os.name == "nt" else "agent")
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    monkeypatch.chdir(here)
+    cfg = ThirdPartyCliSubagentConfig(name="rowagent", command="./agent")
+
+    res = await probe_one(cfg, source="config", path=str(tmp_path))
+
+    assert res.status == "unknown"
+    assert "cwd" in res.detail
