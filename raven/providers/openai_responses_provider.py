@@ -113,7 +113,12 @@ class OpenAIResponsesProvider(LLMProvider):
             body["reasoning"] = {"effort": reasoning_effort}
         for pattern, overrides in self.model_overrides.items():
             if isinstance(overrides, dict) and pattern.lower() in stored_model.lower():
-                body.update(overrides)
+                extra_body = overrides.get("extra_body")
+                if isinstance(extra_body, dict):
+                    body.update(extra_body)
+                    body.update({key: value for key, value in overrides.items() if key != "extra_body"})
+                else:
+                    body.update(overrides)
         if instructions:
             body["prompt_cache_key"] = _prompt_cache_key(instructions, stored_model)
         if tools:

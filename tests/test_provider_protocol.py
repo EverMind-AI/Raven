@@ -1122,6 +1122,39 @@ async def _replayed_deepseek_call(monkeypatch, provider_name: str) -> dict:
     return call
 
 
+async def test_responses_model_overrides_unwrap_extra_body(monkeypatch) -> None:
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, content=_anthropic_sse({"type": "response.completed", "response": {}}))
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
+    provider = OpenAIResponsesProvider(
+        api_key="test",
+        api_base="https://api.example/v1",
+        default_model="deepseek/deepseek-v4.1-flash-1017",
+        model_overrides={
+            "deepseek-v4.1": {
+                "temperature": 0.2,
+                "provider": {"order": ["DirectInfra"]},
+                "extra_body": {
+                    "provider": {"order": ["DeepInfra"]},
+                    "reasoning": {"effort": "high"},
+                },
+            }
+        },
+    )
+
+    await provider.chat(messages=[{"role": "user", "content": "hello"}], model=provider.default_model)
+
+    assert sent[0]["temperature"] == 0.2
+    assert sent[0]["provider"] == {"order": ["DirectInfra"]}
+    assert sent[0]["reasoning"] == {"effort": "high"}
+    assert "extra_body" not in sent[0]
+
+
 async def test_openai_responses_replays_another_vendors_call_under_an_id_it_accepts(monkeypatch) -> None:
     """OpenAI's own endpoint polices the item id the way the Codex backend does."""
     call = await _replayed_deepseek_call(monkeypatch, "openai")
