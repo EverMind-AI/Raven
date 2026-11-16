@@ -1319,8 +1319,10 @@ class TurnPathMixin:
 
         def _land_hook_note(decision) -> None:
             """Honor a hook's ``append_note``: the note joins the last message
-            the model is about to read. A body shape the loop does not know
-            drops the note with a warning rather than guessing it into place."""
+            the model is about to read, except after a tool round, where the
+            last message is a fenced tool result and the note becomes a message
+            of its own. A body shape the loop does not know drops the note with
+            a warning rather than guessing it into place."""
             if decision.append_note and not append_hook_note(messages, decision.append_note):
                 logger.warning("Hook note dropped: no transcript message to land it on")
 

@@ -101,6 +101,48 @@ async def test_before_iteration_sees_the_turn_and_can_withhold_a_tool_for_one_it
 
 
 @pytest.mark.asyncio
+async def test_a_hook_note_after_a_tool_round_is_its_own_message_not_tool_text(tmp_path):
+    """A tool result is fenced as untrusted input, so a note written into one
+    reaches the model as something a tool told it. After a tool round the note
+    is a message of its own; the tool result is left exactly as it was."""
+
+    class NoteAfterTheTools(AgentHook):
+        async def before_iteration(self, ctx):
+            if ctx.iteration == 2:
+                return HookDecision(append_note="check the second table")
+            return HookDecision()
+
+    provider = _ScriptedProvider([_tool_call("list_dir", {"path": "."}), _text("done")])
+    loop = _loop(tmp_path, provider, [NoteAfterTheTools()])
+
+    await loop._process_message(_req())
+
+    sent = provider.calls[1]["messages"]
+    tool_result = next(m for m in sent if m.get("role") == "tool")
+    assert "check the second table" not in str(tool_result["content"])
+    assert any(m.get("role") == "user" and m.get("content") == "check the second table" for m in sent)
+
+
+@pytest.mark.asyncio
+async def test_generated_advice_is_said_once_across_a_turns_iterations(tmp_path):
+    """The generated function is stateless, so the same words come back at each
+    phase. The hook hands the participant the live transcript, and a note the
+    transcript already carries is not written a second time."""
+    from raven.agent.hook.participant import ParticipantHook
+    from raven.agent.subagent.charter import Charter, CharterParticipant, charter_scope
+
+    source = "def advise(step):\n    return 'hold the line'"
+    provider = _ScriptedProvider([_tool_call("list_dir", {"path": "."}), _text("done")])
+    loop = _loop(tmp_path, provider, [ParticipantHook("charter", CharterParticipant)])
+
+    with charter_scope(Charter(functions=(("advise", source),))):
+        await loop._process_message(_req())
+
+    sent = provider.calls[1]["messages"]
+    assert str(sent).count("hold the line") == 1, "the same words were delivered once"
+
+
+@pytest.mark.asyncio
 async def test_before_execute_tools_rollback_discards_the_proposal_and_does_not_consume_an_iteration(tmp_path):
     class BounceOnce(AgentHook):
         def __init__(self) -> None:
@@ -296,7 +338,7 @@ async def test_a_session_policy_pins_the_reasoning_effort_of_its_calls(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_an_after_iteration_note_lands_on_the_last_message_before_the_next_call(tmp_path):
+async def test_an_after_iteration_note_is_a_message_of_its_own_before_the_next_call(tmp_path):
     class Nudge(AgentHook):
         async def after_iteration(self, ctx):
             if getattr(ctx.response, "has_tool_calls", False):
@@ -309,9 +351,11 @@ async def test_an_after_iteration_note_lands_on_the_last_message_before_the_next
     out = await loop._process_message(_req("what is here"))
 
     assert out is not None
-    last_seen = provider.calls[1]["messages"][-1]
-    assert last_seen["role"] == "tool"
-    assert str(last_seen["content"]).endswith("\n\n[budget warning: most of the budget is spent]")
+    sent = provider.calls[1]["messages"]
+    assert sent[-1]["role"] == "user"
+    assert sent[-1]["content"] == "[budget warning: most of the budget is spent]"
+    tool_result = next(m for m in sent if m.get("role") == "tool")
+    assert "[budget warning" not in str(tool_result["content"]), "a tool result is not where guidance goes"
     assert "[budget warning" not in str(provider.calls[0]["messages"][-1]["content"]), "landed after, not before"
 
 
