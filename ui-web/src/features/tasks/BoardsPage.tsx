@@ -9,6 +9,7 @@ import { ArrowDown01Icon, BubbleChatIcon, KanbanIcon, ListViewIcon, SparklesIcon
 import { useEffect, useId, useState, useSyncExternalStore } from 'react'
 
 import { Icon } from '../../components/Icon'
+import { PageBar } from '../../components/PageBar'
 import { t } from '../../i18n/t'
 import { since } from '../../lib/ago'
 import { formatDuration } from '../../lib/duration'
@@ -320,8 +321,7 @@ function verbsFor(card: TaskBoardCard): ThreadVerbs {
 function Toolbar({ s }: { readonly s: BoardsState }): JSX.Element {
   const conversations = [...new Map(s.cards.map((c) => [c.session_key, c.session_title])).entries()]
   return (
-    <div className="tkbbar">
-      <h2 className="tkbh">{t('gui.tasks.page.title')}</h2>
+    <PageBar title={t('gui.tasks.page.title')} end={<ToolbarEnd s={s} />}>
       <select
         className="tkbconvsel"
         aria-label={t('gui.tasks.page.conversation')}
@@ -331,6 +331,14 @@ function Toolbar({ s }: { readonly s: BoardsState }): JSX.Element {
         <option value="">{t('gui.tasks.page.all_conversations')}</option>
         {conversations.map(([key, title]) => <option value={key} key={key}>{title}</option>)}
       </select>
+    </PageBar>
+  )
+}
+
+/* The switch and the Board / List segments, at the far end of the page bar. */
+function ToolbarEnd({ s }: { readonly s: BoardsState }): JSX.Element {
+  return (
+    <>
       <button
         className="tkbswitch"
         type="button"
@@ -349,7 +357,7 @@ function Toolbar({ s }: { readonly s: BoardsState }): JSX.Element {
           <Icon icon={ListViewIcon} size={14} />{t('gui.tasks.page.view_list')}
         </button>
       </div>
-    </div>
+    </>
   )
 }
 
