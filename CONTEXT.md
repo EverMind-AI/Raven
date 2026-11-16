@@ -934,23 +934,30 @@ The deck engine's picture-search state as the runtime would resolve it now, not
 a reading of the Search service picker: `vendor` is the vendor that would answer
 (`""` when none resolves), `ready` says a key resolves for it, and `reason`
 names why that vendor answers: `ok` when it is the vendor the deck is
-configured to use (the lane's rendered search selection -- its folder's own
-`tools.web.search.provider` where it names one, the inherited host choice
-otherwise -- or the deck's own pin),
-`fallback_no_key` when that selection has a picture surface but no key,
-`no_surface` when that selection has none, and `not_ready` when no vendor
-resolves. `fallback` is derived from it -- true for `fallback_no_key` and
+configured to use (its folder's own `tools.web.search.provider` where it names
+one, else the host's selection the Search service picker shows -- or the
+deck's own keyed pin), `fallback_no_key` when that selection has a picture
+surface but no key the deck lane can use, `no_surface` when that selection has
+none, and `not_ready` when no vendor resolves. The reason is judged against
+that selection, not against the lane's rendered one: when the launcher
+declines the host's choice (an env-only host key, a lane key for another
+vendor) the deck searches on a vendor the picker does not show, and that is a
+fallback. `fallback` is derived from it -- true for `fallback_no_key` and
 `no_surface` -- so the page can say deck generation will fall back; a deck
 pinned to its own vendor stays `ok` and is not a fallback. `reason` is optional
 on the wire and defaults to `not_ready`, so an answer from a gateway older than
-the field still reads. `settings.get` computes the state through
+the field still reads, and the page reads an absent `picture_search` as no note
+at all. `settings.get` computes the state through
 `picture_search_report` over the same rule the router applies, from the config,
 the product folder's own credentials and the vendors' environment variables --
 credentials the raw config cannot show. The lane's rendered selection is the
 launcher's own inheritance over those inputs, not the raw config's declaration
 alone. The offline settings fixture (`ui-web/src/rpc/fixtures/settings.ts`,
-`PPT_VENDORS` / `pictureSearchOf`) is its explicit mirror; the vendor list is
-pinned to `PPT_IMAGE_SEARCH_VENDORS` by
+`PPT_VENDORS` / `pictureSearchOf`) is its explicit mirror, and the Tools page
+keeps the deck vendor set (`PPT_IMAGE_VENDORS` in
+`ui-web/src/features/settings/source.ts`) only to word a missing picture tool:
+a selected deck vendor lacks a key, any other cannot fill a slide. Both lists
+are pinned to `PPT_IMAGE_SEARCH_VENDORS` by
 `tests/test_agent_tools_web_providers.py`.
 _Avoid_: reading `ready` as "the selected vendor has image search" -- Tavily
 answers the host's `image_search` but is not a deck vendor, so this state speaks

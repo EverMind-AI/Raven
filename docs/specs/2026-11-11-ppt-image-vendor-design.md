@@ -150,7 +150,8 @@ a key; otherwise it uses Serper's key; otherwise it has no picture tool.
   `null` on a route that does not declare `image_search`. Computed from the
   current config and the product folder's own secrets, with the same
   `product_picture_vendor` / `ppt_image_vendor` / `image_search_vendor` helpers
-  the router uses.
+  the router uses, over the same input: the host's `config.json` as written,
+  which is what the launcher renders from, not a dump of the validated model.
 - `routes` is optional on the schema (`SubagentRow.routes?`) and defaults to an
   empty list; `_rows` writes a list on every row. `rpc-schema/openrpc.json`
   gains the property; `ui-web/src/rpc/generated.ts` is regenerated.
@@ -158,7 +159,8 @@ a key; otherwise it uses Serper's key; otherwise it has no picture tool.
 `ui-web`:
 
 - `features/settings/source.ts` takes the deck's picture state from
-  `settings.get`'s `picture_search`; it holds no copy of the vendor rule. The
+  `settings.get`'s `picture_search`; it holds no copy of the vendor rule, and
+  an answer without the field (an older gateway) draws no note. The
   rule has only one home, the backend's `settings.get`
   (`raven/rpc/methods/console.py`, through `picture_search_status`), and
   `ui-web/src/rpc/fixtures/settings.ts` is its explicit offline mirror:
@@ -171,8 +173,14 @@ a key; otherwise it uses Serper's key; otherwise it has no picture tool.
   - selected vendor is not a PPT vendor, Serper key present: info note, "Deck
     generation cannot use this search API's pictures. It will use {name}
     instead."
-  - no usable vendor: warning note, "Deck generation cannot use this search
-    API's pictures and no Serper key is configured, so it cannot run."
+  - no usable vendor, selected vendor not a PPT vendor: warning note, "Deck
+    generation cannot use this search API's pictures and no Serper key is
+    configured, so it cannot run."
+  - no usable vendor, selected vendor a PPT vendor: warning note naming the
+    key to set -- "Set the {name} key here, or a Serper key, to enable it", or
+    the Serper key alone when Serper is selected. The page keeps the PPT
+    vendor set (`PPT_IMAGE_VENDORS`) for this wording only, pinned to
+    `PPT_IMAGE_SEARCH_VENDORS` by the same test file.
 - `features/extAgents/ExtAgentsPage.tsx`: the agent sheet shows the route
   warning for a row whose `routes` holds a not-ready `image_search` route.
 - `i18n/messages.json`: the new strings, en and zh.
