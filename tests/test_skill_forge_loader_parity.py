@@ -943,46 +943,29 @@ class TestRenderingHelpers:
 
 
 class TestContextBuilderIntegration:
-    def test_skill_names_narrows_xml_directory(self, tmp_workspace, tmp_builtin, monkeypatch):
-        # ContextBuilder uses the real built-in directory by default; point it
-        # at our synthetic one so the test is deterministic.
-        from raven.agent.context import ContextBuilder
+    def test_the_estimate_carries_the_always_skills_and_no_skill_directory(self, tmp_workspace, tmp_builtin):
+        """The estimate sizes the system prompt a turn actually sends.
 
-        cb = ContextBuilder(tmp_workspace)
-        # Swap the skills service for one that uses our synthetic builtin.
-        from raven.memory_engine.skill_forge import LocalSkillCatalog
-
-        cb.skills = LocalSkillCatalog(tmp_workspace, builtin_skills_dir=tmp_builtin)
-
-        # With selected_skills=None → full directory
-        prompt_full = cb.build_system_prompt(selected_skills=None)
-        assert "<name>simple</name>" in prompt_full
-        assert "<name>always_flag_top</name>" in prompt_full
-
-        # With selected_skills=[simple_meta] → only simple shows up in the XML
-        # (always-loaded skills are still injected in the # Active Skills
-        # section — that's separate from the XML directory)
-        simple_meta = [m for m in cb.skills._registry.list_all() if m.name == "simple"]
-        prompt_filtered = cb.build_system_prompt(selected_skills=simple_meta)
-        # XML directory: only simple
-        xml_start = prompt_filtered.index("<skills>")
-        xml_end = prompt_filtered.index("</skills>") + len("</skills>")
-        xml_block = prompt_filtered[xml_start:xml_end]
-        assert "<name>simple</name>" in xml_block
-        assert "<name>always_flag_top</name>" not in xml_block
-
-    def test_empty_skill_names_falls_back_to_full_directory(self, tmp_workspace, tmp_builtin):
-        """A stub selector returning [] must fall back, not strip all."""
+        A turn's system prompt carries the always-on skills and nothing else of
+        the pool: the rest reach the model through the scent menu and the skill
+        tools. An estimate that also rendered the pool's directory would reserve
+        room for a section no request carries, and the reservation would grow
+        with every skill installed.
+        """
         from raven.agent.context import ContextBuilder
         from raven.memory_engine.skill_forge import LocalSkillCatalog
 
         cb = ContextBuilder(tmp_workspace)
         cb.skills = LocalSkillCatalog(tmp_workspace, builtin_skills_dir=tmp_builtin)
 
-        prompt = cb.build_system_prompt(selected_skills=[])
-        # Non-empty XML block — this is the safety net
-        assert "<skills>" in prompt
-        assert "<name>simple</name>" in prompt
+        prompt = cb.build_system_prompt()
+
+        assert "# Active Skills" in prompt
+        assert "always_flag_top" in prompt
+        assert "<skills>" not in prompt
+        assert "# Skills" not in prompt
+        assert "A simple builtin skill" not in prompt
+        assert "A workspace-only skill" not in prompt
 
 
 # Note: the remote-skill materialization tests (``_materialize_remote``

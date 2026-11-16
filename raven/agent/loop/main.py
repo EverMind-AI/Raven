@@ -498,7 +498,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             provider=lambda: self.provider,
             model=lambda: self.model,
             context_window_tokens=lambda: self.context_window_tokens,
-            system_prompt=lambda skills: self.context.build_system_prompt(skills),
+            system_prompt=lambda _skills: self.context.build_system_prompt(),
             # Callables like the rest, but for one reason rather than two: the
             # ceiling follows the model a request goes out under, which moves
             # under a live ``/model`` switch. The compaction settings are fixed
@@ -747,8 +747,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         #   policy. Owns the ``MemoryStore`` it built; reach it via
         #   ``self.memory_consolidator.store`` when needed.
         # - ``self.context.skills`` — :class:`LocalSkillCatalog` for the
-        #   always-skills + ``# Skills`` render path. The SkillForgeRouter stack
-        #   (assembled in ``context_engine.factory``) owns retrieval.
+        #   always-skills render path. The SkillForgeRouter stack (assembled in
+        #   ``context_engine.factory``) owns retrieval.
 
         # AgentHook lifecycle chain: the host hands finished hooks (adapter-
         # wrapped callbacks included -- raven/agent/hook/adapters is where a
@@ -948,6 +948,9 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                     if source is not None:
                         router.remove_source(source)
                 elif source is not None:
+                    # Rewritten in place, so nothing on the remove path runs:
+                    # forget the old backend's held hits before the name moves.
+                    router.forget(source)
                     source._backend = backend
                     source._agent_id = agent_id
                     if name:
@@ -1210,9 +1213,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
 
         This is where a session's model becomes the one thing everything under
         the turn reads: the loop's own ``provider``/``model``, the context
-        engine's LLM-backed segments, the skill gate and rewriter, the
-        consolidator, and anything the turn detaches (a subagent inherits the
-        context it was created in).
+        engine's LLM-backed segments, the consolidator, and anything the turn
+        detaches (a subagent inherits the context it was created in).
 
         Resolving once here is also what makes a mid-turn switch harmless
         without any parking. The binding is captured before the first read and

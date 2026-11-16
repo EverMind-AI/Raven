@@ -284,9 +284,8 @@ class SkillHubClient:
         on ``<slug>@<version>`` skips the re-download.
 
         ``prefetched_meta`` skips the internal ``self.get(skill_id)``
-        round-trip when the caller already has the metadata (e.g. the
-        SkillsSegmentBuilder pre-gate body hydrate). This shaves
-        ~50-200ms off post-gate hydrate per selected Hub hit.
+        round-trip when the caller already has the metadata (``use_skill``
+        fetches it first to run the policy on it).
         """
         meta = prefetched_meta if prefetched_meta is not None else await self.get(skill_id)
         slug = meta.get("slug") or meta.get("skill_id") or skill_id

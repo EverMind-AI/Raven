@@ -1,9 +1,8 @@
 """Skill Hub e2e probe.
 
 Exercises the full skill_hub client surface against a real Hub:
-``search → get → install`` plus a SkillsSegmentBuilder dry-run that
-hits the rewriter → router → pre-gate body hydrate → gate → post-gate
-refs hydrate pipeline end-to-end.
+``search → get → install``, then the ``HubSkillSource`` mapping the
+router fans out to.
 
 Run from the project root:
 
@@ -16,10 +15,7 @@ through a Squid proxy refusing CONNECT to ``*.evermind.ai``, this
 script will fail at the first ``search`` call with a network error —
 run from a machine with direct internet or whitelist the host.
 
-Skips LLM-driven stages (rewriter / gate) unless ``--provider <id>``
-is supplied; without a provider, the segment builder runs in
-no-rewriter / no-gate mode (router + hydrate only) so the script is
-useful even when no LLM credentials are wired.
+No LLM calls are issued.
 """
 
 from __future__ import annotations
@@ -27,7 +23,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-import textwrap
 from pathlib import Path
 
 # Allow `python scripts/skill_hub_e2e.py` without `-m`.
@@ -35,7 +30,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from raven.memory_engine.skill_forge import (
     HubSkillSource,
-    SkillForgeRouter,
 )
 from raven.skill_hub import SkillHubClient
 
@@ -93,65 +87,18 @@ async def probe_hub_source(endpoint: str, api_key: str | None, query: str, k: in
         await client.aclose()
 
 
-async def probe_segment(
-    endpoint: str,
-    api_key: str | None,
-    query: str,
-    k: int,
-) -> None:
-    """Stage 3 — SkillsSegmentBuilder body hydrate (no rewriter / gate)."""
-    print("\n=== Stage 3: SkillsSegmentBuilder hydrate (no LLM) ===")
-    from raven.context_engine.segments.skills import SkillsSegmentBuilder
-    from raven.contracts.assembled import TokenBudget
-    from raven.contracts.context import AssemblyContext
-
-    client = SkillHubClient(endpoint, api_key=api_key, timeout_s=10.0)
-    try:
-        hub_source = HubSkillSource(client)
-        router = SkillForgeRouter([hub_source])
-        builder = SkillsSegmentBuilder(
-            router,
-            skill_top_k=k,
-            hub_client=client,
-        )
-        ctx = AssemblyContext(
-            session_key="e2e",
-            current_message=query,
-            media=None,
-            channel=None,
-            chat_id=None,
-            session_messages=[],
-            budget=TokenBudget(
-                context_length=200_000,
-                reserved_output=8000,
-                reserved_tools=4000,
-                reserved_system=4000,
-                available_history=184_000,
-            ),
-        )
-        seg = await builder.build(ctx)
-        ids = seg.meta.get("injected_skill_ids", [])
-        print(f"  → injected_skill_ids: {ids}")
-        print(f"    text length: {len(seg.text)} chars")
-        print("    text preview:")
-        for line in textwrap.indent(seg.text[:1200], "      ").splitlines()[:25]:
-            print(line)
-    finally:
-        await client.aclose()
-
-
 async def main() -> None:
     p = argparse.ArgumentParser(description="Skill Hub e2e probe")
     p.add_argument("--endpoint", required=True, help="Hub base URL")
     p.add_argument("--api-key", default=None, help="Bearer token (optional)")
     p.add_argument("--query", default="generate pdf report")
     p.add_argument("--limit", type=int, default=5)
-    p.add_argument("--k", type=int, default=3, help="top-K for hub source / segment")
+    p.add_argument("--k", type=int, default=3, help="top-K for the hub source")
     p.add_argument(
         "--stage",
-        choices=["1", "2", "3", "all"],
+        choices=["1", "2", "all"],
         default="all",
-        help="Which stage to run (1=client, 2=hub_source, 3=segment).",
+        help="Which stage to run (1=client, 2=hub_source).",
     )
     args = p.parse_args()
 
@@ -159,8 +106,6 @@ async def main() -> None:
         await probe_client(args.endpoint, args.api_key, args.query, args.limit)
     if args.stage in {"2", "all"}:
         await probe_hub_source(args.endpoint, args.api_key, args.query, args.k)
-    if args.stage in {"3", "all"}:
-        await probe_segment(args.endpoint, args.api_key, args.query, args.k)
 
     print("\n✓ all stages completed")
 

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from pydantic.alias_generators import to_camel
 
 from raven.config.loader import EXTENSION_KEYS
 from raven.config.raven import (
@@ -53,7 +54,6 @@ class TestDefaults:
         assert c.weights == {"local": 0.96, "everos": 0.9, "hub": 0.85}
         assert c.over_fetch_factor == 2
         assert c.dedup_by == "name"
-        assert c.top_k == 2
         assert c.rrf_k == 10
         # Hub is the remote source (replaces the retired Mass source). Its URL
         # is the shared marketplace by default; ``enabled`` is the only switch.
@@ -64,6 +64,42 @@ class TestDefaults:
         assert c.hub.timeout_s == pytest.approx(2.0)
         assert c.hub.min_safety == pytest.approx(0.7)
 
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "discovery",
+            "rewrite_max_tokens",
+            "injection_mode",
+            "inject_max",
+            "llm_gate_max_select",
+            "llm_gate_pool_size",
+            "llm_gate_model",
+            "llm_gate_provider",
+            "llm_gate_temperature",
+            "llm_gate_max_tokens",
+        ],
+    )
+    def test_the_push_pipeline_settings_are_gone(self, field: str) -> None:
+        """Skills reach the model one way, so the knobs of the other are not on
+        the model: a field nothing reads would read as a setting that works."""
+        assert field not in SkillForgeConfig.model_fields
+
+    def test_the_two_push_settings_evolver_passes_are_declared_and_never_written(self) -> None:
+        """Evolver is maintained on its own, and its activation probe builds the
+        model with ``llm_gate_enabled`` and ``rewrite_enabled``. Both stay
+        declared so that call builds and type-checks; nothing reads them, and
+        neither is ever written back."""
+        config = SkillForgeConfig(enabled=True, llm_gate_enabled=False, rewrite_enabled=False)
+        for field in ("llm_gate_enabled", "rewrite_enabled"):
+            assert field in SkillForgeConfig.model_fields
+            assert field not in config.model_dump()
+            assert to_camel(field) not in config.model_dump(by_alias=True)
+
+    def test_the_router_carries_no_per_turn_size_of_its_own(self) -> None:
+        """Each caller of the router asks for its own count, so a router-wide
+        ``top_k`` would be a setting no search reads."""
+        assert "top_k" not in SkillForgeRouterConfig.model_fields
+
     def test_rrf_k_accepts_camel_case_and_rejects_zero(self) -> None:
         assert SkillForgeRouterConfig(rrfK=30).rrf_k == 30
         with pytest.raises(ValidationError):
@@ -71,7 +107,6 @@ class TestDefaults:
 
     def test_skill_forge_public_defaults(self) -> None:
         c = SkillForgeConfig()
-        assert c.discovery == "pull"
         assert c.embedding_model == "default"
         assert c.embedding_url == "http://localhost:1357"
         assert c.embedding_api_key is None
@@ -335,7 +370,9 @@ class TestLoaderIntegration:
         assert cfg.memory.user_id == "alice"
         assert cfg.memory.memory_top_k == 10
         assert cfg.skill_forge.router.weights["local"] == pytest.approx(1.5)
-        assert cfg.skill_forge.router.top_k == 8
+        # The legacy block's ``topK`` sized the retired push pipeline; it is
+        # dropped on the way in rather than carried into the router.
+        assert "top_k" not in SkillForgeRouterConfig.model_fields
         assert cfg.skill_forge.router.hub.endpoint == "http://hub.internal:9001"
 
     def test_missing_sections_use_defaults(self, tmp_path: Path) -> None:

@@ -1,7 +1,8 @@
 """Registration of the skill retrieval tools in ``AgentLoop.__init__``.
 
-``read_skill`` and ``use_skill`` both resolve ``local/`` and ``everos/`` ids
-from the on-disk registry, so neither needs a Skill Hub endpoint to be useful.
+``read_skill`` and ``use_skill`` both resolve ``local/`` ids from the on-disk
+registry and memory-backend ids from the hits the engine's router returned, so
+neither needs a Skill Hub endpoint to be useful.
 That matters beyond symmetry: a skill declaring ``inject: description`` is
 advertised by a digest entry that prints no body and is excluded from BM25
 routing, so the tool the digest names is the only route to its instructions.
@@ -242,3 +243,29 @@ def test_the_digest_names_a_tool_this_loop_registered(loop) -> None:
     assert named, hint
     for tool_name in named:
         assert loop.tools.has(tool_name), f"digest points at unregistered {tool_name!r}"
+
+
+class _AgentTrack:
+    """A memory backend whose agent track holds one evolved skill."""
+
+    async def recall(self, query, *, agent_id=None, top_k=5, **_):
+        from raven.contracts.memory import Memory
+
+        return [Memory(text="EVOLVED-STEP-1 rotate pg_dump files weekly", score=0.9, metadata={"id": "sk_42"})]
+
+
+async def test_the_skill_tools_read_a_memory_hit_from_the_live_engine_router(loop) -> None:
+    """read_skill and use_skill look a memory-backend id up in the router the
+    engine holds now, the same one find_skill and the scent menu search."""
+    from raven.memory_engine.skill_forge.backend_source import BackendSkillSource
+    from raven.memory_engine.skill_forge.router import SkillForgeRouter
+
+    loop.context_engine.skills_router = SkillForgeRouter(
+        [BackendSkillSource(_AgentTrack(), agent_id="agent-1", name="everos")]
+    )
+    await loop.tools.get("find_skill").execute(query="postgres backup rotation")
+
+    for name in ("read_skill", "use_skill"):
+        assert "EVOLVED-STEP-1 rotate pg_dump files weekly" in await loop.tools.get(name).execute(
+            skill_id="everos/sk_42"
+        )

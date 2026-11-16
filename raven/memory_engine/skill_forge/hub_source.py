@@ -2,14 +2,9 @@
 
 Discovery layer (Tier 0): turns ``GET /openapi/v1/skills?q=`` catalog
 metadata into :class:`RouterHit` candidates for RRF fusion. The body
-(``skill_md``) is NOT fetched here — that's the
-:class:`SkillsSegmentBuilder`'s pre-gate body-hydrate step which calls
-``SkillHubClient.get(id)`` in parallel across all Hub candidates so the
-LLM gate sees real body excerpts when deciding what to inject.
-
-Bundled file download (zip → extract → resolved refs) happens in the
-post-gate hydrate, only for the 0-2 hits the gate actually selects — so
-catalog calls are O(K) but downloads are O(selected).
+(``skill_md``) is NOT fetched here: ``read_skill`` fetches it for the one
+skill the model chose to read, and ``use_skill`` downloads the bundle — so
+catalog calls are O(K) but body fetches and downloads are O(chosen).
 
 Failures are swallowed into an empty list by the router's
 ``_safe_search``, so a Hub outage never poisons the whole assembly.

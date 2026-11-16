@@ -22,10 +22,9 @@ Here both ride the loop's own hook phases, per the amended verdict:
   scent / memory-recall query, ``turn_question``), so the block stays cards-
   only, never bodies, below a ``---`` separator; (2) a command-shaped or
   blank inbound is never rewritten -- hooks fire before slash dispatch;
-  (3) the seat assumes pull discovery: the shipped product config never sets
-  ``skillForge.discovery``, and switching the host to push would inject the
-  general lane's full bodies beside these cards (the double-injection trap
-  the verdict forbids); (4) the selection call rides ``active_binding()``
+  (3) the general lane reaches the model as the host's scent menu, names
+  and descriptions only, so no general skill body lands beside these cards
+  (the double-injection trap the verdict forbids); (4) the selection call rides ``active_binding()``
   first -- the fork's own binding order -- so a session ``/model`` switch
   reaches it.
 

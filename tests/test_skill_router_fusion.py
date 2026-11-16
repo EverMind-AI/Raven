@@ -13,6 +13,7 @@ from raven.memory_engine.skill_forge import (
     SkillForgeRouter,
     rrf_merge_weighted,
 )
+from raven.memory_engine.skill_forge.router import _HELD_HITS
 
 
 def _hit(qid: str, name: str, score: float = 0.5) -> RouterHit:
@@ -318,3 +319,65 @@ class TestSkillForgeRouterSelect:
         by_name = {h.name: h.meta["contributing_sources"] for h in out}
         assert by_name["x"] == ["local"]
         assert by_name["y"] == ["everos"]
+
+
+class TestHeldHits:
+    """The router keeps the hits it returned, so a hit with no file behind it
+    can still be read by id once the menu or find_skill has named it."""
+
+    async def test_a_returned_hit_is_held_by_its_id(self) -> None:
+        router = SkillForgeRouter([_StubSource("everos", 0.9, [_hit("everos/1", "one")])])
+        assert router.held_hit("everos/1") is None
+
+        await router.select("q", history=[], k=5)
+
+        held = router.held_hit("everos/1")
+        assert held is not None
+        assert held.content == "one"
+
+    async def test_only_the_latest_hits_are_held(self) -> None:
+        source = _StubSource("everos", 0.9, [])
+        router = SkillForgeRouter([source])
+        for n in range(_HELD_HITS + 1):
+            source._hits = [_hit(f"everos/{n}", f"s{n}")]
+            await router.select("q", history=[], k=1)
+
+        assert router.held_hit("everos/0") is None
+        assert router.held_hit(f"everos/{_HELD_HITS}") is not None
+
+    async def test_a_hit_returned_again_is_held_as_new(self) -> None:
+        source = _StubSource("everos", 0.9, [])
+        router = SkillForgeRouter([source])
+        for n in range(_HELD_HITS):
+            source._hits = [_hit(f"everos/{n}", f"s{n}")]
+            await router.select("q", history=[], k=1)
+        source._hits = [_hit("everos/0", "s0")]
+        await router.select("q", history=[], k=1)
+        source._hits = [_hit("everos/new", "fresh")]
+        await router.select("q", history=[], k=1)
+
+        assert router.held_hit("everos/0") is not None
+        assert router.held_hit("everos/1") is None
+
+    async def test_removing_a_source_drops_its_held_hits(self) -> None:
+        everos = _StubSource("everos", 0.9, [_hit("everos/1", "one")])
+        local = _StubSource("local", 1.0, [_hit("local/x", "x")])
+        router = SkillForgeRouter([local, everos])
+        await router.select("q", history=[], k=5)
+
+        router.remove_source(everos)
+
+        assert router.held_hit("everos/1") is None
+        assert router.held_hit("local/x") is not None
+
+    async def test_forgetting_a_source_drops_only_its_held_hits(self) -> None:
+        everos = _StubSource("everos", 0.9, [_hit("everos/1", "one")])
+        local = _StubSource("local", 1.0, [_hit("local/x", "x")])
+        router = SkillForgeRouter([local, everos])
+        await router.select("q", history=[], k=5)
+
+        router.forget(everos)
+
+        assert router.held_hit("everos/1") is None
+        assert router.held_hit("local/x") is not None
+        assert everos in router._sources

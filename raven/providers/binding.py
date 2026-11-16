@@ -8,9 +8,8 @@ The binding is held in a :class:`~contextvars.ContextVar` rather than
 passed down, for two reasons. The turn path reads it at sixteen places
 across three packages -- ``raven.agent`` (the loop and the subagent
 manager), ``raven.context_engine`` (the curator and the history trimmer)
-and ``raven.memory_engine`` (the skill gate, the rewriter and the
-consolidator) -- and threading a parameter through all of them would touch
-far more code than it explains.
+and ``raven.memory_engine`` (the consolidator) -- and threading a parameter
+through all of them would touch far more code than it explains.
 More importantly, ``asyncio.create_task`` copies the current context, so
 work detached during a turn (a subagent, a consolidation task) keeps the
 binding it was started under for its whole life, which is exactly the
