@@ -107,6 +107,16 @@ class BenchmarkGuardConfig(_Base):
     audit: bool = True
 
 
+class WebCacheConfig(_Base):
+    """Host-wide cache of search responses and reader pages (``support.web_cache``). Off by default."""
+
+    enabled: bool = False
+    dir: str = "~/.cache/raven-research/web_cache"
+    ttl_seconds: float = 7 * 86400
+    search: bool = True
+    fetch: bool = True
+
+
 class DigestConfig(_Base):
     """Targeted extraction for web_fetch: long pages distilled to the request.
 
@@ -730,6 +740,7 @@ class FlowConfig(_Base):
     fetch_max_chars: int = 14_000
     search: SearchConfig = Field(default_factory=SearchConfig)
     benchmark_guard: BenchmarkGuardConfig = Field(default_factory=BenchmarkGuardConfig)
+    web_cache: WebCacheConfig = Field(default_factory=WebCacheConfig)
     digest: DigestConfig = Field(default_factory=DigestConfig)
     verify: VerifyConfig = Field(default_factory=VerifyConfig)
     budget_note: BudgetNoteConfig = Field(default_factory=BudgetNoteConfig)

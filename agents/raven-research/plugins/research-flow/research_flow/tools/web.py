@@ -77,6 +77,7 @@ from research_flow.support.ledger import ledger_append as _ledger_append
 from research_flow.support.ledger import verbatim_append as _verbatim_append
 from research_flow.support.ledger import verbatim_path as _verbatim_path
 from research_flow.support.search_saturation import SearchSaturation
+from research_flow.support.web_cache import WebCache
 
 DigestFn = Callable[[str, str], Awaitable["str | DigestOutput"]]
 
@@ -648,6 +649,7 @@ class WebSearchTool(Tool):
         corpus_endpoint: str | None = None,
         benchmark_guard: bool = False,
         benchmark_guard_queries: bool = True,
+        web_cache: WebCache | None = None,
     ):
         self._init_api_key = api_key
         self.max_results = max_results
@@ -680,6 +682,8 @@ class WebSearchTool(Tool):
         # nor the queries that hunt for it are served.
         self.benchmark_guard = benchmark_guard
         self.benchmark_guard_queries = benchmark_guard_queries
+        # Vendor responses only; a corpus run reads a local service and is not cached.
+        self.web_cache = web_cache if web_cache is not None and web_cache.search and not self.corpus_endpoint else None
         self._sessions: dict[str, _SearchTurnState] = {}
 
     @property
@@ -1150,8 +1154,16 @@ class WebSearchTool(Tool):
                 async with httpx.AsyncClient(proxy=self.proxy) as client:
                     return await self._provider_request(client, query, n, page)
 
-            r = await _send_with_retry(_send, op="search_retry", key=query, budget=state.retry_budget)
-            data = r.json()
+            # The key is the request, minus the credential.
+            cache_key = f"{self.provider}\n{n}\n{page}\n{query}"
+            cached = await self.web_cache.aget("search", cache_key) if self.web_cache else None
+            if cached is not None:
+                data = json.loads(cached)
+            else:
+                r = await _send_with_retry(_send, op="search_retry", key=query, budget=state.retry_budget)
+                data = r.json()
+                if self.web_cache and isinstance(data, dict) and data.get("organic"):
+                    await self.web_cache.aput("search", cache_key, r.text)
             if not isinstance(data, dict):
                 data = {}
             data = self._normalise_response(data)
@@ -1615,6 +1627,18 @@ def reader_target_verdict(text: str) -> tuple[int | None, bool]:
     return (int(hit.group(1)) if hit else None), _READER_CAPTCHA_RE.search(head) is not None
 
 
+def _replayable_page(text: str) -> bool:
+    """A reader page safe to serve again: not a stub, not garbled, no target error or CAPTCHA.
+
+    Those are the reads most likely to be transient, and the tool already retries or
+    recovers them, so storing one would pin a bad read for every later run.
+    """
+    if len(text) < _THIN_PAGE_CHARS or _encoding_lost(text):
+        return False
+    status, blocked = reader_target_verdict(text)
+    return not blocked and (status is None or status < 400)
+
+
 _UNRESOLVED_REFUSAL = "Cannot resolve hostname:"
 """The trunk validator's one refusal that says nothing about the target. Pinned
 by the tool tests, which fail if the wording moves and takes the tolerance below
@@ -1702,6 +1726,7 @@ class WebFetchTool(Tool):
         benchmark_guard_question: bool = True,
         benchmark_guard_question_chars: int = QUESTION_RUN_CHARS,
         benchmark_guard_question_shadow: bool = False,
+        web_cache: WebCache | None = None,
     ):
         self._init_api_key = api_key
         self.max_chars = max_chars
@@ -1729,6 +1754,8 @@ class WebFetchTool(Tool):
         # rather than leaving it implicit -- a run configured shadow-on/question-off
         # audits nothing, and that is the intended reading, not an oversight.
         self.benchmark_guard_question_shadow = benchmark_guard_question_shadow
+        # Reader pages only (the Jina branch of ``_read_page``).
+        self.web_cache = web_cache if web_cache is not None and web_cache.fetch and not self.corpus_endpoint else None
         self._sessions: dict[str, _FetchTurnState] = {}
 
     def _state(self) -> _FetchTurnState:
@@ -2233,6 +2260,9 @@ class WebFetchTool(Tool):
             return text, r.status_code
 
         if self.provider == "jina":
+            cache_key = f"jina\n{url}"
+            if self.web_cache and (cached := await self.web_cache.aget("fetch", cache_key)) is not None:
+                return cached, 200
             headers = {"Accept": "text/plain"}
             if key := self.api_key:
                 headers["Authorization"] = f"Bearer {key}"
@@ -2243,6 +2273,8 @@ class WebFetchTool(Tool):
                 # render usually comes back clean.
                 r = await self._get_with_retry(url, {**headers, "x-no-cache": "true"})
                 text = r.text
+            if self.web_cache and r.status_code == 200 and _replayable_page(text):
+                await self.web_cache.aput("fetch", cache_key, text)
             return text, r.status_code
 
         json_headers = {"Accept": "application/json", "Content-Type": "application/json"}

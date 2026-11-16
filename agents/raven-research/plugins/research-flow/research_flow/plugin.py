@@ -41,6 +41,7 @@ from research_flow.state import SessionStore
 from research_flow.support.answer_text import visible_answer
 from research_flow.support.guard_audit import set_audit_dir
 from research_flow.support.ledger import set_ledger_dir
+from research_flow.support.web_cache import WebCache
 from research_flow.tools.ask_user import DRAskUserTool
 from research_flow.tools.web import (
     DEFAULT_FETCH_PROVIDER,
@@ -404,6 +405,8 @@ class _Shared:
         _guard_cfg = self.cfg.benchmark_guard
         set_audit_dir(self.store.ledger_dir if _guard_cfg.enabled and _guard_cfg.audit else None)
         self.session_gear: dict[str, SessionGear] = {}
+        _wc = self.cfg.web_cache
+        self.web_cache = WebCache(_wc.dir, _wc.ttl_seconds, search=_wc.search, fetch=_wc.fetch) if _wc.enabled else None
         self._web_search: WebSearchTool | None = None
         self._search_built = False
         self._web_fetch: WebFetchTool | None = None
@@ -504,6 +507,7 @@ class _Shared:
                 corpus_endpoint=self.corpus_endpoint,
                 benchmark_guard=cfg.benchmark_guard.enabled,
                 benchmark_guard_queries=cfg.benchmark_guard.block_queries,
+                web_cache=self.web_cache,
             )
             if tool.corpus_endpoint or tool.api_key:
                 self._web_search = tool
@@ -600,6 +604,7 @@ class _Shared:
                 benchmark_guard_question=cfg.benchmark_guard.block_question_pages,
                 benchmark_guard_question_chars=cfg.benchmark_guard.question_run_chars,
                 benchmark_guard_question_shadow=cfg.benchmark_guard.question_pages_shadow,
+                web_cache=self.web_cache,
                 **kwargs,
             )
         return self._web_fetch

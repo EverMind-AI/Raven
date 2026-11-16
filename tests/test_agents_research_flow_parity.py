@@ -333,6 +333,11 @@ PRODUCT_ONLY_FIELDS: dict[str, str] = {
         "refuses a fetched page reproducing the question (17 of 21 together), because a copy "
         "on a mirror host or inside a trajectory dump is invisible to any host list"
     ),
+    "web_cache": (
+        "a host-wide on-disk cache of search responses and reader pages "
+        "(support/web_cache.py), for rollouts that sample one question several times. "
+        "Off as a class default and in every product profile; the fork had none"
+    ),
     "verify.evidence_items": (
         "how many tool results the draft reviewer is shown. The fork fixed it in the gate's "
         "signature; it is config here because the measured selection below only pays at a "
