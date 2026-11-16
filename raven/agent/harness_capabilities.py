@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, Mapping, get_args
 
 ModuleName = Literal["memory", "planning", "capability", "action"]
 FunctionKind = Literal["self", "participant"]
+_MODULES = frozenset(get_args(ModuleName))
 
 _PATH = Path(__file__).parents[1] / "playbook" / "harness_generation.json"
 _CONNECTED_PARAMETERS = frozenset(
@@ -57,9 +58,18 @@ def _items(section: Any, kind: str, path: str) -> Mapping[str, Any]:
 
 
 def _validate_connected(root: dict[str, Any]) -> None:
+    """Every switch the catalogue declares is one this loader serves.
+
+    A module body that is not an object is a broken document, not a key to skip
+    past: the module names are the ones the loader reads, so a misshapen one is
+    named here rather than at whichever query walks into it. A ``note`` or any
+    other key belongs to whoever wrote the file, not to this loader.
+    """
     for module, body in root.items():
-        if module == "note" or not isinstance(body, dict):
+        if module not in _MODULES:
             continue
+        if not isinstance(body, dict):
+            raise RuntimeError(f"invalid harness generation capability file: {module} must be an object")
         for name, entry in _items(body.get("parameters", {}), "parameters", module).items():
             path = f"{module}.parameters.{name}"
             if _entry_enabled(entry, path) and (module, name) not in _CONNECTED_PARAMETERS:

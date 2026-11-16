@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from pydantic import ValidationError
@@ -319,7 +320,14 @@ def test_a_misshapen_catalogue_section_names_the_file_rather_than_raising_on_its
 
         return mutate
 
+    def module_body(module: str):
+        def mutate(root: dict) -> None:
+            root[module] = []
+
+        return mutate
+
     for name, mutate, expected in (
+        ("module-body", module_body("memory"), "memory must be an object"),
         ("parameters", at("memory", "parameters"), "memory.parameters must be an object"),
         ("parameters-items", at("memory", "parameters", "items"), "memory.parameters.items must be an object"),
         ("functions", at("memory", "functions"), "memory.functions must be an object"),
@@ -332,7 +340,7 @@ def test_a_misshapen_catalogue_section_names_the_file_rather_than_raising_on_its
         ("self-kind", at("action", "functions", "self"), "action.functions.self must be an object"),
     ):
         point_at(f"{name}.json", mutate)
-        with pytest.raises(RuntimeError, match=f"invalid harness generation capability file: {expected}"):
+        with pytest.raises(RuntimeError, match=re.escape(f"invalid harness generation capability file: {expected}")):
             harness_capabilities.parameter_enabled("memory", "systemPrompt")
 
 
