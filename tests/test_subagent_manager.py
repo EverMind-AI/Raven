@@ -1616,6 +1616,48 @@ async def test_generated_advice_reaches_a_delegated_run_once_and_outside_the_too
     assert str(sent).count("note-iteration") == 1, "the same words were delivered once per round"
 
 
+@pytest.mark.asyncio
+async def test_generated_advice_a_resumed_transcript_already_carries_is_not_repeated(tmp_path) -> None:
+    """A resumed run replays the messages it was handed. The note in them has
+    already been delivered, so a stateless function's same words do not ride a
+    second copy into the transcript."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.subagent.delegate import dispatch_charter
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("the second table", encoding="utf-8")
+
+    class _ReadsThenAnswers(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key="test")
+            self.seen: list[list[dict]] = []
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+        async def chat(self, messages, tools=None, model=None, **_):  # noqa: ANN001, ANN003
+            self.seen.append([dict(m) for m in messages])
+            if not any(m.get("role") == "tool" for m in messages):
+                return LLMResponse(
+                    content="",
+                    finish_reason="tool_calls",
+                    tool_calls=[ToolCallRequest(id="c1", name="read_file", arguments={"path": "notes.txt"})],
+                )
+            return LLMResponse(content="done", finish_reason="stop")
+
+    provider = _ReadsThenAnswers()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path / "home")
+    source = "def advise(step):\n    return 'hold the line'"
+    with dispatch_charter({"functions": {"advise": source}}):
+        await backend.run("read the notes", task_id="t1", workspace=workspace, executor=None)
+        resumed = [dict(m) for m in provider.seen[-1]]
+        await backend.run("read the notes", task_id="t2", workspace=workspace, executor=None, history=resumed)
+
+    sent = provider.seen[-1]
+    assert str(sent).count("hold the line") == 1, "the note was already in the transcript"
+
+
 def test_build_subagent_prompt_hides_orchestration_skills(tmp_path):
     """The catalog handed to a sub-agent must not advertise a skill whose
     procedure needs a tool this backend never registers — the DAG skill tells
