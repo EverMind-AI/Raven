@@ -73,6 +73,12 @@ def _installed_at(skill_dir: Path) -> str:
     observation time is the fallback for a directory that cannot be read or
     whose timestamp the platform cannot convert (Windows rejects mtimes
     outside roughly 1970..3000 with ``OSError``).
+
+    The approximation holds only while nothing touches the bundle: an entry
+    added or removed moves the mtime, and the stamp written here moves it to
+    the observation moment. A directory dated in the future, from a bundle
+    restored out of a backup or a clock left wrong at install time, records
+    a future date, and the stamp is never rewritten.
     """
     try:
         mtime = skill_dir.stat().st_mtime
