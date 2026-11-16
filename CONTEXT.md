@@ -803,11 +803,11 @@ sub-agent -- those are a Turn, a coroutine, and a prompt.
 
 **Task Board** (`raven/agent/task_board/`, `<session_dir>/task_board.json`):
 one host session's set of Task Groups, kept by the host model in one extra call after each
-completed turn that answered or dispatched work, and read back through the `task_board` tool. A turn
-known to be about a group -- one a delegated result opened, one whose message a Move on or an
-Answer named the group for -- writes only to that group, to wherever it places the work it
-started, and to each matter its reply asked the user about; one that also took in a message the
-user sent while it ran writes wherever that message's matter lies too. Only the Raven host
+completed turn that answered or dispatched work, and read back through the `task_board` tool. That
+call sees the system message, the turn's own rows and the board record, not the conversation
+before the turn. It answers for each of the turn's Candidate Groups in `matters` and writes a
+step on every one the turn moved, whatever opened the turn; nothing it writes is confined to the
+group a delegated result or a Move on says the turn is about. Only the Raven host
 keeps one; a subagent or product agent never does
 (`docs/specs/2026-10-29-task-board-design.md`).
 _Avoid_: "task list" (that is `tasks.list`), "todo" (Raven-Code's Checklist).
@@ -856,6 +856,22 @@ the page with the board on (`render.board_on_page`); other channels and the term
 done otherwise; clicking it scrolls the transcript to that turn's reply.
 _Avoid_: "subtask" (it records progress, it is not a unit of work), "step" alone (the node
 record's steps are another thing).
+
+**Candidate Group** (`raven/agent/task_board/matters.py` `candidates`):
+a Task Group a turn's post-turn update has to answer for, whether or not the turn moved it: first
+the turn's owners -- the group that placed the run whose result opened the turn, or the one a Move
+on or an Answer picked -- then every other group the turn's own words name by its id, by the id
+of a Task its steps link, or by a title anchor (an issue or PR reference, a code span, a path or
+file name, a version, a number of three or more digits). The turn's own words are the user's
+message, each message the user sent while it ran, and the reply; a delegated result's body is
+not searched. A turn with none is asked and checked as before.
+_Avoid_: "scope" and "owning group" for the whole list -- the owners are only its head.
+
+**matters** (the `task_board` update's field; `matters_problems`):
+the update's answer for each Candidate Group, `{group, moved, evidence}`: `moved: false` for a
+group the turn only mentioned, which gets no step; `moved: true` with `evidence` -- the turn's own
+words, quoted -- for one it moved, which gets a step of its own. Every step on an existing group
+needs a moved answer, listed or not. Checked in code and refused like any fault, never stored.
 
 **Instance Title** / **Run Title** (`InstanceRow.title` / `InstanceRow.runTitle`):
 what one instance was asked, and what the graph it belongs to was asked. Computed by

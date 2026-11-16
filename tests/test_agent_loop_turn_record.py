@@ -321,6 +321,64 @@ def test_a_rerun_seed_copied_from_another_attempt_is_recorded_afresh():
     assert [m["content"] for m in second.messages()] == ["q", "a correction"]
 
 
+def _call_rows() -> list[dict[str, Any]]:
+    call = {"id": "c", "type": "function", "function": {"name": "exec", "arguments": "{}"}}
+    return [
+        {"role": "assistant", "content": "", "tool_calls": [call]},
+        {"role": "tool", "tool_call_id": "c", "content": "r"},
+        {"role": "assistant", "content": "done"},
+    ]
+
+
+def test_the_cut_keeps_the_system_message_the_opening_and_the_turns_rows():
+    base = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "old"},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "user", "content": "now"},
+    ]
+    log = TurnLog(base, len(base))
+    base += _call_rows()
+
+    assert [m["content"] for m in log.cut_to_turn(base)] == ["s", "now", "", "r", "done"]
+
+
+def test_the_cut_restores_an_opening_a_head_summary_replaced():
+    base = [{"role": "system", "content": "s"}, {"role": "user", "content": "old"}, {"role": "user", "content": "now"}]
+    log = TurnLog(base, len(base))
+    base += _call_rows()
+    log.follow(base)
+    summary = {"role": "user", "content": f"{compaction.SUMMARY_MARKER}\n\nbrief"}
+    window = [base[0], summary, *base[3:]]
+    log.follow(window)
+
+    assert [m["content"] for m in log.cut_to_turn(window)] == ["s", "now", "", "r", "done"]
+
+
+def test_a_rerun_logs_cut_holds_only_the_rerun():
+    base = [{"role": "system", "content": "s"}, {"role": "user", "content": "q"}]
+    first = TurnLog(base, 2)
+    base += [
+        {"role": "assistant", "content": "first attempt's research"},
+        {"role": "user", "content": "a correction", "_mid_turn_user": True},
+    ]
+    first.follow(base)
+    kept = first.messages()
+    seed = [dict(m) for m in (*kept[:2], kept[3])]
+    second = TurnLog(seed, 2)
+    seed.append({"role": "assistant", "content": "the rerun's answer"})
+
+    assert [m["content"] for m in second.cut_to_turn(seed)] == ["s", "q", "a correction", "the rerun's answer"]
+
+
+def test_a_window_with_no_row_of_the_turn_is_sent_whole():
+    base = [{"role": "system", "content": "s"}, {"role": "user", "content": "q"}]
+    log = TurnLog(base, len(base))
+    other = [{"role": "system", "content": "s"}, {"role": "user", "content": "elsewhere"}]
+
+    assert log.cut_to_turn(other) == other
+
+
 def _saved_tool_result(workspace: Path, body: str, **context: Any) -> str:
     from raven.config.raven import ContextConfig
 

@@ -96,6 +96,24 @@ class TurnLog:
         self._sync(self._live)
         return [_unstamped(m) for m in self._entries]
 
+    def cut_to_turn(self, window: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """``window`` without the history before this turn: its system message when it
+        opens with one, the turn's opening message as the log holds it -- the original
+        even when a window pass replaced it -- then every row of ``window`` from the first
+        one this log stamped, each as the window last sent it. The whole ``window`` when
+        it holds no row of this turn."""
+        self._sync(self._live)
+        mark = f"{self._token}:"
+        first = next(
+            (i for i, m in enumerate(window) if str(m.get(TURN_LOG_KEY, "")).startswith(mark)),
+            None,
+        )
+        if first is None:
+            return list(window)
+        system = [window[0]] if window[0].get("role") == "system" else []
+        opening = [self._head[-1]] if self._head and self._head[-1].get("role") != "system" else []
+        return [*system, *opening, *window[first:]]
+
     def drop(self, removed: Iterable[dict[str, Any]]) -> None:
         """Forget messages the loop took back (a hook rollback), and anything
         recorded after them, so the record matches a turn in which they never

@@ -508,12 +508,25 @@ def _both_moved() -> LLMResponse:
     )
 
 
-def _scope(instruction: str) -> str:
+def _paragraph(instruction: str) -> str:
     return instruction[instruction.index("[END DISPATCHES]") : instruction.index("How to write the update:")]
 
 
-async def test_a_delegated_result_keeps_its_turns_board_to_the_group_that_placed_the_run(tmp_path):
-    provider = Recording([LLMResponse(content="The subagent found the empty token."), _both_moved()])
+def _moved(group: str, quote: str) -> dict:
+    return {"group": group, "moved": True, "evidence": quote}
+
+
+def _stepped(*groups: str) -> list[dict]:
+    return [{"group": g, "title": f"Moved {g}", "summary": "Moved.", "status": "idle"} for g in groups]
+
+
+async def test_a_delegated_result_lists_its_group_first_and_writes_what_it_moved(tmp_path):
+    reply = "The subagent found the empty token; the g_b notes are drafted too."
+    board_reply = _update(
+        steps=_stepped("g_a", "g_b"),
+        matters=[_moved("g_a", "found the empty token"), _moved("g_b", "the g_b notes are drafted")],
+    )
+    provider = Recording([LLMResponse(content=reply), board_reply])
     agent = _agent(tmp_path, provider)
     _placed_and_another(agent)
     result = TurnRequest(
@@ -526,12 +539,15 @@ async def test_a_delegated_result_keeps_its_turns_board_to_the_group_that_placed
     await agent._process_message(result, session_key=KEY, origin=Origin.SUBAGENT)
     await _drain(agent)
 
-    assert "g_a" in _scope(_text(provider.requests[1]["messages"][-1]))
-    assert [len(g.steps) for g in load_board(agent.sessions.session_dir(KEY)).groups] == [2, 1]
+    paragraph = _paragraph(_text(provider.requests[1]["messages"][-1]))
+    assert "This turn opened on g_a:" in paragraph
+    assert "This turn touched these groups: g_a, g_b." in paragraph
+    assert [len(g.steps) for g in load_board(agent.sessions.session_dir(KEY)).groups] == [2, 2]
 
 
-async def test_a_move_on_keeps_its_turns_board_to_the_group_it_named(tmp_path):
-    provider = Recording([LLMResponse(content=ANSWER), _both_moved()])
+async def test_a_move_on_lists_the_picked_group_first(tmp_path):
+    board_reply = _update(steps=_stepped("g_b"), matters=[_moved("g_b", "Draft them for Friday")])
+    provider = Recording([LLMResponse(content=ANSWER), board_reply])
     agent = _agent(tmp_path, provider)
     _placed_and_another(agent)
     await agent.task_board.move_on(KEY, "g_b")
@@ -539,27 +555,53 @@ async def test_a_move_on_keeps_its_turns_board_to_the_group_it_named(tmp_path):
     await agent._process_message(_turn("Draft them for Friday."), session_key=KEY)
     await _drain(agent)
 
-    assert "g_b" in _scope(_text(provider.requests[1]["messages"][-1]))
+    assert "This turn opened on g_b:" in _paragraph(_text(provider.requests[1]["messages"][-1]))
     assert [len(g.steps) for g in load_board(agent.sessions.session_dir(KEY)).groups] == [1, 2]
 
 
-async def test_a_mid_turn_message_frees_a_move_ons_turn_to_write_what_it_moved(tmp_path):
-    """A message the user sent while the turn ran may be about any matter, and only the model
-    can tell which: the update is no longer kept to the group the Move on named."""
-    provider = Recording([LLMResponse(content=ANSWER), _both_moved()])
+async def test_a_mid_turn_message_is_searched_for_candidates(tmp_path):
+    board_reply = _update(
+        steps=_stepped("g_a", "g_b"),
+        matters=[_moved("g_b", "Draft them for Friday"), _moved("g_a", "where does g_a stand")],
+    )
+    provider = Recording([LLMResponse(content=ANSWER), board_reply])
     agent = _agent(tmp_path, provider)
     _placed_and_another(agent)
     await agent.task_board.move_on(KEY, "g_b")
-    waiting = [_turn("And where does the fix stand?")]
+    waiting = [_turn("And where does g_a stand?")]
 
     await agent._process_message(
         _turn("Draft them for Friday."), session_key=KEY, drain=lambda: [waiting.pop()] if waiting else []
     )
     await _drain(agent)
 
-    scope = _scope(_text(provider.requests[1]["messages"][-1]))
-    assert "g_b -- and to the matter of each message the user sent while it was already running." in scope
+    assert "This turn touched these groups: g_b, g_a." in _paragraph(_text(provider.requests[1]["messages"][-1]))
     assert [len(g.steps) for g in load_board(agent.sessions.session_dir(KEY)).groups] == [2, 2]
+
+
+async def test_the_post_turn_call_carries_only_this_turn(tmp_path):
+    provider = Recording(
+        [
+            LLMResponse(content=ANSWER),
+            BOARD_REPLY,
+            LLMResponse(content="The notes are drafted."),
+            _update(steps=[]),
+        ]
+    )
+    agent = _agent(tmp_path, provider)
+
+    await agent._process_message(_turn(), session_key=KEY)
+    await _drain(agent)
+    await agent._process_message(_turn("And the release notes?"), session_key=KEY)
+    await _drain(agent)
+
+    main, extra = provider.requests[2]["messages"], provider.requests[3]["messages"]
+    texts = [_text(m) for m in extra]
+    assert any("Why is the page blank" in _text(m) for m in main), "the turn itself still sees its history"
+    assert not any("Why is the page blank" in t or ANSWER in t for t in texts)
+    assert extra[0]["role"] == "system" and "And the release notes?" in texts[1]
+    assert any("The notes are drafted." in t for t in texts[2:-1])
+    assert "task board" in texts[-1]
 
 
 async def test_a_turn_the_user_started_with_nothing_picked_keeps_every_group_it_moved(tmp_path):
@@ -570,7 +612,7 @@ async def test_a_turn_the_user_started_with_nothing_picked_keeps_every_group_it_
     await agent._process_message(_turn("Where do the fix and the notes stand?"), session_key=KEY)
     await _drain(agent)
 
-    assert _scope(_text(provider.requests[1]["messages"][-1])) == "[END DISPATCHES]\n\n"
+    assert _paragraph(_text(provider.requests[1]["messages"][-1])) == "[END DISPATCHES]\n\n"
     assert [len(g.steps) for g in load_board(agent.sessions.session_dir(KEY)).groups] == [2, 2]
 
 

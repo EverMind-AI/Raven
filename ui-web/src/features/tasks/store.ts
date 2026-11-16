@@ -175,7 +175,7 @@ export function lendAnswer(fn: Answer | null): void {
 }
 
 /* The answer is a message about this group, so it is held as the move-on too:
-   the server is told as it goes, and its turn is kept to the group. */
+   the server is told as it goes, and its turn lists the group first. */
 export function answer(sessionKey: string | null, group: TaskGroup): void {
   if (!answerVerb) return
   if (sessionKey) hold(sessionKey, group)
