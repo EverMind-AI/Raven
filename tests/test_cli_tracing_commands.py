@@ -411,6 +411,34 @@ def test_tracing_adopts_unrecorded_viewer_and_says_stop_will_not_manage_it(tmp_p
     assert "will not manage" in out
 
 
+def test_tracing_adopting_an_unrecorded_viewer_still_names_the_stuck_one(tmp_path, monkeypatch):
+    """The stuck viewer the record names is named on the adopt path too.
+
+    The record says 4242/5555 stopped answering, and the requested 4318 holds
+    a healthy viewer with no record. The launcher adopts 4318; it still has to
+    say that 4242 keeps running and is what `raven tracing stop` manages.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 4242, "port": 5555}), encoding="utf-8")
+    monkeypatch.setattr(tc, "_pid_is_viewer", lambda pid: pid == 4242)
+    monkeypatch.setattr(tc, "_viewer_health", lambda port: port != 5555)
+    monkeypatch.setattr(tc, "_port_live", lambda port: True)
+    opened = []
+    monkeypatch.setattr(tc.webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setattr(tc.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("must adopt the live viewer"))
+    buf = StringIO()
+    monkeypatch.setattr(tc, "console", Console(file=buf, width=200))
+
+    tc._open_dashboard(4318)
+
+    out = buf.getvalue()
+    assert opened == ["http://127.0.0.1:4318/"]
+    assert "no usable pid record" in out
+    assert "4242" in out, out
+    assert "5555" in out, out
+
+
 def test_tracing_drops_an_unreadable_pidfile_before_adopting(tmp_path, monkeypatch):
     """A malformed record cannot be signalled, so it is removed, not left behind."""
     monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))

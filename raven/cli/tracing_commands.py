@@ -362,6 +362,15 @@ def _open_dashboard(port: int) -> None:
                 "[yellow]It has no usable pid record, so [cyan]raven tracing stop[/cyan] will "
                 "not manage it; stop that instance by hand.[/yellow]"
             )
+            if stuck is not None:
+                # The record names the stuck viewer on the other port; that is
+                # the one `stop` still manages, so name it rather than let the
+                # earlier decision go unsaid.
+                console.print(
+                    f"[yellow]The recorded viewer (pid {stuck['pid']}, port {stuck['port']}) is not "
+                    "answering and keeps running; [cyan]raven tracing stop[/cyan] manages that one, "
+                    f"not the viewer on {port}.[/yellow]"
+                )
             webbrowser.open(url)
             return
         # Port is held by something that is NOT our viewer (a stale instance or
