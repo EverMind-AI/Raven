@@ -398,6 +398,23 @@ describe('turn.started', () => {
        clock off -- the live lane names it the way a reload does. */
     expect(delivered[0]![1]).toMatchObject({ runId: 'r1', nodeId: 'push' })
   })
+
+  /* A report answers no call, so there is no run to read its sender off: the
+     mark names the agent, and the live lane hands it on as a reload does. */
+  it('hands the row the agent an unprompted report names', async () => {
+    const h = await harness({ rows: [{ id: 's1' }] })
+
+    h.dispatch({
+      type: 'turn.started',
+      payload: {
+        turn_id: 't-report',
+        delegated: { kind: 'unprompted', label: 'Coder/h1', status: 'report', agent: 'Coder', content: 'the report' },
+      },
+    })
+
+    const delivered = h.did('delivered') as Array<[string, Record<string, unknown>]>
+    expect(delivered[0]![1]).toMatchObject({ label: 'Coder/h1', isDag: false, agent: 'Coder' })
+  })
 })
 
 describe('episode.start', () => {

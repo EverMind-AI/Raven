@@ -556,12 +556,12 @@ const deliveredStatus = (v: unknown): DeliveredData['status'] =>
    then there is nothing to fold open. Absent is a server that never sent it. */
 export function delivered(lane: Lane, p: {
   label: string; isDag: boolean; status?: string; open: () => void; body?: string; output?: string; outputTruncated?: boolean | null
-  at?: number; turnId?: string; runId?: string | null; nodeId?: string | null
+  at?: number; turnId?: string; runId?: string | null; nodeId?: string | null; agent?: string | null
 }): void {
   const said = typeof p.output === 'string'
   push(lane, {
     v: 0, id: nextId(), kind: 'sdlv', at: p.at ?? Date.now(), ...(p.turnId ? { turnId: p.turnId } : {}),
-    label: p.label, isDag: p.isDag, runId: String(p.runId || ''), nodeId: String(p.nodeId || ''),
+    label: p.label, isDag: p.isDag, runId: String(p.runId || ''), nodeId: String(p.nodeId || ''), agent: String(p.agent || ''),
     status: deliveredStatus(p.status), open: p.open,
     body: said ? (p.output as string).trim() : defence(p.body || ''), said, shown: false,
     outputTruncated: said && p.outputTruncated === true,
@@ -1901,6 +1901,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
           isDag,
           runId: d.run_id,
           nodeId: d.node_id,
+          agent: d.agent,
           at: turnAt,
           status: d.status,
           body: m.text || '',

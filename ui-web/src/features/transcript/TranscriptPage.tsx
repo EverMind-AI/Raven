@@ -1539,7 +1539,7 @@ const DeliveredView = memo(function DeliveredView({ lane, seg }: { lane: Lane; s
      arrive with its run -- so the row follows the call's own version too. */
   useSyncExternalStore((cb) => store.subscribe(lane, cb), () => (call ? call.v : 0))
   const { cls, key } = deliveredVerdict(seg)
-  const who = seg.isDag ? t('gui.deleg.dag_title') : call ? store.spawnHead(call).agent : row?.agent || ''
+  const who = seg.isDag ? t('gui.deleg.dag_title') : seg.agent || (call ? store.spawnHead(call).agent : row?.agent || '')
   const title = seg.isDag ? row?.task_summary || (call && call.runTitle) || t('gui.deleg.dag_title') : seg.label
   const tally = graphTally(seg)
   const span = runSpan(row, call)

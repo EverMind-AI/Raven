@@ -420,9 +420,19 @@ export interface TranscriptNotice {
  * via the `definition` "TranscriptDelegated".
  */
 export interface TranscriptDelegated {
-  kind: 'spawn' | 'dag';
+  /**
+   * `spawn` or `dag` for a delegated run's result; `unprompted` for an instance's own report, made on its own schedule (an armed wake, a watch round) and answering no call.
+   */
+  kind: 'spawn' | 'dag' | 'unprompted';
   label: string;
-  status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled';
+  /**
+   * The agent that sent it. Set on an unprompted report, which answers no call, so no spawn call or task row exists to read the sender off.
+   */
+  agent?: string;
+  /**
+   * `report` is an unprompted report's only status: it carries what the instance said, not how a run ended.
+   */
+  status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled' | 'report';
   /**
    * Set for kind=dag, so a client can open the run.
    */
@@ -1651,9 +1661,19 @@ export interface TurnStartedEvent {
   payload: {
     turn_id: string;
     delegated?: {
-      kind: 'spawn' | 'dag';
+      /**
+       * `spawn` or `dag` for a delegated run's result; `unprompted` for an instance's own report, made on its own schedule (an armed wake, a watch round) and answering no call.
+       */
+      kind: 'spawn' | 'dag' | 'unprompted';
       label: string;
-      status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled';
+      /**
+       * The agent that sent it. Set on an unprompted report, which answers no call, so no spawn call or task row exists to read the sender off.
+       */
+      agent?: string;
+      /**
+       * `report` is an unprompted report's only status: it carries what the instance said, not how a run ended.
+       */
+      status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled' | 'report';
       /**
        * Which node of the run this is about. Present only on a `kind: dag` node's own report, which concerns one node rather than the whole run.
        */
@@ -2006,12 +2026,22 @@ export interface SessionNamingEndedEvent {
 export interface SubagentDeliveredEvent {
   type: 'subagent.delivered';
   payload: {
-    kind: 'spawn' | 'dag';
     /**
-     * The spawn's display label, or the dag's run_id.
+     * `spawn` or `dag` for a delegated run's result; `unprompted` for an instance's own report, made on its own schedule (an armed wake, a watch round) and answering no call.
+     */
+    kind: 'spawn' | 'dag' | 'unprompted';
+    /**
+     * The spawn's display label, the dag's run_id, or `<agent>/<instance>` for an unprompted report.
      */
     label: string;
-    status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled';
+    /**
+     * The agent that sent it. Set on an unprompted report, which answers no call, so no spawn call or task row exists to read the sender off.
+     */
+    agent?: string;
+    /**
+     * `report` is an unprompted report's only status: it carries what the instance said, not how a run ended.
+     */
+    status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled' | 'report';
     /**
      * Set for kind=dag, so a client can open the run.
      */

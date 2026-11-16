@@ -539,9 +539,16 @@ class TurnStartedDelegated(_Strict):
     its own ``text``.
     """
 
-    kind: Literal["spawn", "dag"]
+    kind: Literal["spawn", "dag", "unprompted"]
     label: str
-    status: Literal["ok", "error", "exception", "notice", "cancelled"]
+    agent: str | None = Field(
+        default=None,
+        description=(
+            "The agent that sent it. Set on an unprompted report, which answers no call, so no "
+            "spawn call or task row exists to read the sender off."
+        ),
+    )
+    status: Literal["ok", "error", "exception", "notice", "cancelled", "report"]
     run_id: str | None = None
     node_id: str | None = Field(
         None,
@@ -925,9 +932,19 @@ class CronDeliveredEvent(_Strict):
 
 
 class SubagentDeliveredPayload(_Strict):
-    kind: Literal["spawn", "dag"]
-    label: str = Field(..., description="The spawn's display label, or the dag's run_id.")
-    status: Literal["ok", "error", "exception", "notice", "cancelled"]
+    kind: Literal["spawn", "dag", "unprompted"]
+    label: str = Field(
+        ...,
+        description="The spawn's display label, the dag's run_id, or `<agent>/<instance>` for an unprompted report.",
+    )
+    agent: str | None = Field(
+        default=None,
+        description=(
+            "The agent that sent it. Set on an unprompted report, which answers no call, so no "
+            "spawn call or task row exists to read the sender off."
+        ),
+    )
+    status: Literal["ok", "error", "exception", "notice", "cancelled", "report"]
     run_id: str | None = Field(default=None, description="Set for kind=dag, so a client can open the run.")
     node_id: str | None = Field(
         default=None,
@@ -4368,9 +4385,16 @@ class TranscriptDelegated(_Strict):
     and a live stream draw the same row from the same fields.
     """
 
-    kind: Literal["spawn", "dag"]
+    kind: Literal["spawn", "dag", "unprompted"]
     label: str
-    status: Literal["ok", "error", "exception", "notice", "cancelled"]
+    agent: str | None = Field(
+        default=None,
+        description=(
+            "The agent that sent it. Set on an unprompted report, which answers no call, so no "
+            "spawn call or task row exists to read the sender off."
+        ),
+    )
+    status: Literal["ok", "error", "exception", "notice", "cancelled", "report"]
     run_id: str | None = Field(default=None, description="Set for kind=dag, so a client can open the run.")
     node_id: str | None = Field(
         default=None,
