@@ -126,7 +126,10 @@
         "profile": "script_author",
         "composerModel": "",
         "readerEffort": "low",
-        "renderDpi": 144
+        "renderDpi": 144,
+        "imageSearch": {
+          "provider": "host"
+        }
       }
     }
   }

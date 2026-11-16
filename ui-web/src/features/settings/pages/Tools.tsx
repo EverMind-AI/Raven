@@ -8,7 +8,10 @@ import { t } from '../../../i18n/t'
 import { show as toast } from '../../../state/toast'
 import { Card, Chip, KeyLink, Row, Rov, Switch, Xrow } from '../Fields'
 import { ROLES, RolePill, disabledTools, roleValue } from '../providers/Roles'
-import { FETCH_KEYLESS, WEB_VENDOR, WEB_VENDOR_LABEL, WEB_VENDOR_URL, borrowedKey, legacyKey, str, vendorKey, webKeyReady, webVendor } from '../source'
+import {
+  FETCH_KEYLESS, PPT_IMAGE_VENDORS, WEB_VENDOR, WEB_VENDOR_LABEL, WEB_VENDOR_URL,
+  borrowedKey, legacyKey, str, vendorKey, webKeyReady, webVendor,
+} from '../source'
 import * as store from '../store'
 import GROUPS from '../toolGroups.json'
 
@@ -102,6 +105,28 @@ export function VendorSelect({ keyName, value, opts }: { keyName: string; value:
   )
 }
 
+function missingPictureNote(selected: string): string {
+  if (!PPT_IMAGE_VENDORS.includes(selected)) return t('gui.settings.tools.ppt_image_missing')
+  const name = WEB_VENDOR_LABEL[selected] || selected
+  return selected === 'serper'
+    ? t('gui.settings.tools.ppt_image_no_key', { name })
+    : t('gui.settings.tools.ppt_image_no_key_or_serper', { name })
+}
+
+function PictureNote({ selected }: { selected: string }): JSX.Element | null {
+  const picture = useSyncExternalStore(store.subscribe, () => store.get().snap.pictureSearch)
+  if (picture.ready && !picture.fallback) return null
+  return (
+    <Row>
+      <Rov warn={!picture.ready}>
+        {picture.ready
+          ? t('gui.settings.tools.ppt_image_fallback', { name: WEB_VENDOR_LABEL[picture.vendor] || picture.vendor })
+          : missingPictureNote(selected)}
+      </Rov>
+    </Row>
+  )
+}
+
 function Panel({ id, raw }: { id: string; raw: Record<string, unknown> }): JSX.Element | null {
   const roleId = ROLE_OF[id]
   if (roleId) {
@@ -117,6 +142,7 @@ function Panel({ id, raw }: { id: string; raw: Record<string, unknown> }): JSX.E
         <Row label={t(id === 'web_search' ? 'gui.settings.tools.search_vendor' : 'gui.settings.tools.fetch_vendor')}>
           <VendorSelect keyName={pick.path} value={vendor} opts={pick.vendors.map((v) => [v, WEB_VENDOR_LABEL[v] || v])} />
         </Row>
+        {id === 'web_search' ? <PictureNote selected={vendor} /> : null}
         {(keyed || FETCH_KEYLESS.has(vendor)) && (
           <KeyRow label={t('gui.settings.tools.vendor_key', { name: WEB_VENDOR_LABEL[vendor] || vendor })}
             keyName={vendorKey(vendor)} legacy={legacyKey(id, vendor)} url={WEB_VENDOR_URL[vendor]} raw={raw} />

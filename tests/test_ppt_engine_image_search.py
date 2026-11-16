@@ -80,7 +80,7 @@ def _client(monkeypatch) -> None:
     _Client.live = 0
     _Client.most_at_once = 0
     _Client.delay = 0.0
-    monkeypatch.setattr("raven_ppt.plugin.image_search.httpx.AsyncClient", _Client)
+    monkeypatch.setattr("raven.agent.tools.web.httpx.AsyncClient", _Client)
 
 
 def _tool() -> PptImageSearchTool:
@@ -109,12 +109,12 @@ async def test_the_queries_of_one_call_run_together() -> None:
 
 async def test_no_more_than_the_concurrency_gate_is_in_flight() -> None:
     """A courtesy bound on one endpoint, the same one `ppt_fetch` holds."""
-    from raven_ppt.plugin.image_search import _SEARCH_CONCURRENCY
+    from raven.agent.tools.web import IMAGE_SEARCH_CONCURRENCY
 
     _Client.delay = 0.02
     await _tool().execute(queries=[f"q{n}" for n in range(MAX_QUERIES)])
 
-    assert _Client.most_at_once <= _SEARCH_CONCURRENCY
+    assert _Client.most_at_once <= IMAGE_SEARCH_CONCURRENCY
 
 
 async def test_one_query_that_fails_does_not_cost_the_others() -> None:
@@ -122,7 +122,7 @@ async def test_one_query_that_fails_does_not_cost_the_others() -> None:
 
     reply = await _tool().execute(queries=["fine", "broken", "also fine"])
 
-    assert "This search failed (RuntimeError: serper said 503)" in reply
+    assert "This search failed (RuntimeError)" in reply
     assert "https://pics.example/fine.png" in reply
     assert "https://pics.example/also fine.png" in reply
 
@@ -169,6 +169,13 @@ async def test_a_missing_key_is_said_once_rather_than_per_query() -> None:
     assert _Client.asked == []
 
 
+def test_the_deck_tool_refuses_a_vendor_the_deck_cannot_use() -> None:
+    """Tavily's hits carry no dimensions and no source page, so it belongs to
+    the host `image_search` only; a deck tool built on it would drop every hit."""
+    with pytest.raises(ValueError, match="tavily"):
+        PptImageSearchTool(provider="tavily")
+
+
 async def test_what_a_slide_cannot_use_is_dropped_before_it_is_offered(monkeypatch) -> None:
     """The floor the tool was written for, still applied per query in a batch."""
 
@@ -177,7 +184,7 @@ async def test_what_a_slide_cannot_use_is_dropped_before_it_is_offered(monkeypat
             type(self).asked.append(json["q"])
             return _Response({"images": [{"imageUrl": "https://pics/x.png", "imageWidth": 320, "imageHeight": 180}]})
 
-    monkeypatch.setattr("raven_ppt.plugin.image_search.httpx.AsyncClient", _Small)
+    monkeypatch.setattr("raven.agent.tools.web.httpx.AsyncClient", _Small)
 
     reply = await _tool().execute(queries=["tiny"])
 

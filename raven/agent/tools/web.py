@@ -12,7 +12,7 @@ import asyncio
 import json
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -677,7 +677,7 @@ IMAGE_MAX_QUERIES = 12
 #: search pages only; a deployment on one of those searches pictures through the
 #: default vendor's key when it holds one. Tavily answers without dimensions, so
 #: its hits are offered as "size unknown" rather than dropped.
-IMAGE_SEARCH_VENDORS: tuple[str, ...] = ("serper", "serpapi", "brave", "tavily", "firecrawl")
+IMAGE_SEARCH_VENDORS: tuple[str, ...] = ("serper", "serpapi", "brave", "tavily", "firecrawl", "serply")
 
 
 def image_search_vendor(selected: str, key_for: "Callable[[str], str | None] | None" = None) -> str:
@@ -689,6 +689,53 @@ def image_search_vendor(selected: str, key_for: "Callable[[str], str | None] | N
     one whose Tavily has no key, searches them through the Serper key it holds.
     """
     if selected in IMAGE_SEARCH_VENDORS and (key_for is None or key_for(selected)):
+        return selected
+    return DEFAULT_SEARCH_PROVIDER
+
+
+PPT_IMAGE_SEARCH_VENDORS: tuple[str, ...] = ("serper", "serpapi", "brave", "firecrawl", "serply")
+"""Vendors whose image results can fill a slide.
+
+The host's ``image_search`` also speaks Tavily, which returns picture URLs without
+dimensions and without the page they came from. The deck engine drops both, so a
+Tavily hit can never become a usable deck picture; the deck set is the host set
+minus that one vendor.
+"""
+
+
+def ppt_image_search_provider(image_search: Mapping[str, Any]) -> str:
+    """The deck's picture route from its ``imageSearch`` declaration.
+
+    The one parser for ``imageSearch.provider``: the deck engine validates its
+    slice with it and the readiness probe derives its answer from it, so a
+    declaration the engine refuses cannot read as ready. An absent key is the
+    engine's default, ``"host"``; a present value must be the string ``"host"``
+    or one of :data:`PPT_IMAGE_SEARCH_VENDORS`. Raises ``ValueError`` naming the
+    value otherwise, and a present ``null`` is not the same as an absent key.
+    """
+    if "provider" not in image_search:
+        return "host"
+    provider = image_search["provider"]
+    if not isinstance(provider, str):
+        raise ValueError(f"imageSearch.provider must be a string, got {provider!r}")
+    if provider != "host" and provider not in PPT_IMAGE_SEARCH_VENDORS:
+        raise ValueError(
+            f"unknown ppt image search provider {provider!r}; "
+            f"known routes are 'host' and {', '.join(PPT_IMAGE_SEARCH_VENDORS)}"
+        )
+    return provider
+
+
+def ppt_image_vendor(selected: str, key_for: "Callable[[str], str | None] | None" = None) -> str:
+    """The vendor the deck engine's picture search speaks, given the host's selection.
+
+    The selected vendor when it is one of :data:`PPT_IMAGE_SEARCH_VENDORS` and a
+    key resolves for it; Serper otherwise. The fallback is the owner's rule: a
+    deployment that searches pages through a vendor without a usable picture
+    surface still gets decks from the Serper key it holds. The caller checks the
+    key for the returned vendor, so no key there means no picture tool.
+    """
+    if selected in PPT_IMAGE_SEARCH_VENDORS and (key_for is None or key_for(selected)):
         return selected
     return DEFAULT_SEARCH_PROVIDER
 
@@ -753,6 +800,7 @@ class ImageSearchTool(Tool):
         max_results: int = 5,
         proxy: str | None = None,
         provider: "str | Callable[[], str]" = DEFAULT_SEARCH_PROVIDER,
+        require_dimensions: bool = False,
     ):
         _check_provider(provider, IMAGE_SEARCH_VENDORS, "image_search")
         # A callable is the live form (a reader over the config file), as for web_search.
@@ -761,6 +809,7 @@ class ImageSearchTool(Tool):
         self._refusal = _VendorRefusal(SEARCH_REFUSAL_STATUSES)
         self.max_results = max_results
         self.proxy = proxy
+        self.require_dimensions = require_dimensions
         self._provider_source: "Callable[[], str] | None" = provider if callable(provider) else None
         self._init_provider: str = DEFAULT_SEARCH_PROVIDER if callable(provider) else provider
 
@@ -842,6 +891,18 @@ class ImageSearchTool(Tool):
         found = await asyncio.gather(*(one(said) for said in wanted))
         return found[0] if len(found) == 1 else ("\n\n" + "-" * 60 + "\n\n").join(found)
 
+    def _holds_up(self, hit: ImageHit, min_width: int) -> bool:
+        """Whether a hit is large enough for the caller's screen.
+
+        A vendor that reports no size leaves the judgement to the caller unless
+        this tool asked for dimensions, which the deck engine does.
+        """
+        if self.require_dimensions and (hit.width is None or hit.height is None):
+            return False
+        return (hit.width is None or hit.width >= min_width) and (
+            hit.height is None or hit.height >= int(min_width * 9 / 16)
+        )
+
     async def _search_images(self, query: str, count: int, min_width: int, vendor: str, key: str) -> str:
         """The vendor's image surface, filtered to what a screen can use.
 
@@ -854,14 +915,7 @@ class ImageSearchTool(Tool):
             response = await self._provider_request(client, query, max(count, 10), vendor, key)
             response.raise_for_status()
         hits = self.normalise_hits(response.json(), vendor)
-        usable = [
-            hit
-            for hit in hits
-            if hit.image_url
-            and (hit.width is None or hit.width >= min_width)
-            # 16:9 is the shape of a screen; far taller than wide cannot fill a region uncropped.
-            and (hit.height is None or hit.height >= int(min_width * 9 / 16))
-        ]
+        usable = [hit for hit in hits if hit.image_url and self._holds_up(hit, min_width)]
         if not usable:
             return (
                 f"No images at least {min_width}px wide for: {query}\n"
@@ -913,6 +967,13 @@ class ImageSearchTool(Tool):
                 "https://api.tavily.com/search",
                 json={"query": query, "max_results": n, "include_images": True, "include_image_descriptions": True},
                 headers={**auth_json, "Authorization": f"Bearer {key}"},
+                timeout=15.0,
+            )
+        if vendor == "serply":
+            return await client.get(
+                "https://api.serply.io/v1/image",
+                params={"q": query},
+                headers={"Accept": "application/json", "X-Api-Key": key},
                 timeout=15.0,
             )
         return await client.post(
@@ -990,6 +1051,24 @@ class ImageSearchTool(Tool):
                         height=None,
                         source=domain(url),
                         page="",
+                    )
+                )
+        elif vendor == "serply":
+            # ``image.src`` is Google's cached thumbnail; the picture itself, with
+            # its dimensions, is ``original_image``. The numbers arrive as strings.
+            for item in data.get("image_results") or []:
+                original = item.get("original_image") or {}
+                link = item.get("link") or {}
+                image = item.get("image") or {}
+                page = str(link.get("href") or "")
+                hits.append(
+                    ImageHit(
+                        title=str(link.get("title") or image.get("alt") or ""),
+                        image_url=str(original.get("src") or ""),
+                        width=number(original.get("width")),
+                        height=number(original.get("height")),
+                        source=str(link.get("domain") or domain(page)),
+                        page=page,
                     )
                 )
         else:
