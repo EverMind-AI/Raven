@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import os
+import signal
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -94,17 +95,24 @@ class Sandbox:
 
         Covers refs (all of loose and packed refs via for-each-ref plus the ref
         tree), .git/config, .git/hooks and anything else small under the common
-        git dir. Large objects under .git/objects are not hashed -- wiping them
-        corrupts the repository loudly, which no silent-write case looks like.
+        git dir. Index flags from `git ls-files -v` are included because
+        assume-unchanged / skip-worktree make `git status` skip a modified
+        tracked file. Large objects under .git/objects are not hashed -- wiping
+        them corrupts the repository loudly, which no silent-write case looks
+        like.
         """
         try:
             refs = self._git("for-each-ref").stdout
+            index_flags = self._git("ls-files", "-v").stdout
             common = self._git("rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
         except (OSError, subprocess.SubprocessError):
             return None
 
         digest = hashlib.sha256()
         digest.update(refs.encode("utf-8", "replace"))
+        # ls-files -v exposes assume-unchanged / skip-worktree flags, which make
+        # `git status` stop reporting a modified tracked file.
+        digest.update(index_flags.encode("utf-8", "replace"))
         base = Path(common) if common else None
         if base is None:
             return None
@@ -154,6 +162,25 @@ class Sandbox:
             path = path.resolve()
         return path
 
+    @staticmethod
+    def _kill_process_group(proc: subprocess.Popen[str]) -> None:
+        """Kill the process group started by ``bash`` so no child outlives it."""
+        if os.name == "posix":
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            return
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                    capture_output=True,
+                    check=False,
+                )
+            except OSError:
+                pass
+
     def bash(self, command: str, timeout: float = 60.0) -> str:
         # The candidate is the diff of THIS worktree vs base; a command that
         # names the origin repo escapes the experiment — reads see the wrong
@@ -183,20 +210,21 @@ class Sandbox:
             # origin write this command is about to make.
             return "[refused: origin repository state unavailable (git rev-parse/status failed); command not run]"
         timed_out = False
-        proc = subprocess.Popen(
-            ["bash", "-c", command],
-            cwd=str(self.root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            encoding="utf-8",
-            errors="replace",
-            # Its own process group, so a surviving grandchild can be killed
-            # with the group before the origin is re-snapshotted.
-            start_new_session=(os.name == "posix"),
-        )
+        proc: subprocess.Popen[str] | None = None
         out, err = "", ""
         error_text = None
         try:
+            proc = subprocess.Popen(
+                ["bash", "-c", command],
+                cwd=str(self.root),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                encoding="utf-8",
+                errors="replace",
+                # Its own process group, so a surviving grandchild can be killed
+                # with the group before the origin is re-snapshotted.
+                start_new_session=(os.name == "posix"),
+            )
             try:
                 out, err = proc.communicate(timeout=timeout)
             except subprocess.TimeoutExpired:
@@ -209,6 +237,14 @@ class Sandbox:
         except Exception as e:  # noqa: BLE001 — a bad command must not crash the run
             error_text = f"[bash error: {type(e).__name__}: {str(e)[:150]}]"
         finally:
+            if proc is not None:
+                # A background child can outlive bash; kill the group on every
+                # exit path so it cannot write the origin after the snapshot.
+                self._kill_process_group(proc)
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
             after = self._origin_state()
         if after is None:
             raise RuntimeError(
@@ -226,6 +262,8 @@ class Sandbox:
             )
         if error_text is not None:
             return error_text
+        if proc is None:
+            return "[bash error: process did not start]"
         out = (out or "")[-4000:]
         err = (err or "")[-1500:]
         return f"[exit {proc.returncode}]\n{out}" + (f"\n[stderr]\n{err}" if err else "")

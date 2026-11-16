@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -92,6 +93,51 @@ class TestBashBoundary:
             assert (sandbox.repo_root / "timeout-poison").exists()
         finally:
             (sandbox.repo_root / "timeout-poison").unlink(missing_ok=True)
+
+    @pytest.mark.slow
+    def test_timeout_kills_a_late_origin_writer(self, sandbox):
+        cmd = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && sleep 2 && touch late-poison"
+        poison = sandbox.repo_root / "late-poison"
+        try:
+            out = sandbox.bash(cmd, timeout=0.5)
+            assert "TIMEOUT" in out
+            time.sleep(2.5)
+            assert not poison.exists()
+        finally:
+            poison.unlink(missing_ok=True)
+
+    @pytest.mark.slow
+    def test_background_writer_is_killed_before_snapshot(self, sandbox):
+        if sys.platform == "win32":
+            pytest.skip("process-group cleanup is POSIX-only")
+        cmd = "(sleep 2; cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\"; touch bg-poison) >/dev/null 2>&1 &"
+        poison = sandbox.repo_root / "bg-poison"
+        try:
+            out = sandbox.bash(cmd)
+            assert "[exit 0]" in out
+            time.sleep(2.5)
+            assert not poison.exists()
+        finally:
+            poison.unlink(missing_ok=True)
+
+    def test_assume_unchanged_index_flag_is_detected(self, sandbox):
+        cmd = (
+            "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && "
+            "printf 'score = 999\\n' > grader.py && git update-index --assume-unchanged grader.py"
+        )
+        with pytest.raises(RuntimeError, match="origin repository"):
+            sandbox.bash(cmd)
+
+    def test_missing_bash_is_reported_not_raised(self, sandbox, monkeypatch):
+        monkeypatch.setattr(sandbox, "_origin_state", lambda: ("h", "", "f"))
+
+        def _raise(*_args, **_kwargs):
+            raise FileNotFoundError("bash")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(subprocess, "Popen", _raise)
+            out = sandbox.bash("echo hi")
+        assert "bash error" in out and "FileNotFoundError" in out
 
     def test_ref_deletion_in_common_dir_is_detected(self, sandbox, subject):
         repo, _sha = subject
