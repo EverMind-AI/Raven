@@ -200,12 +200,14 @@ def test_send_media_without_frame_uses_proactive_send(tmp_path):
 
 
 def test_send_media_resolves_file_url(tmp_path):
+    """A Path.as_uri() ref (the form raven itself emits) must resolve on both
+    POSIX and Windows: url2pathname handles the Windows drive prefix."""
     f = tmp_path / "data.csv"
     f.write_text("x")
     ch = _channel()
     ch._client = AsyncMock()
     ch._frames["c1"] = SimpleNamespace(body={})
-    asyncio.run(ch.send("c1", "", media=[f"file://{f}"]))
+    asyncio.run(ch.send("c1", "", media=[f.as_uri()]))
     assert ch._client.reply_media.await_args.args[1] == str(f)
 
 

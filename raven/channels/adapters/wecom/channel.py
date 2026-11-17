@@ -10,6 +10,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 
 from loguru import logger
 from wecom_aibot_sdk import WSClient, generate_req_id
@@ -251,7 +252,9 @@ class WecomChannel(ChannelBase):
         """Resolve an outbound media ref (local or file:// path) to an existing
         local path within the upload size cap, for the SDK upload protocol."""
         if media_ref.startswith("file://"):
-            path = Path(unquote(urlparse(media_ref).path))
+            # url2pathname is the platform-aware inverse of Path.as_uri(); a bare
+            # Path(urlparse(...).path) yields \C:\... on Windows and never resolves.
+            path = Path(url2pathname(unquote(urlparse(media_ref).path)))
         else:
             path = Path(os.path.expanduser(media_ref))
         if not path.is_file():
