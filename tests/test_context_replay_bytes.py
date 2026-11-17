@@ -184,6 +184,27 @@ class TestTheQuestionReplaysByteForByte:
         assert "RECALL<the first question>" in _user(first)["content"]
         assert "RECALL<the first question>" in _user(second[:-1])["content"]
 
+    def test_a_recovery_notice_replays_with_the_scratch_still_behind_the_words(self, tmp_path: Path) -> None:
+        """Recovery injection prepends its notice to a string message, so the
+        session write leaves the block in the content and files none; the
+        scratch is still filed and must still come back."""
+        from raven.agent.loop.turn_path import TurnPathMixin
+
+        clock = _Clock()
+        engine = _engine(tmp_path, clock)
+        manager = SessionManager(tmp_path)
+        session = manager.get_or_create("cli:x")
+
+        first = _turn(engine, session.messages, "the first question")
+        question = _user(first)
+        recovering = SimpleNamespace(_pending_recovery={"cli:probe": {"files": ["a.py"]}})
+        TurnPathMixin._inject_recovery_block(recovering, "cli:probe", first)  # type: ignore[arg-type]
+        assert "previous turn was interrupted" in str(question["content"])
+        _save(session, first)
+        second = _turn(engine, session.messages, "the second question")
+
+        assert _user(second[:-1])["content"] == question["content"]
+
     def test_a_note_landed_on_the_message_after_the_scratch_replays_where_it_stood(self, tmp_path: Path) -> None:
         """A hook note lands on the message the model is about to read, which is
         the question, and it lands after the scratch the question carries."""

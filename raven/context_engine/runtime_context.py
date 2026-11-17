@@ -98,12 +98,16 @@ def replayed_content(message: dict[str, Any]) -> Any:
     back as it is.
     """
     content = message.get("content")
-    lines = message.get(RUNTIME_CONTEXT_FIELD)
-    if message.get("role") != "user" or not isinstance(lines, str) or not lines:
+    if message.get("role") != "user":
         return content
     # The scratch goes back first: where it stood is an offset into the
     # message's own words, and the block would shift it.
     content = replayed_scratch(message, content)
+    lines = message.get(RUNTIME_CONTEXT_FIELD)
+    if not isinstance(lines, str) or not lines:
+        # A message filed with no block: recovery injection left it in the
+        # content, so the session write filed none. The scratch is still filed.
+        return content
     if not carries_runtime_context(content, lines):
         content = with_runtime_context(lines, content)
     return content

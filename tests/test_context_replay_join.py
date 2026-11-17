@@ -165,6 +165,20 @@ class TestTheScratchIsFiledAndRejoined:
 
         assert replayed_content(message) == f"{_LINES}\n\nthe words"
 
+    def test_the_scratch_is_rejoined_even_when_no_block_is_filed(self) -> None:
+        """Recovery injection leaves the block in the content, so the session
+        write files no ``runtime_context``; the scratch is still filed and must
+        still come back."""
+        sent = f"[Recovery -- the previous turn was interrupted]\n\n{_LINES}\n\nthe words\n\n{_SCRATCH}"
+        message = {
+            "role": "user",
+            "content": f"[Recovery -- the previous turn was interrupted]\n\n{_LINES}\n\nthe words",
+            TURN_SCRATCH_FIELD: _SCRATCH,
+            TURN_SCRATCH_AT_FIELD: len(f"[Recovery -- the previous turn was interrupted]\n\n{_LINES}\n\nthe words"),
+        }
+
+        assert replayed_content(message) == sent
+
     def test_the_scratch_is_found_by_its_text_wherever_it_sits(self) -> None:
         """A notice put in front of the message moves the block off the start;
         the scratch is still the recorded text and is rejoined as it was."""
