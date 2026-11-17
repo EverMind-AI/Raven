@@ -484,6 +484,12 @@ _HOOK_INJECTED_KEY = "_hook_injected"
 #: given up -- from the research it is entitled to discard.
 _MID_TURN_USER_KEY = "_mid_turn_user"
 
+#: The same fact as the session write stores it. The private spelling above
+#: keeps the mark out of every provider payload; the loop renames it on the way
+#: to disk, and the history projection reads this one to rebuild what the turn
+#: was sent with.
+_STORED_MID_TURN_KEY = "mid_turn"
+
 #: Introduces the mid-turn arrivals on the way to the provider. Without it the
 #: model reads a correction the reader typed while it worked as a fresh question
 #: and answers it instead of steering, because nothing in the payload says the
@@ -491,7 +497,7 @@ _MID_TURN_USER_KEY = "_mid_turn_user"
 _MID_TURN_HEADER = "[Mid-turn messages — sent by the user while this turn was already running]"
 
 
-def merge_mid_turn(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def merge_mid_turn(messages: list[dict[str, Any]], *, replay: bool = False) -> list[dict[str, Any]]:
     """One user message per adjacent run of mid-turn arrivals, under the header.
 
     Applied at the call seam, on the payload only: history keeps one entry per
@@ -499,11 +505,18 @@ def merge_mid_turn(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rides the merged message because the re-run seed reads it to find the
     mid-turn messages again.
 
-    Only the private spelling counts. A replayed transcript carries the plain
-    ``mid_turn`` of an entry already saved, and labelling that again would put
-    the header on a question the model answered turns ago.
+    Only the private spelling counts, except under ``replay``: a saved entry
+    carries the plain ``mid_turn``, and the history projection asks for the
+    same fold the turn was sent with so the provider's cached prefix matches.
+    The plain spelling is never honoured on the live path, where it would
+    label an entry this turn did not add.
     """
-    if not any(m.get(_MID_TURN_USER_KEY) for m in messages):
+    mark = _MID_TURN_USER_KEY
+
+    def arrival(m: dict[str, Any]) -> bool:
+        return bool(m.get(mark)) or (replay and bool(m.get(_STORED_MID_TURN_KEY)))
+
+    if not any(arrival(m) for m in messages):
         return messages
     out: list[dict[str, Any]] = []
     run: list[str] = []
@@ -512,11 +525,17 @@ def merge_mid_turn(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not run:
             return
         body = "\n\n".join(run)
-        out.append({"role": "user", "content": f"{_MID_TURN_HEADER}\n\n{body}", _MID_TURN_USER_KEY: True})
+        merged: dict[str, Any] = {"role": "user", "content": f"{_MID_TURN_HEADER}\n\n{body}"}
+        if not replay:
+            # The live fold's output is a candidate for the next pass and for the
+            # re-run seed. A replayed one is payload only, and marking it would
+            # make a saved arrival look like one this turn added.
+            merged[mark] = True
+        out.append(merged)
         run.clear()
 
     for m in messages:
-        if m.get(_MID_TURN_USER_KEY):
+        if arrival(m):
             # The merged message keeps the mark, so a second pass over the same
             # list must not stack a second header onto its own output.
             run.append(str(m.get("content") or "").removeprefix(f"{_MID_TURN_HEADER}\n\n"))

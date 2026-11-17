@@ -41,6 +41,7 @@ from raven.context_engine.curator import (
     _curator_input_payload,
     _trace_messages,
 )
+from raven.context_engine.history_trimmer import STORED_MID_TURN_KEY
 from raven.context_engine.runtime_context import replayed_content
 from raven.contracts.context import AssemblyContext, Segment
 from raven.contracts.llm_provider import LLMProvider
@@ -388,7 +389,8 @@ Rules:
 
         A user message is replayed with the runtime-context lines it was sent
         with, through the same ``replayed_content`` the slow path's
-        ``HistoryTrimmer.history_from_ids`` uses.
+        ``HistoryTrimmer.history_from_ids`` uses, and an arrival the reader
+        typed mid-turn keeps its mark for the call seam to fold.
         """
         allowed = {"role", "content", "tool_calls", "tool_call_id", "name", "reasoning_content", "thinking_blocks"}
         out: list[dict[str, Any]] = []
@@ -397,6 +399,8 @@ Rules:
             if entry.get("role"):
                 if "content" in entry:
                     entry["content"] = replayed_content(message)
+                if message.get(STORED_MID_TURN_KEY):
+                    entry[STORED_MID_TURN_KEY] = True
                 out.append(entry)
         for idx, msg in enumerate(out):
             if msg.get("role") == "user":

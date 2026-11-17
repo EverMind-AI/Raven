@@ -1604,7 +1604,7 @@ class TurnPathMixin:
             # Last, and on the payload only: the strategies above decide against
             # the shape the messages arrived in, and the prompt-cache prefix
             # stays stable because the same arrivals always fold the same way.
-            call_messages = merge_mid_turn(call_messages)
+            call_messages = merge_mid_turn(call_messages, replay=True)
             # Sized to the prompt it goes out beside, which is the room the
             # history strategy's trigger holds back: near that line the model's
             # whole ceiling no longer fits, and a provider that checks
@@ -3915,7 +3915,7 @@ class TurnPathMixin:
             with _llm_purpose("task_board"), usage_context.bind(key):
                 call_messages, call_tools, call_model = await self.strategies.before_llm_call(rows, tools, model)
                 return await self.provider.chat_with_retry(
-                    messages=merge_mid_turn(call_messages),
+                    messages=merge_mid_turn(call_messages, replay=True),
                     tools=call_tools,
                     model=call_model,
                     fallback_models=fallback_models,

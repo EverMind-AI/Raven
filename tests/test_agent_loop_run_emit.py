@@ -18,7 +18,7 @@ import pytest
 from raven.agent.hook import AgentHook, HookDecision
 from raven.agent.hook.adapters import DecisionConsumerAdapter
 from raven.agent.loop import AgentLoop
-from raven.agent.loop._shared import _MID_TURN_HEADER
+from raven.agent.loop._shared import _MID_TURN_HEADER, _MID_TURN_USER_KEY
 from raven.agent.loop.bundles import HostWiring
 from raven.agent.loop.recovery import NETWORK_CUT_CONTINUATION
 from raven.agent.window.parts import CONVERSATION, SKILLS, measure_parts
@@ -2524,3 +2524,26 @@ async def test_a_marker_after_a_file_delivery_does_not_make_the_turn_silent(tmp_
     assert not any(isinstance(e, EvNotice) and e.kind is NoticeKind.SILENT_TURN for e in sink.events)
     assert not any(isinstance(e, EvText) for e in sink.events), "the marker is no reply to send"
     assert outcome.silent is False and outcome.explicit_reply is True
+
+
+async def test_a_mid_turn_arrival_is_replayed_as_it_was_sent(tmp_path):
+    # The turn boundary is where a provider's prefix cache breaks: the next
+    # request only reuses this one when the bytes match. History keeps one entry
+    # per arrival, so the replay has to fold them back into the single labelled
+    # message the model was handed.
+    provider = _RecordingStreamProvider([*_stream_scripts(1), [ChatDelta(content="second")]])
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_FakeTool())
+
+    drain = _gap_drain([[], [_req("wait, skip the 2023 numbers"), _req("Q4 only")]])
+    await loop.run_turn(_req("summarise the report"), _EmitCollector(), drain, stream=True)
+    await loop.run_turn(_req("and the total?"), _EmitCollector(), _drain, stream=True)
+
+    sent = _labelled(provider.calls[1])
+    replayed = _labelled(provider.calls[2])
+    assert len(sent) == 1, provider.calls[1]
+    assert replayed == sent, "the next request replays the arrival as it was sent"
+    # The rerun seed reads this key off the live list, so a replayed arrival
+    # wearing it would put the whole history into the next attempt.
+    assert not any(_MID_TURN_USER_KEY in m for m in provider.calls[2]), provider.calls[2]
