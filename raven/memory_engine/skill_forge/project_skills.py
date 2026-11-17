@@ -4,9 +4,10 @@ A project skill is a flat ``<name>/SKILL.md`` under a ``.agents/skills``
 directory, the layout ``gh skill``, ``npx skills`` and Codex install into. The
 walk starts at the working directory and climbs to the nearest ancestor holding
 a ``.git`` entry (or stops at the working directory itself when there is none),
-collecting each ``.agents/skills`` directory on the way, nearest first. Home and
-agent-home trees are never project directories, and a symlink counts only when
-its resolved target stays inside the project boundary.
+collecting each ``.agents/skills`` directory on the way, nearest first. The
+user-level ``~/.agents`` tree and agent home are never read as project skills,
+and a symlink counts only when its resolved target stays inside the project
+boundary.
 
 Those directories are then served from a process-wide cache of BM25 indexes
 keyed by the directory tuple, so every session in one checkout shares one
@@ -38,6 +39,11 @@ class ProjectRoots:
 
     dirs: tuple[Path, ...]
     boundary: Path
+    guarded: tuple[Path, ...] = ()
+
+
+def _is_guarded(path: Path, guarded: tuple[Path, ...]) -> bool:
+    return any(path.is_relative_to(root) for root in guarded)
 
 
 def project_skill_roots(
@@ -48,24 +54,34 @@ def project_skill_roots(
 ) -> ProjectRoots | None:
     """Resolve the project's skill directories for one working directory.
 
-    ``boundary`` is the git root, or the working directory when it has no git
-    ancestor. Returns ``None`` when no directory qualifies.
+    ``boundary`` is the git root, or the working directory when there is no
+    git ancestor or the nearest one is home, agent home, or an ancestor of
+    agent home. Paths resolving into the user-level ``.agents`` tree or agent
+    home are never collected. Returns ``None`` when no directory qualifies.
     """
+    home_r = (home or Path.home()).resolve()
+    agent_home_r = agent_home.resolve()
+    guarded = (home_r / ".agents", agent_home_r)
+    excluded = {home_r, agent_home_r, *agent_home_r.parents}
     start = workdir.resolve()
     chain = [start, *start.parents]
     git_root = next((d for d in chain if (d / ".git").exists()), None)
+    if git_root in excluded:
+        git_root = None
     walk = chain[: chain.index(git_root) + 1] if git_root is not None else [start]
     boundary = git_root or start
-    home_r = (home or Path.home()).resolve()
-    excluded = {home_r, agent_home.resolve(), *agent_home.resolve().parents}
     dirs: list[Path] = []
     for d in walk:
         if d in excluded:
             continue
         cand = d / PROJECT_SKILLS_DIR
-        if cand.is_dir() and cand.resolve().is_relative_to(boundary):
-            dirs.append(cand.resolve())
-    return ProjectRoots(tuple(dirs), boundary) if dirs else None
+        if not cand.is_dir():
+            continue
+        resolved = cand.resolve()
+        if not resolved.is_relative_to(boundary) or _is_guarded(resolved, guarded):
+            continue
+        dirs.append(resolved)
+    return ProjectRoots(tuple(dirs), boundary, guarded) if dirs else None
 
 
 def read_project_skills(roots: ProjectRoots) -> list[SkillMeta]:
@@ -89,9 +105,13 @@ def read_project_skills(roots: ProjectRoots) -> list[SkillMeta]:
                 resolved_entry = entry.resolve()
                 if not resolved_entry.is_relative_to(roots.boundary):
                     continue
+                if _is_guarded(resolved_entry, roots.guarded):
+                    continue
                 # SKILL.md itself can be a symlink out of the project.
                 skill_file = (resolved_entry / "SKILL.md").resolve()
                 if not skill_file.is_file() or not skill_file.is_relative_to(roots.boundary):
+                    continue
+                if _is_guarded(skill_file, roots.guarded):
                     continue
             except (OSError, RuntimeError):
                 # Python 3.12 raises RuntimeError on a symlink loop; 3.13 yields the looped path instead.

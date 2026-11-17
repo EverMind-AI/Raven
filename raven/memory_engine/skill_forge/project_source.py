@@ -2,14 +2,15 @@
 
 Each search resolves the working directory bound to the running turn through
 :class:`ProjectSkills`, so a router shared by every session of a gateway offers
-each turn only its own project's skills. A cold index is waited on for a short
-bound only: the router gathers every source with no per-source timeout, so a
-large project must cost its first turn a missing menu line, never a stalled
-assembly.
+each turn only its own project's skills. A cold index and the scoring over it
+are each waited on for a short bound only: the router gathers every source with
+no per-source timeout, so a large project must cost its turn a missing menu
+line, never a stalled assembly.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 from raven.memory_engine.skill_forge.types import RouterHit
@@ -38,6 +39,13 @@ class ProjectSkillSource:
         index = await self._project.index(wait_s=self._wait_s)
         if index is None:
             return []
+        try:
+            ranked = await asyncio.wait_for(
+                asyncio.to_thread(index.search, query, k),
+                self._wait_s,
+            )
+        except TimeoutError:
+            return []
         return [
             RouterHit(
                 qualified_id=f"project/{meta.name}",
@@ -50,7 +58,7 @@ class ProjectSkillSource:
                     "path": str(meta.path),
                 },
             )
-            for meta, score in index.search(query, k)
+            for meta, score in ranked
         ]
 
 

@@ -12,6 +12,7 @@ import asyncio
 import logging
 import shutil
 import threading
+import time
 from pathlib import Path
 
 from raven.agent import workdir
@@ -172,6 +173,46 @@ async def test_a_cold_build_does_not_hold_up_the_router(tmp_path: Path) -> None:
     gate.set()
     assert await asyncio.to_thread(started.wait, 5.0)
     await asyncio.sleep(0.05)
+
+
+async def test_a_slow_project_search_does_not_block_the_event_loop(tmp_path: Path) -> None:
+    repo = _repo(tmp_path / "repo")
+    _skill(repo / ".agents" / "skills", "pdf-tools", body="Extract text from PDF files.")
+    index = ProjectSkillIndex([])
+    searched: list[str] = []
+
+    def slow_search(query: str, k: int) -> list[tuple]:
+        searched.append(query)
+        time.sleep(1.0)
+        return []
+
+    index.search = slow_search  # type: ignore[method-assign]
+    src = ProjectSkillSource(_project(tmp_path, _Bound(repo), cache=ProjectSkillCache(build=lambda roots: index)))
+
+    gaps: list[float] = []
+    stop = asyncio.Event()
+
+    async def heartbeat() -> None:
+        loop = asyncio.get_running_loop()
+        last = loop.time()
+        while not stop.is_set():
+            await asyncio.sleep(0.01)
+            now = loop.time()
+            gaps.append(now - last)
+            last = now
+
+    beat = asyncio.create_task(heartbeat())
+    await asyncio.sleep(0.05)
+    started = time.monotonic()
+    hits = await src.search("pdf text", [], 5)
+    elapsed = time.monotonic() - started
+    stop.set()
+    await beat
+
+    assert hits == []
+    assert searched == ["pdf text"]
+    assert max(gaps) < 0.2
+    assert elapsed < 0.9
 
 
 async def test_the_scent_menu_offers_the_bound_project_skill(tmp_path: Path) -> None:

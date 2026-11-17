@@ -250,7 +250,7 @@ class TestProjectSkills:
         out = await ReadSkillTool(project=_project(tmp_path, repo)).execute(skill_id="project/pdf-tools")
 
         assert "Extract" in out
-        assert str(guide) in out
+        assert f"({skill_dir}/references/guide.md)" in out
 
     async def test_read_skill_project_miss_does_not_fall_back_to_held_hits(self, tmp_path: Path) -> None:
         repo = _project_repo(tmp_path / "repo")

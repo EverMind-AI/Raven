@@ -113,6 +113,96 @@ def test_home_and_agent_home_ancestors_are_never_project_dirs(tmp_path: Path) ->
     assert project_skill_roots(workdir, agent_home=agent_home, home=home) is None
 
 
+def test_a_git_root_at_home_does_not_bound_a_gitless_workdir(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".git").mkdir(parents=True)
+    config = home / ".raven" / "config.json"
+    config.parent.mkdir()
+    config.write_text(
+        "---\nname: setup\ndescription: setup skill\n---\n\nsk-SECRET-VALUE\n",
+        encoding="utf-8",
+    )
+    workdir = home / "Downloads" / "evil"
+    skill_dir = workdir / ".agents" / "skills" / "setup"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").symlink_to(config)
+    agent_home = home / ".raven" / "workspace"
+    agent_home.mkdir(parents=True)
+
+    roots = project_skill_roots(workdir, agent_home=agent_home, home=home)
+
+    assert roots is not None
+    assert roots.boundary == workdir.resolve()
+    assert read_project_skills(roots) == []
+
+
+def test_home_is_a_containment_root_with_agent_home_outside_it(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".git").mkdir(parents=True)
+    config = home / ".raven" / "config.json"
+    config.parent.mkdir()
+    config.write_text(
+        "---\nname: setup\ndescription: setup skill\n---\n\nsk-SECRET-VALUE\n",
+        encoding="utf-8",
+    )
+    workdir = home / "evil"
+    skill_dir = workdir / ".agents" / "skills" / "setup"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").symlink_to(config)
+    agent_home = tmp_path / "elsewhere" / "workspace"
+    agent_home.mkdir(parents=True)
+
+    roots = project_skill_roots(workdir, agent_home=agent_home, home=home)
+
+    assert roots is not None
+    assert roots.boundary == workdir.resolve()
+    assert read_project_skills(roots) == []
+
+
+def test_an_agents_symlink_into_agent_home_is_skipped_inside_the_boundary(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    agent_home = repo / "nested" / "agent-home"
+    _skill(agent_home / ".agents" / "skills", "leaked")
+    workdir = repo / "pkg"
+    workdir.mkdir(parents=True)
+    (workdir / ".agents").symlink_to(agent_home / ".agents")
+    home = tmp_path / "home"
+
+    assert project_skill_roots(workdir, agent_home=agent_home, home=home) is None
+
+    own = repo / "own"
+    _skill(own / ".agents" / "skills", "kept")
+    roots = project_skill_roots(own, agent_home=agent_home, home=home)
+    assert roots is not None
+    assert roots.guarded == (home.resolve() / ".agents", agent_home.resolve())
+
+    inside = ProjectRoots(
+        ((workdir / ".agents" / "skills").resolve(),),
+        repo.resolve(),
+        roots.guarded,
+    )
+    assert read_project_skills(inside) == []
+
+
+def test_a_checkout_under_home_with_its_own_git_root_is_collected(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = home / "code" / "foo"
+    (repo / ".git").mkdir(parents=True)
+    _skill(repo / ".agents/skills", "pdf-tools")
+    workdir = repo / "pkg"
+    workdir.mkdir(parents=True)
+    agent_home = home / ".raven" / "workspace"
+    agent_home.mkdir(parents=True)
+
+    roots = project_skill_roots(workdir, agent_home=agent_home, home=home)
+
+    assert roots is not None
+    assert roots.dirs == ((repo / ".agents/skills").resolve(),)
+    assert roots.boundary == repo.resolve()
+    assert [meta.name for meta in read_project_skills(roots)] == ["pdf-tools"]
+
+
 def test_no_directory_found_is_none(tmp_path: Path) -> None:
     agent_home = tmp_path / "home" / "workspace"
     agent_home.mkdir(parents=True)
