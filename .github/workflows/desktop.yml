@@ -5,6 +5,12 @@ on:
     paths:
       - 'desktop/**'
       - '.github/workflows/desktop.yml'
+      # The page's half of the shell bridge. The Python contract test holds the
+      # two sides together, but a change here should still build the window.
+      - 'ui-web/src/app/connection.ts'
+      - 'ui-web/src/state/look.ts'
+      - 'ui-web/src/state/shellWindow.ts'
+      - 'tests/test_desktop_shell_contract.py'
 
 concurrency:
   group: desktop-${{ github.workflow }}-${{ github.ref }}
