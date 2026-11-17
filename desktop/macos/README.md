@@ -87,7 +87,26 @@ open /tmp/Raven.app
 The native window itself needs a Mac with a GUI, so it is not covered by CI.
 The launcher's argument contract has a pytest (`tests/test_desktop_macos_launcher.py`)
 that runs on every platform with a POSIX shell, and a macOS CI job typechecks
-the Swift sources whenever `desktop/**` changes.
+the Swift sources whenever `desktop/**` changes. That job also runs the
+navigation matrix (`RAVEN_DESKTOP_SELFTEST=1`), which checks what a click does
+without opening a window or contacting a gateway.
+
+## Files, downloads and new windows
+
+The page hands a delivered file to an `<a download>` link. A `WKWebView` treats
+that as a navigation unless the app says otherwise, so a click would replace the
+window with the file itself and take the page's script context with it. The app
+answers `shouldPerformDownload` with a `WKDownload` instead, and saves to the
+reader's `Downloads` folder, adding ` (2)` rather than overwriting a file that is
+already there. The same check runs at response time for anything the gateway
+marks `Content-Disposition: attachment` or that WebKit cannot display.
+
+A link that asks for a new window (`target=_blank`, `window.open`) gets a real
+child window next to the main one, so "open in a new tab" no longer navigates
+Raven away from itself. External links still go to the system browser.
+
+`File -> Back` (Cmd-[) and `File -> Forward` (Cmd-]) exist because the window has
+no browser toolbar; they return to the page from anywhere it can navigate to.
 
 ## Known limits
 

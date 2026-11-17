@@ -12,6 +12,60 @@ import WebKit
 // The page's side of that bridge lives in ui-web/src/app/connection.ts and
 // ui-web/src/state/shellWindow.ts.
 
+// What a navigation should do, decided before any WebKit call is made. Kept as
+// a value so the matrix can be exercised without a window or a server.
+enum NavigationIntent {
+    case allow      // the page itself
+    case download   // a file the gateway sends as an attachment
+    case preview    // a page this app shows in its own child window
+    case external   // hand it to the system browser
+    case retry      // raven://retry
+    case cancel
+}
+
+struct NavigationPolicy {
+    let localHosts: Set<String>
+
+    func isLocal(_ url: URL?) -> Bool {
+        guard let url, let host = url.host else { return false }
+        return localHosts.contains(host)
+    }
+
+    /// A click or redirect about to happen.
+    func action(for url: URL?, targetFrameIsNil: Bool, shouldPerformDownload: Bool) -> NavigationIntent {
+        guard let url else { return .allow }
+        if url.scheme == "raven" {
+            return url.host == "retry" ? .retry : .cancel
+        }
+        // A download is not a page. Letting it through replaces the window with
+        // the file itself, and the page's script context goes with it.
+        if shouldPerformDownload {
+            return isLocal(url) ? .download : .external
+        }
+        if targetFrameIsNil {
+            // `target=_blank` and `window.open`. Loading this into the main view
+            // would navigate the app away from the page that asked for it.
+            if isLocal(url) { return .preview }
+            if url.scheme == "http" || url.scheme == "https" { return .external }
+            return .allow
+        }
+        if isLocal(url) { return .allow }
+        if url.scheme == "http" || url.scheme == "https" { return .external }
+        return .allow
+    }
+
+    /// The response to a navigation already allowed: WebKit knows the headers
+    /// and the MIME type here, so an attachment can still become a download
+    /// rather than a page. Subframes are left alone -- a framed viewer is the
+    /// page's own business.
+    func response(for url: URL?, isForMainFrame: Bool, disposition: String?, canShowMIMEType: Bool) -> NavigationIntent {
+        guard isForMainFrame, isLocal(url) else { return .allow }
+        if let disposition, disposition.lowercased().contains("attachment") { return .download }
+        if !canShowMIMEType { return .download }
+        return .allow
+    }
+}
+
 private final class ScriptBridge: NSObject, WKScriptMessageHandler {
     weak var app: AppDelegate?
 
@@ -24,15 +78,17 @@ private final class ScriptBridge: NSObject, WKScriptMessageHandler {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate,
+                         NSWindowDelegate {
     private var window: NSWindow!
     private var webView: WKWebView!
     private var splash: NSView?
     private var busy = false
     private var loadedPage = false
     private var lastReauth = Date.distantPast
+    private var previewWindows: [NSWindow] = []
 
-    private let localHosts: Set<String> = ["127.0.0.1", "localhost", "::1"]
+    private let policy = NavigationPolicy(localHosts: ["127.0.0.1", "localhost", "::1"])
 
     // MARK: - Lifecycle
 
@@ -62,6 +118,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
         let fileItem = NSMenuItem()
         let fileMenu = NSMenu(title: "File")
+        // A way back from anywhere the page can navigate to, since this window
+        // has no browser toolbar.
+        let backItem = NSMenuItem(title: "Back", action: #selector(goBack), keyEquivalent: "[")
+        backItem.target = self
+        fileMenu.addItem(backItem)
+        let forwardItem = NSMenuItem(title: "Forward", action: #selector(goForward), keyEquivalent: "]")
+        forwardItem.target = self
+        fileMenu.addItem(forwardItem)
+        fileMenu.addItem(NSMenuItem.separator())
         let reconnectItem = NSMenuItem(title: "Reconnect", action: #selector(reconnectAction), keyEquivalent: "R")
         reconnectItem.target = self
         reconnectItem.keyEquivalentModifierMask = [.command, .shift]
@@ -150,6 +215,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     @objc private func reconnectAction() { reconnect() }
 
+    @objc private func goBack() {
+        if webView.canGoBack { webView.goBack() }
+    }
+
+    @objc private func goForward() {
+        if webView.canGoForward { webView.goForward() }
+    }
+
     @objc private func reloadAction() {
         if loadedPage { webView.reload() } else { reconnect() }
     }
@@ -223,7 +296,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     // MARK: - The page's bridge
 
     func receive(_ message: WKScriptMessage) {
+        // The bridge belongs to the main page: a preview window showing a
+        // delivered file must not be able to drive the app's splash, theme or
+        // sign-in handshake.
         guard message.name == "raven",
+              message.webView === webView,
               message.frameInfo.isMainFrame,
               isLocal(message.webView?.url),
               let body = message.body as? [String: Any],
@@ -341,23 +418,89 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        guard let url = navigationAction.request.url else {
-            decisionHandler(.allow); return
-        }
-        if url.scheme == "raven" {
-            if url.host == "retry" { reconnect() }
-            decisionHandler(.cancel); return
-        }
-        if isLocal(url) { decisionHandler(.allow); return }
-        if url.scheme == "http" || url.scheme == "https" {
+        let intent = policy.action(
+            for: navigationAction.request.url,
+            targetFrameIsNil: navigationAction.targetFrame == nil,
+            shouldPerformDownload: navigationAction.shouldPerformDownload)
+        switch intent {
+        case .allow:
+            decisionHandler(.allow)
+        case .download:
+            decisionHandler(.download)
+        case .external:
             // External links belong to the system browser, not this window.
-            NSWorkspace.shared.open(url)
-            decisionHandler(.cancel); return
+            if let url = navigationAction.request.url { NSWorkspace.shared.open(url) }
+            decisionHandler(.cancel)
+        case .preview:
+            // Left to `createWebViewWith`, which WebKit calls next. Cancelling
+            // here would drop a request that delegate is about to answer.
+            decisionHandler(.allow)
+        case .retry:
+            reconnect()
+            decisionHandler(.cancel)
+        case .cancel:
+            decisionHandler(.cancel)
         }
-        decisionHandler(.allow)
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
+                 decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        let http = navigationResponse.response as? HTTPURLResponse
+        let intent = policy.response(
+            for: navigationResponse.response.url,
+            isForMainFrame: navigationResponse.isForMainFrame,
+            disposition: http?.value(forHTTPHeaderField: "Content-Disposition"),
+            canShowMIMEType: navigationResponse.canShowMIMEType)
+        decisionHandler(intent == .download ? .download : .allow)
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    // MARK: - WKDownloadDelegate
+
+    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse,
+                  suggestedFilename: String, completionHandler: @escaping (URL?) -> Void) {
+        completionHandler(AppDelegate.saveLocation(for: suggestedFilename))
+    }
+
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        let alert = NSAlert()
+        alert.messageText = "The download failed"
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    /// Where a download lands: the reader's Downloads folder, under a name that
+    /// does not overwrite an earlier file. `WebKit` asks for this once per
+    /// download and fails the download if the answer is nil.
+    static func saveLocation(for suggested: String, in folder: URL? = nil) -> URL {
+        let fm = FileManager.default
+        let dir = folder
+            ?? fm.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? fm.temporaryDirectory
+        let cleaned = suggested.isEmpty ? "download" : suggested
+        var target = dir.appendingPathComponent(cleaned)
+        let stem = target.deletingPathExtension().lastPathComponent
+        let ext = target.pathExtension
+        var n = 2
+        while fm.fileExists(atPath: target.path) {
+            target = dir.appendingPathComponent(ext.isEmpty ? "\(stem) (\(n))" : "\(stem) (\(n)).\(ext)")
+            n += 1
+        }
+        return target
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // A child window loading its file must not retitle the main one, and
+        // must not count as "the page is up" for the reload shortcut.
+        guard webView === self.webView else { return }
         if let t = webView.title, !t.isEmpty, isLocal(webView.url) {
             window.title = t
             loadedPage = true
@@ -365,40 +508,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        failIfLocal(error)
+        failIfLocal(error, in: webView)
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        failIfLocal(error)
+        failIfLocal(error, in: webView)
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        reconnect()
+        // Only the main page is worth rebuilding; a child's crash just closes
+        // that child rather than restarting the app's gateway handshake.
+        if webView === self.webView {
+            reconnect()
+        } else {
+            webViewDidClose(webView)
+        }
     }
 
-    private func failIfLocal(_ error: Error) {
+    private func failIfLocal(_ error: Error, in webView: WKWebView) {
         let ns = error as NSError
         if ns.code == NSURLErrorCancelled { return }
         guard let url = ns.userInfo[NSURLErrorFailingURLErrorKey] as? URL, isLocal(url) else { return }
-        showStatus("The page could not reach the gateway. Press Cmd-Shift-R to retry.", retry: true)
+        // The status page belongs to the main window; a child that cannot load
+        // is closed instead of overwriting the app.
+        if webView === self.webView {
+            showStatus("The page could not reach the gateway. Press Cmd-Shift-R to retry.", retry: true)
+        } else {
+            webViewDidClose(webView)
+        }
     }
 
     private func isLocal(_ url: URL?) -> Bool {
-        guard let url, let host = url.host else { return false }
-        return localHosts.contains(host)
+        policy.isLocal(url)
     }
 
     // MARK: - WKUIDelegate
 
+    /// A page asked for a window of its own (`target=_blank`, `window.open`).
+    /// The page keeps its own view: the child gets a real window beside it, so
+    /// "open in a new tab" shows the file and leaves Raven where it was.
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         guard navigationAction.targetFrame == nil, let url = navigationAction.request.url else { return nil }
-        if isLocal(url) {
-            webView.load(navigationAction.request)
-        } else if url.scheme == "http" || url.scheme == "https" {
-            NSWorkspace.shared.open(url)
+        if !isLocal(url) {
+            if url.scheme == "http" || url.scheme == "https" { NSWorkspace.shared.open(url) }
+            return nil
         }
-        return nil
+        let child = WKWebView(frame: NSRect(x: 0, y: 0, width: 960, height: 720), configuration: configuration)
+        child.navigationDelegate = self
+        child.uiDelegate = self
+        child.allowsMagnification = true
+        child.autoresizingMask = [.width, .height]
+
+        let panel = NSWindow(
+            contentRect: child.frame,
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false)
+        panel.title = url.lastPathComponent.isEmpty ? "Raven" : url.lastPathComponent
+        panel.contentView = child
+        panel.isReleasedWhenClosed = false
+        panel.delegate = self
+        panel.center()
+        previewWindows.append(panel)
+        panel.makeKeyAndOrderFront(nil)
+        return child
+    }
+
+    /// `window.close()` from a page in a child window.
+    func webViewDidClose(_ webView: WKWebView) {
+        guard webView !== self.webView else { return }
+        for panel in previewWindows where panel.contentView === webView {
+            panel.close()
+        }
+    }
+
+    /// A child window the reader closed with its own button.
+    func windowWillClose(_ notification: Notification) {
+        guard let closed = notification.object as? NSWindow, closed !== window else { return }
+        previewWindows.removeAll { $0 === closed }
     }
 
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
@@ -420,6 +608,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         alert.addButton(withTitle: "Cancel")
         completionHandler(alert.runModal() == .alertFirstButtonReturn)
     }
+}
+
+// MARK: - Policy self-test
+
+/// `RAVEN_DESKTOP_SELFTEST=1` runs the navigation matrix and exits without
+/// opening a window, so the decisions that keep the page in place can be
+/// checked in CI on any machine -- no gateway, no GUI, no click.
+private func runSelfTest() -> Int32 {
+    let p = NavigationPolicy(localHosts: ["127.0.0.1", "localhost", "::1"])
+    let local = URL(string: "http://127.0.0.1:18793/files/download?token=t")!
+    let page = URL(string: "http://127.0.0.1:18793/")!
+    let remote = URL(string: "https://example.com/file.zip")!
+
+    var failures: [String] = []
+    func check(_ label: String, _ got: NavigationIntent, _ want: NavigationIntent) {
+        if String(describing: got) != String(describing: want) {
+            failures.append("\(label): got \(got), want \(want)")
+        }
+    }
+
+    // A download click must never be a page navigation; that is the defect this
+    // matrix exists for.
+    check("local download", p.action(for: local, targetFrameIsNil: false, shouldPerformDownload: true), .download)
+    check("external download", p.action(for: remote, targetFrameIsNil: false, shouldPerformDownload: true), .external)
+    check("page load", p.action(for: page, targetFrameIsNil: false, shouldPerformDownload: false), .allow)
+    check("external link", p.action(for: remote, targetFrameIsNil: false, shouldPerformDownload: false), .external)
+    check("new window local", p.action(for: page, targetFrameIsNil: true, shouldPerformDownload: false), .preview)
+    check("new window external", p.action(for: remote, targetFrameIsNil: true, shouldPerformDownload: false), .external)
+    check("retry", p.action(for: URL(string: "raven://retry")!, targetFrameIsNil: false, shouldPerformDownload: false), .retry)
+    check("other raven scheme", p.action(for: URL(string: "raven://elsewhere")!, targetFrameIsNil: false, shouldPerformDownload: false), .cancel)
+
+    // Headers seen at response time: an attachment is still a download even
+    // when the click did not say so.
+    check("attachment main", p.response(for: local, isForMainFrame: true,
+                                        disposition: "attachment; filename=\"a.png\"",
+                                        canShowMIMEType: true), .download)
+    check("html main", p.response(for: page, isForMainFrame: true, disposition: "inline",
+                                  canShowMIMEType: true), .allow)
+    check("unshowable main", p.response(for: local, isForMainFrame: true, disposition: nil,
+                                        canShowMIMEType: false), .download)
+    check("attachment subframe", p.response(for: local, isForMainFrame: false,
+                                            disposition: "attachment; filename=\"a.png\"",
+                                            canShowMIMEType: true), .allow)
+
+    // A second download of the same file must not overwrite the first.
+    let fm = FileManager.default
+    let dir = fm.temporaryDirectory.appendingPathComponent("raven-selftest-\(UUID().uuidString)")
+    try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+    let first = dir.appendingPathComponent("a.png")
+    fm.createFile(atPath: first.path, contents: Data())
+    if AppDelegate.saveLocation(for: "a.png", in: dir) == first {
+        failures.append("saveLocation reused an existing name")
+    }
+    if AppDelegate.saveLocation(for: "b.png", in: dir).lastPathComponent != "b.png" {
+        failures.append("saveLocation rewrote a fresh name")
+    }
+    try? fm.removeItem(at: dir)
+
+    if failures.isEmpty {
+        print("selftest: ok (12 policy cases, saveLocation)")
+        return 0
+    }
+    for f in failures { print("selftest: FAIL \(f)") }
+    return 1
+}
+
+if ProcessInfo.processInfo.environment["RAVEN_DESKTOP_SELFTEST"] == "1" {
+    exit(runSelfTest())
 }
 
 let app = NSApplication.shared
