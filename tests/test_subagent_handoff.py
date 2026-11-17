@@ -35,20 +35,31 @@ _META_ROOT = "/root/.raven/workspace/sessions/g/c/subagents/direct"
 def _meta_root_looks_recorded(monkeypatch):
     """``_meta()``'s directory is illustrative and is never created on disk.
 
-    The renderer's missing-record check reads ``Path.is_dir()``, which would
-    otherwise mark every turn built from ``_meta()`` as a lost record. Treat
-    only that one illustrative prefix as present; every other path (in
-    particular the missing-record test's own ``tmp_path`` directory) still
-    hits the real filesystem.
+    The renderer's missing-record check reads ``Path.is_dir()``, and an ended
+    turn's file list reads ``Path.is_file()``. Without this, every turn built
+    from ``_meta()`` would be a lost record. Treat only that one illustrative
+    prefix as a completed ``prompt.md``/``out.md`` pair; every other path (in
+    particular the missing-record test's own ``tmp_path`` directory, and a
+    turn that really wrote ``error.md``) still hits the real filesystem.
     """
     real_is_dir = Path.is_dir
+    real_is_file = Path.is_file
 
     def _is_dir(self):
         if str(self).startswith(_META_ROOT):
             return True
         return real_is_dir(self)
 
+    def _is_file(self):
+        # Ended illustrative turns are described as a completed pair. The
+        # renderer now stats the files, and this prefix is not a real tree
+        # (statting it is EACCES), so answer here and do not touch the disk.
+        if str(self).startswith(_META_ROOT):
+            return self.name in {"prompt.md", "out.md"}
+        return real_is_file(self)
+
     monkeypatch.setattr(Path, "is_dir", _is_dir)
+    monkeypatch.setattr(Path, "is_file", _is_file)
 
 
 def test_nothing_pending_takes_nothing():
@@ -103,6 +114,92 @@ def test_an_unlanded_turn_is_marked_and_lists_only_its_prompt():
 
     assert "running at handoff time" in block
     assert "prompt.md" in block
+    assert "out.md" not in block
+
+
+def _landed(tmp_path, call_id, *, status, files):
+    """A turn directory with only the files ``finish`` actually wrote."""
+    directory = tmp_path / call_id
+    directory.mkdir()
+    for name, text in files.items():
+        (directory / name).write_text(text, encoding="utf-8")
+    return DirectTurnMeta(
+        agent="Raven-General",
+        handle="fail1",
+        call_id=call_id,
+        directory=directory,
+        started_at_ms=1786000000000,
+        ended_at_ms=1786000060000,
+        status=status,
+    )
+
+
+def test_a_failed_turn_names_error_md_and_not_the_missing_out_md(tmp_path):
+    """A backend that raises finishes with error.md and no out.md. The block
+    is the only place that names record files, so naming out.md points the
+    main agent at a file that was never written and hides the failure reason."""
+    h = DirectChatHandoff()
+    h.record(
+        "s1",
+        _landed(
+            tmp_path,
+            "fail1",
+            status="failed",
+            files={
+                "prompt.md": "do the thing",
+                "error.md": "Error: backend exploded",
+                "meta.json": "{}",
+            },
+        ),
+    )
+    block = h.take("s1")
+
+    assert "fail1/{prompt.md,error.md}" in block
+    assert "out.md" not in block
+
+
+def test_a_cancelled_turn_names_only_the_prompt_that_was_written(tmp_path):
+    """Cancellation finishes with neither output nor an error, so the turn
+    directory holds prompt.md only."""
+    h = DirectChatHandoff()
+    h.record(
+        "s1",
+        _landed(
+            tmp_path,
+            "cancel1",
+            status="cancelled",
+            files={"prompt.md": "do the thing", "meta.json": "{}"},
+        ),
+    )
+    block = h.take("s1")
+
+    assert "cancel1/prompt.md" in block
+    assert "out.md" not in block
+    assert "error.md" not in block
+
+
+def test_an_ended_turn_whose_directory_holds_no_record_files_is_unavailable(tmp_path):
+    """An ended directory that holds none of the record files must not be
+    described as {prompt.md,out.md}. Same rule as a directory never created."""
+    directory = tmp_path / "empty1"
+    directory.mkdir()
+    h = DirectChatHandoff()
+    h.record(
+        "s1",
+        DirectTurnMeta(
+            agent="Raven-General",
+            handle="fail1",
+            call_id="empty1",
+            directory=directory,
+            started_at_ms=1786000000000,
+            ended_at_ms=1786000060000,
+            status="failed",
+        ),
+    )
+    block = h.take("s1")
+
+    assert "empty1 (record unavailable)" in block
+    assert "prompt.md" not in block
     assert "out.md" not in block
 
 

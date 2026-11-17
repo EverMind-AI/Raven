@@ -3499,9 +3499,11 @@ does its content get -- are answered independently and neither leans on the othe
 
 **Handoff Block** (`raven/agent/subagent/direct_chat.py`):
 The pointer block the runtime prepends to the user's next turn to the main agent after
-direct-chat activity: per instance, a UTC time span and the paths of each turn's
-`prompt.md` and `out.md`, inside `subagents/direct/<agent>/<handle>/<call_id>/` beside the
-Subagent history. Activity, not only chats - a User-Created Instance is reported in its own
+direct-chat activity: per instance, a UTC time span and the record files present in each
+turn's directory - `prompt.md`, `out.md`, `error.md` - inside
+`subagents/direct/<agent>/<handle>/<call_id>/` beside the Subagent history. A still-running
+turn names `prompt.md` only, and an ended turn whose directory holds none of the three is
+marked unavailable. Activity, not only chats - a User-Created Instance is reported in its own
 right, and one with no turns yet names no path, because the record directories are made per
 turn. An instance answering a direct turn at take time is reported as running, with the
 time it began answering (the handle lock held, not the moment the turn queued), read from
