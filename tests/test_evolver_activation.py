@@ -8,7 +8,10 @@ the catalog's signature would otherwise break it in silence.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+import pytest
 
 from evolver.activation import dry_query
 from evolver.activation.ledger import (
@@ -117,21 +120,33 @@ def test_per_task_density_ignores_an_empty_beacon_file(tmp_path: Path) -> None:
     assert density == {"task_a": 0.0}
 
 
-def test_per_task_density_escapes_a_glob_metacharacter_in_the_task_id(tmp_path: Path) -> None:
-    """A task id names a directory; ``[``, ``*`` and ``?`` in it are not a pattern.
+def test_per_task_density_escapes_a_bracket_in_the_task_id(tmp_path: Path) -> None:
+    """A task id names a directory; a bracket in it is not a character class.
 
-    The workspaces exist on disk under exactly that name, so globbing the raw id
-    reads the bracket as a character class, matches nothing, and the task drops
-    out of the affinity map without an error.
+    The workspace exists on disk under exactly that name, so globbing the raw id
+    reads the bracket as pattern syntax, matches nothing, and the task drops out
+    of the affinity map without an error. The bracket is also a legal Windows
+    filename character, so this case runs on every platform.
     """
     mark_beacons_enabled(tmp_path)
-    ids = ["task[1]", "task*2", "task?3"]
+    _record_beacon(tmp_path, "task[1]", 0, fired=True)
+
+    density = per_task_density([tmp_path], ["task[1]"])
+
+    assert density == {"task[1]": 1.0}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="'*' and '?' are reserved in Windows path components")
+def test_per_task_density_escapes_a_star_and_question_mark_in_the_task_id(tmp_path: Path) -> None:
+    """The other two metacharacters, on the platforms whose filesystems allow them."""
+    mark_beacons_enabled(tmp_path)
+    ids = ["task*2", "task?3"]
     for tid in ids:
         _record_beacon(tmp_path, tid, 0, fired=True)
 
     density = per_task_density([tmp_path], ids)
 
-    assert density == {"task[1]": 1.0, "task*2": 1.0, "task?3": 1.0}
+    assert density == {"task*2": 1.0, "task?3": 1.0}
 
 
 def test_read_fired_tasks_escapes_a_glob_metacharacter_in_the_task_id(tmp_path: Path) -> None:
