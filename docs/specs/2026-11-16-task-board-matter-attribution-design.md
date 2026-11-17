@@ -37,8 +37,9 @@ Three things cause it.
 - A matter the turn only mentions gets no step.
 - Holds on the flash-class models Raven runs the host on, not only on the strongest one.
 - The guarantees the fence existed for stay: a bad step on another group never costs a
-  delegated result's group its step, every dispatch is placed, every question the reply
-  asked lands on a step.
+  delegated result's group its step, every dispatch is placed, and an update that is written
+  carries every question the reply asked on a step (a salvage may drop a faulty step that
+  asked one; with the fence that update was refused whole).
 
 ## Non-goals
 
