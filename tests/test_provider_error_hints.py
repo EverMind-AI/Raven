@@ -17,10 +17,7 @@ def test_the_cli_is_handed_a_command_for_a_rejected_key() -> None:
         provider_error_hint("auth", "openrouter", surface="cli")
         == "Fix: raven provider test openrouter  or  raven onboard"
     )
-    assert (
-        provider_error_hint("auth", None, surface="cli")
-        == "Fix: raven provider test <name>  or  raven onboard"
-    )
+    assert provider_error_hint("auth", None, surface="cli") == "Fix: raven provider test <name>  or  raven onboard"
 
 
 def test_the_cli_gets_an_apt_hint_and_no_key_guidance_for_the_rest() -> None:
@@ -46,10 +43,7 @@ def test_the_channel_is_handed_something_it_can_act_on_without_a_command() -> No
     """A chat reader holds no credentials and cannot run anything, so the
     channel wording carries no command and points the credential case at the
     operator instead."""
-    assert (
-        provider_error_hint("auth", "openrouter", surface="channel")
-        == "The operator can check the provider key."
-    )
+    assert provider_error_hint("auth", "openrouter", surface="channel") == "The operator can check the provider key."
     assert provider_error_hint("rate_limit", "openrouter", surface="channel") == "Try again in a moment."
 
     for category in (
