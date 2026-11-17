@@ -577,8 +577,9 @@ model sent is salvaged before anything is parked: each `groups` entry keeps only
 that pass on their own -- a status the step on its group already sets goes, the summary
 written beside it stays -- and a text past its limit stands as written. A step with a fault
 of its own -- an unknown group, a bad status -- is dropped when it places no work and another
-step is left to write, so one bad step does not cost the turn's other matters their steps.
-The rest of its steps and its placement are kept whole, so they are still written and its work
+step is left to write, and a group stepped twice keeps the step that places work, else its
+first, so one bad step does not cost the turn's other matters their steps. The rest of its
+steps and its placement are kept whole, so they are still written and its work
 placed; only a fault in a step that places work, in every step, or in the placement -- a handle
 left out -- leaves no update to be had. Then, as
 when the post-turn call fails after the provider's retries, or the turn itself errored or was

@@ -498,6 +498,24 @@ def test_a_salvage_drops_a_step_at_fault_that_places_no_work():
     assert [len(g.steps) for g in after.groups] == [2]
 
 
+def test_a_salvage_keeps_one_step_per_group():
+    """A group stepped twice is refused whole though neither step is at fault on its own: the
+    group keeps the step that places work, else its first."""
+    board = _one_group()
+    gid = board.groups[0].id
+    first = {"group": gid, **STEP, "status": "idle"}
+    again = {"group": gid, "title": "Moved it again", "summary": "Again.", "status": "idle"}
+    working = {"group": gid, **STEP, "status": "running", "tasks": [DAG.handle]}
+
+    kept = salvage(board, {"steps": [first, again]})
+
+    assert kept["steps"] == [first]
+    after = apply_update(board, kept, [], turn_at="T2", turn_id=None, now_ms=9, allow_long=True)
+    assert [len(g.steps) for g in after.groups] == [2]
+    assert salvage(board, {"steps": [first, working]})["steps"] == [working]
+    assert salvage(board, {"steps": [working, again]})["steps"] == [working]
+
+
 def test_a_salvage_keeps_a_step_at_fault_that_places_work_for_the_rules_to_refuse():
     board = _one_group()
     faulty = {"group": board.groups[0].id, **STEP, "status": "not-a-status", "tasks": [DAG.handle]}

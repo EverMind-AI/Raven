@@ -176,9 +176,9 @@ sentence from an earlier turn all fail, and the refusal says how to fix it.
 A step that opens a new group (`new_title`) needs no `matters` entry: it has no id to answer
 for, and the placement rules already cover the work it carries. When every attempt is refused,
 `salvage` writes the last update, dropping a step with a fault of its own that places no work
-when another step is left to write -- one bad step must not cost an owner its step, which the
-fence used to protect by dropping every other matter; faults in `matters` alone never stop a
-salvage.
+when another step is left to write, and keeping one step per group (the step that places work,
+else the first) -- one bad step must not cost an owner its step, which the fence used to
+protect by dropping every other matter; faults in `matters` alone never stop a salvage.
 
 ### 5. No fence
 
