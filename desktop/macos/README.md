@@ -61,10 +61,12 @@ the gateway running.
 
 ## Layout
 
-All of this lives under `desktop/macos/`. No existing upstream file is
-modified, so syncing `main` from upstream cannot conflict with the desktop
-work. The desktop branch is based on upstream `main` and can be rebased on it
-whenever the gateway's auth behavior changes.
+The window and its build scripts live under `desktop/macos/`. The branch also
+carries three small changes outside that tree because the window needs them: a
+`--print-url` mode in `raven/cli/serve_commands.py` so the launcher can ask for
+one URL instead of probing the gateway itself, `desktop` in the commit-scope
+list, and the CI job plus contract test that keep the bridge honest. Everything
+else upstream is untouched.
 
 | File | What it does |
 | --- | --- |
