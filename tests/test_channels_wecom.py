@@ -1,5 +1,6 @@
 """Tests for raven.channels.adapters.wecom — frame/body parsing, per-type
-content extraction, and inbound dedup. Pure surface; no live SDK."""
+content extraction, inbound dedup, and outbound text/media sends. Pure
+surface; no live SDK (media upload/send is mocked at the WSClient boundary)."""
 
 import asyncio
 from pathlib import Path
@@ -171,15 +172,95 @@ def test_send_skips_when_no_frame():
     ch._client.reply_stream.assert_not_awaited()
 
 
-def test_send_media_surfaced_as_notice():
-    """reply_stream is text-only — dropped attachments become a visible
-    notice instead of vanishing."""
+def test_send_media_replies_with_cached_frame(tmp_path):
+    """A cached frame routes the file through the in-band reply (upload +
+    media_id reply), mirroring how the text reply is routed."""
+    f = tmp_path / "report.pdf"
+    f.write_bytes(b"%PDF")
     ch = _channel()
     ch._client = AsyncMock()
     ch._frames["c1"] = SimpleNamespace(body={})
-    asyncio.run(ch.send("c1", "hi", media=["/m/report.pdf"]))
-    sent_text = ch._client.reply_stream.await_args.args[2]
-    assert "hi" in sent_text and "[Attachment not sent: report.pdf]" in sent_text
+    asyncio.run(ch.send("c1", "here you go", media=[str(f)]))
+    ch._client.reply_stream.assert_awaited_once()  # text first
+    ch._client.reply_media.assert_awaited_once()
+    args, _ = ch._client.reply_media.await_args
+    assert args[0] is ch._frames["c1"]
+    assert args[1] == str(f)
+
+
+def test_send_media_without_frame_uses_proactive_send(tmp_path):
+    """No cached frame: the SDK's chatid-based proactive send still delivers."""
+    f = tmp_path / "report.pdf"
+    f.write_bytes(b"%PDF")
+    ch = _channel()
+    ch._client = AsyncMock()
+    asyncio.run(ch.send("c1", "", media=[str(f)]))
+    ch._client.send_media_message.assert_awaited_once_with("c1", str(f))
+    ch._client.reply_media.assert_not_awaited()
+
+
+def test_send_media_resolves_file_url(tmp_path):
+    f = tmp_path / "data.csv"
+    f.write_text("x")
+    ch = _channel()
+    ch._client = AsyncMock()
+    ch._frames["c1"] = SimpleNamespace(body={})
+    asyncio.run(ch.send("c1", "", media=[f"file://{f}"]))
+    assert ch._client.reply_media.await_args.args[1] == str(f)
+
+
+def test_send_media_blank_refs_skipped():
+    ch = _channel()
+    ch._client = AsyncMock()
+    ch._frames["c1"] = SimpleNamespace(body={})
+    asyncio.run(ch.send("c1", "", media=["", "   "]))
+    ch._client.reply_media.assert_not_awaited()
+    ch._client.reply_stream.assert_not_awaited()  # no failure notice for blanks
+
+
+def test_send_media_missing_file_reports_failure():
+    """A missing file is logged and surfaced to the user, not dropped."""
+    ch = _channel()
+    ch._client = AsyncMock()
+    ch._frames["c1"] = SimpleNamespace(body={})
+    asyncio.run(ch.send("c1", "done", media=["/nope/report.pdf"]))
+    ch._client.reply_media.assert_not_awaited()
+    assert ch._client.reply_stream.await_count == 2  # content, then failure notice
+    assert "[Attachment send failed: report.pdf]" in ch._client.reply_stream.await_args.args[2]
+
+
+def test_send_media_too_large_reports_failure(monkeypatch, tmp_path):
+    import raven.channels.adapters.wecom.channel as wecom_mod
+
+    monkeypatch.setattr(wecom_mod, "_MAX_MEDIA_BYTES", 4)
+    f = tmp_path / "big.bin"
+    f.write_bytes(b"12345678")
+    ch = _channel()
+    ch._client = AsyncMock()
+    ch._frames["c1"] = SimpleNamespace(body={})
+    asyncio.run(ch.send("c1", "", media=[str(f)]))
+    ch._client.reply_media.assert_not_awaited()  # rejected before upload
+    assert "[Attachment send failed: big.bin]" in ch._client.reply_stream.await_args.args[2]
+
+
+def test_send_media_upload_error_reports_failure(tmp_path):
+    f = tmp_path / "report.pdf"
+    f.write_bytes(b"%PDF")
+    ch = _channel()
+    ch._client = AsyncMock()
+    ch._client.reply_media = AsyncMock(side_effect=RuntimeError("upload failed"))
+    ch._frames["c1"] = SimpleNamespace(body={})
+    asyncio.run(ch.send("c1", "hi", media=[str(f)]))  # no raise: failure is reported
+    assert "[Attachment send failed: report.pdf]" in ch._client.reply_stream.await_args.args[2]
+
+
+def test_send_media_failure_notice_only_when_text_sendable():
+    """No frame means no text channel either: the failure stays in the log."""
+    ch = _channel()
+    ch._client = AsyncMock()
+    asyncio.run(ch.send("c1", "", media=["/nope/report.pdf"]))
+    ch._client.send_media_message.assert_not_awaited()
+    ch._client.reply_stream.assert_not_awaited()
 
 
 def test_send_replies_with_cached_frame():
@@ -268,6 +349,13 @@ def test_wecom_satisfies_channel_contract():
     ch = _channel()
     assert isinstance(ch, Channel)  # name/capabilities/start/stop/send
     assert capability_violations(ch) == []  # no login/streaming declared or implemented
+
+
+def test_wecom_declares_file_attachments():
+    from raven.channels.adapters.wecom.spec import SPEC
+
+    assert _channel().capabilities.file_attachments is True
+    assert SPEC.capabilities.file_attachments is True
 
 
 def test_wecom_spec_import_is_cheap():
