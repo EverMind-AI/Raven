@@ -57,6 +57,8 @@ if TYPE_CHECKING:
         HubSkillSource,
         LocalSkillCatalog,
         LocalSkillSource,
+        ProjectSkills,
+        ProjectSkillSource,
         SkillForgeRouter,
     )
     from raven.memory_engine.skill_forge.catalog import render_skill_body
@@ -79,6 +81,8 @@ __all__ = [
     "LocalSkillSource",
     "MemoryConsolidator",
     "MemoryStore",
+    "ProjectSkillSource",
+    "ProjectSkills",
     "RouterHit",
     "SkillForgeRouter",
     "SkillMeta",
@@ -106,6 +110,8 @@ _FACE: dict[str, str] = {
     "LocalSkillSource": "raven.memory_engine.skill_forge",
     "MemoryConsolidator": "raven.memory_engine.consolidate.consolidator",
     "MemoryStore": "raven.memory_engine.consolidate.consolidator",
+    "ProjectSkillSource": "raven.memory_engine.skill_forge",
+    "ProjectSkills": "raven.memory_engine.skill_forge",
     "RouterHit": "raven.memory_engine.skill_forge.types",
     "SkillForgeRouter": "raven.memory_engine.skill_forge",
     "SkillMeta": "raven.memory_engine.skill_local.types",

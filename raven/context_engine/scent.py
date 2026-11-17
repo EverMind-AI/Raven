@@ -1,9 +1,9 @@
 """The scent menu — skill discovery's per-turn hint.
 
 Rules and a cheap lookup, no model: on a *fat* turn, one ``router.select``
-over the three sources renders a few name+description lines into the turn's
-user envelope. No bodies, no system-prefix bytes, no LLM calls. The model pulls
-what it wants through ``find_skill`` / ``read_skill``.
+over Local, the memory backend, Hub and Project renders a few name+description
+lines into the turn's user envelope. No bodies, no system-prefix bytes, no LLM
+calls. The model pulls what it wants through ``find_skill`` / ``read_skill``.
 
 Judgement errors are engineered to be near-free in both directions: a turn
 wrongly judged fat costs one sub-millisecond local lookup (plus one light

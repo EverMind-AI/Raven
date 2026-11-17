@@ -51,7 +51,7 @@ class TestDefaults:
     def test_skill_router_defaults(self) -> None:
         c = SkillForgeRouterConfig()
         assert c.enabled is True
-        assert c.weights == {"local": 0.96, "everos": 0.9, "hub": 0.85}
+        assert c.weights == {"local": 0.96, "everos": 0.9, "hub": 0.85, "project": 0.96}
         assert c.over_fetch_factor == 2
         assert c.dedup_by == "name"
         assert c.rrf_k == 10
@@ -127,6 +127,20 @@ class TestDefaults:
         assert isinstance(c.skill_forge.router, SkillForgeRouterConfig)
         assert isinstance(c.eval_engine, EvalEngineConfig)
         assert c.eval_engine.enabled is False
+
+
+class TestProjectSkillsSection:
+    """The project source's switch and its router weight."""
+
+    def test_project_skills_default_on(self) -> None:
+        assert SkillForgeConfig().project_skills.enabled is True
+
+    def test_project_skills_reads_the_camel_key(self) -> None:
+        c = SkillForgeConfig.model_validate({"projectSkills": {"enabled": False}})
+        assert c.project_skills.enabled is False
+
+    def test_router_weights_carry_the_project_source(self) -> None:
+        assert SkillForgeRouterConfig().weights["project"] == 0.96
 
 
 # ---------------------------------------------------------------------------

@@ -1194,14 +1194,29 @@ class LocalDirConfig(_Base):
     from always injection (but still retrievable via select)."""
 
 
+class ProjectSkillsConfig(_Base):
+    """Skills the project carries in its own repository.
+
+    ``.agents/skills`` is read from the turn's working directory up to the
+    git root; hits are offered as ``project/<name>``.
+    """
+
+    enabled: bool = True
+    """False -> the project source offers nothing and ``project/<name>``
+    ids no longer resolve. Config key ``skillForge.projectSkills``; read
+    live (``config/live.py``), so turning it off stops the next search
+    without a restart."""
+
+
 class SkillForgeConfig(_Base):
     """SkillForge configuration.
 
     Retrieved skills reach the model one way: a per-turn scent menu (a few
-    name and description lines from the three-source router) rides the user
-    envelope, and the model reads a body with ``read_skill`` or searches with
-    ``find_skill``. No turn spends a model call choosing skills, and the system
-    prefix carries only the always-on ones.
+    name and description lines from the four-source router: Local, EverOS,
+    Hub and Project) rides the user envelope, and the model reads a body
+    with ``read_skill`` or searches with ``find_skill``. No turn spends a
+    model call choosing skills, and the system prefix carries only the
+    always-on ones.
 
     Evolution is handled by the embedded ``everos``
     extraction pipeline, configured via
@@ -1245,6 +1260,10 @@ class SkillForgeConfig(_Base):
     local_dirs: list[LocalDirConfig] = Field(default_factory=list)
     """Local skill directories to mount. List order = priority:
     later entries override earlier on name collision."""
+
+    project_skills: ProjectSkillsConfig = Field(default_factory=ProjectSkillsConfig)
+    """Skills kept inside the project itself (``.agents/skills``) -- config
+    key ``skillForge.projectSkills``. The switch is read live."""
 
     scan_max_depth: int = 5
     """Maximum directory depth when scanning for SKILL.md files.
@@ -1621,8 +1640,8 @@ class HubSourceConfig(_Base):
 class SkillForgeRouterConfig(_Base):
     """Multi-source skill routing policy.
 
-    The sources are Local, EverOS and Hub; this block tunes the weighted
-    RRF and the per-source plumbing.
+    The sources are Local, EverOS, Hub and Project; this block tunes the
+    weighted RRF and the per-source plumbing.
     """
 
     enabled: bool = True
@@ -1634,14 +1653,22 @@ class SkillForgeRouterConfig(_Base):
             "local": 0.96,
             "everos": 0.9,
             "hub": 0.85,
+            "project": 0.96,
         },
     )
     """Per-source RRF weight. Higher = more rank mass when the same skill
-    surfaces from multiple sources. Local highest (hand-curated); Hub
-    (the remote marketplace, replaces the retired Mass source) lowest as
-    imported/unvalidated; Everos in between (task-specific, auto-evolved).
+    surfaces from multiple sources. Local highest (hand-curated), tied with
+    Project (a repository's own skills are as specific to the task as the
+    user's hand-written ones); Hub (the remote marketplace, replaces the
+    retired Mass source) lowest as imported/unvalidated; Everos in between
+    (task-specific, auto-evolved).
 
-    Only the ratios matter -- scaling all three leaves the order unchanged.
+    The default applies per key, not only when the whole dict is absent: a
+    file that spells out ``weights`` without a ``project`` entry predates
+    this source, and its consumer reads ``weights.get("project", 0.96)``
+    rather than the user's file being rewritten.
+
+    Only the ratios matter -- scaling all sources leaves the order unchanged.
     Read them together with ``rrf_k``: the spread has to stay well inside
     the rank ladder that ``rrf_k`` produces, or weight silently overrides
     rank and each source becomes a strict tier."""

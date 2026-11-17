@@ -54,6 +54,57 @@ from raven.utils.text import parse_frontmatter
 _DEFAULT_BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
 
 
+def build_skill_meta(
+    skill_dir: Path,
+    source: str,
+    *,
+    always_enabled: bool = True,
+) -> SkillMeta | None:
+    """Read ``<skill_dir>/SKILL.md`` into a :class:`SkillMeta`.
+
+    Returns ``None`` when the file is missing or unreadable (including a
+    non-UTF-8 body), so one broken skill never hides its siblings.
+    """
+    skill_file = skill_dir / "SKILL.md"
+    try:
+        body = skill_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+    frontmatter, content = parse_frontmatter(body, line_fallback=True, preserve_body_whitespace=True)
+    nested = _parse_nested_metadata(frontmatter.get("metadata", ""))
+    requires = nested.get("requires", {}) if isinstance(nested.get("requires"), dict) else {}
+    always = _resolve_always(frontmatter, nested)
+    if not always_enabled:
+        always = False
+    inject = _resolve_inject(frontmatter, nested)
+
+    # ``stable_key`` is the directory name. For everos it is
+    # the sqlite ``skills.id`` string (the pipeline materializes
+    # ``<workspace>/skills/everos/<sqlite_id>/SKILL.md``); for
+    # everything else it equals the display name.
+    stable_key = skill_dir.name
+    # Display name prefers frontmatter ``name`` so everos skills
+    # whose directory is a numeric id still surface a human-readable
+    # label. Falls back to dir name for hand-authored skills lacking
+    # that field.
+    display_name = (frontmatter.get("name") or "").strip() or skill_dir.name
+    description = " ".join(frontmatter.get("description", "").split()) or display_name
+
+    return SkillMeta(
+        id=f"{source}/{stable_key}",
+        name=display_name,
+        description=description,
+        path=skill_file,
+        content=content,
+        source=source,  # type: ignore[arg-type]
+        always=always,
+        inject=inject,
+        requires=requires,
+        raw_frontmatter=frontmatter,
+    )
+
+
 class SkillRegistry:
     """Read-only view of the on-disk skill pool.
 
@@ -451,44 +502,7 @@ class SkillRegistry:
         *,
         always_enabled: bool = True,
     ) -> SkillMeta | None:
-        skill_file = skill_dir / "SKILL.md"
-        try:
-            body = skill_file.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            return None
-
-        frontmatter, content = parse_frontmatter(body, line_fallback=True, preserve_body_whitespace=True)
-        nested = _parse_nested_metadata(frontmatter.get("metadata", ""))
-        requires = nested.get("requires", {}) if isinstance(nested.get("requires"), dict) else {}
-        always = _resolve_always(frontmatter, nested)
-        if not always_enabled:
-            always = False
-        inject = _resolve_inject(frontmatter, nested)
-
-        # ``stable_key`` is the directory name. For everos it is
-        # the sqlite ``skills.id`` string (the pipeline materializes
-        # ``<workspace>/skills/everos/<sqlite_id>/SKILL.md``); for
-        # everything else it equals the display name.
-        stable_key = skill_dir.name
-        # Display name prefers frontmatter ``name`` so everos skills
-        # whose directory is a numeric id still surface a human-readable
-        # label. Falls back to dir name for hand-authored skills lacking
-        # that field.
-        display_name = (frontmatter.get("name") or "").strip() or skill_dir.name
-        description = " ".join(frontmatter.get("description", "").split()) or display_name
-
-        return SkillMeta(
-            id=f"{source}/{stable_key}",
-            name=display_name,
-            description=description,
-            path=skill_file,
-            content=content,
-            source=source,  # type: ignore[arg-type]
-            always=always,
-            inject=inject,
-            requires=requires,
-            raw_frontmatter=frontmatter,
-        )
+        return build_skill_meta(skill_dir, source, always_enabled=always_enabled)
 
 
 # ----------------------------------------------------------------------

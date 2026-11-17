@@ -799,6 +799,59 @@ def skill_hub_enabled(live: LiveConfig) -> bool:
     return answer
 
 
+def project_skills_on(raw: Any) -> bool:
+    """Whether a config, as the file writes it, leaves the project skill source on.
+
+    Mirrors :func:`skill_hub_on`: the loader's migrations run first, on a copy,
+    because some of them never reach the file, and both top-level spellings are
+    accepted. A shape this reader cannot walk answers the schema default, which
+    is on -- the source reads skills from the working directory only, so a
+    broken edit costs no more than the default already does.
+    """
+    from raven.config.loader import _migrate_config
+    from raven.config.raven import ProjectSkillsConfig
+
+    default = ProjectSkillsConfig().enabled
+    if not isinstance(raw, dict):
+        return default
+    try:
+        data = _migrate_config(copy.deepcopy(raw), pop_extension_keys=False)
+    except Exception:  # noqa: BLE001 - a file the loader cannot walk answers the default
+        return default
+    camel = data.get("skillForge")
+    snake = data.get("skill_forge")
+    if camel is not None and snake is not None:
+        return default
+    block = camel if camel is not None else snake
+    if not isinstance(block, dict):
+        return default
+    try:
+        cfg = ProjectSkillsConfig.model_validate(block.get("projectSkills", block.get("project_skills")) or {})
+    except Exception:  # noqa: BLE001 - a block the loader refuses answers the default
+        return default
+    return cfg.enabled
+
+
+_PROJECT_ANSWERS: "weakref.WeakKeyDictionary[LiveConfig, tuple[dict[str, Any], bool]]" = weakref.WeakKeyDictionary()
+
+
+def project_skills_enabled(live: LiveConfig) -> bool:
+    """Whether the project skill source may run, read on every ask.
+
+    Read live rather than captured at loop start so switching the source off
+    stops the next search, not the next process. The answer is kept per parsed
+    file, the way :func:`skill_hub_enabled` keeps the Hub's, so the migration
+    runs once per change of the bytes rather than once per search.
+    """
+    raw = live.raw()
+    kept = _PROJECT_ANSWERS.get(live)
+    if kept is not None and kept[0] is raw:
+        return kept[1]
+    answer = project_skills_on(raw)
+    _PROJECT_ANSWERS[live] = (raw, answer)
+    return answer
+
+
 _LAST_VALID_PERMISSIONS: "weakref.WeakKeyDictionary[LiveConfig, Any]" = weakref.WeakKeyDictionary()
 
 

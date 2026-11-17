@@ -30,6 +30,7 @@ from raven.config.live import (
     held,
     hold_for_this_turn,
     max_tool_iterations,
+    project_skills_enabled,
     reasoning_effort,
     skill_hub_enabled,
 )
@@ -357,6 +358,33 @@ class TestTheHubSwitch:
         _write(path, {"skillRouter": {"hub": {"endpoint": "https://legacy.test", "enabled": False}}})
         assert skill_hub_enabled(live) is False
         assert len(calls) == 2
+
+
+class TestProjectSkillsEnabled:
+    """The project source's switch is read live for the same reason the Hub's
+    is: turning it off must stop the next search, not the next process."""
+
+    def _live(self, tmp_path: Path, payload: dict) -> LiveConfig:
+        path = tmp_path / "config.json"
+        _write(path, payload)
+        return LiveConfig(path)
+
+    def test_no_block_is_on(self, tmp_path: Path) -> None:
+        assert project_skills_enabled(self._live(tmp_path, {})) is True
+
+    def test_an_explicit_off_is_off(self, tmp_path: Path) -> None:
+        live = self._live(tmp_path, {"skillForge": {"projectSkills": {"enabled": False}}})
+        assert project_skills_enabled(live) is False
+
+    def test_the_snake_spelling_is_read(self, tmp_path: Path) -> None:
+        live = self._live(tmp_path, {"skill_forge": {"project_skills": {"enabled": False}}})
+        assert project_skills_enabled(live) is False
+
+    def test_an_invalid_block_reads_as_the_default(self, tmp_path: Path) -> None:
+        """A value the loader refuses is not an off switch: the source reads
+        as the schema default rather than as consent to something else."""
+        live = self._live(tmp_path, {"skillForge": {"projectSkills": {"enabled": "maybe"}}})
+        assert project_skills_enabled(live) is True
 
 
 class TestThePlaybookSwitch:

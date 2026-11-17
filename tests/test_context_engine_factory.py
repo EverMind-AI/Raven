@@ -5,12 +5,14 @@ builds the single :class:`ContextAssembler` from a flat SegmentBuilder
 list, and the SkillForgeRouter its scent menu and ``find_skill`` share from:
 
 - Local (always),
+- the memory backend (when one is supplied),
 - Hub (when ``hub.endpoint`` is set),
-- the memory backend (when one is supplied).
+- Project (always; it gates itself on the live switch and the turn's
+  working directory).
 
 With no backend the engine still constructs (recall lane yields [],
-router runs Local-only). AgentLoop always delegates skill selection to
-the engine (``_uses_default_engine`` is always True), and
+router mounts Local and Project). AgentLoop always delegates skill
+selection to the engine (``_uses_default_engine`` is always True), and
 ``_collect_injected_skill_ids`` prefers the assembled-metadata stash.
 """
 
@@ -322,6 +324,25 @@ class TestSkillForgeRouterAssembly:
         )
         names = {s.name: s.weight for s in router._sources}
         assert names["acme"] == 0.7
+
+    def test_router_mounts_the_project_source_at_its_default_weight(self, tmp_path: Path) -> None:
+        """A weights dict written before this source existed still gets 0.96."""
+        router = _build_router(
+            builder=ContextBuilder(workspace=tmp_path),
+            backend=None,
+            memory_config=MemoryConfig(),
+            skill_forge_router_config=SkillForgeRouterConfig(weights={"local": 1.0}),
+        )
+        assert {s.name: s.weight for s in router._sources}["project"] == 0.96
+
+    def test_router_project_weight_follows_config(self, tmp_path: Path) -> None:
+        router = _build_router(
+            builder=ContextBuilder(workspace=tmp_path),
+            backend=None,
+            memory_config=MemoryConfig(),
+            skill_forge_router_config=SkillForgeRouterConfig(weights={"project": 0.5}),
+        )
+        assert {s.name: s.weight for s in router._sources}["project"] == 0.5
 
 
 class TestCuratorPinWiring:

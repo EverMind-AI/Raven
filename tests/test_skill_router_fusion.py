@@ -126,6 +126,36 @@ class TestRrfMergeAcrossSources:
         assert names.index("gamma") < names.index("delta")
 
 
+class TestRrfProjectCollisionRule:
+    """A repository's skill never displaces the user's own skill of that name.
+
+    Scores from two BM25 pools are not comparable, so the higher-score rule
+    decides this pairing arbitrarily; the local representative keeps the slot
+    and the project hit stays readable by its explicit ``project/<name>`` id.
+    """
+
+    def test_a_local_hit_represents_a_name_shared_with_a_project_hit(self) -> None:
+        project_hits = [_hit("project/x", "x", score=9.0)]
+        local_hits = [_hit("local/x", "x", score=0.1)]
+        for source_results in (
+            [("local", 1.0, local_hits), ("project", 0.96, project_hits)],
+            [("project", 0.96, project_hits), ("local", 1.0, local_hits)],
+        ):
+            out = rrf_merge_weighted(source_results, k=5)
+            assert len(out) == 1
+            assert out[0].qualified_id == "local/x"
+            assert set(out[0].meta["contributing_sources"]) == {"local", "project"}
+
+    def test_other_collisions_still_keep_the_higher_score(self) -> None:
+        local_hits = [_hit("local/x", "x", score=0.1)]
+        hub_hits = [_hit("hub/x", "x", score=9.0)]
+        out = rrf_merge_weighted(
+            [("local", 1.0, local_hits), ("hub", 0.85, hub_hits)],
+            k=5,
+        )
+        assert out[0].qualified_id == "hub/x"
+
+
 class TestRrfMergeDedupBy:
     def test_dedup_by_qualified_id_no_collapse_when_names_match(self) -> None:
         """When dedup_by='qualified_id', same-name from different sources

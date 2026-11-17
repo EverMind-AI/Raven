@@ -21,7 +21,11 @@ Three additional behaviors are baked in:
   self-evolved variant under the same name) collapses into one hit.
   RRF scores from both sources accumulate; the representative ``hit``
   is the one with the highest per-source ``score`` so the prompt sees
-  the best version available.
+  the best version available. The Local-versus-Project pairing is the
+  one exception: the user's own skill keeps the slot, because scores
+  from two BM25 pools are not comparable and a repository must not
+  displace a same-named local skill. The project hit stays readable
+  by its explicit ``project/<name>`` id.
 
 - **Telemetry annotation.** Each output hit gets ``rrf_score`` and
   ``contributing_sources`` written into ``meta`` so a debug overlay /
@@ -77,6 +81,7 @@ def rrf_merge_weighted(
     damping = RRF_K if rrf_k is None else rrf_k
     rrf_scores: dict[str, float] = defaultdict(float)
     best_hit: dict[str, RouterHit] = {}
+    best_source: dict[str, str] = {}
     contributing: dict[str, list[str]] = defaultdict(list)
 
     for source_name, weight, hits in source_results:
@@ -85,11 +90,24 @@ def rrf_merge_weighted(
             rrf_scores[key] += weight / (damping + rank)
             contributing[key].append(source_name)
             prev = best_hit.get(key)
+            if prev is None:
+                best_hit[key] = hit
+                best_source[key] = source_name
+                continue
             # Keep the hit with the higher per-source ``score`` as the
             # representative — the user-facing prompt should see the
-            # best-ranked instance, not arbitrary first-seen.
-            if prev is None or hit.score > prev.score:
+            # best-ranked instance, not arbitrary first-seen. Between Local
+            # and Project the scores are not comparable, so Local holds the
+            # slot in either arrival order.
+            prev_source = best_source[key]
+            if source_name == "local" and prev_source == "project":
                 best_hit[key] = hit
+                best_source[key] = source_name
+            elif source_name == "project" and prev_source == "local":
+                continue
+            elif hit.score > prev.score:
+                best_hit[key] = hit
+                best_source[key] = source_name
 
     # Stable sort by descending RRF; for ties Python's sort is stable
     # so insertion order (= dedup_key encounter order) breaks ties

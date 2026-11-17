@@ -14,10 +14,10 @@ With ``context.cache.turn_scratch`` on (the default), ``# Memory``, the section
 that moves with the query, is appended to the turn's user message instead of
 the system prompt.
 
-Retrieved skills never enter a segment. A :class:`SkillForgeRouter` over 1-3
+Retrieved skills never enter a segment. A :class:`SkillForgeRouter` over 1-4
 sources feeds the :class:`ScentMenu`, a few name and description lines in the
 turn's user envelope, and the ``find_skill`` tool; the model reads a body with
-``read_skill``. The router is assembled from up to three sources:
+``read_skill``. The router is assembled from up to four sources:
 
 - :class:`LocalSkillSource` — always; wraps the builder's existing
   ``LocalPool`` + ``SkillRegistry`` (no second disk scan).
@@ -26,10 +26,13 @@ turn's user envelope, and the ``find_skill`` tool; the model reads a body with
   ``memory.backend`` name.
 - :class:`HubSkillSource` — always mounted: the shared Skill Hub marketplace
   (or the URL the config names), gated per search on the live switch.
+- :class:`ProjectSkillSource` — always mounted: the project's
+  ``.agents/skills``, resolved from the turn's working directory per search
+  and gated per search on the live switch.
 
 With no ``backend`` the engine still constructs: the recall lane yields
-``[]`` and the router runs Local-only, so the agent boots even when no
-memory plugin is installed.
+``[]`` and the router runs the three always-mounted sources (Local, Hub and
+Project), so the agent boots even when no memory plugin is installed.
 """
 
 from __future__ import annotations
@@ -40,8 +43,9 @@ from typing import TYPE_CHECKING, Callable
 
 from loguru import logger
 
+from raven.agent import workdir
 from raven.agent.context import ContextBuilder
-from raven.config.live import LiveConfig, curator_pin, skill_hub_enabled
+from raven.config.live import LiveConfig, curator_pin, project_skills_enabled, skill_hub_enabled
 from raven.context_engine import history as history_strategies
 from raven.context_engine.assembler import ContextAssembler
 from raven.context_engine.scent import ScentMenu
@@ -126,6 +130,7 @@ def build_context_engine(
         skill_forge_router_config=skill_forge_router_config,
         skill_hub_client=skill_hub_client,
         hub_enabled_reader=lambda: skill_hub_enabled(live),
+        project_enabled_reader=lambda: project_skills_enabled(live),
     )
 
     builders = [
@@ -219,12 +224,15 @@ def _build_router(
     skill_forge_router_config: "SkillForgeRouterConfig",
     skill_hub_client: "SkillHubClient | None" = None,
     hub_enabled_reader: "Callable[[], bool] | None" = None,
+    project_enabled_reader: "Callable[[], bool] | None" = None,
 ) -> "SkillForgeRouter":
-    """Assemble the 1-to-3 source SkillForgeRouter the scent menu and find_skill share."""
+    """Assemble the 1-to-4 source SkillForgeRouter the scent menu and find_skill share."""
     from raven.memory_engine import (
         BackendSkillSource,
         HubSkillSource,
         LocalSkillSource,
+        ProjectSkills,
+        ProjectSkillSource,
         SkillForgeRouter,
     )
 
@@ -283,6 +291,20 @@ def _build_router(
                 enabled_reader=hub_enabled_reader,
             )
         )
+
+    # ── Source 4: Project (always) ──────────────────────────────────
+    # The source resolves the turn's working directory per search, so every
+    # session of this gateway sees its own project and the live switch needs
+    # no rebuild in either direction.
+    project_source = ProjectSkillSource(
+        ProjectSkills(
+            agent_home=builder.workspace,
+            workdir_reader=workdir.current,
+            enabled_reader=project_enabled_reader,
+        )
+    )
+    project_source.weight = float(weights.get("project", 0.96))
+    sources.append(project_source)
 
     return SkillForgeRouter(
         sources=sources,

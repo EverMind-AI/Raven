@@ -16,7 +16,7 @@ Two policies the router enforces (not its sources):
   whole-pipeline failure because of one transient.
 
 The router's source list is fixed in its membership, not in its lifetime:
-the sources are internal (Local, EverOS and Hub) and a third-party skill
+the sources are internal (Local, EverOS, Hub and Project) and a third-party skill
 retrieval extension goes through :class:`MemoryBackend` rather than through
 new ForgeSkillSource implementations. The one exception is the memory
 backend's source, which a live switch adds or removes with

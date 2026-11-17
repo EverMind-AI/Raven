@@ -30,9 +30,9 @@ raven skill get --help
 raven skill block --help
 ```
 
-SkillForge 有三个来源：本地文件、通过配置的记忆后端召回的技能/案例，以及远程
-Skill Hub 候选。可用性取决于配置和服务连通性；目录搜索命中不证明 bundle 已安装，
-也不证明所需工具存在。
+SkillForge 有四个来源：本地文件、通过配置的记忆后端召回的技能/案例、远程
+Skill Hub 候选，以及工作目录所在仓库携带的项目技能。可用性取决于配置和服务连通性；
+目录搜索命中不证明 bundle 已安装，也不证明所需工具存在。
 
 搜索 Skill Hub 会把文字发出本机。该来源默认开启，使用共享目录
 （`https://skillhub.evermind.ai`）；配置可以在 `skillForge.router.hub.endpoint`
@@ -46,6 +46,30 @@ Skill Hub 候选。可用性取决于配置和服务连通性；目录搜索命�
 检索到的技能以简短的名称/描述菜单出现在符合条件的轮次中，模型用 `find_skill` 搜索、
 用 `read_skill` 读取正文。只有标记为 `always` 的技能常驻系统提示词。挑选技能不会让一轮
 多出模型调用，不过查找时仍可能访问 Skill Hub，也不是每轮都会出现菜单。
+
+### 技能目录 { #skill-directories }
+
+技能装在两个目录之一，取决于它是给用户用，还是给单个项目用：
+
+- **Agent home 的 `skills/`** —— 用户级目录，即 agent home 下的 `skills/`：默认
+  `~/.raven/workspace/skills`，可由 `RAVEN_HOME` 以及 `raven agent`、`raven gateway`、
+  `raven tui` 的 `--home` 选项改变位置。
+- **项目的 `.agents/skills`** —— 从本轮工作目录向上读到 git 根目录，途经的每一层各贡献
+  一个目录；两个目录出现同名技能时，以最近的目录提供的为准。工作目录之上没有 git 根目录
+  时，只读该目录本身。只识别扁平的 `<name>/SKILL.md` 布局；符号链接只有解析后的目标仍在
+  git 根目录内才算数。用户主目录、agent home 及其各层祖先目录永远不作为项目目录。
+
+项目技能也以 `project/<name>` 出现在名称/描述菜单和 `find_skill` 的结果中，
+`read_skill` / `use_skill` 按轮、按本轮自己的工作目录解析这些 id，因此两个 checkout
+中的会话不会看到对方的项目技能。项目技能不论 frontmatter 怎么写都不会被注入系统提示词。
+只有主 Agent 读取这些技能，子 Agent 不读取。该来源默认开启，可用
+`skillForge.projectSkills.enabled` 关闭；两个方向都在下一次搜索时生效，不需要重启。
+
+写入同一布局的安装器可以把技能装进项目：
+
+```bash
+gh skill install <owner>/<repo> skills/<name>/SKILL.md --dir .agents/skills
+```
 
 Bundle 下载有独立的同意设置：
 
