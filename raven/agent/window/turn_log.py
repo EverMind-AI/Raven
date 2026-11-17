@@ -70,8 +70,11 @@ class TurnLog:
     def __init__(self, base: list[dict[str, Any]], start: int) -> None:
         self._head = list(base[:start])
         self._token = uuid.uuid4().hex
+        # The opening in the form the window last held it: a pass's copy replaces it.
+        self._opening: dict[str, Any] | None = None
         if self._head and self._head[-1].get("role") != "system":
             self._head[-1][OPENING_KEY] = True
+            self._opening = self._head[-1]
         self._entries: list[dict[str, Any]] = []
         self._index: dict[str, int] = {}
         self._live: list[dict[str, Any]] = base
@@ -113,10 +116,10 @@ class TurnLog:
         """``window`` without the history before this turn: its system message when it
         opens with one, then the turn's opening message and every row after it, each as the
         window last sent it -- a picture a pass withdrew stays withdrawn. When a head summary
-        took the opening's place, the log's own opening comes back, without pictures if the
-        window no longer carries any, followed by the summary: it stands for the turn's early
-        rows, a message sent while the turn ran among them. The whole ``window`` when it
-        holds no row of this turn."""
+        took the opening's place, the opening comes back in the last form the window held it,
+        without pictures if the window no longer carries any, followed by the summary: it
+        stands for the turn's early rows, a message sent while the turn ran among them. The
+        whole ``window`` when it holds no row of this turn."""
         self._sync(self._live)
         mark = f"{self._token}:"
         first = next(
@@ -129,7 +132,7 @@ class TurnLog:
         opened = next((i for i in range(first - 1, -1, -1) if window[i].get(OPENING_KEY) is True), None)
         if opened is not None:
             return [*system, *window[opened:]]
-        opening = [self._head[-1]] if self._head and self._head[-1].get("role") != "system" else []
+        opening = [self._opening] if self._opening is not None else []
         if opening and _pictures(opening[0]) and not any(_pictures(m) for m in window):
             opening = [without_pictures(opening[0])]
         summary = next((i for i in range(first - 1, -1, -1) if compaction.is_summary(window[i])), first)
@@ -159,6 +162,8 @@ class TurnLog:
         # or what is appended into the gap would be read as already seen.
         self._mark = min(self._mark, len(messages))
         for i, m in enumerate(messages):
+            if m.get(OPENING_KEY) is True and not m.get(STAND_IN_KEY):
+                self._opening = m
             seq = m.get(TURN_LOG_KEY)
             if isinstance(seq, str) and seq.startswith(self._token):
                 at = self._index.get(seq)

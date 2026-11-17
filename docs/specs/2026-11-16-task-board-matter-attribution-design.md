@@ -196,9 +196,10 @@ The post-turn call no longer sends the turn's whole window. It sends:
   a pass withdrew, stays withdrawn, or the board call meets the same refusal;
 - the turn's own rows as the window last sent them (an elided body stays elided), mid-turn
   messages included;
-- when a head summary took the opening's place, the log's own opening instead (without
-  pictures the window no longer carries), followed by that summary, which stands for the
-  turn's early rows and any message sent while it ran that they held;
+- when a head summary took the opening's place, the opening in the last form the window held
+  it (a picture a pass withdrew stays withdrawn, and none comes back when the window carries
+  none), followed by that summary, which stands for the turn's early rows and any message
+  sent while it ran that they held;
 - the instruction.
 
 `TurnLog.cut_to_turn(window)` builds it: the log marks the opening, a mark a pass's copy keeps

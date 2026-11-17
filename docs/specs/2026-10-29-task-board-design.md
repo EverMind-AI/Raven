@@ -285,8 +285,8 @@ reply has already gone out and shutdown drains it like the others.
 **Input.** The message list `_run_agent_loop` returned, cut to the turn
 (`TurnLog.cut_to_turn`): the system message the turn's last call sent, the turn's opening
 message and its own rows as that call's window held them -- a picture the endpoint refused
-stays withdrawn; when a head summary took the opening's place, the log's opening comes back
-beside it -- plus its final answer, with the same tools array, and
+stays withdrawn; when a head summary took the opening's place, the opening comes back beside
+it in the last form the window held it -- plus its final answer, with the same tools array, and
 one appended user-role instruction rendered from `raven/templates/prompts/{en,zh}/
 task_board_update.md` through `raven.i18n.prompt`. It is the shape the early-exit synthesis
 call already uses (`_synthesize_final_on_exhaustion` in `turn_path.py`: "the turn's own conversation plus
