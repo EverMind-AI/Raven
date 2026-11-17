@@ -10,6 +10,7 @@ raven/                 # Shared runtime, feature engines, and CLI/RPC/ACP surfac
 agents/                # Specialized agents assembled from installed Raven and plugins
 plugins-dist/          # everos-memory, everos-cloud-memory, design-engine, and ppt-engine distributions
 ui-web/                # Browser UI, also used by the desktop window
+desktop/               # Native desktop windows around the web UI (macOS)
 ui-tui/                # React/Ink terminal UI
 rpc-schema/            # Shared OpenRPC contract for interactive clients
 schemas/               # Generated agent and plugin JSON Schemas
