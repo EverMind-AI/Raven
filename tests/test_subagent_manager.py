@@ -1520,19 +1520,19 @@ def test_generated_participant_notes_preserve_each_supported_message_shape() -> 
     from raven.agent.subagent.backends.raven_loop import _append_participant_note
 
     absent: list[dict] = []
-    _append_participant_note(absent, "note", set())
+    _append_participant_note(absent, "note")
     assert absent == []
 
     text = [{"content": "base"}]
-    _append_participant_note(text, "note", set())
+    _append_participant_note(text, "note")
     assert text[-1]["content"] == "base\n\nnote"
 
     blocks = [{"content": [{"type": "text", "text": "base"}]}]
-    _append_participant_note(blocks, "note", set())
+    _append_participant_note(blocks, "note")
     assert blocks[-1]["content"][-1] == {"type": "text", "text": "note"}
 
     empty = [{"content": None}]
-    _append_participant_note(empty, "note", set())
+    _append_participant_note(empty, "note")
     assert empty[-1]["content"] == "note"
 
 
@@ -1546,25 +1546,23 @@ def test_generated_participant_guidance_is_kept_out_of_a_tool_result() -> None:
         {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
         {"role": "tool", "tool_call_id": "c1", "name": "read_file", "content": "<untrusted>file text</untrusted>"},
     ]
-    _append_participant_note(messages, "check the second table", set())
+    _append_participant_note(messages, "check the second table")
 
     assert messages[1]["content"] == "<untrusted>file text</untrusted>"
     assert messages[-1] == {"role": "user", "content": "check the second table"}
 
 
-def test_generated_participant_guidance_is_single_use() -> None:
-    """The advice is asked for every round while a generated function is
-    stateless, so the same words are delivered once rather than once per
-    round."""
+def test_generated_participant_notes_keep_the_order_the_rounds_produce() -> None:
+    """The writer places a note and remembers nothing: whether the same words
+    were already said is the participant's question, answered by reading the
+    transcript, because a counter cannot see a rollback pop the note. What is
+    settled here is that a second, different note still lands, after the first.
+    """
     from raven.agent.subagent.backends.raven_loop import _append_participant_note
 
-    delivered: set[str] = set()
     messages: list[dict] = [{"role": "user", "content": "the task"}]
-    for _ in range(3):
-        _append_participant_note(messages, "hold the line", delivered)
-
-    assert messages[-1]["content"] == "the task\n\nhold the line"
-    _append_participant_note(messages, "a second thought", delivered)
+    _append_participant_note(messages, "hold the line")
+    _append_participant_note(messages, "a second thought")
     assert messages[-1]["content"] == "the task\n\nhold the line\n\na second thought"
 
 
