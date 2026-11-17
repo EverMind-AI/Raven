@@ -467,11 +467,12 @@ def _stamp_replied_via_tool(messages: list[dict[str, Any]], turn_base: int) -> N
             return
 
 
-#: A message a hook injected on rollback: the harness re-prompting itself (a
-#: reviewer rejection, a commit nudge). It persists into history because the
-#: model was shown it, but no real user said it; the underscore key is dropped
-#: on the way to the provider, so what it changes is only how readers of the
-#: transcript classify the line.
+#: A message a hook put in the transcript rather than a person: the harness
+#: re-prompting itself on a rollback (a reviewer rejection, a commit nudge), or
+#: the note a hook leaves for the next call when it lands as a row of its own.
+#: It persists into history because the model was shown it, but no real user
+#: said it; the underscore key is dropped on the way to the provider, so what it
+#: changes is only how readers of the transcript classify the line.
 _HOOK_INJECTED_KEY = "_hook_injected"
 #: A user message the runtime merged into a turn that was already running
 #: (``BusyPolicy.INJECT``). It is a real user message and persists as one; the
@@ -550,17 +551,18 @@ def append_hook_note(messages: list[dict[str, Any]] | None, note: str) -> bool:
 
     After a tool round the last row is a tool result, which is fenced as
     untrusted input: guidance written into one reaches the model as something a
-    tool told it. So the note becomes a message of its own there. Every other
-    body gains it after a blank line (or as a text block), which reads as part
-    of what the model was already about to read. False when there is nothing to
-    land on or the body's shape is one the loop does not know -- the note is
-    dropped rather than guessed into place, and the caller logs that.
+    tool told it. So the note becomes a message of its own there, marked as the
+    harness speaking -- no reader may take it for the turn's question. Every
+    other body gains it after a blank line (or as a text block), which reads as
+    part of what the model was already about to read. False when there is
+    nothing to land on or the body's shape is one the loop does not know -- the
+    note is dropped rather than guessed into place, and the caller logs that.
     """
     if not messages or not note:
         return False
     last = messages[-1]
     if last.get("role") == "tool":
-        messages.append({"role": "user", "content": note})
+        messages.append({"role": "user", "content": note, _HOOK_INJECTED_KEY: True})
         return True
     body = last.get("content")
     if isinstance(body, str):

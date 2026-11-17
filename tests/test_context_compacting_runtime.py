@@ -1231,6 +1231,22 @@ class TestTheTurnsOwnWords:
 
         assert _turn_held([{"role": "user", "content": "[image]", "_attached_image": True}]) == frozenset()
 
+    def test_the_row_a_hook_note_lands_on_is_not_read_as_the_question(self) -> None:
+        """The note is written as its own ``user`` row after a tool round. Read
+        as the question, the overflow path would hold from there on and trim
+        away the words the turn is actually answering."""
+        from raven.agent.loop._shared import append_hook_note
+        from raven.context_engine.history.compacting.runtime import _turn_held
+
+        history = [
+            {"role": "user", "content": "what failed?"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "trace"},
+        ]
+        assert append_hook_note(history, "check the second table") is True
+        held = _turn_held(history)
+        assert history[min(held)]["content"] == "what failed?", "the note is the harness, not the question"
+
     async def test_a_reclaim_keeps_the_question_and_the_correction(self, tmp_path: Path) -> None:
         builder = _builder(tmp_path)
         messages = _working_list(inject_at=10, picture_at=14)

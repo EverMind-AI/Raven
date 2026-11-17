@@ -312,12 +312,14 @@ def _turns_a_person_opened(messages: list[dict[str, Any]]) -> list[dict[str, Any
     So the turn decides. A ``role == "user"`` entry opens one and its mark
     rules until the next opens; anything before the first user entry is the
     tail of a turn this slice does not contain, and is kept, because the slice
-    starts where the last annotation stopped.
+    starts where the last annotation stopped. A row the harness put there is
+    not a person speaking -- a hook's note or re-prompt -- so it opens nothing
+    and leaves the turn in progress with whatever verdict it already had.
     """
     out: list[dict[str, Any]] = []
     keep = True
     for m in messages:
-        if m.get("role") == "user":
+        if m.get("role") == "user" and not m.get(_HOOK_INJECTED_KEY):
             keep = not m.get("origin")
         if keep:
             out.append(m)
