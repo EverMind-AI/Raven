@@ -207,6 +207,9 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
     runtime_lines = message.get("runtime_context")
     if isinstance(runtime_lines, str) and runtime_lines:
         parts.append(runtime_lines)
+    scratch = message.get("turn_scratch")
+    if isinstance(scratch, str) and scratch:
+        parts.append(scratch)
     reasoning = message.get("reasoning_content")
     if isinstance(reasoning, str) and reasoning:
         parts.append(reasoning)

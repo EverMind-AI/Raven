@@ -36,6 +36,7 @@ from loguru import logger
 from raven.agent.window.parts import ATTACHMENT_NOTES_KEY
 from raven.context_engine.runtime_context import (
     RUNTIME_CONTEXT_KEY,
+    block_with_menu,
     notice_ceiling,
     notice_changes,
     told_notices,
@@ -398,7 +399,7 @@ class ContextAssembler(ContextEngine):
         and feed the next turn's novelty window its own output. Hence the
         single-newline join and the collapse of any blank lines within.
 
-        The runtime-context lines themselves, without the menu, are recorded
+        The runtime-context lines and the menu, joined as one block, are recorded
         on the message (``RUNTIME_CONTEXT_KEY``). The persist files them beside
         the user's words and the history projection joins them back through
         the same ``with_runtime_context``, so a later turn replays the block
@@ -430,11 +431,12 @@ class ContextAssembler(ContextEngine):
             tool_notices=tool_notices,
             session_notices=parts.session_notices,
         )
-        runtime_ctx = f"{lines}\n{_scent_in_envelope(ctx.scent_text)}" if ctx.scent_text else lines
+        menu = _scent_in_envelope(ctx.scent_text) if ctx.scent_text else None
+        runtime_ctx = block_with_menu(lines, menu)
         message: dict[str, Any] = {
             "role": "user",
             "content": with_runtime_context(runtime_ctx, parts.content),
-            RUNTIME_CONTEXT_KEY: lines,
+            RUNTIME_CONTEXT_KEY: runtime_ctx,
         }
         # The notes as they ride in the content, recorded the way the turn
         # scratch is: the window measurement takes them out of the conversation
