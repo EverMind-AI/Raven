@@ -759,6 +759,11 @@ def _fill_resumed_context(usage: dict[str, Any], session: Any) -> None:
     times the window its last call measured, and a short one at a few tokens,
     the system prompt and the tool list being no part of it.
 
+    ``usage.context_parts`` is taken off that same row and left absent when the
+    row carries none: an older breakdown describes a prompt the newer reading
+    did not measure, so pairing the two would draw a composition the fill never
+    had.
+
     A session with no reading -- written before rows carried one, or whose
     calls never reported their usage -- falls back to a tiktoken estimate of
     ``get_history(max_messages=0)``, marked ``context_estimated``. Failures
@@ -768,10 +773,13 @@ def _fill_resumed_context(usage: dict[str, Any], session: Any) -> None:
     if session is None:
         return
     context_max = usage.get("context_max") or 0
-    if measured := _last_window_reading(session.messages):
+    measured, parts = _last_window_reading(session.messages)
+    if measured:
         usage["context_used"] = measured
         usage["context_percent"] = round(100 * measured / context_max) if context_max else 0
         usage["context_estimated"] = False
+        if parts is not None:
+            usage["context_parts"] = parts
         return
     try:
         # The estimate counts what an engine that leaves compaction to the
@@ -802,14 +810,36 @@ def _fill_resumed_context(usage: dict[str, Any], session: Any) -> None:
 # percentage. Either is read as no reading.
 _READING_CEILING = 1_000_000_000
 
+# The parts a breakdown may carry, in the order the card draws them. A stored
+# key outside this set is not part of the contract and is not passed on.
+_PART_KEYS = ("system", "tools", "conversation", "files", "memory", "skills")
 
-def _last_window_reading(messages: list[Any]) -> int:
-    """The window the newest reading-carrying row records, or 0 for none."""
+
+def _last_window_reading(messages: list[Any]) -> tuple[int, dict[str, int] | None]:
+    """The newest reading-carrying row's window and breakdown, or ``(0, None)``."""
     for message in reversed(messages):
         used = message.get("context_used") if isinstance(message, dict) else None
         if isinstance(used, int) and not isinstance(used, bool) and 0 < used <= _READING_CEILING:
-            return used
-    return 0
+            return used, _stored_parts(message.get("context_parts"))
+    return 0, None
+
+
+def _stored_parts(value: Any) -> dict[str, int] | None:
+    """The breakdown's token counts, or None when none is one.
+
+    The record is drawn by a page and the session file is editable: a string, a
+    bool (an ``int`` to Python), a negative count or one past any window is
+    dropped rather than reaching the card. A partly valid record keeps its
+    valid counts.
+    """
+    if not isinstance(value, dict):
+        return None
+    parts = {
+        key: count
+        for key in _PART_KEYS
+        if isinstance(count := value.get(key), int) and not isinstance(count, bool) and 0 <= count <= _READING_CEILING
+    }
+    return parts or None
 
 
 def _session_to_list_item(info: dict[str, Any]) -> dict[str, Any]:

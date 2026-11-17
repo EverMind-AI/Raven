@@ -978,6 +978,42 @@ async def test_each_reply_is_stored_with_the_window_its_call_measured(workspace)
 
 
 @pytest.mark.asyncio
+async def test_each_reply_is_stored_with_the_breakdown_its_call_measured(workspace):
+    """The divided window is kept on the reply its call produced, sink or not.
+
+    The live card reads the breakdown off ``message.complete``; a page that
+    reloads onto the conversation has only the stored rows. The parts cannot be
+    re-measured from the log afterwards -- the remembered segments are not in
+    it -- so each reply carries its own, the way it carries the window reading.
+    """
+    agent = _costing_agent(
+        workspace,
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="c1", name="list_dir", arguments={"path": "."})],
+                usage=_measured(6000, 200),
+            ),
+            LLMResponse(content="done", finish_reason="stop", usage=_measured(6500, 300)),
+        ],
+    )
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key="tui:c1",
+    )
+
+    replies = _stored_replies(workspace, "tui:c1")
+    keys = {"system", "tools", "conversation", "files", "memory", "skills"}
+    assert [set(r.get("context_parts") or {}) for r in replies] == [keys, keys]
+    assert all("_context_parts" not in r for r in replies), f"the in-flight private key was stored: {replies}"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("extra", "used"),
     [
@@ -998,6 +1034,7 @@ async def test_a_resumed_session_shows_the_reading_the_live_turn_showed(workspac
 
     assert sink["context_used"] == used
     assert (usage["context_used"], usage["context_percent"]) == (sink["context_used"], sink["context_percent"])
+    assert usage["context_parts"] == sink["context_parts"]
     assert usage["context_estimated"] is False
 
 
@@ -1019,6 +1056,7 @@ async def test_a_reply_whose_call_reported_no_usage_carries_no_reading(workspace
 
     (reply,) = _stored_replies(workspace, "tui:c1")
     assert "context_used" not in reply and "_context_used" not in reply, reply
+    assert "context_parts" not in reply and "_context_parts" not in reply, reply
 
 
 class _ReviseTheAnswer(AgentHook):
