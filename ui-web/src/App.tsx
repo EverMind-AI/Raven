@@ -56,6 +56,7 @@ import { Dock } from './chrome/Dock'
 import { FailureBars } from './chrome/FailureBar'
 import { Lightbox } from './chrome/Lightbox'
 import { Rail } from './chrome/Rail'
+import { SearchDialog } from './chrome/SearchDialog'
 import { SheetRack } from './chrome/SheetRack'
 import { Tooltip } from './chrome/Tooltip'
 import { UpgradeShade } from './chrome/UpgradeShade'
@@ -380,6 +381,7 @@ export function App(): JSX.Element {
       <DetailPanel />
       <SettingsModal />
       <ExportVeil />
+      <SearchDialog />
       <ConfirmSheet />
       <div className="menu" id="menu" data-open="false" role="menu" />
       <div className="toasts" id="toasts" aria-live="polite" />

@@ -4337,10 +4337,6 @@
       "en": "Manage",
       "zh": "管理"
     },
-    "gui.rail.no_hits": {
-      "en": "No session matches \"{q}\".",
-      "zh": "没有匹配「{q}」的会话。"
-    },
     "gui.rail.pinned": {
       "en": "Pinned",
       "zh": "已固定"
@@ -4352,10 +4348,6 @@
     "gui.rail.imported": {
       "en": "Imported",
       "zh": "导入"
-    },
-    "gui.rail.search_hits": {
-      "en": "Results - {n}",
-      "zh": "搜索结果 · {n}"
     },
     "gui.reach.auth": {
       "en": "Your account",
@@ -4424,6 +4416,14 @@
     "gui.search_sessions": {
       "en": "Search sessions",
       "zh": "搜索会话"
+    },
+    "gui.find.count": {
+      "en": "{n} matching conversations",
+      "zh": "匹配的会话 · {n}"
+    },
+    "gui.find.empty": {
+      "en": "No conversation matches that.",
+      "zh": "没有匹配的会话。"
     },
     "gui.send": {
       "en": "Send",
