@@ -158,7 +158,8 @@ class TestBashBoundary:
         with pytest.raises(RuntimeError, match="subject checkout"):
             sandbox.bash(cmd)
         assert target.read_text() == "score = 1\n"
-        assert target.stat().st_mode & 0o777 == 0o755
+        if sys.platform != "win32":
+            assert target.stat().st_mode & 0o777 == 0o755
 
     @pytest.mark.parametrize(
         ("rel", "index_flag"),
@@ -310,6 +311,65 @@ class TestBashBoundary:
         assert "[exit 0]" in sandbox.bash("git stash")
         assert "[exit 0]" in sandbox.bash("echo healthy")
 
+    def test_a_ref_created_in_the_subject_checkout_is_not_deleted(self, sandbox, subject):
+        # The sandbox and the subject checkout share one ref namespace, so a
+        # ref created during the command window may be the user's. The guard
+        # does not detect a created ref, so it must not delete one either.
+        repo, _sha = subject
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && git branch user-work && touch ref-poison"
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        assert (
+            subprocess.run(
+                ["git", "rev-parse", "--verify", "refs/heads/user-work"],
+                cwd=repo,
+                capture_output=True,
+                env=_ENV,
+            ).returncode
+            == 0
+        )
+
+    def test_a_stash_in_the_subject_checkout_does_not_cost_the_round(self, sandbox, subject):
+        # The stash stack belongs to the checkout, not to a worktree: the
+        # stash the driver pushes in its own worktree moves the user's stack,
+        # and that must not read as a write to the subject checkout.
+        repo, _sha = subject
+        (repo / "grader.py").write_text("score = 9\n")
+        subprocess.run(
+            ["git", "stash", "push", "-m", "user-stash"],
+            cwd=repo,
+            check=True,
+            env=_ENV,
+        )
+        assert "[exit 0]" in sandbox.bash("echo PROMPT = v2 > benchmarks/appworld/agent_cli.py && git stash")
+        assert "[exit 0]" in sandbox.bash("echo healthy")
+        stash = subprocess.run(
+            ["git", "stash", "list"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            env=_ENV,
+        ).stdout
+        assert "user-stash" in stash
+
+    def test_the_abort_message_names_the_branch(self, sandbox, subject):
+        repo, _sha = subject
+        subprocess.run(["git", "branch", "other"], cwd=repo, check=True, env=_ENV)
+        command = "d=$(sed -n 's/^gitdir: //p' .git); git -C \"$d/../../..\" checkout -q other"
+        with pytest.raises(RuntimeError, match=r"the checked-out branch \(refs/heads/other\)"):
+            sandbox.bash(command)
+
+    def test_the_sandbox_refuses_to_build_on_an_unreadable_checkout(self, subject, tmp_path):
+        repo, sha = subject
+        index = repo / ".git/index"
+        original = index.read_bytes()
+        try:
+            index.write_bytes(b"invalid index\n")
+            with pytest.raises(RuntimeError, match="could not be inspected"):
+                Sandbox(repo, tmp_path / "wt-broken", sha)
+        finally:
+            index.write_bytes(original)
+
     def test_detected_write_is_undone(self, sandbox):
         hook = sandbox.repo_root / ".git/hooks/post-checkout"
         hook.write_text("#!/bin/sh\nexit 0\n")
@@ -359,6 +419,7 @@ class TestBashBoundary:
             sandbox.bash(command)
         assert (sandbox.repo_root / "grader.py").read_text() == "score = 2\n"
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows chmod only toggles the read-only bit")
     def test_a_chmod_of_a_dirty_file_is_undone(self, sandbox):
         # The content digest covers the mode, so a chmod is caught; the restore
         # has to put the captured mode back rather than keep the command's.
@@ -370,6 +431,7 @@ class TestBashBoundary:
         assert target.read_text() == "score = 2\n"
         assert target.stat().st_mode & 0o777 == 0o644
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows chmod only toggles the read-only bit")
     def test_a_chmod_of_an_untracked_file_is_undone(self, sandbox):
         target = sandbox.repo_root / "existing-untracked.py"
         target.write_text("value = 1\n")

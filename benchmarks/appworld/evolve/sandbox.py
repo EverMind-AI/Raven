@@ -29,6 +29,12 @@ and one that changes it is reported rather than undone. The restore puts back
 the content and mode it captured; a clean tracked path is re-materialised by
 git through the checkout filters, so a file whose on-disk bytes differed from
 git's checkout form comes back in that form (``core.autocrlf``).
+
+Only the refs that existed when the command started are compared and restored.
+A ref created during the command window is left alone: the sandbox and the
+subject checkout share one ref namespace, so it may be the user's, and the ref
+the driver makes in its own worktree is harmless. The stash stack is shared
+the same way and is out of the comparison for the same reason.
 """
 
 from __future__ import annotations
@@ -79,6 +85,12 @@ _GIT_REDIRECT_VARS = (
     "GIT_NAMESPACE",
 )
 
+# The stash stack belongs to the checkout, not to a worktree: a stash the
+# driver pushes in its own worktree lands in the subject checkout's
+# namespace. The guard cannot tell that push from the user's own, so it
+# neither reports the stash nor rewrites it.
+_SHARED_STACK_REF = "refs/stash"
+
 
 def _in_whitelist(rel: str) -> bool:
     return any(rel.startswith(p) for p in WHITELIST_PREFIXES)
@@ -122,7 +134,7 @@ class _SubjectState:
         if self.head != other.head:
             changes.append("HEAD")
         if self.head_ref != other.head_ref:
-            changes.append("the checked-out branch")
+            changes.append(f"the checked-out branch ({other.head_ref or self.head_ref})")
         if self.index_entries != other.index_entries:
             changes.append("the index")
         if self.worktree != other.worktree:
@@ -139,11 +151,29 @@ class _SubjectState:
             changes.append("git hooks")
         # Only the refs that existed when the command started: a ref the
         # command created is the sandbox's own branch, tag or stash, which says
-        # nothing about a write to the subject checkout.
-        moved = sorted(name for name, sha in self.refs.items() if other.refs.get(name) != sha)
+        # nothing about a write to the subject checkout. The stash stack is
+        # shared by every worktree of the checkout, so a push there is the
+        # driver's undo as often as it is the user's.
+        moved = sorted(
+            name for name, sha in self.refs.items() if name != _SHARED_STACK_REF and other.refs.get(name) != sha
+        )
         if moved:
             changes.append(f"refs ({', '.join(moved[:5])})")
         return changes
+
+
+class SubjectCheckoutWriteError(RuntimeError):
+    """A sandbox command reached the subject checkout.
+
+    ``unrestored`` names what the guard could not put back. When it is empty
+    the subject checkout is the way the command found it, so only the
+    offending candidate is lost; when it is not, the checkout is still
+    contaminated and the round that follows cannot be trusted.
+    """
+
+    def __init__(self, message: str, *, unrestored: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.unrestored = tuple(unrestored)
 
 
 class Sandbox:
@@ -161,6 +191,14 @@ class Sandbox:
         self.repo_root = Path(repo_root)
         self.root = Path(worktree_path)
         self.whitelist = whitelist_prefixes
+        # Probe the subject checkout once, here: a checkout the guard cannot
+        # read is a round whose every command would be refused, and the
+        # driver would spend its turns on refusals instead of on the failure.
+        if self._subject_state(capture=False) is None:
+            raise RuntimeError(
+                f"the subject checkout could not be inspected ({self.repo_root}); "
+                "the guard cannot tell a write to it from a clean run"
+            )
         git_ops.remove_worktree(self.repo_root, self.root, force=True) if self.root.exists() else None
         git_ops.create_worktree(self.repo_root, self.root, base_sha)
         self._orig = self._snapshot()
@@ -555,19 +593,21 @@ class Sandbox:
                 problems.append(f"hooks/{rel}")
 
     def _restore_refs(self, before: _SubjectState, after: _SubjectState, problems: list[str]) -> None:
-        """Put the refs back: the ones the command moved, and the ones it deleted."""
+        """Put the moved refs back.
+
+        Only the refs that existed when the command started are put back. A ref
+        created during the command window may be the user's: the sandbox and
+        the subject checkout share one ref namespace, so the guard cannot tell
+        whose it is, and the ref the driver made in its own worktree is
+        harmless. The stash stack is left alone for the same reason.
+        """
         for name, sha in sorted(before.refs.items()):
+            if name == _SHARED_STACK_REF:
+                continue
             if after.refs.get(name) == sha:
                 continue
             try:
                 self._git("update-ref", name, sha)
-            except subprocess.SubprocessError:
-                problems.append(f"ref {name}")
-        for name in sorted(set(after.refs) - set(before.refs)):
-            # A ref the command created — the sandbox's own branch, tag or
-            # stash. It says nothing about a write to the subject checkout.
-            try:
-                self._git("update-ref", "-d", name)
             except subprocess.SubprocessError:
                 problems.append(f"ref {name}")
 
@@ -766,11 +806,12 @@ class Sandbox:
                 unrestored, removed = self._restore_subject(before, after)
             except Exception as exc:  # noqa: BLE001 — the abort must happen even if the restore fails
                 unrestored, removed = [f"the restore failed ({type(exc).__name__})"], []
-            raise RuntimeError(
+            raise SubjectCheckoutWriteError(
                 "sandbox command modified the subject checkout "
-                f"({', '.join(changes)}); round aborted"
+                f"({', '.join(changes)})"
                 + (f"; could not undo: {', '.join(unrestored)}" if unrestored else "")
-                + (f"; removed: {', '.join(removed)}" if removed else "")
+                + (f"; removed: {', '.join(removed)}" if removed else ""),
+                unrestored=unrestored,
             )
         if timed_out:
             return (
