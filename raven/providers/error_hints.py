@@ -36,6 +36,15 @@ _CHANNEL_HINTS = {
     "server": "A retry later may work.",
 }
 
+#: The advice a TUI reader can act on. The chat's advice, with the one
+#: difference the screen makes: the credential case points at the screen the
+#: TUI owns, where a key can be set, rather than at a command nobody there can
+#: run.
+_TUI_HINTS = {
+    **_CHANNEL_HINTS,
+    "auth": "Open Settings to check the provider key.",
+}
+
 
 def provider_error_hint(category: str, provider: str | None = None, *, surface: str) -> str:
     """The line that tells a reader what to do about ``category``.
@@ -52,4 +61,6 @@ def provider_error_hint(category: str, provider: str | None = None, *, surface: 
         return f"Hint: {body}" if body else ""
     if surface == "channel":
         return _CHANNEL_HINTS.get(category, "")
+    if surface == "tui":
+        return _TUI_HINTS.get(category, "")
     raise ValueError(f"unknown surface: {surface!r}")
