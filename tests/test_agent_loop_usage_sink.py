@@ -1261,7 +1261,10 @@ async def test_a_failed_turn_that_filed_no_reply_keeps_its_reading_on_the_failur
     assert sink["context_used"] == live
     assert failure["turn_ended"]["status"] == "failed"
     assert failure["context_used"] == live
+    assert sink["context_parts"]
+    assert failure["context_parts"] == sink["context_parts"]
     assert (usage["context_used"], usage["context_percent"]) == (sink["context_used"], sink["context_percent"])
+    assert usage["context_parts"] == sink["context_parts"]
     assert usage["context_estimated"] is False
 
 
@@ -1288,15 +1291,19 @@ async def test_a_turn_cut_short_after_a_call_keeps_that_calls_reading_on_its_mar
 
     monkeypatch.setattr(agent, "_strip_think", _cut_on_the_retry)
 
+    sink: dict = {}
     with pytest.raises(cut):
-        await _turn(agent, {}, session_key="tui:c1")
+        await _turn(agent, sink, session_key="tui:c1")
 
     marker = _stored_replies(workspace, "tui:c1")[-1]
     usage = await _resumed_usage(workspace, monkeypatch, "tui:c1")
 
     assert marker["turn_ended"]["status"] == status
     assert marker["context_used"] == 7000
+    assert sink["context_parts"]
+    assert marker["context_parts"] == sink["context_parts"]
     assert (usage["context_used"], usage["context_estimated"]) == (7000, False)
+    assert usage["context_parts"] == sink["context_parts"]
 
 
 @pytest.mark.asyncio
