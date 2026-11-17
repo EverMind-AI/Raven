@@ -178,8 +178,9 @@ A step that opens a new group (`new_title`) needs no `matters` entry: it has no 
 for, and the placement rules already cover the work it carries. When every attempt is refused,
 `salvage` writes the last update, dropping a step with a fault of its own that places no work
 when another step is left to write, and keeping one step per group (the step that places work,
-else the first that asks the user something, else the first) -- one bad step must not cost an owner its step, which the fence used to
-protect by dropping every other matter; faults in `matters` alone never stop a salvage.
+else the first that asks the user something, else the first) -- one bad step must not cost an
+owner its step, which the fence used to protect by dropping every other matter; faults in
+`matters` alone never stop a salvage.
 
 ### 5. No fence
 
