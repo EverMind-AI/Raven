@@ -238,14 +238,15 @@ function DeliverablesNav(): JSX.Element {
    direct chat still live there. */
 function TasksNav(): JSX.Element {
   const state = useSyncExternalStore(tasksStore.subscribe, tasksStore.get)
-  useEffect(() => { void tasksStore.refresh(); void tasksStore.refreshBoard() }, [])
   /* Answered here rather than inside the view: in the desk, one nothing has to
      look like the other two, and TasksPanel's own note belongs to the panel.
      Nothing is no Task and no group: a conversation that delegated nothing
      still has the matters its board keeps, and the Task Board page opens them
      here. An unread board is not an empty one -- a reconnect resets it with
-     this tab mounted, and the panel reads it back. */
-  if (!state.rows.length && state.boardLoaded && !state.board?.groups.length) {
+     this tab mounted, and the panel reads it back -- so the note waits for
+     both reads to land: while either is still out (a gateway restarting under
+     the page refuses the first one), the panel stands and asks again. */
+  if (state.loaded && state.boardLoaded && !state.rows.length && !state.board?.groups.length) {
     return <DeskEmpty kind="tasks" title={t('gui.ws.tasks_none')} />
   }
   return <TasksPanel />

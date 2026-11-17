@@ -110,6 +110,46 @@ afterEach(() => {
   setCurrent(null)
 })
 
+/* A tab opened while the gateway restarts gets its first read refused. This
+   panel is the one tasks surface with no poll behind it, so it has to ask
+   again itself rather than stay blank until the reader closes and reopens it. */
+describe('a first read the gateway refuses', () => {
+  it('asks again until the rows land, without the tab being reopened', async () => {
+    vi.useFakeTimers()
+    try {
+      let refusals = 1
+      setSources({
+        tasks: {
+          ...source(),
+          list: async () => {
+            if (refusals > 0) {
+              refusals -= 1
+              throw new Error('not connected')
+            }
+            return [task({ id: 'a', kind: 'spawn', status: 'completed', task_summary: null })]
+          },
+        },
+        workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
+        transcript: { clean: (x) => String(x ?? ''), okOf: () => true, stagePaint },
+      })
+      /* The board's own read is not the subject: land it first so the refused
+         read this case is about is the rows' alone. */
+      store.set({ ...store.get(), boardLoaded: true, board: { version: 1, groups: [], unassigned: [] } })
+
+      render(<TasksPanel />)
+      await act(async () => {})
+      expect(document.querySelector('.sarow.task')).toBeNull()
+
+      await act(async () => { vi.advanceTimersByTime(10_000); await Promise.resolve(); await Promise.resolve() })
+      expect(document.querySelector('.sarow.task .nm')?.textContent).toBe('a')
+      /* And it stops asking: nothing is left scheduled once both landed. */
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('the tasks list', () => {
   const draw = async (): Promise<void> => {
     render(<TasksPanel />)
