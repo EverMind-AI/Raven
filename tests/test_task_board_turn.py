@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
 import dataclasses
 import json
@@ -17,11 +18,11 @@ from raven.agent.task_board import service as board_service
 from raven.agent.task_board.board import Board, ProgressStep, TaskGroup, TaskLink
 from raven.agent.task_board.store import BOARD_FILENAME, load_board, save_board
 from raven.config.schema import TaskBoardConfig
-from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
+from raven.contracts.llm_provider import ErrorClassification, LLMResponse, ToolCallRequest
 from raven.contracts.tool import Tool
 from raven.observability import purpose
 from raven.providers.base import LLMProvider
-from raven.spine.message import ChatType, Source
+from raven.spine.message import ChatType, Media, Source
 from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
 from raven.token_wise import usage_context
 
@@ -614,6 +615,61 @@ async def test_a_turn_the_user_started_with_nothing_picked_keeps_every_group_it_
 
     assert _paragraph(_text(provider.requests[1]["messages"][-1])) == "[END DISPATCHES]\n\n"
     assert [len(g.steps) for g in load_board(agent.sessions.session_dir(KEY)).groups] == [2, 2]
+
+
+_PIXEL = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+def _carries_a_picture(messages) -> bool:
+    return any(
+        isinstance(part, dict) and part.get("type") == "image_url"
+        for m in messages
+        if isinstance(m.get("content"), list)
+        for part in m["content"]
+    )
+
+
+class RefusesPictures(Recording):
+    """A text-only endpoint: any request carrying a picture is refused the way such a model refuses it."""
+
+    def __init__(self, replies: list[LLMResponse]):
+        super().__init__(replies)
+        self.refused: list[str | None] = []
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        if _carries_a_picture(messages):
+            self.refused.append(purpose.current())
+            return LLMResponse(
+                content="This model does not accept images.",
+                finish_reason="error",
+                error_classification=ErrorClassification("images_unsupported", strip_images=True),
+            )
+        return await super().chat(messages, tools, model, max_tokens, temperature, reasoning_effort, tool_choice)
+
+
+async def test_a_picture_the_endpoint_refused_stays_out_of_the_board_call(tmp_path):
+    picture = tmp_path / "pixel.png"
+    picture.write_bytes(_PIXEL)
+    provider = RefusesPictures([LLMResponse(content=ANSWER), BOARD_REPLY])
+    agent = _agent(tmp_path, provider)
+    turn = dataclasses.replace(_turn("What is in this picture?"), media=(Media(str(picture), "image/png", "image"),))
+
+    await agent._process_message(turn, session_key=KEY)
+    await _drain(agent)
+
+    assert provider.refused == ["main"], "the turn met the refusal once, and the board call never did"
+    assert [g.title for g in load_board(agent.sessions.session_dir(KEY)).groups] == ["Fix bug A"]
 
 
 async def _consolidated(_session) -> bool:

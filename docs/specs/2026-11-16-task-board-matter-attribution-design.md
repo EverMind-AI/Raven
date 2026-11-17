@@ -187,15 +187,19 @@ result is this turn's movement on it and the rules demand a step for every moved
 The post-turn call no longer sends the turn's whole window. It sends:
 
 - the system message and the tools array the turn's last call sent, unchanged;
-- the turn's opening message, as the turn's log holds it -- the original even when a window
-  pass replaced it with a summary;
+- the turn's opening message as the window last sent it: a picture the endpoint refused, and
+  a pass withdrew, stays withdrawn, or the board call meets the same refusal;
 - the turn's own rows as the window last sent them (an elided body stays elided), mid-turn
   messages included;
 - the instruction.
 
-`TurnLog.cut_to_turn(window)` builds it: the log stamps every row the turn adds, so the
-window's first stamped row is where the turn's own rows start.
+`TurnLog.cut_to_turn(window)` builds it: the log marks the opening, a mark a pass's copy keeps
+and a summary lacks, and stamps every row the turn adds, so the window's first stamped row is
+where the turn's own rows start.
 
+- when a head summary took the opening's place, the log's own opening instead (without
+  pictures the window no longer carries), followed by that summary, which stands for the
+  turn's early rows and any message sent while it ran that they held;
 Everything before the opening message is left out. The board record in the instruction already
 gives every open group's title, status, summary and last two steps' titles, and every
 completed group's title: the history a matter needs. The carry pass continues from this

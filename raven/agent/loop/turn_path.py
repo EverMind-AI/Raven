@@ -127,7 +127,7 @@ from raven.agent.tools.removals import RemovalWatch
 from raven.agent.window import shrink
 from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, filed_image_note, image_sources
 from raven.agent.window.parts import ATTACHMENT_NOTES_KEY, measure_parts
-from raven.agent.window.turn_log import TURN_LOG_KEY, TurnLog
+from raven.agent.window.turn_log import OPENING_KEY, TURN_LOG_KEY, TurnLog
 from raven.contracts.harness import (
     ActionRequest,
     CapabilityRequest,
@@ -1356,6 +1356,7 @@ class TurnPathMixin:
                 # A hook may hand back a copy of a message this turn already
                 # wrote; it is a new message, not a rewrite of that one.
                 entry.pop(TURN_LOG_KEY, None)
+                entry.pop(OPENING_KEY, None)
                 entry.setdefault("timestamp", self._now_fn().isoformat())
                 entry[_HOOK_INJECTED_KEY] = True
                 messages.append(entry)
@@ -4237,6 +4238,7 @@ class TurnPathMixin:
                     entry["trace_id"] = trace_id
                 first_user_pending = False
             entry.pop(TURN_LOG_KEY, None)
+            entry.pop(OPENING_KEY, None)
             runtime_lines = entry.pop(RUNTIME_CONTEXT_KEY, None)
             if (scratch := entry.pop(TURN_SCRATCH_KEY, None)) and role == "user":
                 # The turn scratch (recalled memory, routed skills) is rebuilt

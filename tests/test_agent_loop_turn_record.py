@@ -343,16 +343,43 @@ def test_the_cut_keeps_the_system_message_the_opening_and_the_turns_rows():
     assert [m["content"] for m in log.cut_to_turn(base)] == ["s", "now", "", "r", "done"]
 
 
-def test_the_cut_restores_an_opening_a_head_summary_replaced():
+def test_the_cut_restores_an_opening_a_head_summary_replaced_and_keeps_the_summary():
+    """The summary stands for what it replaced, this turn's early rows and a message sent
+    while it ran among them, so it stays beside the opening the log puts back."""
     base = [{"role": "system", "content": "s"}, {"role": "user", "content": "old"}, {"role": "user", "content": "now"}]
     log = TurnLog(base, len(base))
     base += _call_rows()
     log.follow(base)
     summary = {"role": "user", "content": f"{compaction.SUMMARY_MARKER}\n\nbrief"}
+    window = [base[0], summary, *base[4:]]
+    log.follow(window)
+
+    assert [m["content"] for m in log.cut_to_turn(window)] == ["s", "now", summary["content"], "r", "done"]
+
+
+def test_a_restored_opening_carries_no_picture_the_window_no_longer_holds():
+    opening = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "what is this?"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        ],
+    }
+    base = [{"role": "system", "content": "s"}, opening]
+    log = TurnLog(base, len(base))
+    base += _call_rows()
+    log.follow(base)
+    shrink.window_images(base, 0, reason="refused", any_role=True)
+    log.follow(base)
+    summary = {"role": "user", "content": f"{compaction.SUMMARY_MARKER}\n\nbrief"}
     window = [base[0], summary, *base[3:]]
     log.follow(window)
 
-    assert [m["content"] for m in log.cut_to_turn(window)] == ["s", "now", "", "r", "done"]
+    cut = log.cut_to_turn(window)
+
+    assert _pictures(cut) == 0
+    assert "what is this?" in str(cut[1]["content"])
+    assert _pictures([opening]) == 1, "the log's own record keeps the picture"
 
 
 def test_a_rerun_logs_cut_holds_only_the_rerun():
@@ -369,6 +396,68 @@ def test_a_rerun_logs_cut_holds_only_the_rerun():
     seed.append({"role": "assistant", "content": "the rerun's answer"})
 
     assert [m["content"] for m in second.cut_to_turn(seed)] == ["s", "q", "a correction", "the rerun's answer"]
+
+
+def _pictures(messages: list[dict[str, Any]]) -> int:
+    return sum(
+        1
+        for m in messages
+        if isinstance(m.get("content"), list)
+        for part in m["content"]
+        if isinstance(part, dict) and part.get("type") == "image_url"
+    )
+
+
+def test_the_cut_keeps_the_windows_copy_of_an_opening_whose_picture_was_withdrawn():
+    """An endpoint that refused the opening's picture refuses it again if the cut puts it back."""
+    opening = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "what is this?"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        ],
+    }
+    base = [{"role": "system", "content": "s"}, opening]
+    log = TurnLog(base, len(base))
+    base.append({"role": "assistant", "content": "a cat"})
+    log.follow(base)
+    shrink.window_images(base, 0, reason="refused", any_role=True)
+    log.follow(base)
+
+    cut = log.cut_to_turn(base)
+
+    assert _pictures(cut) == 0
+    assert cut[1] is base[1], "the window's own copy of the opening is what goes"
+    assert [m["role"] for m in cut] == ["system", "user", "assistant"]
+
+
+def test_the_cut_keeps_an_opening_withdrawn_while_a_later_picture_stays():
+    """A picture window that kept only the newest picture: the opening's stays withdrawn
+    rather than coming back beside the one the window still carries."""
+    opening = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "compare these"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        ],
+    }
+    base = [{"role": "system", "content": "s"}, opening]
+    log = TurnLog(base, len(base))
+    base.append(
+        {
+            "role": "tool",
+            "tool_call_id": "c",
+            "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,BBBB"}}],
+        }
+    )
+    log.follow(base)
+    shrink.window_images(base, 1, any_role=True)
+    log.follow(base)
+
+    cut = log.cut_to_turn(base)
+
+    assert _pictures(cut) == 1
+    assert cut[1] is base[1]
 
 
 def test_a_window_with_no_row_of_the_turn_is_sent_whole():
