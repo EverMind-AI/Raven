@@ -8,6 +8,7 @@ carries (or drops) edits the designer never verified.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -382,6 +383,32 @@ class TestBashBoundary:
         command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && touch appeared.txt"
         with pytest.raises(RuntimeError, match="removed: appeared.txt"):
             sandbox.bash(command)
+
+    def test_a_stat_preserving_write_is_undone(self, sandbox):
+        # A copy that keeps the file's size and mtime leaves git's stat cache
+        # agreeing with the index. The restore has to act on the paths the
+        # guard caught, not on the paths git still calls dirty, and it has to
+        # write the index version itself: a checkout does nothing when git
+        # believes the file is unchanged.
+        target = sandbox.repo_root / "grader.py"
+        original = target.read_bytes()
+        payload = original.replace(b"1", b"2")
+        assert len(payload) == len(original)
+        index = sandbox.repo_root / ".git/index"
+        stat = target.stat()
+        # The index looks as old as the file, so git re-reads the content of
+        # the file instead of trusting its cached stat.
+        os.utime(index, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        before = sandbox._subject_state(capture=True)
+        # The command's write: the same size, the same mtime.
+        target.write_bytes(payload)
+        os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        after = sandbox._subject_state(capture=False)
+        assert before is not None and after is not None
+        assert before.differences(after) == ["tracked files"]
+        problems, removed = sandbox._restore_subject(before, after)
+        assert not problems
+        assert target.read_bytes() == original
 
     def test_git_dir_in_the_environment_does_not_redirect_the_probe(self, sandbox, tmp_path, monkeypatch):
         # GIT_DIR and its friends override -C: a harness that exports one of

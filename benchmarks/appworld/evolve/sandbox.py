@@ -20,10 +20,11 @@ symbolic HEAD, the index entries and their flags, the worktree against the
 index, and the refs that existed when the command started — plus the places git
 does not look: the paths marked assume-unchanged or skip-worktree, the untracked
 paths, and the configuration, HEAD and hooks under the git dir. Three limits
-follow from leaning on git: a tracked path is compared by its content, so a
-rewrite that keeps the file's size is still seen; an untracked path is compared
-by size and mtime rather than by content; and an untracked directory is listed
-as one collapsed entry, so a write below its first level is not seen at all.
+follow from leaning on git: a tracked path is compared by its content, but only for
+the paths git reports as changed, so a rewrite that keeps a file's size and
+mtime is invisible; an untracked path is compared by size and mtime rather
+than by content; and an untracked directory is listed as one collapsed entry,
+so a write below its first level is not seen at all.
 """
 
 from __future__ import annotations
@@ -617,7 +618,13 @@ class Sandbox:
         # dirty before the command. A command that threw the checkout's own
         # edit away made the path clean again, and that edit is still the
         # checkout's to lose.
-        for path in sorted(set(before.worktree) | dirty):
+        #
+        # The paths the guard caught are the source of truth, not the paths
+        # git calls dirty now: the index was just rewritten with the
+        # pre-command stat cache, so a path whose size and mtime the command
+        # preserved agrees with it and looks clean to git even though its
+        # content changed.
+        for path in sorted(set(before.worktree) | set(after.worktree) | dirty):
             was = before.worktree.get(path)
             now = after.worktree.get(path)
             saved = before.worktree_bytes.get(path)
@@ -639,10 +646,23 @@ class Sandbox:
                 if was != now:
                     problems.append(path)
                 continue
+            # Clean before the command: the index holds the pre-command
+            # version. Write it back over the path instead of asking git to
+            # do it: a checkout is a no-op when git believes the file is
+            # unchanged, and after the index rewrite it believes that.
+            target = self.repo_root / path
             try:
+                target.unlink(missing_ok=True)
                 self._git("checkout", "--", path)
-            except subprocess.SubprocessError:
+            except (OSError, subprocess.SubprocessError):
                 problems.append(path)
+                # The path is gone and the checkout failed: put the index
+                # version back by hand.
+                try:
+                    blob = self._git("cat-file", "blob", f":{path}").stdout
+                    self._write_bytes(target, blob.encode("utf-8", "surrogateescape"))
+                except (OSError, subprocess.SubprocessError):
+                    pass
 
     def bash(self, command: str, timeout: float = 60.0) -> str:
         # The candidate is the diff of THIS worktree vs base; a command that
