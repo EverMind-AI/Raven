@@ -1782,7 +1782,7 @@ def register(app: typer.Typer) -> None:
         print_url: bool = typer.Option(
             False,
             "--print-url",
-            help="Print the one-time sign-in URL on stdout and open nothing (for native windows).",
+            help="Print the one-time sign-in URL on stdout and open nothing (for the native desktop app).",
         ),
         supervise: bool = typer.Option(
             False,
