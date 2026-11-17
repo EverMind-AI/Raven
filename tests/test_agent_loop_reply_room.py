@@ -439,6 +439,41 @@ async def test_a_reclaim_that_retells_the_question_is_still_kept(workspace, monk
 
 
 @pytest.mark.asyncio
+async def test_a_reclaim_that_retells_a_question_behind_a_recovery_notice_is_retried(workspace, monkeypatch):
+    """Recovery puts its notice in front of a block-list question after assembly,
+    so the block the note is retold into is no longer the first one; the loop has
+    to recognize the question in that shape too."""
+    note = mcp_notice("github", "installed, awaiting authorization.")
+    lines = f"{RUNTIME_CONTEXT_TAG}\nChat ID: x"
+    older = {
+        "role": "user",
+        "content": with_runtime_context(f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{note}", "q0"),
+    }
+    recovery = {"type": "text", "text": "[Recovery - the previous turn was interrupted before finishing]"}
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+    question = {
+        "role": "user",
+        "content": [recovery, *with_runtime_context(lines, [image, {"type": "text", "text": "and now?"}])],
+        RUNTIME_CONTEXT_KEY: lines,
+    }
+    provider = _Recording([_overflow(), LLMResponse(content="answered", finish_reason="stop")])
+    agent = _agent(workspace, provider, monkeypatch)
+
+    async def reclaim(key, messages, *, attempt, window):
+        return OverflowOutcome(messages=retell_notices(messages, [messages[0], messages[-1]]), reclaimed_tokens=100)
+
+    monkeypatch.setattr(agent.context_engine, "on_context_overflow", reclaim)
+    initial = [{"role": "system", "content": "sys"}, older, {"role": "assistant", "content": "a0"}, question]
+
+    final, _, _, _ = await agent._run_agent_loop(initial, session_key="s1")
+
+    assert final == "answered"
+    retry_question = provider.calls[-1]["messages"][-1]
+    parts = [part.get("text", "") for part in retry_question["content"] if part.get("type") == "text"]
+    assert any(part.startswith(RUNTIME_CONTEXT_TAG) and note in part for part in parts)
+
+
+@pytest.mark.asyncio
 async def test_a_real_reclaim_that_retells_the_question_is_retried(workspace, monkeypatch):
     """The compacting builder's own reclaim retells a note into the question; the
     loop has to recognize the question and retry instead of ending on the refusal."""

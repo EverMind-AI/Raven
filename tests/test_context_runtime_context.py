@@ -731,3 +731,45 @@ class TestAPluginNameKeysItsOwnLine:
         replay = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{cleared}", "q")}
 
         assert told_notices([replay]) == {}
+
+    @pytest.mark.parametrize(
+        ("line", "name"),
+        [
+            ("MCP plugin 'a'b': still connecting.", "a'b"),
+            ("MCP plugin 'c\\d': still connecting.", "c\\d"),
+            ("MCP plugin 'c\\d'e': still connecting.", "c\\d'e"),
+        ],
+        ids=["quote", "backslash", "both"],
+    )
+    def test_a_line_filed_before_the_escaping_reads_back_the_way_it_was_written(self, line: str, name: str) -> None:
+        """A session filed before ``mcp_notice`` escaped its names holds the raw
+        name, up to the first ``': ``; the reader recovers it as far as that format allows."""
+        from raven.context_engine.runtime_context import notice_subject
+
+        assert notice_subject(line) == name
+
+    def test_a_name_written_escaped_is_not_read_as_a_raw_one(self) -> None:
+        """A raw name can look escaped; the escaped reading still wins, so every
+        line ``mcp_notice`` writes keeps reading back exactly."""
+        from raven.context_engine.runtime_context import mcp_notice, notice_subject
+
+        assert notice_subject(mcp_notice("c\\d", "still connecting.")) == "c\\d"
+
+    def test_a_note_filed_before_the_escaping_keys_its_plugin(self) -> None:
+        from raven.context_engine.runtime_context import told_notices
+
+        legacy = "MCP plugin 'a'b': installed, still connecting."
+        replay = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{legacy}", "q")}
+
+        assert told_notices([replay]) == {"a'b": legacy}
+
+    def test_a_cleared_line_filed_before_the_escaping_still_clears(self) -> None:
+        """The line that clears a plugin was written raw too; it has to be read as
+        the clearing, not as one more note."""
+        from raven.context_engine.runtime_context import _CLEARED, mcp_notice, told_notices
+
+        noted = mcp_notice("a'b", "installed, still connecting.")
+        legacy = f"MCP plugin 'a'b': {_CLEARED}"
+        replay = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{noted}\n{legacy}", "q")}
+
+        assert told_notices([replay]) == {}
