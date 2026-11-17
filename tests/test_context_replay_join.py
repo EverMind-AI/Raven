@@ -207,7 +207,11 @@ class TestTheScratchIsFiledAndRejoined:
 
         replayed = replayed_content(message)
 
-        assert replayed == [{"type": "text", "text": _LINES}, {"type": "text", "text": "the words"}, {"type": "text", "text": _SCRATCH}]
+        assert replayed == [
+            {"type": "text", "text": _LINES},
+            {"type": "text", "text": "the words"},
+            {"type": "text", "text": _SCRATCH},
+        ]
 
     def test_a_note_kept_after_the_scratch_keeps_its_place(self) -> None:
         """A hook note appended after the scratch stays where it was, so the
