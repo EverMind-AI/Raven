@@ -544,6 +544,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     // MARK: - WKUIDelegate
 
+    /// `<input type="file">` does nothing on macOS unless the app answers this
+    /// call: WebKit has no panel of its own and reports no error when the
+    /// delegate is silent. Four places in the page depend on it -- the
+    /// composer's upload, a subagent's attach button, the knowledge base's
+    /// add-file and add-folder (which asks for a directory), and the package
+    /// import dialog.
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping ([URL]?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        let attachTo = webView.window ?? window
+        let answer: (NSApplication.ModalResponse) -> Void = { response in
+            completionHandler(response == .OK ? panel.urls : nil)
+        }
+        if let attachTo {
+            panel.beginSheetModal(for: attachTo, completionHandler: answer)
+        } else {
+            answer(panel.runModal())
+        }
+    }
+
     /// A page asked for a window of its own (`target=_blank`, `window.open`).
     /// The page keeps its own view: the child gets a real window beside it, so
     /// "open in a new tab" shows the file and leaves Raven where it was.
@@ -666,8 +690,16 @@ private func runSelfTest() -> Int32 {
     }
     try? fm.removeItem(at: dir)
 
+    // File inputs are dead on macOS without this optional WKUIDelegate method,
+    // and silence is the whole failure mode: nothing opens, nothing reports.
+    let delegate = AppDelegate()
+    let openPanel = NSSelectorFromString("webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:")
+    if !delegate.responds(to: openPanel) {
+        failures.append("the app does not implement the open-panel delegate, so <input type=file> is inert on macOS")
+    }
+
     if failures.isEmpty {
-        print("selftest: ok (12 policy cases, saveLocation)")
+        print("selftest: ok (12 policy cases, saveLocation, open-panel delegate)")
         return 0
     }
     for f in failures { print("selftest: FAIL \(f)") }
