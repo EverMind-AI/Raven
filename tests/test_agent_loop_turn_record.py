@@ -416,6 +416,39 @@ def test_a_restored_opening_keeps_the_form_the_window_last_sent():
     assert cut[2] is summary
 
 
+def test_a_restored_opening_loses_a_picture_withdrawn_after_the_summary():
+    """The other order: a head summary took the opening's place while it still carried its
+    picture, and a refusal later withdrew every picture the window held. The log's last form
+    of the opening still has one, so the cut takes it out."""
+    opening = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "compare these"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        ],
+    }
+    base = [{"role": "system", "content": "s"}, opening]
+    log = TurnLog(base, len(base))
+    base.append(
+        {
+            "role": "tool",
+            "tool_call_id": "c",
+            "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,BBBB"}}],
+        }
+    )
+    log.follow(base)
+    summary = {"role": "user", "content": f"{compaction.SUMMARY_MARKER}\n\nbrief"}
+    window = [base[0], summary, *base[2:]]
+    log.follow(window)
+    shrink.window_images(window, 0, reason="refused", any_role=True)
+    log.follow(window)
+
+    cut = log.cut_to_turn(window)
+
+    assert _pictures(cut) == 0
+    assert "compare these" in str(cut[1]["content"])
+
+
 def test_a_rerun_logs_cut_holds_only_the_rerun():
     base = [{"role": "system", "content": "s"}, {"role": "user", "content": "q"}]
     first = TurnLog(base, 2)
