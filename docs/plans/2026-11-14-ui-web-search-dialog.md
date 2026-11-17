@@ -17,7 +17,7 @@
 - Import direction (`src` ranks in `ui-web/scripts/gates/import-direction.test.mjs`): `state/` may not import `features/`; `chrome/` may.
 - New classes in `chrome/` must carry the `chrome-` prefix (`scripts/check-class-namespace.mjs`), and every class the markup writes must be defined in `page.css`.
 - `page.css` may not carry a color literal outside a `--token:` definition (it must go through `var(--…)` or a `color-mix()` of tokens).
-- Never remove `gui.rail.search_hits` or `gui.rail.no_hits` from `i18n/messages.json`: the TUI reads both (`ui-tui/src/i18n/messages.generated.ts`).
+- Remove `gui.rail.search_hits` and `gui.rail.no_hits` from `i18n/messages.json` and regenerate `ui-tui/src/i18n/messages.generated.ts`: once the rail stops filtering, no front end reads them.
 - The search input stays uncontrolled — no `value` prop — so the reader's caret and IME are untouched.
 - No new dependencies.
 

@@ -43,9 +43,10 @@ shortcut.
 - `App.tsx` regions are golden-tested (`ui-web/src/test/__golden__/region-*.txt`,
   `ui-web/src/test/regions.test.ts`); a new region needs its name in `REGIONS`
   and its golden minted on a developer machine.
-- `i18n/messages.json` feeds the TUI as well. `gui.rail.search_hits` and
-  `gui.rail.no_hits` belong to the TUI's own rail search and stay in the
-  catalogue even though ui-web stops reading them.
+- `i18n/messages.json` feeds the TUI as well, so the TUI's generated copy is
+  regenerated with it. `gui.rail.search_hits` and `gui.rail.no_hits` were the
+  old row's two words; with the row gone nothing reads either, so they leave
+  the catalogue.
 - The search field stays uncontrolled (no `value` prop): what the store owns is
   the lowercased term, and the browser keeps the caret and the IME state.
 - Source comments are English and are added only where the code cannot say the
