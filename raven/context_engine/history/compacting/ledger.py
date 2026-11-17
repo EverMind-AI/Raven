@@ -33,6 +33,11 @@ from raven.utils.tokens import estimate_message_tokens
 
 Boundary = Literal["tool_pair", "turn"]
 
+#: The loop's mark on a user row it wrote rather than the reader: a hook's note
+#: or re-prompt. Spelled here rather than imported because a history strategy
+#: must not load the loop, the same rule ``runtime`` follows for its own list.
+_HOOK_INJECTED_KEY = "_hook_injected"
+
 
 @dataclass(frozen=True)
 class LedgerEntry:
@@ -62,7 +67,9 @@ class MessageLedger:
         ]
         self.groups = _group_index(messages)
         self._balanced = _balanced_cuts(len(messages), self.groups)
-        self._user_cuts = frozenset(e.index for e in self.entries if e.role == "user") | {0, len(messages)}
+        self._user_cuts = frozenset(
+            idx for idx, msg in enumerate(messages) if msg.get("role") == "user" and not msg.get(_HOOK_INJECTED_KEY)
+        ) | {0, len(messages)}
 
     def __len__(self) -> int:
         return len(self.entries)
