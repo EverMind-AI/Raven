@@ -228,7 +228,9 @@ about one step of a Turn, answered against a read-only `StepView` whose `phase` 
 the six moments is asking, and answered in plain data -- a string, a narrower list of tool
 definitions, a mapping built by `Intake`, `Accept`, `Resample` or `End` -- never a write into the loop's own state and
 never an instance of a host class, so a judgement compiled from a dispatch's own source can
-answer the same verbs a plugin does. Three invariants hold for every participant whatever its
+answer the same verbs a plugin does. The step such a function is handed is the StepView as
+plain data, with a normalized `response.tool_calls` projected to `id`/`name`/`arguments`
+mappings and nothing of the provider's private fields. Three invariants hold for every participant whatever its
 origin: it is shown facts it cannot write, it answers with data the host interprets, and an
 answer that raises or does not parse counts as silence rather than as a refusal. The host builds
 one per Turn from a `ParticipantFactory`, so what a participant has already done this turn is an
