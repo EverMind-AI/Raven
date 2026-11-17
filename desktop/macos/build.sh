@@ -5,6 +5,8 @@ set -eu
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 APP="${RAVEN_DESKTOP_APP:-$HOME/Applications/Raven.app}"
+MACOS_DEPLOYMENT_TARGET="12.0"
+TARGET="$(uname -m)-apple-macosx$MACOS_DEPLOYMENT_TARGET"
 # The bundle is replaced wholesale below, so refuse an override that is not
 # clearly an app bundle before anything is deleted.
 case "$APP" in
@@ -23,7 +25,7 @@ mkdir -p "$CACHE" "$(dirname "$APP")" "$HERE/build"
 
 echo "[1/4] compile native window"
 /usr/bin/swiftc -O -framework Cocoa -framework WebKit \
-    -module-cache-path "$CACHE" \
+    -target "$TARGET" -module-cache-path "$CACHE" \
     -o "$HERE/build/RavenDesktop" "$HERE/RavenDesktop.swift"
 
 echo "[2/4] build icon from the raven mark"
@@ -42,7 +44,8 @@ fi
 OFFICIAL="$HERE/build/AppIcon.png"
 if [ ! -f "$OFFICIAL" ]; then
     /usr/bin/swiftc -O -framework Cocoa -framework WebKit \
-        -module-cache-path "$CACHE" -o "$HERE/build/render_svg" "$HERE/render_svg.swift"
+        -target "$TARGET" -module-cache-path "$CACHE" \
+        -o "$HERE/build/render_svg" "$HERE/render_svg.swift"
     "$HERE/build/render_svg" "$SVG" "$OFFICIAL.raw.png"
     /usr/bin/sips -z 1024 1024 "$OFFICIAL.raw.png" --out "$OFFICIAL" >/dev/null
 fi

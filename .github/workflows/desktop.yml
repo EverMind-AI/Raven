@@ -31,10 +31,16 @@ jobs:
       # checking that the window, the shell bridge and the WebKit delegates
       # still compile together. It needs no simulator, signing identity or GUI.
       - name: Typecheck the window
-        run: /usr/bin/swiftc -typecheck -framework Cocoa -framework WebKit desktop/macos/RavenDesktop.swift
+        run: >-
+          /usr/bin/swiftc -typecheck
+          -target "$(uname -m)-apple-macosx12.0"
+          -framework Cocoa -framework WebKit desktop/macos/RavenDesktop.swift
 
       - name: Typecheck the icon renderer
-        run: /usr/bin/swiftc -typecheck -framework Cocoa -framework WebKit desktop/macos/render_svg.swift
+        run: >-
+          /usr/bin/swiftc -typecheck
+          -target "$(uname -m)-apple-macosx12.0"
+          -framework Cocoa -framework WebKit desktop/macos/render_svg.swift
 
       # The navigation matrix decides whether a click becomes a page or a file.
       # Getting it wrong replaces the window with the file, which is exactly the
@@ -42,5 +48,8 @@ jobs:
       - name: Check the navigation policy
         run: |
           /usr/bin/swiftc -O -framework Cocoa -framework WebKit \
+            -target "$(uname -m)-apple-macosx12.0" \
             -o "$RUNNER_TEMP/raven-desktop" desktop/macos/RavenDesktop.swift
+          /usr/bin/vtool -show-build "$RUNNER_TEMP/raven-desktop" |
+            grep -F "minos 12.0"
           RAVEN_DESKTOP_SELFTEST=1 "$RUNNER_TEMP/raven-desktop"
