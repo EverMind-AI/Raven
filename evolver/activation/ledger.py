@@ -13,6 +13,7 @@ product runtime never pays for it.
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import time
@@ -108,6 +109,10 @@ def per_task_density(out_dirs: "list[Path | str]", task_ids: "list[str]") -> "di
     instrumentation means no affinity estimate, and the anchor stays
     ledger-only (the same fail-open rule as :func:`read_fired_tasks`). Tasks
     with no recorded attempt are omitted, which the anchor reads as density 0.
+
+    A task id names a directory, so it is escaped before it reaches the glob:
+    an id containing ``[``, ``*`` or ``?`` would otherwise be read as pattern
+    syntax and the task would drop out of the map without an error.
     """
     roots = [Path(d) / BEACONS_DIRNAME for d in out_dirs]
     if not any((r / ENABLED_MARKER).exists() for r in roots):
@@ -119,7 +124,7 @@ def per_task_density(out_dirs: "list[Path | str]", task_ids: "list[str]") -> "di
         for root in roots:
             if not root.is_dir():
                 continue
-            for ws in root.glob(f"{tid}_k*"):
+            for ws in root.glob(f"{glob.escape(tid)}_k*"):
                 attempts += 1
                 lf = ws / LEDGER_FILENAME
                 try:
@@ -151,7 +156,7 @@ def read_fired_tasks(out_dirs: "list[Path | str]", task_ids: "list[str]") -> "se
         for tid in task_ids:
             if tid in fired:
                 continue
-            for ws in root.glob(f"{tid}_k*"):
+            for ws in root.glob(f"{glob.escape(tid)}_k*"):
                 lf = ws / LEDGER_FILENAME
                 try:
                     if lf.is_file() and lf.stat().st_size > 0:

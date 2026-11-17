@@ -15,6 +15,7 @@ from evolver.activation.ledger import (
     beacon_workspace,
     mark_beacons_enabled,
     per_task_density,
+    read_fired_tasks,
 )
 
 
@@ -114,3 +115,28 @@ def test_per_task_density_ignores_an_empty_beacon_file(tmp_path: Path) -> None:
     density = per_task_density([tmp_path], ["task_a"])
 
     assert density == {"task_a": 0.0}
+
+
+def test_per_task_density_escapes_a_glob_metacharacter_in_the_task_id(tmp_path: Path) -> None:
+    """A task id names a directory; ``[``, ``*`` and ``?`` in it are not a pattern.
+
+    The workspaces exist on disk under exactly that name, so globbing the raw id
+    reads the bracket as a character class, matches nothing, and the task drops
+    out of the affinity map without an error.
+    """
+    mark_beacons_enabled(tmp_path)
+    ids = ["task[1]", "task*2", "task?3"]
+    for tid in ids:
+        _record_beacon(tmp_path, tid, 0, fired=True)
+
+    density = per_task_density([tmp_path], ids)
+
+    assert density == {"task[1]": 1.0, "task*2": 1.0, "task?3": 1.0}
+
+
+def test_read_fired_tasks_escapes_a_glob_metacharacter_in_the_task_id(tmp_path: Path) -> None:
+    mark_beacons_enabled(tmp_path)
+    _record_beacon(tmp_path, "task[1]", 0, fired=True)
+    _record_beacon(tmp_path, "task[1]", 1, fired=False)
+
+    assert read_fired_tasks([tmp_path], ["task[1]"]) == {"task[1]"}
