@@ -33,6 +33,7 @@ def test_the_gzip_copy_inflates_to_the_page(build: ModuleType, tmp_path: Path) -
     page = (tmp_path / "index.html").read_bytes()
     assert page == "<html>\u00e9\n</html>".encode()
     assert gzip.decompress((tmp_path / "index.html.gz").read_bytes()) == page
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["index.html", "index.html.gz"]
 
 
 def test_the_same_page_packs_to_the_same_bytes(
@@ -61,6 +62,43 @@ def test_a_failed_write_leaves_no_copy_of_the_page_before(
     with pytest.raises(OSError):
         build._write_page(tmp_path, "<html>new</html>")
     assert not (tmp_path / "index.html.gz").exists()
+
+
+def test_a_copy_cut_short_is_never_left_where_it_is_sent_from(
+    build: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A client that accepts gzip is sent whatever lies at the copy's path, so
+    half a copy is a page that will not inflate until someone rebuilds."""
+    write_bytes = Path.write_bytes
+
+    def cut_short(self: Path, data: bytes) -> int:
+        write_bytes(self, data[: len(data) // 2])
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(Path, "write_bytes", cut_short)
+    with pytest.raises(OSError):
+        build._write_page(tmp_path, "<html>new</html>")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["index.html"]
+
+
+def test_a_copy_moved_into_place_waits_out_a_brief_refusal(
+    build: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows can refuse the rename too while a scanner still holds the file
+    just written."""
+    replace = build.os.replace
+    refusals = iter([True, True])
+
+    def held(src: Path, dst: Path) -> None:
+        if next(refusals, False):
+            raise PermissionError(13, "The process cannot access the file")
+        replace(src, dst)
+
+    monkeypatch.setattr(build.os, "replace", held)
+    monkeypatch.setattr(build.time, "sleep", lambda _s: None)
+    build._write_page(tmp_path, "<html>new</html>")
+    assert gzip.decompress((tmp_path / "index.html.gz").read_bytes()) == b"<html>new</html>"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["index.html", "index.html.gz"]
 
 
 def test_a_copy_held_open_for_a_moment_is_still_replaced(

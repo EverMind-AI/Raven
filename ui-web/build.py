@@ -27,9 +27,11 @@ Run:
 
 import gzip
 import hashlib
+import os
 import shutil
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -152,11 +154,13 @@ def _write_page(dist: Path, out: str) -> int:
     ``index.html.gz`` when one lies beside the page, so the page, a few
     megabytes of inlined script, goes over the wire at about a quarter of that.
     The old copy is removed first: a build that dies after writing the page must
-    not leave the previous page's copy to be sent in its place. Returns the
-    copy's size.
+    not leave the previous page's copy to be sent in its place. The new one is
+    written beside its name and moved into place, so a write cut short never
+    leaves half a copy to be sent either. Returns the copy's size.
     """
     page = dist / "index.html"
     copy = dist / "index.html.gz"
+    part = dist / "index.html.gz.part"
     _remove(copy)
     # newline="" so the bytes are the same on every platform: the default
     # translates "\n" to "\r\n" on Windows, which would hand a checkout there a
@@ -164,11 +168,15 @@ def _write_page(dist: Path, out: str) -> int:
     # the same reason: the same page always packs to the same bytes.
     page.write_text(out, encoding="utf-8", newline="")
     data = gzip.compress(page.read_bytes(), compresslevel=9, mtime=0)
-    copy.write_bytes(data)
+    try:
+        part.write_bytes(data)
+        _patiently(lambda: os.replace(part, copy))
+    finally:
+        part.unlink(missing_ok=True)
     return len(data)
 
 
-def _remove(path: Path, tries: int = 40) -> None:
+def _remove(path: Path) -> None:
     """Remove ``path``, waiting out a reader that holds it open.
 
     Windows refuses to remove a file another handle has open, and the gateway
@@ -176,9 +184,15 @@ def _remove(path: Path, tries: int = 40) -> None:
     after a couple of seconds fails the build here, before the page is written,
     so the two never disagree.
     """
+    _patiently(lambda: path.unlink(missing_ok=True))
+
+
+def _patiently(op: Callable[[], object], tries: int = 40) -> None:
+    """Run ``op``, retrying for about two seconds while Windows refuses it
+    because another handle holds the file."""
     for attempt in range(tries):
         try:
-            path.unlink(missing_ok=True)
+            op()
             return
         except PermissionError:
             if attempt == tries - 1:
