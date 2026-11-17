@@ -2159,3 +2159,40 @@ def test_undoing_the_cut_turn_forgets_its_markers_and_keeps_an_earlier_ones():
         earlier.metadata[key] = 0
     earlier.undo_last_turn()
     assert [earlier.metadata[key] for key in _TURN_MARKERS] == [0, 0], "the turn it marks is still there"
+
+
+def test_list_sessions_scans_an_unchanged_transcript_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A poll that finds the same transcript does not read it again.
+
+    The picker asks for the same files on every request; re-reading all of them
+    each time is the cost this cache exists to remove.
+    """
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("cli:one")
+    session.add_message("user", "hello")
+    manager.save(session)
+
+    scans: list[Path] = []
+    real = SessionManager._scan_file  # a staticmethod: it takes the path only
+    monkeypatch.setattr(manager, "_scan_file", lambda path: scans.append(path) or real(path))
+
+    first = manager.list_sessions()
+    second = manager.list_sessions()
+
+    assert first == second
+    assert len(scans) == 1
+
+
+def test_list_sessions_rescans_a_transcript_that_grew(tmp_path: Path):
+    """A transcript that changed is read again, so the listing is not stale."""
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("cli:one")
+    session.add_message("user", "first")
+    manager.save(session)
+    assert manager.list_sessions()[0]["message_count"] == 1
+
+    grown = manager.get_or_create("cli:one")
+    grown.add_message("assistant", "second")
+    manager.save(grown)
+
+    assert manager.list_sessions()[0]["message_count"] == 2
