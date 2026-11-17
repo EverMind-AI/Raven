@@ -162,6 +162,25 @@ def test_a_windows_path_in_a_title_is_an_anchor():
     assert anchors(r"Install under %LOCALAPPDATA%\raven") == ["%LOCALAPPDATA%/raven"]
 
 
+def test_a_path_anchor_stops_at_the_colon_after_it():
+    assert anchors("raven/agent/window: picture withdrawal") == ["raven/agent/window"]
+    assert anchors("Crash at raven/agent/loop/turn_path.py:3772") == ["raven/agent/loop/turn_path.py", "3772"]
+    assert anchors("Mount D:/x first") == ["D:/x"]
+    assert anchors("See https://example.org/a/b") == ["example.org/a/b"]
+
+
+def test_a_path_named_without_the_colon_after_it_names_its_group():
+    board = Board(
+        [
+            TaskGroup("g_w", "raven/agent/window: picture withdrawal", "", "idle", 1, 1, []),
+            TaskGroup("g_l", "Crash at raven/agent/loop/turn_path.py:3772", "", "idle", 1, 1, []),
+        ],
+        [],
+    )
+
+    assert candidates(board, [], "touched raven/agent/window and raven/agent/loop/turn_path.py") == ["g_w", "g_l"]
+
+
 def test_a_path_names_its_group_with_either_separator():
     board = Board([TaskGroup("g_w", r"Port the launcher in C:\tools\raven", "", "idle", 1, 1, [])], [])
 
