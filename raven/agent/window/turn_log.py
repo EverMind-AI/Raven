@@ -134,7 +134,7 @@ class TurnLog:
             return [*system, *window[opened:]]
         opening = [self._opening] if self._opening is not None else []
         if opening and _pictures(opening[0]) and not any(_pictures(m) for m in window):
-            opening = [without_pictures(opening[0])]
+            opening = [without_pictures(opening[0], reason="summary")]
         summary = next((i for i in range(first - 1, -1, -1) if compaction.is_summary(window[i])), first)
         return [*system, *opening, *window[summary:]]
 

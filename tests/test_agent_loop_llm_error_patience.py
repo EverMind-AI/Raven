@@ -1030,7 +1030,7 @@ async def test_a_note_on_the_tool_result_transport_is_filed_with_its_facts_only(
 
 @pytest.mark.parametrize(
     ("reason", "keep"),
-    [("refused", 2), ("context", 2), ("budget", 2), ("superseded", 0), ("superseded", 2)],
+    [("refused", 2), ("context", 2), ("budget", 2), ("superseded", 0), ("superseded", 2), ("summary", 0)],
 )
 @pytest.mark.parametrize(
     "source",

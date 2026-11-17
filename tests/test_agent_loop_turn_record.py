@@ -447,6 +447,8 @@ def test_a_restored_opening_loses_a_picture_withdrawn_after_the_summary():
 
     assert _pictures(cut) == 0
     assert "compare these" in str(cut[1]["content"])
+    note = cut[1]["content"][1]["text"]
+    assert "summary" in note and "refused" not in note, "nothing refused the opening's picture; a summary took it"
 
 
 def test_a_rerun_logs_cut_holds_only_the_rerun():
