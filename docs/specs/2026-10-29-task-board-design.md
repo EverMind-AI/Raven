@@ -418,10 +418,11 @@ delegated result included this time -- after both sides are read the same way (a
 as its text, emphasis and code backticks dropped, whitespace collapsed, case folded; `...`
 splits a quote into pieces of at least four characters, each found on its own). A step that
 opens a new group answers for nothing. After three refusals the last update is salvaged as
-any other: a fault in `matters` alone never stops it. `matters` is never stored. A turn with
-no candidate is asked and checked without any of this. So a delegated result's group still
-gets its step -- the result is the turn's news about it -- and so does every other matter the
-turn moved, each on its own group.
+any other (6.1): a fault in `matters` alone never stops it. `matters` is never stored. A turn
+with no candidate is asked and checked without any of this. A delegated result's group leads
+the list and its result is quotable evidence, so the model is asked to step it with every other
+matter the turn moved, each on its own group; nothing forces an owner to be answered
+`moved: true` -- an update that steps nothing is accepted, as it always was.
 
 **Ordering.** Two locks per session in the board service. The update queue holds a
 post-turn update across its model call, so the next turn's update is built on this one's
@@ -574,9 +575,12 @@ prefix and the page's existing colour variables (`--amber`, `--sky`, `--moss`, `
 6.1 **The update cannot be had.** When the third attempt is refused too, the last update the
 model sent is salvaged before anything is parked: each `groups` entry keeps only the fields
 that pass on their own -- a status the step on its group already sets goes, the summary
-written beside it stays -- and a text past its limit stands as written. Its steps and its
-placement are kept whole, so the turn's steps are still written and its work placed; only a
-fault there -- an unknown group, a handle left out -- leaves no update to be had. Then, as
+written beside it stays -- and a text past its limit stands as written. A step with a fault
+of its own -- an unknown group, a bad status -- is dropped when it places no work and another
+step is left to write, so one bad step does not cost the turn's other matters their steps.
+The rest of its steps and its placement are kept whole, so they are still written and its work
+placed; only a fault in a step that places work, in every step, or in the placement -- a handle
+left out -- leaves no update to be had. Then, as
 when the post-turn call fails after the provider's retries, or the turn itself errored or was
 stopped ("Which turns"), the turn's handles are appended
 to `unassigned` with the turn's id, a warning is logged, and the next turn's update must place

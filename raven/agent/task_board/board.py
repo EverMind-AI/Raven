@@ -498,22 +498,35 @@ def owning_groups(board: Board, handles: Collection[str], groups: Collection[str
     ]
 
 
+def _faulty(raw: Mapping[str, Any], known: Set[str]) -> bool:
+    rules = _Rules(allow_long=True)
+    _check_steps(rules, [raw], known)
+    return bool(rules.problems)
+
+
 def salvage(board: Board, args: Mapping[str, Any]) -> dict[str, Any]:
     """The last update a model never got accepted, cut back to what the board can still take.
 
     Each ``groups`` entry keeps only the fields that pass on their own -- a status the
     step on its group already sets goes, the summary written beside it stays -- and a
     group keeps its first such entry. Applied with ``allow_long``, its text past a
-    limit stands as written. Steps are left whole: a fault in one, or in where the work
-    is placed, is still refused, and the work parked.
+    limit stands as written. A step with a fault of its own is dropped when it places no
+    work and another step is left to write, so one bad step does not cost every other
+    matter its step; with none left there is nothing to save. A step that places work
+    stays, and a fault there, or in where the work is placed, is still refused, and the
+    work parked.
     """
     out = dict(args)
+    known = {g.id for g in board.groups}
+    steps = args.get("steps")
+    if isinstance(steps, list) and all(isinstance(raw, Mapping) for raw in steps):
+        sound = [raw for raw in steps if _tasks(raw) or not _faulty(raw, known)]
+        if sound:
+            out["steps"] = steps = sound
     changes = args.get("groups")
     if changes is None:
         return out
-    steps = args.get("steps")
     stepped = _stepped([raw for raw in steps if isinstance(raw, Mapping)]) if isinstance(steps, list) else set()
-    known = {g.id for g in board.groups}
     kept: list[dict[str, Any]] = []
     for raw in changes if isinstance(changes, list) else []:
         if not isinstance(raw, Mapping) or any(entry["group"] == raw.get("group") for entry in kept):

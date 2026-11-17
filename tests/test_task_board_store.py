@@ -483,6 +483,32 @@ def test_a_salvage_leaves_a_fault_in_a_step_or_a_placement_to_be_refused():
         apply_update(board, kept, [DAG], turn_at="T2", turn_id=None, now_ms=9, allow_long=True)
 
 
+def test_a_salvage_drops_a_step_at_fault_that_places_no_work():
+    """One bad step must not cost the rest of the update: an owner's own step, on a turn a
+    result opened, used to be kept by the fence that dropped every other matter."""
+    board = _one_group()
+    gid = board.groups[0].id
+    stray = {"new_title": "Notes", "new_summary": "Drafting", **STEP, "status": "not-a-status"}
+    last = {"steps": [{"group": gid, **STEP, "status": "idle"}, stray]}
+
+    kept = salvage(board, last)
+
+    assert kept["steps"] == [last["steps"][0]]
+    after = apply_update(board, kept, [], turn_at="T2", turn_id=None, now_ms=9, allow_long=True)
+    assert [len(g.steps) for g in after.groups] == [2]
+
+
+def test_a_salvage_keeps_a_step_at_fault_that_places_work_for_the_rules_to_refuse():
+    board = _one_group()
+    faulty = {"group": board.groups[0].id, **STEP, "status": "not-a-status", "tasks": [DAG.handle]}
+
+    kept = salvage(board, {"steps": [faulty]})
+
+    assert kept["steps"] == [faulty]
+    with pytest.raises(UpdateRejectedError):
+        apply_update(board, kept, [DAG], turn_at="T2", turn_id=None, now_ms=9, allow_long=True)
+
+
 def test_set_group_status_completes_and_reopens():
     board = _one_group()
 

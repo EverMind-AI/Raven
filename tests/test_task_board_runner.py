@@ -1229,6 +1229,21 @@ async def test_matters_faults_alone_never_stop_a_salvage(tmp_path):
     assert _steps(service) == [2, 2]
 
 
+async def test_an_owner_keeps_its_step_when_another_steps_fault_never_clears(tmp_path):
+    service = _service(tmp_path)
+    _two_matters(service)
+    bad = {"group": "g_b", "title": "Moved g_b", "summary": "Moved.", "status": "not-a-status"}
+    reply = _update_with(
+        [*_steps_on("g_a"), bad], matters=[_moved("g_a"), _moved("g_b", "the notes for g_b are drafted")]
+    )
+    call = Scripted(reply)
+
+    await _run(service, call, dispatches=(), delegated=[SPAWN.handle], reply_rows=NOTES_REPLY)
+
+    assert len(call.seen) == 3
+    assert _steps(service) == [2, 1]
+
+
 async def test_a_delegated_turn_places_the_work_it_started_wherever_it_goes(tmp_path):
     service = _service(tmp_path)
     _two_matters(service)

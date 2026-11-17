@@ -10,8 +10,8 @@ is asked again, unless its whole text is the call written out, which is read as
 the call. The arguments are checked whole by :func:`apply_update`; a refusal goes
 back to the model with every fault it found, up to :data:`MAX_ATTEMPTS` times.
 When every attempt is refused, the last update the model sent is still written as
-far as the board can take it -- see :func:`salvage` -- and only a fault in a step
-or in where its work goes leaves no update to be had. Then the turn's dispatches
+far as the board can take it -- see :func:`salvage` -- and only a fault in every
+step, in a step that places work, or in where its work goes leaves no update to be had. Then the turn's dispatches
 are parked in ``unassigned`` and the next update has to place them first -- a
 dispatch is never silently dropped. A turn that failed or was stopped makes no
 call, and what it dispatched is parked the same way, in its place in the update
