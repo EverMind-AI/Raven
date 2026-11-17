@@ -405,7 +405,7 @@ function SettingsPanel({ base, busy, models }: { base: KbBase; busy: boolean; mo
   )
 }
 
-function Sheet({ base }: { base: KbBase | null }): JSX.Element {
+function Sheet({ base, busy, error }: { base: KbBase | null; busy: boolean; error: string | null }): JSX.Element {
   const [name, setName] = useState(base?.name ?? '')
   const [description, setDescription] = useState(base?.description ?? '')
   /* Creating only. A base with no model reaches no endpoint, which is the one
@@ -419,6 +419,10 @@ function Sheet({ base }: { base: KbBase | null }): JSX.Element {
   }, [])
 
   const save = (): void => {
+    /* A press while the last one is still out is not a second base: it is the
+       same ask, already answered for. Saying so on the button beats the store
+       dropping it in silence. */
+    if (busy) return
     if (base) void store.write(base, { name: name.trim(), description: description.trim() })
     else void store.create(name, description, indexing)
     if (base) store.closeSheet()
@@ -452,12 +456,13 @@ function Sheet({ base }: { base: KbBase | null }): JSX.Element {
             <span>{t('gui.knowledge.no_embedding')}</span>
           </label>
         )}
+        {error ? <p className="knowledge-failed" role="alert">{error}</p> : null}
         <div className="knowledge-actions">
           <button className="mini ghost" onClick={() => store.closeSheet()}>
             {t('gui.cancel')}
           </button>
-          <button className="mini" disabled={!name.trim()} onClick={save}>
-            {t(base ? 'gui.save' : 'gui.knowledge.create')}
+          <button className="mini" disabled={busy || !name.trim()} onClick={save}>
+            {busy ? t('gui.knowledge.creating') : t(base ? 'gui.save' : 'gui.knowledge.create')}
           </button>
         </div>
       </div>
@@ -1677,7 +1682,7 @@ export function KnowledgeApp(): JSX.Element {
         </div>
       )}
 
-      {s.sheet?.kind === 'create' && <Sheet base={null} />}
+      {s.sheet?.kind === 'create' && <Sheet base={null} busy={s.busy} error={s.sheetError} />}
       {s.sheet?.kind === 'settings' && <SettingsPanel base={s.sheet.base} busy={s.busy} models={s.models} />}
     </div>
   )

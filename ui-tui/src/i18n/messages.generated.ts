@@ -3407,6 +3407,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.knowledge.tab_starred': 'Starred',
     'gui.knowledge.tab_recent': 'Recent',
     'gui.knowledge.create': 'New knowledge base',
+    'gui.knowledge.creating': 'Creating...',
     'gui.knowledge.no_embedding': 'Store the documents without indexing them yet',
     'gui.knowledge.no_embedding_help':
       'A base with no embedding model reaches no endpoint, so it can be made while one is unreachable. Pick a model later in settings and its documents are indexed then.',
@@ -6929,6 +6930,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.knowledge.tab_starred': '星标',
     'gui.knowledge.tab_recent': '最近',
     'gui.knowledge.create': '新建知识库',
+    'gui.knowledge.creating': '正在创建…',
     'gui.knowledge.no_embedding': '先保存文档，暂不建立索引',
     'gui.knowledge.no_embedding_help':
       '未配置向量模型的知识库不会访问任何端点，因此在端点不可达时也能创建。稍后在设置中选择模型，其文档会在那时建立索引。',

@@ -142,6 +142,14 @@ export interface KnowledgeState {
   aim: { page: number; top: number; nth: number } | null
   /** Whether the blank piece at the top of the list is open. */
   drafting: boolean
+  /** Why the last write from the open sheet failed, if it did.
+   *
+   * The sheet stays up when a write is refused, so the reason has to live
+   * where that sheet can read it. The notice it used to be says the same
+   * thing for 2.6 seconds and then leaves no trace, which read as a button
+   * that did nothing. Cleared when the sheet opens, closes, or is retried.
+   */
+  sheetError: string | null
   /** The sheet on top of the page, if any. */
   sheet:
     | { kind: 'create' }
@@ -181,6 +189,7 @@ const store = makeStore<KnowledgeState>({
   aim: null,
   drafting: false,
   sheet: null,
+  sheetError: null,
 })
 
 /* The whole shape, as scripts/gates/store-shape.test.mjs holds every
@@ -859,7 +868,7 @@ export function setTab(tab: Tab): void {
 }
 
 export function openCreate(): void {
-  patch({ sheet: { kind: 'create' } })
+  patch({ sheet: { kind: 'create' }, sheetError: null })
 }
 
 /* The models a base could be moved onto, read once per page.
@@ -928,17 +937,17 @@ export function openSettings(base: KbBase): void {
 }
 
 export function openSheet(sheet: KnowledgeState['sheet']): void {
-  patch({ sheet })
+  patch({ sheet, sheetError: null })
 }
 
 export function closeSheet(): void {
-  patch({ sheet: null })
+  patch({ sheet: null, sheetError: null })
 }
 
 export async function create(name: string, description: string, embedding = true): Promise<void> {
   const named = name.trim()
   if (!named || get().busy) return
-  patch({ busy: true })
+  patch({ busy: true, sheetError: null })
   try {
     const made = await source().create(named, description.trim(), embedding)
     /* Inserted rather than refetched: create answers with the same row shape
@@ -948,7 +957,12 @@ export async function create(name: string, description: string, embedding = true
        here should be offerable there without a reload. */
     mentions.invalidate()
   } catch (e) {
-    toast(reasonOf(e))
+    /* On the sheet, which is still open: the notice that carried this before
+       lapsed in under three seconds and left the dialog looking untouched, so
+       a refused create read as a button that did nothing. */
+    const why = reasonOf(e)
+    if (get().sheet) patch({ sheetError: why })
+    else toast(why)
   } finally {
     patch({ busy: false })
   }
