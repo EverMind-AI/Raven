@@ -6,10 +6,11 @@ from __future__ import annotations
 
 import asyncio
 import gc
-import os
 import shutil
 import threading
 from pathlib import Path
+
+import pytest
 
 from raven.memory_engine.skill_forge.project_skills import (
     ProjectRoots,
@@ -22,6 +23,21 @@ from raven.memory_engine.skill_forge.project_skills import (
 )
 from raven.memory_engine.skill_local.registry import build_skill_meta
 from raven.memory_engine.skill_local.types import SkillMeta
+
+
+def _symlink_to(link: Path, target: Path) -> None:
+    """Create a symlink, or skip where the platform refuses one.
+
+    Unelevated Windows without Developer Mode raises WinError 1314 for every
+    symlink, and none of these fixtures can express the resolved-target rule
+    another way.
+    """
+    try:
+        link.symlink_to(target)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink creation requires an unavailable privilege")
+        raise
 
 
 def _skill(
@@ -125,7 +141,7 @@ def test_a_git_root_at_home_does_not_bound_a_gitless_workdir(tmp_path: Path) -> 
     workdir = home / "Downloads" / "evil"
     skill_dir = workdir / ".agents" / "skills" / "setup"
     skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").symlink_to(config)
+    _symlink_to(skill_dir / "SKILL.md", config)
     agent_home = home / ".raven" / "workspace"
     agent_home.mkdir(parents=True)
 
@@ -148,7 +164,7 @@ def test_home_is_a_containment_root_with_agent_home_outside_it(tmp_path: Path) -
     workdir = home / "evil"
     skill_dir = workdir / ".agents" / "skills" / "setup"
     skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").symlink_to(config)
+    _symlink_to(skill_dir / "SKILL.md", config)
     agent_home = tmp_path / "elsewhere" / "workspace"
     agent_home.mkdir(parents=True)
 
@@ -166,7 +182,7 @@ def test_an_agents_symlink_into_agent_home_is_skipped_inside_the_boundary(tmp_pa
     _skill(agent_home / ".agents" / "skills", "leaked")
     workdir = repo / "pkg"
     workdir.mkdir(parents=True)
-    (workdir / ".agents").symlink_to(agent_home / ".agents")
+    _symlink_to(workdir / ".agents", agent_home / ".agents")
     home = tmp_path / "home"
 
     assert project_skill_roots(workdir, agent_home=agent_home, home=home) is None
@@ -215,7 +231,7 @@ def test_a_symlinked_agents_dir_outside_the_boundary_is_skipped(tmp_path: Path) 
     (repo / ".git").mkdir(parents=True)
     elsewhere = tmp_path / "elsewhere"
     _skill(elsewhere / ".agents/skills", "outside")
-    (repo / ".agents").symlink_to(elsewhere / ".agents")
+    _symlink_to(repo / ".agents", elsewhere / ".agents")
 
     roots = project_skill_roots(
         repo,
@@ -267,9 +283,9 @@ def test_a_symlinked_skill_outside_the_boundary_is_skipped(tmp_path: Path) -> No
     skills_dir.mkdir(parents=True)
     elsewhere = tmp_path / "elsewhere"
     _skill(elsewhere, "ext")
-    (skills_dir / "ext").symlink_to(elsewhere / "ext")
+    _symlink_to(skills_dir / "ext", elsewhere / "ext")
     _skill(repo / "tools", "own")
-    (skills_dir / "own").symlink_to(repo / "tools" / "own")
+    _symlink_to(skills_dir / "own", repo / "tools" / "own")
 
     roots = project_skill_roots(
         repo,
@@ -291,7 +307,7 @@ def test_a_skill_file_symlinked_outside_the_boundary_is_skipped(tmp_path: Path) 
     elsewhere.mkdir()
     secret = elsewhere / "secret.txt"
     secret.write_text("outside data", encoding="utf-8")
-    (bad / "SKILL.md").symlink_to(secret)
+    _symlink_to(bad / "SKILL.md", secret)
     _skill(skills_dir, "good", body="inside")
 
     roots = project_skill_roots(
@@ -310,7 +326,7 @@ def test_a_skill_file_symlink_loop_is_skipped(tmp_path: Path) -> None:
     skills_dir = repo / ".agents" / "skills"
     loop = skills_dir / "loop"
     loop.mkdir(parents=True)
-    os.symlink("SKILL.md", loop / "SKILL.md")
+    _symlink_to(loop / "SKILL.md", Path("SKILL.md"))
     _skill(skills_dir, "good")
 
     roots = project_skill_roots(
@@ -606,8 +622,8 @@ async def test_two_boundaries_over_one_directory_tuple_do_not_share_an_index(tmp
     (nested / "work").mkdir()
     _skill(nested / ".agents" / "skills", "pdf-tools")
     outside = _skill(outer / "elsewhere", "evil")
-    (nested / ".agents" / "skills" / "evil").symlink_to(outside)
-    (outer / ".agents").symlink_to(nested / ".agents")
+    _symlink_to(nested / ".agents" / "skills" / "evil", outside)
+    _symlink_to(outer / ".agents", nested / ".agents")
     agent_home = tmp_path / "agent-home"
     home = tmp_path / "home"
 
