@@ -593,6 +593,41 @@ async def test_concurrent_calls_share_one_build(tmp_path: Path) -> None:
     assert len(builds) == 1
 
 
+async def test_two_boundaries_over_one_directory_tuple_do_not_share_an_index(tmp_path: Path) -> None:
+    """Containment is decided against ``roots.boundary`` while the index is built,
+    so the directory tuple alone cannot key it: an outer repo whose ``.agents``
+    points into a nested repo collects the same resolved directory under a wider
+    boundary, and whichever build landed first must not decide for the other."""
+    outer = tmp_path / "outer"
+    nested = outer / "nested"
+    (outer / ".git").mkdir(parents=True)
+    (nested / ".git").mkdir(parents=True)
+    (outer / "work").mkdir()
+    (nested / "work").mkdir()
+    _skill(nested / ".agents" / "skills", "pdf-tools")
+    outside = _skill(outer / "elsewhere", "evil")
+    (nested / ".agents" / "skills" / "evil").symlink_to(outside)
+    (outer / ".agents").symlink_to(nested / ".agents")
+    agent_home = tmp_path / "agent-home"
+    home = tmp_path / "home"
+
+    outer_roots = project_skill_roots(outer / "work", agent_home=agent_home, home=home)
+    nested_roots = project_skill_roots(nested / "work", agent_home=agent_home, home=home)
+    assert outer_roots is not None and nested_roots is not None
+    assert outer_roots.dirs == nested_roots.dirs
+    assert outer_roots.boundary != nested_roots.boundary
+    assert {s.name for s in read_project_skills(outer_roots)} == {"pdf-tools", "evil"}
+    assert {s.name for s in read_project_skills(nested_roots)} == {"pdf-tools"}
+
+    builds: list[int] = []
+    cache = ProjectSkillCache(build=_counting_build(builds))
+    assert await cache.index_for(outer_roots, wait_s=None) is not None
+    second = await cache.index_for(nested_roots, wait_s=None)
+
+    assert second is not None
+    assert {m.name for m in second.metas} == {"pdf-tools"}
+
+
 async def test_the_least_recently_used_project_is_evicted(tmp_path: Path) -> None:
     roots = []
     for name in ("p1", "p2", "p3"):

@@ -1979,9 +1979,12 @@ is a project directory; a symlink counts only when its resolved target stays ins
 git root; a deeper `SKILL.md` is not a project skill. Project skills are never
 `always`-injected: `always` and `inject` frontmatter are ignored, and the system prefix
 carries none of them. The index is per project — a process-wide cache keyed by the resolved
-directory tuple and rebuilt when a fingerprint of the directories changes — and the leader
-agent is the only one that reads it. The switch is `skillForge.projectSkills.enabled`,
-default on, read live: off stops the next search and the next `project/` resolution.
+directory tuple and its git-root boundary, rebuilt when a fingerprint of the directories
+changes — and the leader agent is the only one that reads it: a process launched as a
+sub-agent mounts no project source and its tools answer `project/` with "not available to
+this agent". The switch is `skillForge.projectSkills.enabled`, default on, read live: off
+stops the next search and the next `project/` resolution, and a shape the loader refuses
+reads off too.
 _Avoid_: "workspace skill" — that is agent home's `skills/` layer, read by the local
 source and a different directory.
 

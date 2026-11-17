@@ -97,14 +97,14 @@ def rrf_merge_weighted(
             # Keep the hit with the higher per-source ``score`` as the
             # representative — the user-facing prompt should see the
             # best-ranked instance, not arbitrary first-seen. Between Local
-            # and Project the scores are not comparable, so Local holds the
-            # slot in either arrival order.
+            # and Project the scores are not comparable, so Project never takes
+            # a name Local contributed to, whatever source arrived in between.
             prev_source = best_source[key]
+            if source_name == "project" and "local" in contributing[key]:
+                continue
             if source_name == "local" and prev_source == "project":
                 best_hit[key] = hit
                 best_source[key] = source_name
-            elif source_name == "project" and prev_source == "local":
-                continue
             elif hit.score > prev.score:
                 best_hit[key] = hit
                 best_source[key] = source_name

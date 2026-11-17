@@ -10,10 +10,11 @@ and a symlink counts only when its resolved target stays inside the project
 boundary.
 
 Those directories are then served from a process-wide cache of BM25 indexes
-keyed by the directory tuple, so every session in one checkout shares one
-project index and no two checkouts ever do. Freshness is a fingerprint of the
-directories and their ``SKILL.md`` files, re-read off the event loop, and a
-search waits for a build only as long as its caller can afford.
+keyed by the directory tuple and its boundary, so every session in one checkout
+shares one project index and two boundaries over the same directories do not.
+Freshness is a fingerprint of the directories and their ``SKILL.md`` files,
+re-read off the event loop, and a search waits for a build only as long as its
+caller can afford.
 """
 
 from __future__ import annotations
@@ -181,8 +182,20 @@ def _build_index(roots: ProjectRoots) -> ProjectSkillIndex:
     return ProjectSkillIndex(read_project_skills(roots))
 
 
+def _cache_key(roots: ProjectRoots) -> tuple[tuple[Path, ...], Path]:
+    """The directories plus the boundary the index is built under.
+
+    Containment inside a build reads ``roots.boundary``, so two working
+    directories that collect the same resolved directories under different git
+    roots see different skills; a key without the boundary would let whichever
+    build landed first decide for both.
+    """
+    return (roots.dirs, roots.boundary)
+
+
 class ProjectSkillCache:
-    """Process-wide cache of project skill indexes, keyed by the directory tuple.
+    """Process-wide cache of project skill indexes, keyed by the directory tuple
+    and its boundary.
 
     A build runs in a worker thread, one per key at a time; the caller waits for
     it at most ``wait_s`` seconds and otherwise gets the previous index, or
@@ -199,13 +212,13 @@ class ProjectSkillCache:
             raise ValueError("max_entries must be zero or greater")
         self._max_entries = max_entries
         self._build = build or _build_index
-        self._entries: OrderedDict[tuple[Path, ...], tuple[tuple, ProjectSkillIndex]] = OrderedDict()
-        self._inflight: dict[tuple[Path, ...], asyncio.Task[ProjectSkillIndex | None]] = {}
+        self._entries: OrderedDict[tuple[tuple[Path, ...], Path], tuple[tuple, ProjectSkillIndex]] = OrderedDict()
+        self._inflight: dict[tuple[tuple[Path, ...], Path], asyncio.Task[ProjectSkillIndex | None]] = {}
         self._lock = threading.Lock()
 
     async def index_for(self, roots: ProjectRoots, *, wait_s: float | None) -> ProjectSkillIndex | None:
         """Return the project's current index, waiting at most ``wait_s`` for a build."""
-        key = roots.dirs
+        key = _cache_key(roots)
         task = self._inflight.get(key)
         if task is None:
             task = asyncio.ensure_future(asyncio.to_thread(self._refresh, roots))
@@ -226,7 +239,7 @@ class ProjectSkillCache:
         except TimeoutError:
             return self._cached_index(key)
 
-    def _cached_index(self, key: tuple[Path, ...]) -> ProjectSkillIndex | None:
+    def _cached_index(self, key: tuple[tuple[Path, ...], Path]) -> ProjectSkillIndex | None:
         with self._lock:
             entry = self._entries.get(key)
             if entry is None:
@@ -235,7 +248,7 @@ class ProjectSkillCache:
             return entry[1]
 
     def _refresh(self, roots: ProjectRoots) -> ProjectSkillIndex | None:
-        key = roots.dirs
+        key = _cache_key(roots)
         try:
             fingerprint = project_fingerprint(roots)
             with self._lock:

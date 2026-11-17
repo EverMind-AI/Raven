@@ -1513,10 +1513,17 @@ class WiringMixin:
             def skills_router():
                 return getattr(self.context_engine, "skills_router", None)
 
-            project_skills = ProjectSkills(
-                agent_home=self.workspace,
-                workdir_reader=workdir.current,
-                enabled_reader=lambda: project_skills_enabled(self._live_config),
+            # A sub-agent is given no project skills, matching the router source
+            # the leader process alone mounts; the tools answer ``project/`` ids
+            # with "not available to this agent."
+            project_skills = (
+                None
+                if is_subagent_process()
+                else ProjectSkills(
+                    agent_home=self.workspace,
+                    workdir_reader=workdir.current,
+                    enabled_reader=lambda: project_skills_enabled(self._live_config),
+                )
             )
             self.tools.register(
                 ReadSkillTool(

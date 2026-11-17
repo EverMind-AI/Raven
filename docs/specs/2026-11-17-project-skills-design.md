@@ -199,7 +199,8 @@ A `ProjectSkillSource` beside `LocalSkillSource` in `memory_engine/skill_forge/`
 `skillForge.projectSkills.enabled`, a boolean, default `true`. It is read live, like the
 Hub switch (`config/live.py`, `skill_hub_enabled`): setting it to `false` stops the next
 search, with no restart. A block rather than a bare boolean leaves room for later knobs.
-`skillForge.router.enabled: false` already bypasses the router, and with it this source.
+`skillForge.projectSkills.enabled` is the only switch today; `skillForge.router.enabled`
+has no reader in this tree, so wiring it or retiring it is a follow-up.
 
 ### 5.7 Documentation
 

@@ -26,13 +26,15 @@ turn's user envelope, and the ``find_skill`` tool; the model reads a body with
   ``memory.backend`` name.
 - :class:`HubSkillSource` — always mounted: the shared Skill Hub marketplace
   (or the URL the config names), gated per search on the live switch.
-- :class:`ProjectSkillSource` — always mounted: the project's
+- :class:`ProjectSkillSource` — mounted in the host process only: the project's
   ``.agents/skills``, resolved from the turn's working directory per search
-  and gated per search on the live switch.
+  and gated per search on the live switch. A process launched as a sub-agent
+  mounts no project source.
 
 With no ``backend`` the engine still constructs: the recall lane yields
-``[]`` and the router runs the three always-mounted sources (Local, Hub and
-Project), so the agent boots even when no memory plugin is installed.
+``[]`` and the router runs the sources mounted outside a sub-agent process
+(Local, Hub and Project), so the agent boots even when no memory plugin is
+installed.
 """
 
 from __future__ import annotations
@@ -57,6 +59,7 @@ from raven.context_engine.segments import (
 )
 from raven.contracts.context import ContextEngine
 from raven.contracts.llm_provider import LLMProvider
+from raven.home import is_subagent_process
 from raven.providers.pool import live_pin_resolver
 
 if TYPE_CHECKING:
@@ -292,19 +295,22 @@ def _build_router(
             )
         )
 
-    # ── Source 4: Project (always) ──────────────────────────────────
+    # ── Source 4: Project (host process only) ───────────────────────
     # The source resolves the turn's working directory per search, so every
     # session of this gateway sees its own project and the live switch needs
-    # no rebuild in either direction.
-    project_source = ProjectSkillSource(
-        ProjectSkills(
-            agent_home=builder.workspace,
-            workdir_reader=workdir.current,
-            enabled_reader=project_enabled_reader,
+    # no rebuild in either direction. A process the host launched as a
+    # sub-agent mounts no project source: only the leader agent reads a
+    # repository's own skills.
+    if not is_subagent_process():
+        project_source = ProjectSkillSource(
+            ProjectSkills(
+                agent_home=builder.workspace,
+                workdir_reader=workdir.current,
+                enabled_reader=project_enabled_reader,
+            )
         )
-    )
-    project_source.weight = float(weights.get("project", 0.96))
-    sources.append(project_source)
+        project_source.weight = float(weights.get("project", 0.96))
+        sources.append(project_source)
 
     return SkillForgeRouter(
         sources=sources,

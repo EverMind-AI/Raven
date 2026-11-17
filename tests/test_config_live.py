@@ -380,11 +380,34 @@ class TestProjectSkillsEnabled:
         live = self._live(tmp_path, {"skill_forge": {"project_skills": {"enabled": False}}})
         assert project_skills_enabled(live) is False
 
-    def test_an_invalid_block_reads_as_the_default(self, tmp_path: Path) -> None:
-        """A value the loader refuses is not an off switch: the source reads
-        as the schema default rather than as consent to something else."""
+    def test_an_invalid_block_is_off(self, tmp_path: Path) -> None:
+        """A value the loader refuses is not consent: the source reads the
+        project's own files, so a refused shape answers off the way the Hub's
+        does, rather than falling back to the schema default."""
         live = self._live(tmp_path, {"skillForge": {"projectSkills": {"enabled": "maybe"}}})
+        assert project_skills_enabled(live) is False
+
+    def test_a_bare_false_is_off(self, tmp_path: Path) -> None:
+        """The schema wants a block, so a hand-written ``false`` in its place is
+        a shape it would refuse -- and an explicit off is still an off switch."""
+        live = self._live(tmp_path, {"skillForge": {"projectSkills": False}})
+        assert project_skills_enabled(live) is False
+
+    def test_a_bare_null_is_not_written(self, tmp_path: Path) -> None:
+        """Null is the absence of the key rather than a value: the default stands."""
+        live = self._live(tmp_path, {"skillForge": {"projectSkills": None}})
         assert project_skills_enabled(live) is True
+
+    def test_both_spellings_are_off_like_the_loader(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.json"
+        _write(
+            path,
+            {
+                "skillForge": {"projectSkills": {"enabled": True}},
+                "skill_forge": {"project_skills": {"enabled": True}},
+            },
+        )
+        assert project_skills_enabled(LiveConfig(path)) is False
 
 
 class TestThePlaybookSwitch:

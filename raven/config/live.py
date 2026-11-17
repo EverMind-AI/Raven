@@ -804,31 +804,37 @@ def project_skills_on(raw: Any) -> bool:
 
     Mirrors :func:`skill_hub_on`: the loader's migrations run first, on a copy,
     because some of them never reach the file, and both top-level spellings are
-    accepted. A shape this reader cannot walk answers the schema default, which
-    is on -- the source reads skills from the working directory only, so a
-    broken edit costs no more than the default already does.
+    accepted. A shape this reader cannot validate answers off, the way the Hub's
+    does -- the source reads files the project carries, and a file the loader
+    would refuse is not consent to read them. A ``projectSkills`` node that is
+    absent or null was never written and answers the schema default, which is on.
     """
     from raven.config.loader import _migrate_config
     from raven.config.raven import ProjectSkillsConfig
 
     default = ProjectSkillsConfig().enabled
     if not isinstance(raw, dict):
-        return default
+        return False
     try:
         data = _migrate_config(copy.deepcopy(raw), pop_extension_keys=False)
-    except Exception:  # noqa: BLE001 - a file the loader cannot walk answers the default
-        return default
+    except Exception:  # noqa: BLE001 - a file the loader cannot walk is not consent
+        return False
     camel = data.get("skillForge")
     snake = data.get("skill_forge")
     if camel is not None and snake is not None:
-        return default
+        return False
     block = camel if camel is not None else snake
     if not isinstance(block, dict):
         return default
-    try:
-        cfg = ProjectSkillsConfig.model_validate(block.get("projectSkills", block.get("project_skills")) or {})
-    except Exception:  # noqa: BLE001 - a block the loader refuses answers the default
+    value = block.get("projectSkills")
+    if value is None:
+        value = block.get("project_skills")
+    if value is None:
         return default
+    try:
+        cfg = ProjectSkillsConfig.model_validate(value)
+    except Exception:  # noqa: BLE001 - a block the loader refuses is not consent
+        return False
     return cfg.enabled
 
 

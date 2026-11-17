@@ -146,6 +146,38 @@ class TestRrfProjectCollisionRule:
             assert out[0].qualified_id == "local/x"
             assert set(out[0].meta["contributing_sources"]) == {"local", "project"}
 
+    def test_a_hub_hit_in_between_does_not_hand_the_name_to_project(self) -> None:
+        """Local-over-Project is a property of the name, not of arrival order.
+
+        A same-named Hub hit can legitimately outrank the local one on score, and
+        the higher-scoring project hit that follows must still not take the slot.
+        The rule reads every source that contributed, not just the holder.
+        """
+        out = rrf_merge_weighted(
+            [
+                ("local", 1.0, [_hit("local/x", "x", score=5.0)]),
+                ("hub", 0.85, [_hit("hub/x", "x", score=10.0)]),
+                ("project", 0.96, [_hit("project/x", "x", score=20.0)]),
+            ],
+            k=5,
+        )
+
+        assert len(out) == 1
+        assert out[0].qualified_id != "project/x"
+        assert "project" in out[0].meta["contributing_sources"]
+
+    def test_without_the_hub_hit_the_local_one_represents_the_name(self) -> None:
+        out = rrf_merge_weighted(
+            [
+                ("local", 1.0, [_hit("local/x", "x", score=5.0)]),
+                ("project", 0.96, [_hit("project/x", "x", score=20.0)]),
+            ],
+            k=5,
+        )
+
+        assert len(out) == 1
+        assert out[0].qualified_id == "local/x"
+
     def test_other_collisions_still_keep_the_higher_score(self) -> None:
         local_hits = [_hit("local/x", "x", score=0.1)]
         hub_hits = [_hit("hub/x", "x", score=9.0)]
