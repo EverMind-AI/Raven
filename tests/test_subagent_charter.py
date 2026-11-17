@@ -696,6 +696,99 @@ def test_a_refused_generated_function_is_cached_as_silence(monkeypatch) -> None:
         charter_mod._COMPILED.clear()
 
 
+def _advise_step(transcript):
+    """A step whose only interesting field is the transcript the advice is
+    matched against."""
+    from raven.contracts.participant import StepView
+
+    return StepView(
+        session_key="s",
+        iteration=1,
+        response=None,
+        transcript=tuple(transcript),
+        history=(),
+        turn_base=0,
+        question="do it",
+        rollbacks=0,
+        mode=None,
+        mode_overlay=None,
+        phase="iteration",
+    )
+
+
+@pytest.mark.asyncio
+async def test_generated_advice_says_the_same_words_once_per_transcript() -> None:
+    """A generated function is stateless, so asked at every phase it answers
+    the same words. Once the transcript carries them they have been delivered;
+    a rollback that popped the note leaves the transcript without it, so it
+    is delivered again."""
+    from raven.agent.subagent.charter import CharterParticipant
+
+    source = "def advise(step):\n    return 'check the second table'"
+
+    with charter_scope(Charter(functions=(("advise", source),))):
+        participant = CharterParticipant()
+        first = await participant.advise(_advise_step([{"role": "user", "content": "do it"}]))
+        assert first == "check the second table"
+        again = await participant.advise(
+            _advise_step([{"role": "user", "content": "do it"}, {"role": "user", "content": first}])
+        )
+        assert again is None, "the transcript already carries it"
+        blocks = await participant.advise(
+            _advise_step([{"role": "assistant", "content": [{"type": "text", "text": first}]}])
+        )
+        assert blocks is None, "block-shaped content is read the same way"
+        assert await participant.advise(_advise_step([{"role": "user", "content": "do it"}])) == first, (
+            "a rollback popped the note, so the transcript no longer says it"
+        )
+        assert (
+            await participant.advise(
+                _advise_step([{"role": "assistant", "content": None}, {"role": "tool", "content": [{"type": "image"}]}])
+            )
+            == first
+        ), "rows and blocks with no text are skipped"
+
+
+@pytest.mark.asyncio
+async def test_a_tool_result_quoting_the_advice_is_not_where_it_was_delivered() -> None:
+    """A tool result is fenced as untrusted input, so a file that happens to
+    repeat the sentence is not Raven's guidance reaching the model. Reading it
+    as delivered would silently drop the advice for the rest of the run."""
+    from raven.agent.subagent.charter import CharterParticipant
+
+    source = "def advise(step):\n    return 'check the second table'"
+
+    with charter_scope(Charter(functions=(("advise", source),))):
+        participant = CharterParticipant()
+        quoted = _advise_step(
+            [
+                {"role": "user", "content": "do it"},
+                {"role": "tool", "content": "log line\n\ncheck the second table\n\nmore"},
+            ]
+        )
+        assert await participant.advise(quoted) == "check the second table", "a quoted sentence is not delivery"
+        exact = _advise_step(
+            [{"role": "user", "content": "do it"}, {"role": "tool", "content": "check the second table"}]
+        )
+        assert await participant.advise(exact) == "check the second table", "nor is one that is the whole result"
+
+
+@pytest.mark.asyncio
+async def test_a_transcript_row_that_is_not_a_message_does_not_silence_the_advice() -> None:
+    """The loop passes its own list of dicts, but the transcript is a sequence
+    the caller chooses: a row that is not a mapping, or one with nothing to
+    read, must be skipped. Raising here would be read as the participant
+    answering nothing, and the advice would vanish with it."""
+    from raven.agent.subagent.charter import CharterParticipant
+
+    source = "def advise(step):\n    return 'check the second table'"
+
+    with charter_scope(Charter(functions=(("advise", source),))):
+        participant = CharterParticipant()
+        ragged = _advise_step(["not a row", None, {"role": "user", "content": 42}, {"content": "do it"}])
+        assert await participant.advise(ragged) == "check the second table"
+
+
 def test_a_plugins_own_rules_speak_before_the_dispatchs() -> None:
     """Participant order is product first: a veto needs one voice, and the
     wording the model reads should be the product's own where both would

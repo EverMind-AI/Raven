@@ -71,8 +71,22 @@ def _live_exec_extra_deny() -> list[str] | None:
 
 
 def _append_participant_note(messages: list[dict[str, Any]], note: str) -> None:
-    """Append generated advice without importing the main loop back into this backend."""
+    """One round's generated advice, written where a tool result is not.
+
+    A tool result is fenced as untrusted input, so guidance appended into one
+    reaches the model as something a tool told it: a note that lands after a
+    tool round is a message of its own. Everything else is written exactly as
+    before.
+
+    Nothing is deduplicated here. Whether the words have already been said is a
+    question about the transcript, and the participant answers it by reading
+    that transcript (``CharterParticipant.advise``) -- which is what makes a
+    note a rollback popped deliver again instead of being counted as spent.
+    """
     if not messages or not note:
+        return
+    if messages[-1].get("role") == "tool":
+        messages.append({"role": "user", "content": note})
         return
     body = messages[-1].get("content")
     if isinstance(body, str):

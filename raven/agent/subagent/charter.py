@@ -342,6 +342,32 @@ def _pure_data(value: Any) -> Any:
     return str(value)
 
 
+def _transcript_says(transcript: Any, note: str) -> bool:
+    """Whether the transcript already carries this note.
+
+    A note is written either as a row of its own or after a blank line on the
+    row the model was about to read, so the match is made on those boundaries
+    rather than on a bare substring: a tool result quoting the same sentence is
+    not delivered guidance.
+    """
+    for row in transcript or ():
+        if not isinstance(row, Mapping) or row.get("role") == "tool":
+            continue
+        content = row.get("content")
+        if isinstance(content, str):
+            texts: tuple[str, ...] = (content,)
+        elif isinstance(content, list):
+            texts = tuple(
+                block["text"] for block in content if isinstance(block, Mapping) and isinstance(block.get("text"), str)
+            )
+        else:
+            continue
+        for text in texts:
+            if text == note or text.endswith("\n\n" + note) or ("\n\n" + note + "\n\n") in text:
+                return True
+    return False
+
+
 def _step_payload(step: Any) -> dict[str, Any]:
     """The step as the generated functions see it: plain data throughout, with
     ``response.tool_calls`` projected to ``id``/``name``/``arguments`` mappings."""
@@ -390,7 +416,15 @@ class CharterParticipant(AgentParticipant):
         return _generated_answer("intake", text, _step_payload(step))
 
     async def advise(self, step: StepView) -> Any:
-        return _generated_answer("advise", _step_payload(step))
+        answer = _generated_answer("advise", _step_payload(step))
+        if isinstance(answer, str) and answer and _transcript_says(getattr(step, "transcript", ()), answer):
+            # The function is stateless: asked at every phase, it answers the
+            # same words. They have been delivered once the transcript carries
+            # them, so a second copy is not guidance the model still needs --
+            # and one a rollback popped is absent again, which is why the
+            # transcript, not a counter, is what this reads.
+            return None
+        return answer
 
     async def salvage(self, step: StepView) -> Any:
         return _generated_answer("salvage", _step_payload(step))

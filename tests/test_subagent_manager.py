@@ -1536,6 +1536,126 @@ def test_generated_participant_notes_preserve_each_supported_message_shape() -> 
     assert empty[-1]["content"] == "note"
 
 
+def test_generated_participant_guidance_is_kept_out_of_a_tool_result() -> None:
+    """A tool result is fenced as untrusted input, so advice appended into one
+    reaches the model as something a tool told it. After a tool round the note
+    is a message of its own."""
+    from raven.agent.subagent.backends.raven_loop import _append_participant_note
+
+    messages = [
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+        {"role": "tool", "tool_call_id": "c1", "name": "read_file", "content": "<untrusted>file text</untrusted>"},
+    ]
+    _append_participant_note(messages, "check the second table")
+
+    assert messages[1]["content"] == "<untrusted>file text</untrusted>"
+    assert messages[-1] == {"role": "user", "content": "check the second table"}
+
+
+def test_generated_participant_notes_keep_the_order_the_rounds_produce() -> None:
+    """The writer places a note and remembers nothing: whether the same words
+    were already said is the participant's question, answered by reading the
+    transcript, because a counter cannot see a rollback pop the note. What is
+    settled here is that a second, different note still lands, after the first.
+    """
+    from raven.agent.subagent.backends.raven_loop import _append_participant_note
+
+    messages: list[dict] = [{"role": "user", "content": "the task"}]
+    _append_participant_note(messages, "hold the line")
+    _append_participant_note(messages, "a second thought")
+    assert messages[-1]["content"] == "the task\n\nhold the line\n\na second thought"
+
+
+@pytest.mark.asyncio
+async def test_generated_advice_reaches_a_delegated_run_once_and_outside_the_tool_result(tmp_path) -> None:
+    """Both rules watched on a run that really makes a tool call: the note rides
+    a message of its own after the tool result rather than the fenced text
+    inside it, and a stateless generated function is told once, not once per
+    round."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.subagent.delegate import dispatch_charter
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("the second table", encoding="utf-8")
+
+    class _ReadsThenAnswers(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key="test")
+            self.seen: list[list[dict]] = []
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+        async def chat(self, messages, tools=None, model=None, **_):  # noqa: ANN001, ANN003
+            self.seen.append([dict(m) for m in messages])
+            if not any(m.get("role") == "tool" for m in messages):
+                return LLMResponse(
+                    content="",
+                    finish_reason="tool_calls",
+                    tool_calls=[ToolCallRequest(id="c1", name="read_file", arguments={"path": "notes.txt"})],
+                )
+            return LLMResponse(content="done", finish_reason="stop")
+
+    provider = _ReadsThenAnswers()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path / "home")
+    source = "def advise(step):\n    return 'note-' + str(step.get('phase'))"
+    with dispatch_charter({"functions": {"advise": source}}):
+        await backend.run("read the notes", task_id="t1", workspace=workspace, executor=None)
+
+    sent = provider.seen[-1]
+    results = [m for m in sent if m.get("role") == "tool"]
+    assert results, "the sub-agent never ran the read"
+    assert "note-after_iteration" not in str(results[0]["content"])
+
+    after = [m for m in sent if m == {"role": "user", "content": "note-after_iteration"}]
+    assert len(after) == 1, "the note after a tool round is a message of its own"
+    assert sent.index(after[0]) > sent.index(results[0])
+    assert str(sent).count("note-iteration") == 1, "the same words were delivered once per round"
+
+
+@pytest.mark.asyncio
+async def test_generated_advice_a_resumed_transcript_already_carries_is_not_repeated(tmp_path) -> None:
+    """A resumed run replays the messages it was handed. The note in them has
+    already been delivered, so a stateless function's same words do not ride a
+    second copy into the transcript."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.subagent.delegate import dispatch_charter
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("the second table", encoding="utf-8")
+
+    class _ReadsThenAnswers(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key="test")
+            self.seen: list[list[dict]] = []
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+        async def chat(self, messages, tools=None, model=None, **_):  # noqa: ANN001, ANN003
+            self.seen.append([dict(m) for m in messages])
+            if not any(m.get("role") == "tool" for m in messages):
+                return LLMResponse(
+                    content="",
+                    finish_reason="tool_calls",
+                    tool_calls=[ToolCallRequest(id="c1", name="read_file", arguments={"path": "notes.txt"})],
+                )
+            return LLMResponse(content="done", finish_reason="stop")
+
+    provider = _ReadsThenAnswers()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path / "home")
+    source = "def advise(step):\n    return 'hold the line'"
+    with dispatch_charter({"functions": {"advise": source}}):
+        await backend.run("read the notes", task_id="t1", workspace=workspace, executor=None)
+        resumed = [dict(m) for m in provider.seen[-1]]
+        await backend.run("read the notes", task_id="t2", workspace=workspace, executor=None, history=resumed)
+
+    sent = provider.seen[-1]
+    assert str(sent).count("hold the line") == 1, "the note was already in the transcript"
+
+
 def test_build_subagent_prompt_hides_orchestration_skills(tmp_path):
     """The catalog handed to a sub-agent must not advertise a skill whose
     procedure needs a tool this backend never registers — the DAG skill tells
