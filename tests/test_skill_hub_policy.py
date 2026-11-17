@@ -6,12 +6,14 @@ import io
 import json
 import os
 import sys
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from raven.skill_hub.audit import record_install, write_install_meta
+from raven.skill_hub.client import SkillHubClient
 from raven.skill_hub.policy import (
     SkillPolicy,
     is_blocked,
@@ -311,8 +313,17 @@ class TestWriteInstallMeta:
         assert abs((installed - datetime.now(timezone.utc)).total_seconds()) < 60
         assert record["installed_at_source"] == "mtime"
 
+    @pytest.mark.parametrize(
+        "error",
+        [
+            OSError(22, "Invalid argument"),
+            OverflowError("timestamp out of range"),
+            ValueError("year out of range"),
+        ],
+        ids=["oserror", "overflowerror", "valueerror"],
+    )
     def test_an_unconvertible_mtime_falls_back_to_the_clock(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
     ) -> None:
         skill_dir = tmp_path / "bundle"
         skill_dir.mkdir()
@@ -320,7 +331,7 @@ class TestWriteInstallMeta:
         class _UnconvertibleDateTime:
             @classmethod
             def fromtimestamp(cls, *_args: object, **_kwargs: object) -> datetime:
-                raise OSError(22, "Invalid argument")
+                raise error
 
             @classmethod
             def now(cls, tz: timezone | None = None) -> datetime:
@@ -334,6 +345,67 @@ class TestWriteInstallMeta:
         installed = datetime.fromisoformat(record["installed_at"])
         assert abs((installed - datetime.now(timezone.utc)).total_seconds()) < 60
         assert record["installed_at_source"] == "clock"
+
+
+def _zip(files: dict[str, str]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, body in files.items():
+            zf.writestr(name, body)
+    return buf.getvalue()
+
+
+class TestInstallStampThroughTheClient:
+    """``install()`` returns the bundle root, and that directory's mtime is
+    the extraction time in both shapes ``_bundle_root`` distinguishes."""
+
+    @staticmethod
+    async def _install_and_stamp(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, files: dict[str, str]
+    ) -> tuple[Path, dict, str]:
+        cache = tmp_path / "hub"
+        client = SkillHubClient("https://hub.example", cache_dir=cache)
+        payload = _zip(files)
+
+        async def _download(_skill_id: str) -> bytes:
+            return payload
+
+        monkeypatch.setattr(client, "download", _download)
+        info = await client.install(
+            "openclaw/skills/demo",
+            prefetched_meta={"slug": "demo", "version": "v1"},
+        )
+        await client.aclose()
+
+        handed = Path(info["dir"])
+        measured = datetime.fromtimestamp(handed.stat().st_mtime, timezone.utc)
+        assert abs((measured - datetime.now(timezone.utc)).total_seconds()) < 60
+
+        write_install_meta(handed, slug="demo", version="v1", trigger="use_skill")
+        record = json.loads((handed / ".install-meta.json").read_text(encoding="utf-8"))
+        return handed, record, measured.isoformat(timespec="seconds")
+
+    async def test_wrapped_zip_stamps_the_wrapper_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        handed, record, measured = await self._install_and_stamp(
+            tmp_path,
+            monkeypatch,
+            {"demo/SKILL.md": "body", "demo/scripts/run.sh": "echo hi"},
+        )
+        assert handed == tmp_path / "hub" / "demo@v1" / "demo"
+        assert record["installed_at"] == measured
+        assert record["installed_at_source"] == "mtime"
+
+    async def test_flat_zip_stamps_the_extraction_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        handed, record, measured = await self._install_and_stamp(
+            tmp_path,
+            monkeypatch,
+            {"SKILL.md": "body", "scripts/run.sh": "echo hi"},
+        )
+        assert handed == tmp_path / "hub" / "demo@v1"
+        assert record["installed_at"] == measured
+        assert record["installed_at_source"] == "mtime"
 
 
 class TestRecordInstall:
