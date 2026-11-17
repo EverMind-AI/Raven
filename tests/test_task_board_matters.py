@@ -153,3 +153,22 @@ def test_a_long_run_in_a_title_is_read_in_linear_time():
 
 def test_a_long_run_of_unclosed_brackets_is_normalized_in_linear_time():
     assert _seconds(lambda: normalized("[" * 100_000)) < 1.0
+
+
+def test_a_windows_path_in_a_title_is_an_anchor():
+    assert anchors(r"Fix the ACP launcher in D:\projects\Raven\raven\acp_client") == [
+        "D:/projects/Raven/raven/acp_client"
+    ]
+    assert anchors(r"Install under %LOCALAPPDATA%\raven") == ["%LOCALAPPDATA%/raven"]
+
+
+def test_a_path_names_its_group_with_either_separator():
+    board = Board([TaskGroup("g_w", r"Port the launcher in C:\tools\raven", "", "idle", 1, 1, [])], [])
+
+    assert candidates(board, [], r"ported the launcher in C:\tools\raven today") == ["g_w"]
+    assert candidates(board, [], "ported the launcher in C:/tools/raven today") == ["g_w"]
+
+
+def test_a_quote_matches_a_path_written_with_either_separator():
+    assert quoted(r"C:\tools\raven", normalized("I ported C:/tools/raven today"))
+    assert quoted("C:/tools/raven", normalized(r"I ported C:\tools\raven today"))

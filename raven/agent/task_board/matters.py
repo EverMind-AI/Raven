@@ -22,7 +22,7 @@ _W = "0-9A-Za-z_"
 _ANCHOR = re.compile(
     r"(?P<ref>#\d{1,10})(?!\d)"
     r"|`(?P<code>[^`\n]{3,100})`"
-    rf"|(?P<path>[{_W}.-]{{0,100}}[{_W}-]/[{_W}./-]{{1,100}})"
+    rf"|(?P<path>[{_W}.:%~-]{{0,100}}[{_W}:%~-]/[{_W}./:%~-]{{1,100}})"
     rf"|(?P<file>[{_W}-]{{2,60}}\.[A-Za-z]{{2,5}})(?![{_W}])"
     rf"|(?<![{_W}.])(?P<version>v?\d{{1,10}}(?:\.\d{{1,10}}){{1,4}})(?![{_W}])"
     rf"|(?<![{_W}.#])(?P<number>\d{{3,20}})(?![{_W}.])"
@@ -34,6 +34,11 @@ _SHORTEST_PIECE = 4
 _SHAPE = 'must be a list of {"group": "<id>", "moved": true|false, "evidence": "<quote>"} entries, one per listed group'
 
 
+def _slashed(text: str) -> str:
+    # One separator: a Windows path and its forward-slash spelling name the same file.
+    return text.replace("\\", "/")
+
+
 def anchors(title: str) -> list[str]:
     """The tokens of ``title`` that identify a matter rather than describe it, in title order.
 
@@ -41,7 +46,7 @@ def anchors(title: str) -> list[str]:
     more digits. Plain words are never anchors: "fix" and "review" name half a board.
     """
     found: list[str] = []
-    for match in _ANCHOR.finditer(title):
+    for match in _ANCHOR.finditer(_slashed(title)):
         token = next(value for value in match.groupdict().values() if value)
         if token not in found:
             found.append(token)
@@ -63,7 +68,7 @@ def candidates(board: Board, owners: Sequence[str], text: str) -> list[str]:
     """The groups a turn's update must answer for: ``owners`` first, as given, then every other
     group on ``board``, open or completed, that ``text`` names by id, by the id of a Task its
     steps link, or by a title anchor, in board order."""
-    folded = text.casefold()
+    folded = _slashed(text).casefold()
     listed = list(dict.fromkeys(owners))
     for group in board.groups:
         if group.id not in listed and any(_names(folded, token) for token in _tokens(group)):
@@ -74,7 +79,7 @@ def candidates(board: Board, owners: Sequence[str], text: str) -> list[str]:
 def normalized(text: str) -> str:
     """``text`` the way a quote is checked against it: a markdown link read as its text, emphasis
     and code backticks gone, whitespace collapsed, case folded."""
-    text = _LINK.sub(r"\1", text).replace("*", "").replace("`", "")
+    text = _slashed(_LINK.sub(r"\1", text)).replace("*", "").replace("`", "")
     return re.sub(r"\s+", " ", text).strip().casefold()
 
 
