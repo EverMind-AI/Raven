@@ -20,6 +20,7 @@ from raven.agent.tools.message import MessageTool
 from raven.contracts.asking import SupportsDirectAsk
 from raven.gateway.outlet import ChannelOutletAdapter
 from raven.providers.base import bound_llm_detail, llm_error_summary, parse_llm_error
+from raven.providers.error_hints import provider_error_hint
 from raven.spine import OriginPools, Scheduler, session_key_for
 from raven.spine.delivery import DeliveryHub
 from raven.spine.events import MediaOut, Text, TurnEnded, TurnFailed, TurnStarted
@@ -40,11 +41,12 @@ _TURN_CUT_BY_RELOAD_REPLY = "A runtime reload cut this reply short; please send 
 def _failed_turn_reply(error: str, *, reported: bool) -> str:
     """What a channel reader is told about a failed turn.
 
-    A model call's failure is told as its category and endpoint alone. The
-    vendor's own account goes to the operator's log, not to a group chat: an
-    auth body carries a masked key and an account URL, and a rejected-request
-    body can quote the prompt back. ``a2a`` already answers a remote caller at
-    this altitude (``TURN_FAILED_MESSAGE``).
+    A model call's failure is told as its category and endpoint, plus what the
+    reader can do about it -- no command, and nothing about the credentials
+    themselves. The vendor's own account goes to the operator's log, not to a
+    group chat: an auth body carries a masked key and an account URL, and a
+    rejected-request body can quote the prompt back. ``a2a`` already answers a
+    remote caller at this altitude (``TURN_FAILED_MESSAGE``).
 
     A runner that worded the failure itself -- ``reported`` -- is quoted,
     bounded, because that text is the runtime's own report and was written for
@@ -54,7 +56,9 @@ def _failed_turn_reply(error: str, *, reported: bool) -> str:
     parsed = parse_llm_error(error)
     if parsed is not None:
         category, provider, _detail = parsed
-        return llm_error_summary(category, provider)
+        summary = llm_error_summary(category, provider)
+        hint = provider_error_hint(category, provider, surface="channel")
+        return f"{summary} {hint}" if hint else summary
     if reported and error.strip():
         return bound_llm_detail(error)
     return _TURN_FAILED_REPLY
