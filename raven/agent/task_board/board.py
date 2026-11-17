@@ -505,17 +505,15 @@ def _faulty(raw: Mapping[str, Any], known: Set[str]) -> bool:
 
 
 def _one_per_group(steps: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    working = {raw.get("group") for raw in steps if _tasks(raw)}
-    seen: set[str] = set()
-    kept = []
+    def weight(raw: Mapping[str, Any]) -> tuple[bool, bool]:
+        return bool(_tasks(raw)), bool(raw.get("questions"))
+
+    best: dict[str, Mapping[str, Any]] = {}
     for raw in steps:
         group = raw.get("group")
-        if isinstance(group, str):
-            if not _tasks(raw) and (group in working or group in seen):
-                continue
-            seen.add(group)
-        kept.append(raw)
-    return kept
+        if isinstance(group, str) and (group not in best or weight(raw) > weight(best[group])):
+            best[group] = raw
+    return [raw for raw in steps if _tasks(raw) or not isinstance(raw.get("group"), str) or best[raw["group"]] is raw]
 
 
 def salvage(board: Board, args: Mapping[str, Any]) -> dict[str, Any]:
@@ -527,8 +525,9 @@ def salvage(board: Board, args: Mapping[str, Any]) -> dict[str, Any]:
     limit stands as written. A step with a fault of its own is dropped when it places no
     work and another step is left to write, so one bad step does not cost every other
     matter its step; with none left there is nothing to save. A group stepped twice keeps
-    the step that places work, else its first. A step that places work stays, and a fault
-    there, or in where the work is placed, is still refused, and the work parked.
+    the step that places work, else the first that asks the user something, else its first.
+    A step that places work stays, and a fault there, or in where the work is placed, is
+    still refused, and the work parked.
     """
     out = dict(args)
     known = {g.id for g in board.groups}

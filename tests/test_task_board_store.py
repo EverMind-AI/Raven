@@ -514,6 +514,22 @@ def test_a_salvage_keeps_one_step_per_group():
     assert [len(g.steps) for g in after.groups] == [2]
     assert salvage(board, {"steps": [first, working]})["steps"] == [working]
     assert salvage(board, {"steps": [working, again]})["steps"] == [working]
+    opened = {**NEW, **STEP, "status": "idle"}
+    assert salvage(board, {"steps": [opened, first, again]})["steps"] == [opened, first]
+    twice = {**working, "tasks": [SPAWN.handle]}
+    assert salvage(board, {"steps": [working, twice]})["steps"] == [working, twice], "left for the rules to refuse"
+
+
+def test_a_salvage_keeps_the_step_that_asks_over_a_first_that_does_not():
+    """The fence kept a step that asked the user and dropped the bare one beside it; a group
+    stepped twice must not lose its question to the order the steps were written in."""
+    board = _one_group()
+    gid = board.groups[0].id
+    first = {"group": gid, **STEP, "status": "idle"}
+    asking = {"group": gid, **STEP, "status": "needs_you", "questions": ASKED[:1]}
+    again = {"group": gid, **STEP, "status": "needs_you", "questions": ASKED[1:]}
+
+    assert salvage(board, {"steps": [first, asking, again]})["steps"] == [asking]
 
 
 def test_a_salvage_keeps_a_step_at_fault_that_places_work_for_the_rules_to_refuse():
