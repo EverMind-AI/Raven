@@ -136,3 +136,25 @@ def withdrawn_image_note(source: dict[str, Any], *, index: int, total: int, reas
     else:
         why = f"{_SEEN} when it arrived; only the {keep} newest image-bearing result(s) keep their pictures."
     return f"[image no longer in context: {what}{origin}{when}. {why} To see it again, {again}]"
+
+
+def without_pictures(message: dict[str, Any], *, reason: str = "superseded", keep: int = 0) -> dict[str, Any]:
+    """A copy of ``message`` whose image parts have become notes (:func:`withdrawn_image_note`).
+
+    ``message`` carries its content as a list of parts.
+    """
+    sources = message.get(IMAGE_SOURCES_KEY) or []
+    total = sum(1 for part in message["content"] if is_image_part(part))
+    parts: list[Any] = []
+    seen = 0
+    for part in message["content"]:
+        if not is_image_part(part):
+            parts.append(part)
+            continue
+        source = sources[seen] if seen < len(sources) else {}
+        seen += 1
+        note = withdrawn_image_note(source, index=seen, total=total, reason=reason, keep=keep)
+        parts.append({"type": "text", "text": note})
+    clean = dict(message)
+    clean["content"] = parts
+    return clean

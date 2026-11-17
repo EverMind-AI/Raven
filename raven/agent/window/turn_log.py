@@ -36,6 +36,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from raven.agent.window import compaction
+from raven.agent.window.images import without_pictures
 from raven.utils.images import is_image_part
 
 TURN_LOG_KEY = "_turn_log_seq"
@@ -129,8 +130,8 @@ class TurnLog:
         if opened is not None:
             return [*system, *window[opened:]]
         opening = [self._head[-1]] if self._head and self._head[-1].get("role") != "system" else []
-        if opening and not any(_pictures(m) for m in window):
-            opening = [_without_pictures(opening[0])]
+        if opening and _pictures(opening[0]) and not any(_pictures(m) for m in window):
+            opening = [without_pictures(opening[0])]
         summary = next((i for i in range(first - 1, -1, -1) if compaction.is_summary(window[i])), first)
         return [*system, *opening, *window[summary:]]
 
@@ -176,15 +177,6 @@ class TurnLog:
 def _pictures(message: dict[str, Any]) -> bool:
     content = message.get("content")
     return isinstance(content, list) and any(is_image_part(part) for part in content)
-
-
-def _without_pictures(message: dict[str, Any]) -> dict[str, Any]:
-    # Imported here: shrink reads this module's keys at import.
-    from raven.agent.window import shrink
-
-    copy = [message]
-    shrink.window_images(copy, 0, any_role=True)
-    return copy[0]
 
 
 def _unstamped(message: dict[str, Any]) -> dict[str, Any]:
