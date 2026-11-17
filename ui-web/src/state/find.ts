@@ -47,5 +47,7 @@ export function toggle(force?: boolean, from?: HTMLElement | null): void {
   set({ open: false, query: '' })
   const back = opener
   opener = null
+  /* Focus goes back in this task, before React re-renders: the veil is
+     display:none once it does, and a focus still inside it falls to the body. */
   back?.focus()
 }
