@@ -24,7 +24,11 @@ follow from leaning on git: a tracked path is compared by its content, but only 
 the paths git reports as changed, so a rewrite that keeps a file's size and
 mtime is invisible; an untracked path is compared by size and mtime rather
 than by content; and an untracked directory is listed as one collapsed entry,
-so a write below its first level is not seen at all.
+so a write below it that leaves the directory's own stat unchanged is not seen,
+and one that changes it is reported rather than undone. The restore puts back
+the content and mode it captured; a clean tracked path is re-materialised by
+git through the checkout filters, so a file whose on-disk bytes differed from
+git's checkout form comes back in that form (``core.autocrlf``).
 """
 
 from __future__ import annotations
@@ -56,7 +60,9 @@ _IGNORED_DIR_PARTS = ("__pycache__",)
 # How much of the subject checkout the guard keeps in memory so it can undo a
 # write: the tracked files that were already dirty when the command started, and
 # the untracked files. A subject checkout with a larger dirty set is reported as
-# partly unrestored instead of being read back on every command.
+# partly unrestored rather than kept in memory. The comparison still reads the
+# content of every changed path to digest it; the budget does not bound that
+# read.
 _RESTORE_CAPTURE_FILES = 512
 _RESTORE_CAPTURE_BYTES = 32 * 1024 * 1024
 
@@ -106,9 +112,9 @@ class _SubjectState:
     head_file: Optional[bytes] = None
     hooks: dict[str, tuple[int, bytes]] = field(default_factory=dict)
     index_bytes: Optional[bytes] = None
-    worktree_bytes: dict[str, bytes] = field(default_factory=dict)
-    uncompared_bytes: dict[str, bytes] = field(default_factory=dict)
-    untracked_bytes: dict[str, bytes] = field(default_factory=dict)
+    worktree_files: dict[str, tuple[int, bytes]] = field(default_factory=dict)
+    uncompared_files: dict[str, tuple[int, bytes]] = field(default_factory=dict)
+    untracked_files: dict[str, tuple[int, bytes]] = field(default_factory=dict)
 
     def differences(self, other: "_SubjectState") -> list[str]:
         """What changed between two observations of the subject checkout."""
@@ -266,8 +272,8 @@ class Sandbox:
             return "missing"
         return f"{info.st_size}:{info.st_mtime_ns}:{info.st_mode}"
 
-    def _path_state(self, path: str) -> tuple[Optional[str], Optional[bytes]]:
-        """A comparison token for one tracked path, and its content.
+    def _path_state(self, path: str) -> tuple[Optional[str], Optional[bytes], Optional[int]]:
+        """A comparison token for one tracked path, its content, and its mode.
 
         The token is the content, so a rewrite that keeps the file's size is
         still seen as a change. A path that cannot be read is neither missing
@@ -278,10 +284,10 @@ class Sandbox:
         token = self._file_token(target)
         if token is None:
             state = "missing" if not os.path.lexists(target) else "unreadable"
-            return state, None
+            return state, None, None
         mode, payload = token
         digest = hashlib.sha256(f"{mode}\0".encode("ascii") + payload).hexdigest()
-        return digest, payload
+        return digest, payload, mode
 
     @staticmethod
     def _spend(budget: list[int], size: int) -> bool:
@@ -292,14 +298,15 @@ class Sandbox:
         budget[1] -= size
         return True
 
-    def _capture_one(self, path: Path, budget: list[int]) -> Optional[bytes]:
-        """The content of ``path``, or None when it is over the capture budget."""
+    def _capture_one(self, path: Path, budget: list[int]) -> Optional[tuple[int, bytes]]:
+        """The mode and content of ``path``, or None when it is over the capture budget."""
         if budget[0] <= 0 or budget[1] <= 0:
             return None
         try:
             if path.is_symlink() or not path.is_file():
                 return None
-            size = path.stat().st_size
+            info = path.stat()
+            size = info.st_size
         except OSError:
             return None
         if size > budget[1]:
@@ -310,7 +317,7 @@ class Sandbox:
             return None
         if not self._spend(budget, len(content)):
             return None
-        return content
+        return info.st_mode, content
 
     @staticmethod
     def _read_optional(path: Path) -> Optional[bytes]:
@@ -367,15 +374,15 @@ class Sandbox:
         budget = [_RESTORE_CAPTURE_FILES, _RESTORE_CAPTURE_BYTES]
         try:
             worktree: dict[str, str] = {}
-            worktree_bytes: dict[str, bytes] = {}
+            worktree_files: dict[str, tuple[int, bytes]] = {}
             for path in self._diff_paths(worktree_diff):
-                token, content = self._path_state(path)
+                token, content, mode = self._path_state(path)
                 worktree[path] = token or "missing"
-                if capture and content is not None and self._spend(budget, len(content)):
-                    worktree_bytes[path] = content
+                if capture and content is not None and mode is not None and self._spend(budget, len(content)):
+                    worktree_files[path] = (mode, content)
 
             untracked: dict[str, str] = {}
-            untracked_bytes: dict[str, bytes] = {}
+            untracked_files: dict[str, tuple[int, bytes]] = {}
             for path in untracked_raw.split("\0"):
                 if not path:
                     continue
@@ -386,19 +393,19 @@ class Sandbox:
                     continue
                 untracked[path] = token
                 if capture and not path.endswith("/"):
-                    content = self._capture_one(self.repo_root / path, budget)
-                    if content is not None:
-                        untracked_bytes[path] = content
+                    saved = self._capture_one(self.repo_root / path, budget)
+                    if saved is not None:
+                        untracked_files[path] = saved
 
             uncompared: dict[str, str] = {}
-            uncompared_bytes: dict[str, bytes] = {}
+            uncompared_files: dict[str, tuple[int, bytes]] = {}
             for path in self._uncompared_paths(index_entries):
-                token, content = self._path_state(path)
+                token, content, mode = self._path_state(path)
                 if token is None:
                     continue
                 uncompared[path] = token
-                if capture and content is not None and self._spend(budget, len(content)):
-                    uncompared_bytes[path] = content
+                if capture and content is not None and mode is not None and self._spend(budget, len(content)):
+                    uncompared_files[path] = (mode, content)
 
             git_dir = Path(git_dir_raw)
             common_dir = Path(common_dir_raw)
@@ -416,9 +423,9 @@ class Sandbox:
                 head_file=self._read_optional(git_dir / "HEAD"),
                 hooks=self._hooks(common_dir),
                 index_bytes=self._read_optional(git_dir / "index") if capture else None,
-                worktree_bytes=worktree_bytes,
-                uncompared_bytes=uncompared_bytes,
-                untracked_bytes=untracked_bytes,
+                worktree_files=worktree_files,
+                uncompared_files=uncompared_files,
+                untracked_files=untracked_files,
             )
         except OSError:
             return None
@@ -475,6 +482,17 @@ class Sandbox:
         tmp.write_bytes(content)
         os.chmod(tmp, mode)
         os.replace(tmp, path)
+
+    def _restore_file(self, path: Path, mode: int, content: bytes) -> None:
+        """Put a captured path back: a symlink as a symlink, a file with its mode."""
+        if stat.S_ISLNK(mode):
+            target = content.decode("utf-8", "surrogateescape")
+            if os.path.lexists(path):
+                path.unlink()
+            os.symlink(target, path)
+            return
+        self._write_bytes(path, content)
+        os.chmod(path, mode & 0o777)
 
     def _restore_subject(self, before: _SubjectState, after: _SubjectState) -> tuple[list[str], list[str]]:
         """Put the subject checkout back the way the command found it.
@@ -582,31 +600,32 @@ class Sandbox:
             except OSError:
                 problems.append(path)
         # An untracked file the command changed: put back what was captured.
-        for path, content in before.untracked_bytes.items():
+        for path, (mode, content) in before.untracked_files.items():
             try:
                 if self._stat_token(self.repo_root / path) == before.untracked.get(path):
                     continue
-                self._write_bytes(self.repo_root / path, content)
+                self._restore_file(self.repo_root / path, mode, content)
             except OSError:
                 problems.append(path)
-        # An untracked file whose content was not captured (over the capture
-        # budget): name it rather than leave the command's change in place.
-        for path in sorted(set(before.untracked) - set(before.untracked_bytes)):
-            if path.endswith("/"):
-                continue
+        # An untracked path whose content was not captured (over the capture
+        # budget, or a directory, whose content is not read back): name it
+        # rather than leave the command's change in place unmentioned.
+        for path in sorted(set(before.untracked) - set(before.untracked_files)):
             if before.untracked.get(path) != after.untracked.get(path):
                 problems.append(path)
-        for path, content in before.uncompared_bytes.items():
+        for path, (mode, content) in before.uncompared_files.items():
             # git skips these paths, so `git checkout --` would leave them
-            # alone; the captured content is what puts them back.
+            # alone; the captured content and mode are what put them back,
+            # including when the command removed the file.
             try:
                 current = self._file_token(self.repo_root / path)
-                if current is not None and current[1] != content:
-                    self._write_bytes(self.repo_root / path, content)
+                if current is not None and current[0] == mode and current[1] == content:
+                    continue
+                self._restore_file(self.repo_root / path, mode, content)
             except OSError:
                 problems.append(path)
         # A path git skips whose content was not captured: same as above.
-        for path in sorted(set(before.uncompared) - set(before.uncompared_bytes)):
+        for path in sorted(set(before.uncompared) - set(before.uncompared_files)):
             if before.uncompared.get(path) != after.uncompared.get(path):
                 problems.append(path)
         try:
@@ -627,14 +646,15 @@ class Sandbox:
         for path in sorted(set(before.worktree) | set(after.worktree) | dirty):
             was = before.worktree.get(path)
             now = after.worktree.get(path)
-            saved = before.worktree_bytes.get(path)
+            saved = before.worktree_files.get(path)
             if saved is not None:
                 if was == now:
                     continue
                 # The file was already dirty before the command started; put
                 # back the edit that predates it rather than the index version.
+                saved_mode, saved_content = saved
                 try:
-                    self._write_bytes(self.repo_root / path, saved)
+                    self._restore_file(self.repo_root / path, saved_mode, saved_content)
                 except OSError:
                     problems.append(path)
                 continue

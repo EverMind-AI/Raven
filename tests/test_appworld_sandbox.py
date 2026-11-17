@@ -143,6 +143,23 @@ class TestBashBoundary:
         ).stdout
         assert flags.startswith("H ")
 
+    def test_a_deleted_assume_unchanged_file_is_restored(self, sandbox):
+        # git skips an assume-unchanged path, so its deletion is invisible to
+        # status; the captured content and mode are what put it back.
+        target = sandbox.repo_root / "grader.py"
+        target.chmod(0o755)
+        subprocess.run(
+            ["git", "update-index", "--assume-unchanged", "grader.py"],
+            cwd=sandbox.repo_root,
+            check=True,
+            env=_ENV,
+        )
+        cmd = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && rm -f grader.py"
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(cmd)
+        assert target.read_text() == "score = 1\n"
+        assert target.stat().st_mode & 0o777 == 0o755
+
     @pytest.mark.parametrize(
         ("rel", "index_flag"),
         [
@@ -342,6 +359,42 @@ class TestBashBoundary:
             sandbox.bash(command)
         assert (sandbox.repo_root / "grader.py").read_text() == "score = 2\n"
 
+    def test_a_chmod_of_a_dirty_file_is_undone(self, sandbox):
+        # The content digest covers the mode, so a chmod is caught; the restore
+        # has to put the captured mode back rather than keep the command's.
+        target = sandbox.repo_root / "grader.py"
+        target.write_text("score = 2\n")
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && chmod 755 grader.py"
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        assert target.read_text() == "score = 2\n"
+        assert target.stat().st_mode & 0o777 == 0o644
+
+    def test_a_chmod_of_an_untracked_file_is_undone(self, sandbox):
+        target = sandbox.repo_root / "existing-untracked.py"
+        target.write_text("value = 1\n")
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && chmod 755 existing-untracked.py"
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        assert target.stat().st_mode & 0o777 == 0o644
+
+    def test_a_retargeted_symlink_is_restored(self, sandbox):
+        if sys.platform == "win32":
+            pytest.skip("symlinks need a privilege on Windows")
+        link = sandbox.repo_root / "grader-link"
+        link.symlink_to("grader.py")
+        subprocess.run(["git", "add", "grader-link"], cwd=sandbox.repo_root, check=True, env=_ENV)
+        subprocess.run(["git", "commit", "-qm", "link"], cwd=sandbox.repo_root, check=True, env=_ENV)
+        # The checkout's own edit retargets the link, so it is dirty before the
+        # command and has to be captured rather than restored from the index.
+        link.unlink()
+        link.symlink_to("raven/agent/loop.py")
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && ln -sfn grader.py grader-link"
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        assert link.is_symlink()
+        assert os.readlink(link) == "raven/agent/loop.py"
+
     def test_the_capture_budget_names_the_paths_it_cannot_restore(self, sandbox, monkeypatch):
         # Over the capture budget the guard has no content to put back, so it
         # names the path instead of replacing the checkout's own edit with the
@@ -358,7 +411,10 @@ class TestBashBoundary:
         assert (sandbox.repo_root / "grader.py").read_text() == "score = 999\n"
         assert (sandbox.repo_root / "raven/agent/loop.py").read_text() == "x = 2\n"
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="file permissions are POSIX-only")
+    @pytest.mark.skipif(
+        sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+        reason="file permissions are POSIX-only, and root reads a 0o000 file",
+    )
     def test_an_unreadable_file_is_not_emptied(self, sandbox):
         # A file this process may not read must not be recorded as an empty
         # one: the restore would write that emptiness back over it.
@@ -366,13 +422,14 @@ class TestBashBoundary:
         target.write_text("score = 2\n")
         target.chmod(0o000)
         try:
-            token, content = sandbox._path_state("grader.py")
+            token, content, mode = sandbox._path_state("grader.py")
             before = sandbox._subject_state(capture=True)
             after = sandbox._subject_state(capture=True)
         finally:
             target.chmod(0o644)
         assert token == "unreadable"
         assert content is None
+        assert mode is None
         if before is not None and after is not None:
             problems: list[str] = []
             sandbox._restore_worktree(before, after, problems, [])
@@ -383,6 +440,27 @@ class TestBashBoundary:
         command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && touch appeared.txt"
         with pytest.raises(RuntimeError, match="removed: appeared.txt"):
             sandbox.bash(command)
+
+    def test_a_write_below_an_existing_untracked_directory_is_named(self, sandbox):
+        # An untracked directory is one collapsed entry, so the file the
+        # command adds inside it is not captured; the abort has to name the
+        # directory rather than report a clean undo.
+        artifacts = sandbox.repo_root / "artifacts"
+        artifacts.mkdir()
+        (artifacts / "keep.txt").write_text("keep\n")
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && printf 'poison\\n' > artifacts/new.txt"
+        with pytest.raises(RuntimeError, match="could not undo") as excinfo:
+            sandbox.bash(command)
+        assert "artifacts/" in str(excinfo.value)
+
+    def test_a_deleted_untracked_directory_is_named(self, sandbox):
+        artifacts = sandbox.repo_root / "artifacts"
+        artifacts.mkdir()
+        (artifacts / "keep.txt").write_text("keep\n")
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && rm -rf artifacts"
+        with pytest.raises(RuntimeError, match="could not undo") as excinfo:
+            sandbox.bash(command)
+        assert "artifacts/" in str(excinfo.value)
 
     def test_a_stat_preserving_write_is_undone(self, sandbox):
         # A copy that keeps the file's size and mtime leaves git's stat cache
