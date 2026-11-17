@@ -275,6 +275,7 @@ class TestWriteInstallMeta:
         assert record["source"] == "hub"
         assert record["trigger"] == "auto_inject"
         assert record["installed_at"]
+        assert record["installed_at_source"] == "mtime"
 
     def test_first_install_wins(self, tmp_path: Path) -> None:
         write_install_meta(tmp_path, slug="foo", version="v2", trigger="auto_inject")
@@ -297,6 +298,7 @@ class TestWriteInstallMeta:
 
         record = json.loads((skill_dir / ".install-meta.json").read_text(encoding="utf-8"))
         assert record["installed_at"] == "2026-03-04T05:06:07+00:00"
+        assert record["installed_at_source"] == "mtime"
 
     def test_a_fresh_install_dates_the_stamp_now(self, tmp_path: Path) -> None:
         skill_dir = tmp_path / "bundle"
@@ -307,6 +309,7 @@ class TestWriteInstallMeta:
         record = json.loads((skill_dir / ".install-meta.json").read_text(encoding="utf-8"))
         installed = datetime.fromisoformat(record["installed_at"])
         assert abs((installed - datetime.now(timezone.utc)).total_seconds()) < 60
+        assert record["installed_at_source"] == "mtime"
 
     def test_an_unconvertible_mtime_falls_back_to_the_clock(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -330,6 +333,7 @@ class TestWriteInstallMeta:
         record = json.loads((skill_dir / ".install-meta.json").read_text(encoding="utf-8"))
         installed = datetime.fromisoformat(record["installed_at"])
         assert abs((installed - datetime.now(timezone.utc)).total_seconds()) < 60
+        assert record["installed_at_source"] == "clock"
 
 
 class TestRecordInstall:

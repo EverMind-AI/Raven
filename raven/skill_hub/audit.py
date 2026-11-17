@@ -16,7 +16,9 @@ Two artifacts with one writer each per install:
   ``raven skill list`` (no log scan needed). First install wins; later
   observations of the same bundle never rewrite it. ``installed_at`` is
   read off the directory mtime, so a bundle cached before stamping
-  existed keeps its install date instead of the date it was first seen.
+  existed keeps its install date instead of the date it was first seen;
+  ``installed_at_source`` says whether that date was measured (``mtime``)
+  or fell back to the observation clock (``clock``).
 """
 
 from __future__ import annotations
@@ -63,8 +65,8 @@ def record_install(
         logger.warning("failed to append skill install audit record to %s", path, exc_info=True)
 
 
-def _installed_at(skill_dir: Path) -> str:
-    """When the bundle landed on disk, to the second.
+def _installed_at(skill_dir: Path) -> tuple[str, str]:
+    """When the bundle landed on disk, to the second, and which source dated it.
 
     The stamp is written the first time a bundle is observed, and a bundle
     cached before stamping existed is first observed long after it was
@@ -72,7 +74,10 @@ def _installed_at(skill_dir: Path) -> str:
     which is the closest known approximation of the install date; the
     observation time is the fallback for a directory that cannot be read or
     whose timestamp the platform cannot convert (Windows rejects mtimes
-    outside roughly 1970..3000 with ``OSError``).
+    outside roughly 1970..3000 with ``OSError``). The second value names the
+    source: ``"mtime"`` for a measured date, ``"clock"`` for the fallback,
+    which first-install-wins freezes permanently and which would otherwise
+    be indistinguishable from a real install date.
 
     The approximation holds only while nothing touches the bundle: an entry
     added or removed moves the mtime, and the stamp written here moves it to
@@ -82,9 +87,9 @@ def _installed_at(skill_dir: Path) -> str:
     """
     try:
         mtime = skill_dir.stat().st_mtime
-        return datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds")
+        return datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds"), "mtime"
     except (OSError, OverflowError, ValueError):
-        return datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return datetime.now(timezone.utc).isoformat(timespec="seconds"), "clock"
 
 
 def write_install_meta(
@@ -105,7 +110,8 @@ def write_install_meta(
     installed there, so there is nothing to stamp. ``installed_at`` comes
     from the directory mtime rather than the clock, so a bundle cached
     before stamping existed is dated to its install, not to the moment
-    it was first observed.
+    it was first observed; ``installed_at_source`` records which of the
+    two produced the date.
     """
     if not skill_dir:
         return
@@ -113,13 +119,15 @@ def write_install_meta(
     path = root / INSTALL_META
     if path.exists():
         return
+    installed_at, installed_at_source = _installed_at(root)
     record = {
         "slug": slug,
         "version": version,
         "source": source,
         "trigger": trigger,
         "score_safety": score_safety,
-        "installed_at": _installed_at(root),
+        "installed_at": installed_at,
+        "installed_at_source": installed_at_source,
     }
     try:
         path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
