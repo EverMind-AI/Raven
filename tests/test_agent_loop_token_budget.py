@@ -256,8 +256,9 @@ def test_what_the_task_board_costs_the_tool_surface(workspace, monkeypatch) -> N
     position a2a is in. Its cost is measured here instead: the increment it puts on
     every call of every host turn. Its first draft nested the whole update shape and
     cost ~514; that shape now lives in the post-turn instruction, paid once per turn,
-    and only an entry's lists stay typed here (~60 of it): a provider that builds the
-    call's JSON from the model's XML by the schema tells a list from text by nothing else.
+    and only an entry's lists and `matters` stay typed here: a provider that builds
+    the call's JSON from the model's XML by the schema tells a list or a boolean from
+    text by nothing else.
     Not asserted, as with a2a: the total of a face that carries it."""
     from raven.config.schema import TaskBoardConfig
 
@@ -267,4 +268,4 @@ def test_what_the_task_board_costs_the_tool_surface(workspace, monkeypatch) -> N
     enabled = _loop(workspace, window=200_000, ceiling=64_000, monkeypatch=monkeypatch, engine=on)._make_token_budget()
 
     cost = enabled.reserved_tools - plain.reserved_tools
-    assert 0 < cost < 300, f"task_board's schema now costs {cost} tokens on every call of every host turn"
+    assert 0 < cost < 340, f"task_board's schema now costs {cost} tokens on every call of every host turn"

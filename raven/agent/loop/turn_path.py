@@ -127,7 +127,7 @@ from raven.agent.tools.removals import RemovalWatch
 from raven.agent.window import shrink
 from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, filed_image_note, image_sources
 from raven.agent.window.parts import ATTACHMENT_NOTES_KEY, measure_parts
-from raven.agent.window.turn_log import TURN_LOG_KEY, TurnLog
+from raven.agent.window.turn_log import OPENING_KEY, TURN_LOG_KEY, TurnLog
 from raven.contracts.harness import (
     ActionRequest,
     CapabilityRequest,
@@ -1356,6 +1356,7 @@ class TurnPathMixin:
                 # A hook may hand back a copy of a message this turn already
                 # wrote; it is a new message, not a rewrite of that one.
                 entry.pop(TURN_LOG_KEY, None)
+                entry.pop(OPENING_KEY, None)
                 entry.setdefault("timestamp", self._now_fn().isoformat())
                 entry[_HOOK_INJECTED_KEY] = True
                 messages.append(entry)
@@ -3768,7 +3769,7 @@ class TurnPathMixin:
             shown = await self.task_board.ack_turn_notes(key)
             self._schedule_task_board(
                 key,
-                turn_window,
+                live["log"].cut_to_turn(turn_window),
                 outcome,
                 live["log"].added(),
                 turn_received_at,
@@ -3779,6 +3780,7 @@ class TurnPathMixin:
                 # The turn's own verdict rather than the marker: a turn a tool answered is not a
                 # Silent Turn whatever it ended on, and a hook's reply has cleared ``silent``.
                 silent=silent and not answered_by_tool,
+                opening=req.text,
             )
 
         if origin is Origin.USER:
@@ -3861,19 +3863,23 @@ class TurnPathMixin:
         delegated: dict[str, Any] | None,
         moved_on: list[str],
         silent: bool,
+        opening: str,
     ) -> None:
         """Start the host's post-turn task board call for the turn that just ended.
 
         It sends the tools array, model, effort and tool choice the turn's last call
         carried, through the same strategies, so it runs at the main model's settings
-        and shares that call's cached prefix up to the reply; only the instruction
-        after it is new. Nothing forces the tool: a forced choice voids Anthropic's
-        cached messages and several providers refuse one outright. The dispatches
-        come from what the turn added -- a spawn still in the history belongs to the
-        turn that made it. ``delegated`` (the request's mark of the result that
-        opened the turn) and ``moved_on`` (the groups the notes it was shown named)
-        say what the turn is about, when anything does; a message the user sent while
-        it ran, among what it added, says it is about more than they name.
+        and reads the tools and the system message from that call's cached prefix.
+        ``window`` is the turn's own (``TurnLog.cut_to_turn``): with the whole
+        conversation in it, the model took earlier turns' events for this one's.
+        Nothing forces the tool: a forced choice voids Anthropic's cached messages
+        and several providers refuse one outright. The dispatches come from what the
+        turn added -- a spawn still in the history belongs to the turn that made it.
+        ``delegated`` (the request's mark of the result that opened the turn) and
+        ``moved_on`` (the groups the notes it was shown named) say what the turn is
+        about, when anything does; ``opening`` (the user's words, or the result's) and
+        the messages the user sent while it ran are searched, with its reply, for
+        the other groups it may have moved.
         """
         from raven.agent.task_board.dispatches import delegated_handle, turn_dispatches
         from raven.agent.task_board.runner import run_post_turn, should_run
@@ -3929,7 +3935,8 @@ class TurnPathMixin:
                 reply_rows=turn_added,
                 delegated=[handle] if (handle := delegated_handle(delegated)) else [],
                 moved_on=moved_on,
-                mid_turn=any(m.get(_MID_TURN_USER_KEY) for m in turn_added),
+                opening=opening,
+                mid_turn_messages=[m for m in turn_added if m.get(_MID_TURN_USER_KEY)],
                 answered_message_calls=answered,
             )
         )
@@ -4231,6 +4238,7 @@ class TurnPathMixin:
                     entry["trace_id"] = trace_id
                 first_user_pending = False
             entry.pop(TURN_LOG_KEY, None)
+            entry.pop(OPENING_KEY, None)
             runtime_lines = entry.pop(RUNTIME_CONTEXT_KEY, None)
             if (scratch := entry.pop(TURN_SCRATCH_KEY, None)) and role == "user":
                 # The turn scratch (recalled memory, routed skills) is rebuilt

@@ -25,7 +25,7 @@ from raven.agent.window.images import (
     ATTACHED_IMAGE_KEY,
     IMAGE_SOURCES_KEY,
     wire_image_bytes,
-    withdrawn_image_note,
+    without_pictures,
 )
 from raven.agent.window.turn_log import STAND_IN_KEY
 from raven.config.raven import PRUNE_LINE_MAX_CHARS
@@ -264,23 +264,8 @@ def window_images(
     stale = bearing[:-keep] if keep else bearing
     pictures = 0
     for i in stale:
-        m = messages[i]
-        sources = m.get(IMAGE_SOURCES_KEY) or []
-        total = sum(1 for p in m["content"] if is_image_part(p))
-        parts: list[Any] = []
-        seen = 0
-        for p in m["content"]:
-            if not is_image_part(p):
-                parts.append(p)
-                continue
-            source = sources[seen] if seen < len(sources) else {}
-            seen += 1
-            note = withdrawn_image_note(source, index=seen, total=total, reason=reason, keep=keep)
-            parts.append({"type": "text", "text": note})
-        clean = dict(m)
-        clean["content"] = parts
-        messages[i] = clean
-        pictures += total
+        pictures += sum(1 for p in messages[i]["content"] if is_image_part(p))
+        messages[i] = without_pictures(messages[i], reason=reason, keep=keep)
     return len(stale), pictures
 
 

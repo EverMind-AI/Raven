@@ -9,7 +9,7 @@ from raven.agent.task_board.board import Board, Dispatch, ProgressStep, TaskGrou
 from raven.agent.task_board.notes import NOTES_FILENAME
 from raven.agent.task_board.service import TaskBoardService
 from raven.agent.task_board.store import BOARD_FILENAME, copy_board, load_board, reset_board, save_board
-from raven.agent.task_board.tool import REFUSED_UPDATE, TOOL_NAME, TaskBoardTool
+from raven.agent.task_board.tool import PARAMETERS, REFUSED_UPDATE, TOOL_NAME, TaskBoardTool
 from raven.contracts.session_events import SessionObserver
 from raven.session.manager import SessionManager
 
@@ -59,7 +59,7 @@ def test_the_schema_is_the_small_face_both_actions_share(sessions):
     assert tool.name == TOOL_NAME == "task_board"
     assert params["required"] == ["action"]
     assert params["properties"]["action"]["enum"] == ["recall", "update", "carry"]
-    assert set(params["properties"]) == {"action", "query", "group_id", "include_turns", "steps", "groups"}
+    assert set(params["properties"]) == {"action", "query", "group_id", "include_turns", "steps", "groups", "matters"}
     # The update's shape is the post-turn instruction's to state, once per turn,
     # not this schema's to carry on every call of every turn -- all but its lists.
     strings = {"type": "array", "items": {"type": "string"}}
@@ -429,3 +429,15 @@ async def test_the_stores_word_that_it_removed_the_conversation_is_final(session
     service.on_session_deleted(KEY, True)
 
     assert not (sessions.session_dir(KEY) / BOARD_FILENAME).exists()
+
+
+def test_a_matters_entry_is_typed():
+    """A provider that builds the call's JSON from the model's XML by the schema reads an
+    untyped list or boolean as text."""
+    assert PARAMETERS["properties"]["matters"] == {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {"group": {"type": "string"}, "moved": {"type": "boolean"}, "evidence": {"type": "string"}},
+        },
+    }

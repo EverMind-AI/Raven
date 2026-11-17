@@ -232,6 +232,12 @@ def render_transcript(messages: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
+def is_summary(message: dict) -> bool:
+    """Whether ``message`` is a head summary :func:`build_compacted` wrote."""
+    content = message.get("content")
+    return isinstance(content, str) and content.startswith(SUMMARY_MARKER)
+
+
 def build_compacted(messages: list[dict], split: int, summary: str) -> list[dict]:
     """Rebuild the transcript as [protected prefix, summary, verbatim tail]."""
     protect_end = protected_prefix_end(messages)

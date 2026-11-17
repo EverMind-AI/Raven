@@ -190,16 +190,17 @@ product agent the host runs never sees the tool; the five product configs also s
 resident under tool-search compaction (`DEFAULT_ALWAYS_VISIBLE`,
 `raven/agent/tools/tool_search.py`): the post-turn call forces it by name.
 
-**Schema.** One description and six properties: `action` (`"recall" | "update"`),
-`query`, `group_id`, `include_turns`, and `steps` / `groups` as arrays of objects whose only
+**Schema.** One description and seven properties: `action` (`"recall" | "update"`),
+`query`, `group_id`, `include_turns`, `steps` / `groups` as arrays of objects whose only
 declared fields are their lists -- `tasks` and `questions` on a step, `questions` on a carry
-entry -- each an array of strings. The schema rides in every host call: nested, the update's
-shape cost about 514 tokens a call; with only the lists typed, about 280, pinned as an
-increment beside A2A's in `tests/test_agent_loop_token_budget.py`. The rest of the shape is
-stated instead by the post-turn instruction (3), once per turn. The lists cannot be left to
-it: a provider that builds a call's JSON from the model's XML by the schema (MiniMax) tells
-a list from text by nothing else, and sends an undeclared one as `{"item": ...}`, which the
-update and carry rules refuse every time. The description also tells the model never to call `update`
+entry -- each an array of strings, and `matters` (3, What a turn may write), typed whole:
+`group`, `moved`, `evidence`. The schema rides in every host call: nested, the update's
+shape cost about 514 tokens a call; with only the lists and `matters` typed, about 335,
+pinned as an increment beside A2A's in `tests/test_agent_loop_token_budget.py`. The rest of
+the shape is stated instead by the post-turn instruction (3), once per turn. The lists and
+`matters` cannot be left to it: a provider that builds a call's JSON from the model's XML by
+the schema (MiniMax) tells a list or a boolean from text by nothing else, and sends an
+undeclared list as `{"item": ...}`, which the update and carry rules refuse every time. The description also tells the model never to call `update`
 itself -- a live model did, mid-turn, when it only said the board was kept for it.
 
 The update's shape, as the post-turn instruction states it:
@@ -281,23 +282,27 @@ saved and `harness.memory.after_turn` has run, beside Step 4's post-action
 learning: launched as a background task held in `_consolidation_tasks`, so the
 reply has already gone out and shutdown drains it like the others.
 
-**Input.** The message list `_run_agent_loop` returned -- the window of the turn's last call
-plus its final answer -- the same tools array and system message that last call sent, and
+**Input.** The message list `_run_agent_loop` returned, cut to the turn
+(`TurnLog.cut_to_turn`): the system message the turn's last call sent, the turn's opening
+message and its own rows as that call's window held them -- a picture the endpoint refused
+stays withdrawn; when a head summary took the opening's place, the log's opening comes back
+beside it -- plus its final answer, with the same tools array, and
 one appended user-role instruction rendered from `raven/templates/prompts/{en,zh}/
 task_board_update.md` through `raven.i18n.prompt`. It is the shape the early-exit synthesis
 call already uses (`_synthesize_final_on_exhaustion` in `turn_path.py`: "the turn's own conversation plus
-one instruction"). The instruction carries:
+one instruction"). The conversation before the turn is left out: with it, the model took earlier
+turns' events for this one's, and the board record already holds each matter's history
+(`docs/specs/2026-11-16-task-board-matter-attribution-design.md`). The instruction carries:
 
 - the board as it stands: every open group's id, title, status, summary and the titles of
   its last two steps; every completed group's id and title;
 - this turn's dispatches, each as a handle (`spawn:<node_id>`, `dag:<run_id>`) with its task
   summary, followed by any `unassigned` left by an earlier failed update (6.1);
-- for a turn that belongs to some groups (What a turn may write, below), one paragraph
-  naming them by id -- never by title, which is text an earlier call wrote -- and asking for
-  steps only there, wherever a listed handle goes, and on the matter of each question the
-  reply asked the user (`task_board_scope.md`); for a turn that also took in a message the
-  user sent while it ran, the paragraph names that message's matter too
-  (`task_board_scope_mid_turn.md`);
+- for a turn with Candidate Groups (What a turn may write, below), a line naming its owners
+  when it has any (`task_board_matters_owners.md`), then a paragraph listing every candidate
+  by id -- never by title, which is text an earlier call wrote -- that asks for one `matters`
+  answer per candidate, a step on each one the turn moved with the turn's own words quoted, and
+  none on a group the turn only mentioned (`task_board_matters.md`);
 - the rules: one step per group this turn advanced, in the conversation's language, its title
   saying what moved and its summary what moved and what is next or awaited -- not restating
   the reply; the lengths above; rewrite a group's summary whenever the turn changed where the
@@ -389,29 +394,35 @@ update still in its call is checked against every handle the board holds unplace
 parked beside it would be a handle it was never told of. A turn that dispatched nothing may
 return an empty update.
 
-**What a turn may write.** Most turns are about whatever their reply moved, and their update
-may step any group. Two kinds are known to be about a group before the model is asked. A
-turn a delegated result opened (`TurnRequest.delegated`) belongs to the group whose step
-placed that run -- `spawn:<node_id>`, or `dag:<run_id>` for a graph even when one node
-reports, since a graph is placed whole -- and a descendant run's result belongs to the group
-that placed the run it descends from ("Descendant runs"). A turn whose message a Move on or an Answer named a
-group for (5.1.1) belongs to that group. The owning groups are resolved on the board the
-update queue hands over, where the update before this one may just have placed the run. The
-update is then confined before it is checked: steps on the owning groups stay, and so does
-every step that places a dispatch, wherever it puts it, a new group included -- the work has
-to land somewhere -- and every step that asks the user something, since a question that went
-out with the reply has to land somewhere too; with the `groups` changes on the groups those
-steps keep. A step or change on any other matter, and a new group with neither a dispatch nor
-a question in it, is dropped rather than refused, so it never costs an attempt. A turn that
-took in a message the user sent while it ran is not confined at all: that message may be
-about any matter, only the model can tell which, and the instruction names it beside the
-owning groups. The instruction names the owning groups so the model
-writes to them; the confinement, not the instruction, is what keeps the update to them --
-except in a turn that took in a mid-turn message, where the instruction alone does. A
-run no step has placed yet -- still in `unassigned` -- names no group, and a turn with no
-owning group is not confined. The cost: a delegated result that also moved another matter,
-without asking the user anything about it, does not record it there, and such a matter that
-first comes up in that turn gets its group at a later turn.
+**What a turn may write.** Any group, a new one included; nothing is confined. Before the
+model is asked, code lists the turn's Candidate Groups (`raven/agent/task_board/matters.py`):
+first its owners -- for a turn a delegated result opened (`TurnRequest.delegated`), the group
+whose step placed that run, `spawn:<node_id>`, or `dag:<run_id>` for a graph even when one node
+reports, since a graph is placed whole, and for a descendant run the group that placed the run
+it descends from ("Descendant runs"); for a turn whose message a Move on or an Answer named a
+group for (5.1.1), that group -- resolved on the board the update queue hands over, where the
+update before this one may just have placed the run. Then every other group, open or completed,
+that the turn's own words name: by its id, by the id of a Task its steps link, or by a title
+anchor (an issue or PR reference, a code span, a path or file name, a version, a number of three
+or more digits). The turn's own words are the user's message (`TurnRequest.text`, not the
+runtime-context block or the recalled memory its envelope carries), each message the user sent
+while it ran, and the reply; a delegated result's body is left out of that search, since a
+report restates its brief and a brief can name matters the turn never touched. A run no step
+has placed yet names no group.
+
+For a turn with candidates, the update answers each in `matters`, and four rules are checked
+with the board's own, every fault named in one refusal: every candidate is answered; a group
+answered `moved: true` has a step; a step on an existing group, listed or not, is answered
+`moved: true`; and each such answer's `evidence` is found in the turn's own words -- the
+delegated result included this time -- after both sides are read the same way (a markdown link
+as its text, emphasis and code backticks dropped, whitespace collapsed, case folded; `...`
+splits a quote into pieces of at least four characters, each found on its own). A step that
+opens a new group answers for nothing. After three refusals the last update is salvaged as
+any other (6.1): a fault in `matters` alone never stops it. `matters` is never stored. A turn
+with no candidate is asked and checked without any of this. A delegated result's group leads
+the list and its result is quotable evidence, so the model is asked to step it with every other
+matter the turn moved, each on its own group; nothing forces an owner to be answered
+`moved: true` -- an update that steps nothing is accepted, as it always was.
 
 **Ordering.** Two locks per session in the board service. The update queue holds a
 post-turn update across its model call, so the next turn's update is built on this one's
@@ -501,8 +512,8 @@ heading Answer's draft opens with (`On "<title>":`), unless it already carries t
 note below reaches only the turn the message opens; the words stay in the conversation, so later
 turns, and the reader's own bubble, still say which matter it was about. The server keeps a note beside the board, as it keeps a set-aside, and the turn the message
 opens reads, in its runtime context, which group it moves on, by id, title and where it
-stands; the turn's own board update reads the same line, and is kept to that group (3,
-What a turn may write). A message sent while a turn runs waits for a turn of its own rather
+stands; the turn's own board update reads the same line, and lists that group first among its
+candidates (3, What a turn may write). A message sent while a turn runs waits for a turn of its own rather
 than joining that one, whose context was read before it. A later move-on replaces one not yet
 acknowledged; a turn already shown the earlier one stays about that group. The Task Board page offers it on every card and row,
 opening the conversation first, as an event does.
@@ -564,9 +575,12 @@ prefix and the page's existing colour variables (`--amber`, `--sky`, `--moss`, `
 6.1 **The update cannot be had.** When the third attempt is refused too, the last update the
 model sent is salvaged before anything is parked: each `groups` entry keeps only the fields
 that pass on their own -- a status the step on its group already sets goes, the summary
-written beside it stays -- and a text past its limit stands as written. Its steps and its
-placement are kept whole, so the turn's steps are still written and its work placed; only a
-fault there -- an unknown group, a handle left out -- leaves no update to be had. Then, as
+written beside it stays -- and a text past its limit stands as written. A step with a fault
+of its own -- an unknown group, a bad status -- is dropped when it places no work and another
+step is left to write, so one bad step does not cost the turn's other matters their steps.
+The rest of its steps and its placement are kept whole, so they are still written and its work
+placed; only a fault in a step that places work, in every step, or in the placement -- a handle
+left out -- leaves no update to be had. Then, as
 when the post-turn call fails after the provider's retries, or the turn itself errored or was
 stopped ("Which turns"), the turn's handles are appended
 to `unassigned` with the turn's id, a warning is logged, and the next turn's update must place
@@ -631,7 +645,9 @@ the extra call per turn.
   update), recall (listing, lookup, BM25 with the completed weight,
   `include_turns` budget), registration (host only; absent under `RAVEN_SUBAGENT` and with
   `enabled: false`), the post-turn runner (no messages persisted, same tools array as the
-  turn's last call, lock ordering, usage counted), the tool-surface token cost pinned, and
+  turn's last call, the window cut to the turn, lock ordering, usage counted), the candidates
+  and the `matters` rules (`tests/test_task_board_matters.py`), the tool-surface token cost
+  pinned, and
   the RPC methods and event against the schema.
 - Page: `features/tasks` tests for ordering, the accordion, the Completed fold, Unassigned,
   chips opening the task pane, the step-to-turn scroll, the overflow actions, and the live
@@ -641,10 +657,12 @@ the extra call per turn.
 
 ## Risk
 
-- **Cost.** Every host turn makes one more call carrying the full window. Where the provider
-  caches by prefix (Anthropic, and OpenAI-compatible endpoints that cache) nearly all of its
-  input is a cache read; elsewhere the turn's input cost roughly doubles. The call is visible
-  in usage and the switch turns it off.
+- **Cost.** Every host turn makes one more call, carrying the system message, the tools and
+  the turn's own rows. Where the provider caches by prefix (Anthropic, and OpenAI-compatible
+  endpoints that cache) the system message and tools are a cache read and the turn's rows new
+  input; replayed on one long session, an update cost about a sixth (glm) to a quarter
+  (deepseek) of what the same call carrying the whole conversation did. The call is visible in
+  usage and the switch turns it off.
 - **Latency.** None on the reply; the board settles a few seconds after it.
 - **Rollback.** `taskBoard.enabled: false`. With no group on any board, the page draws the
   old flat list.

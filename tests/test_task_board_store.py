@@ -21,7 +21,6 @@ from raven.agent.task_board.board import (
     apply_update,
     board_from_dict,
     board_to_dict,
-    confine_update,
     drop_turns,
     ignore_question,
     owning_groups,
@@ -481,6 +480,32 @@ def test_a_salvage_leaves_a_fault_in_a_step_or_a_placement_to_be_refused():
 
     assert kept["groups"] == []
     with pytest.raises(UpdateRejectedError, match=r"^not placed: dag:20261029T100213Z-3eb3b470$"):
+        apply_update(board, kept, [DAG], turn_at="T2", turn_id=None, now_ms=9, allow_long=True)
+
+
+def test_a_salvage_drops_a_step_at_fault_that_places_no_work():
+    """One bad step must not cost the rest of the update: an owner's own step, on a turn a
+    result opened, used to be kept by the fence that dropped every other matter."""
+    board = _one_group()
+    gid = board.groups[0].id
+    stray = {"new_title": "Notes", "new_summary": "Drafting", **STEP, "status": "not-a-status"}
+    last = {"steps": [{"group": gid, **STEP, "status": "idle"}, stray]}
+
+    kept = salvage(board, last)
+
+    assert kept["steps"] == [last["steps"][0]]
+    after = apply_update(board, kept, [], turn_at="T2", turn_id=None, now_ms=9, allow_long=True)
+    assert [len(g.steps) for g in after.groups] == [2]
+
+
+def test_a_salvage_keeps_a_step_at_fault_that_places_work_for_the_rules_to_refuse():
+    board = _one_group()
+    faulty = {"group": board.groups[0].id, **STEP, "status": "not-a-status", "tasks": [DAG.handle]}
+
+    kept = salvage(board, {"steps": [faulty]})
+
+    assert kept["steps"] == [faulty]
+    with pytest.raises(UpdateRejectedError):
         apply_update(board, kept, [DAG], turn_at="T2", turn_id=None, now_ms=9, allow_long=True)
 
 
@@ -1006,39 +1031,3 @@ def test_a_moved_on_group_belongs_to_the_turn_while_the_board_holds_it():
     assert owning_groups(board, [], ["g_2"]) == ["g_2"]
     assert owning_groups(board, [], ["g_gone"]) == []
     assert owning_groups(board, [DAG.handle], ["g_1"]) == ["g_1", "g_2"], "the board's order, each once"
-
-
-def test_a_confined_update_drops_what_it_writes_on_another_matter():
-    own = {"group": "g_1", **STEP, "status": "idle"}
-    args = {
-        "action": "update",
-        "steps": [own, {"group": "g_2", **STEP, "status": "idle"}, {**NEW, **STEP, "status": "idle"}],
-        "groups": [{"group": "g_1", "summary": "Fixed."}, {"group": "g_2", "summary": "Rewritten"}],
-    }
-
-    kept = confine_update(args, ["g_1"])
-
-    assert kept == {"action": "update", "steps": [own], "groups": [{"group": "g_1", "summary": "Fixed."}]}
-    assert len(args["steps"]) == 3, "the arguments handed in are left as they were"
-
-
-def test_a_confined_update_keeps_every_step_that_places_work_and_that_group_s_own_fields():
-    """Work the turn started has to land somewhere, a new matter or another included;
-    the group it lands on is then one this turn moved."""
-    elsewhere = {"group": "g_2", **STEP, "status": "running", "tasks": [SPAWN.handle]}
-    opened = {**NEW, **STEP, "status": "running", "tasks": [DAG.handle]}
-    args = {"steps": [elsewhere, opened], "groups": [{"group": "g_2", "title": "Release notes, v2"}]}
-
-    assert confine_update(args, ["g_1"]) == args
-
-
-def test_an_update_with_no_owning_group_is_left_whole():
-    args = {"steps": [{"group": "g_2", **STEP, "status": "idle"}, {**NEW, **STEP, "status": "idle"}]}
-
-    assert confine_update(args, []) == args
-
-
-def test_a_malformed_update_reaches_the_rules_unconfined():
-    """The model is told what is wrong with what it sent, not with what was left of it."""
-    assert confine_update({"steps": "one step"}, ["g_1"]) == {"steps": "one step"}
-    assert confine_update({"steps": ["x"], "groups": "g_2"}, ["g_1"]) == {"steps": ["x"], "groups": "g_2"}
