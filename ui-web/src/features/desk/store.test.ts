@@ -944,6 +944,37 @@ describe('what is new', () => {
     deliver('/w/a.md')
     expect(desk.unseen('deliverables')).toBe(0)
   })
+
+  /* The palette marks the tab it is drawing after every render, so a mark has
+     to settle. It stopped doing that past the record's cap: the write kept the
+     newest slice while the caller handed over the whole tab, so the ids the
+     write dropped read back as new on the next call and the every-render mark
+     re-notified forever. A tab that outgrew the record froze the web UI. */
+  it('settles when a tab holds more than the record can remember', () => {
+    changed(...Array.from({ length: 301 }, (_, i) => `/w/f${i}.ts`))
+    let notified = 0
+    const stop = desk.subscribe(() => { notified += 1 })
+
+    desk.seeTab('diff')
+    desk.seeTab('diff')
+
+    stop()
+    expect(notified).toBe(1)
+    expect(desk.unseen('diff')).toBe(0)
+  })
+
+  it('leaves the count alone when an item past the slice is opened', () => {
+    changed(...Array.from({ length: 301 }, (_, i) => `/w/f${i}.ts`))
+    desk.seeTab('diff')
+
+    let notified = 0
+    const stop = desk.subscribe(() => { notified += 1 })
+    desk.readItem('diff', '/w/f300.ts:1')
+    stop()
+
+    expect(notified).toBe(0)
+    expect(desk.unseen('diff')).toBe(0)
+  })
 })
 
 /* Which tab the desk comes up on. Not the one it was left on: the reader
