@@ -23,7 +23,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 18
+CURRENT_CONFIG_VERSION = 19
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -56,6 +56,7 @@ _SHIM_PIN_REFRESH_MIGRATION = 15
 _RETIRED_SANDBOX_BACKEND_MIGRATION = 16
 _SANDBOX_NETWORK_MIGRATION = 17
 _RETIRED_PUSH_DISCOVERY_MIGRATION = 18
+_SHIM_PIN_REFRESH_2_MIGRATION = 19
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -431,6 +432,10 @@ def _persist_migrations(path: Path, from_version: int = 0, *, refresh_interprete
                 changed = _migrate_sandbox_network(raw) or changed
             if from_version < _RETIRED_PUSH_DISCOVERY_MIGRATION:
                 changed = _migrate_retired_push_discovery(raw) or changed
+            if from_version < _SHIM_PIN_REFRESH_2_MIGRATION:
+                changed = (
+                    _migrate_retired_shim_pins(raw, _RETIRED_SHIM_COMMANDS[_SHIM_PIN_REFRESH_2_MIGRATION]) or changed
+                )
             if refresh_interpreters:
                 changed = _refresh_bundled_shim_interpreters(raw) or changed
         if not changed:
@@ -1342,8 +1347,8 @@ def _migrate_retired_deep_research(data: dict[str, Any], *, notify: bool = False
 # to the preset's own, so a pin bumped without retiring the one before it here
 # fails there instead of stranding every row configured on that one.
 _SHIM_COMMANDS: dict[str, str] = {
-    "claude_code": "npx -y @agentclientprotocol/claude-agent-acp@0.94.0",
-    "codex": "npx -y @agentclientprotocol/codex-acp@2.2.2",
+    "claude_code": "npx -y @agentclientprotocol/claude-agent-acp@0.108.0",
+    "codex": "npx -y @agentclientprotocol/codex-acp@2.7.0",
     "pi": "npx -y pi-acp@0.0.34",
 }
 
@@ -1366,6 +1371,10 @@ _RETIRED_SHIM_COMMANDS: dict[int, dict[str, frozenset[str]]] = {
         "claude_code": frozenset({"npx -y @agentclientprotocol/claude-agent-acp@0.81.1"}),
         "codex": frozenset({"npx -y @agentclientprotocol/codex-acp@1.13.1"}),
         "pi": frozenset({"npx -y pi-acp@0.0.33"}),
+    },
+    _SHIM_PIN_REFRESH_2_MIGRATION: {
+        "claude_code": frozenset({"npx -y @agentclientprotocol/claude-agent-acp@0.94.0"}),
+        "codex": frozenset({"npx -y @agentclientprotocol/codex-acp@2.2.2"}),
     },
 }
 
@@ -1511,7 +1520,9 @@ def _migrate_retired_shim_pins(
     measured, codex-acp 1.13.1 reopens a thread 1.1.14 created, and
     claude-agent-acp 0.81.1 reopens sessions 0.66.0 and 0.79.0 created; and
     claude-agent-acp 0.94.0, codex-acp 2.2.2 and pi-acp 0.0.34 reopen what the
-    pins before them created (confirmed 2026-10-23). The new command is also a
+    pins before them created (confirmed 2026-10-23), and claude-agent-acp 0.108.0
+    and codex-acp 2.7.0 reopen what 0.94.0 and 2.2.2 created (measured
+    2026-11-18). The new command is also a
     new snapshot fingerprint, so the boot backfill re-measures the menu instead
     of serving the old build's.
 
@@ -1748,6 +1759,8 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
         _log.info("Migrated: dropped the retired subagentDag.verdictEnabled switch again")
     if from_version < _SHIM_PIN_REFRESH_MIGRATION:
         _migrate_retired_shim_pins(data, _RETIRED_SHIM_COMMANDS[_SHIM_PIN_REFRESH_MIGRATION], notify=True)
+    if from_version < _SHIM_PIN_REFRESH_2_MIGRATION:
+        _migrate_retired_shim_pins(data, _RETIRED_SHIM_COMMANDS[_SHIM_PIN_REFRESH_2_MIGRATION], notify=True)
     if from_version < _RETIRED_SANDBOX_BACKEND_MIGRATION:
         _migrate_retired_sandbox_backend(data, notify=True)
     if from_version < _SANDBOX_NETWORK_MIGRATION:
