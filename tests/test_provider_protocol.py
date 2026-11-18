@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import httpx
 import pytest
+from loguru import logger
 
 from raven.config.schema import Config
 from raven.providers.anthropic_messages_provider import AnthropicMessagesProvider, convert_messages
@@ -1122,6 +1123,19 @@ async def _replayed_deepseek_call(monkeypatch, provider_name: str) -> dict:
     return call
 
 
+def _capture_responses_requests(monkeypatch) -> list[dict]:
+    """Record the JSON body of every Responses call made in the test."""
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, content=_anthropic_sse({"type": "response.completed", "response": {}}))
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
+    return sent
+
+
 async def test_responses_model_overrides_unwrap_extra_body(monkeypatch) -> None:
     sent: list[dict] = []
 
@@ -1159,6 +1173,100 @@ async def test_responses_model_overrides_unwrap_extra_body(monkeypatch) -> None:
 
     assert sent[1]["max_output_tokens"] == 123
     assert "extra_body" not in sent[1]
+
+
+@pytest.mark.parametrize("extra_body", ["legacy-string", None, ["provider"]], ids=["string", "null", "list"])
+async def test_responses_model_overrides_warn_when_extra_body_is_not_a_dict(monkeypatch, extra_body) -> None:
+    sent = _capture_responses_requests(monkeypatch)
+    warnings: list[str] = []
+    sink_id = logger.add(lambda message: warnings.append(message.record["message"]), level="WARNING")
+    try:
+        provider = OpenAIResponsesProvider(
+            api_key="test",
+            api_base="https://api.example/v1",
+            default_model="deepseek/deepseek-v4.1-flash-1017",
+            model_overrides={"deepseek-v4.1": {"temperature": 0.2, "extra_body": extra_body}},
+        )
+        await provider.chat(messages=[{"role": "user", "content": "hello"}], model=provider.default_model)
+    finally:
+        logger.remove(sink_id)
+
+    assert sent[0]["extra_body"] == extra_body
+    assert sent[0]["temperature"] == 0.2
+    extra_body_warnings = [message for message in warnings if "extra_body" in message]
+    assert len(extra_body_warnings) == 1
+    assert "not a dict" in extra_body_warnings[0]
+    assert "literal field" in extra_body_warnings[0]
+
+
+async def test_responses_model_overrides_accept_an_empty_extra_body_without_a_warning(monkeypatch) -> None:
+    sent = _capture_responses_requests(monkeypatch)
+    warnings: list[str] = []
+    sink_id = logger.add(lambda message: warnings.append(message.record["message"]), level="WARNING")
+    try:
+        provider = OpenAIResponsesProvider(
+            api_key="test",
+            api_base="https://api.example/v1",
+            default_model="deepseek/deepseek-v4.1-flash-1017",
+            model_overrides={"deepseek-v4.1": {"temperature": 0.2, "extra_body": {}}},
+        )
+        await provider.chat(messages=[{"role": "user", "content": "hello"}], model=provider.default_model)
+    finally:
+        logger.remove(sink_id)
+
+    assert sent[0]["temperature"] == 0.2
+    assert "extra_body" not in sent[0]
+    assert warnings == []
+
+
+async def test_responses_adapter_fields_written_after_overrides_win(monkeypatch) -> None:
+    """The adapter's late writes replace overrides for the same four fields."""
+    sent = _capture_responses_requests(monkeypatch)
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "noop", "description": "nothing", "parameters": {"type": "object", "properties": {}}},
+        }
+    ]
+    provider = OpenAIResponsesProvider(
+        api_key="test",
+        api_base="https://api.example/v1",
+        default_model="deepseek/deepseek-v4.1-flash-1017",
+        model_overrides={
+            "deepseek-v4.1": {
+                "prompt_cache_key": "from-override",
+                "parallel_tool_calls": False,
+                "extra_body": {
+                    "prompt_cache_key": "from-extra-body",
+                    "tools": [],
+                    "tool_choice": "none",
+                    "parallel_tool_calls": False,
+                    "reasoning": {"effort": "high"},
+                },
+            }
+        },
+    )
+
+    await provider.chat(
+        messages=[{"role": "system", "content": "rules"}, {"role": "user", "content": "hello"}],
+        tools=tools,
+        model=provider.default_model,
+    )
+
+    body = sent[0]
+    assert body["prompt_cache_key"] not in {"from-override", "from-extra-body"}
+    assert body["tools"] == [
+        {
+            "type": "function",
+            "name": "noop",
+            "description": "nothing",
+            "parameters": {"type": "object", "properties": {}},
+        }
+    ]
+    assert body["tool_choice"] == "auto"
+    assert body["parallel_tool_calls"] is True
+    assert body["reasoning"] == {"effort": "high"}
+    assert "extra_body" not in body
 
 
 async def test_openai_responses_replays_another_vendors_call_under_an_id_it_accepts(monkeypatch) -> None:

@@ -303,6 +303,10 @@ class AgentDefaults(Base):
     # unknown top-level key is auto-forwarded into extra_body by LiteLLM for
     # OpenAI-compatible backends (e.g. sglang's repetition_penalty); a nested
     # structure can be written directly as extra_body: {...}.
+    # The Responses adapter flattens that nested extra_body, but on a request
+    # carrying instructions or tools it writes its own prompt_cache_key, tools,
+    # tool_choice and parallel_tool_calls after these overrides, replacing an
+    # override for any of those four keys; see openai_responses_provider.chat.
     model_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
     enable_personalization: bool = False  # 4-step PAHF-inspired personalization flow (classify → ask → execute → learn)
 
