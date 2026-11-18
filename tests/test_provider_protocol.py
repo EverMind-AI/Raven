@@ -1269,6 +1269,98 @@ async def test_responses_adapter_fields_written_after_overrides_win(monkeypatch)
     assert "extra_body" not in body
 
 
+def _anthropic_merged_body(provider: AnthropicMessagesProvider, model: str = "claude-haiku-4-5") -> dict:
+    return provider._body(
+        messages=[{"role": "user", "content": "hello"}],
+        tools=None,
+        model=model,
+        max_tokens=None,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+        stream=False,
+    )
+
+
+def test_anthropic_model_overrides_unwrap_extra_body() -> None:
+    provider = AnthropicMessagesProvider(
+        api_key="k",
+        api_base="https://api.anthropic.com/v1",
+        default_model="claude-haiku-4-5",
+        model_overrides={
+            "claude-haiku-4-5": {
+                "max_tokens": 222,
+                "extra_body": {"max_tokens": 111, "metadata": {"user_id": "u"}},
+            }
+        },
+    )
+
+    body = _anthropic_merged_body(provider)
+
+    assert body["max_tokens"] == 222
+    assert body["metadata"] == {"user_id": "u"}
+    assert "extra_body" not in body
+
+
+@pytest.mark.parametrize("extra_body", ["legacy-string", None, ["provider"]], ids=["string", "null", "list"])
+def test_anthropic_model_overrides_warn_when_extra_body_is_not_a_dict(extra_body) -> None:
+    provider = AnthropicMessagesProvider(
+        api_key="k",
+        api_base="https://api.anthropic.com/v1",
+        default_model="claude-haiku-4-5",
+        model_overrides={"claude-haiku-4-5": {"max_tokens": 222, "extra_body": extra_body}},
+    )
+    warnings: list[str] = []
+    sink_id = logger.add(lambda message: warnings.append(message.record["message"]), level="WARNING")
+    try:
+        body = _anthropic_merged_body(provider)
+    finally:
+        logger.remove(sink_id)
+
+    assert body["extra_body"] == extra_body
+    assert body["max_tokens"] == 222
+    extra_body_warnings = [message for message in warnings if "extra_body" in message]
+    assert len(extra_body_warnings) == 1
+    assert "not a dict" in extra_body_warnings[0]
+    assert "literal field" in extra_body_warnings[0]
+
+
+def test_anthropic_model_overrides_accept_an_empty_extra_body_without_a_warning() -> None:
+    provider = AnthropicMessagesProvider(
+        api_key="k",
+        api_base="https://api.anthropic.com/v1",
+        default_model="claude-haiku-4-5",
+        model_overrides={"claude-haiku-4-5": {"max_tokens": 222, "extra_body": {}}},
+    )
+    warnings: list[str] = []
+    sink_id = logger.add(lambda message: warnings.append(message.record["message"]), level="WARNING")
+    try:
+        body = _anthropic_merged_body(provider)
+    finally:
+        logger.remove(sink_id)
+
+    assert body["max_tokens"] == 222
+    assert "extra_body" not in body
+    assert warnings == []
+
+
+def test_anthropic_learned_ceiling_clamps_an_extra_body_max_tokens() -> None:
+    """The one late repair that replaces a merged value is the learned ceiling."""
+    provider = AnthropicMessagesProvider(
+        api_key="k",
+        api_base="https://api.anthropic.com/v1",
+        default_model="claude-haiku-4-5",
+        model_overrides={"claude-haiku-4-5": {"extra_body": {"max_tokens": 500, "metadata": {"user_id": "u"}}}},
+    )
+    provider._ceilings[provider.wire_model_id("claude-haiku-4-5")] = 100
+
+    body = _anthropic_merged_body(provider)
+
+    assert body["max_tokens"] == 100
+    assert body["metadata"] == {"user_id": "u"}
+    assert "extra_body" not in body
+
+
 async def test_openai_responses_replays_another_vendors_call_under_an_id_it_accepts(monkeypatch) -> None:
     """OpenAI's own endpoint polices the item id the way the Codex backend does."""
     call = await _replayed_deepseek_call(monkeypatch, "openai")
