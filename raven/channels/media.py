@@ -20,6 +20,8 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 
 from raven.config.paths import get_media_dir
 
@@ -36,3 +38,31 @@ def save_media_bytes(channel: str, data: bytes, name: str | None) -> Path:
     path = get_media_dir(channel) / f"{digest}_{safe_name(name)}"
     path.write_bytes(data)
     return path
+
+
+def file_uri_to_path(uri: str) -> Path | None:
+    r"""The local :class:`~pathlib.Path` behind a ``file://`` URI, or ``None``.
+
+    ``url2pathname`` is the platform-aware inverse of ``Path.as_uri()``: on
+    Windows it turns ``file:///C:/...`` into ``C:\...``, where a bare
+    ``Path(urlparse(uri).path)`` yields ``\C:\...``, which never exists. A
+    ``localhost`` authority names a UNC share and is handed to Path intact
+    (``//localhost/...``), because ``url2pathname`` folds it away; any other
+    host is remote and refused, mirroring ``raven.acp.methods._file_uri_to_path``.
+    """
+    if not uri.startswith("file://"):
+        return None
+    try:
+        parsed = urlparse(uri)
+    except ValueError:
+        # urlparse raises on a bracketed host that is not a valid IPv6 literal.
+        return None
+    if parsed.netloc and parsed.netloc != "localhost":
+        return None
+    if parsed.netloc:
+        # url2pathname folds the localhost authority away; Path keeps the UNC host.
+        return Path(f"//{parsed.netloc}{unquote(parsed.path)}")
+    target = unquote(parsed.path)
+    if not target:
+        return None
+    return Path(url2pathname(target))

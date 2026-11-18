@@ -1,4 +1,6 @@
-"""Tests for raven.channels.media — traversal-safe, collision-safe writes."""
+"""Tests for raven.channels.media - traversal-safe, collision-safe writes."""
+
+import os
 
 import raven.channels.media as media
 
@@ -33,3 +35,27 @@ def test_save_idempotent_for_same_content(tmp_path, monkeypatch):
     p1 = media.save_media_bytes("feishu", b"same", "a.bin")
     p2 = media.save_media_bytes("feishu", b"same", "a.bin")
     assert p1 == p2
+
+
+def test_file_uri_to_path_resolves_local_uri(tmp_path):
+    f = tmp_path / "data.csv"
+    f.write_text("x")
+    p = media.file_uri_to_path(f.as_uri())
+    assert p is not None
+    assert p == f
+
+
+def test_file_uri_to_path_keeps_localhost_share():
+    p = media.file_uri_to_path("file://localhost/C%24/data/x.csv")
+    if os.name == "nt":
+        assert str(p) == r"\\localhost\C$\data\x.csv"
+    else:
+        assert str(p) == "//localhost/C$/data/x.csv"
+
+
+def test_file_uri_to_path_refuses_remote_host():
+    assert media.file_uri_to_path("file://server/share/x.csv") is None
+
+
+def test_file_uri_to_path_refuses_non_file_uri():
+    assert media.file_uri_to_path("http://example.com/x.csv") is None

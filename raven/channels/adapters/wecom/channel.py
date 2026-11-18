@@ -9,16 +9,13 @@ import os
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
-from urllib.request import url2pathname
-
 from loguru import logger
 from wecom_aibot_sdk import WSClient, generate_req_id
 
 from raven.channels.base import ChannelBase
 from raven.channels.contract import Capabilities
 from raven.channels.errors import transient_network
-from raven.channels.media import safe_name, save_media_bytes
+from raven.channels.media import file_uri_to_path, safe_name, save_media_bytes
 
 _MSG_TYPE_LABEL = {"image": "[image]", "voice": "[voice]", "file": "[file]", "mixed": "[mixed content]"}
 _DEDUP_CAP = 1000
@@ -252,9 +249,10 @@ class WecomChannel(ChannelBase):
         """Resolve an outbound media ref (local or file:// path) to an existing
         local path within the upload size cap, for the SDK upload protocol."""
         if media_ref.startswith("file://"):
-            # url2pathname is the platform-aware inverse of Path.as_uri(); a bare
-            # Path(urlparse(...).path) yields \C:\... on Windows and never resolves.
-            path = Path(url2pathname(unquote(urlparse(media_ref).path)))
+            path = file_uri_to_path(media_ref)
+            if path is None:
+                logger.warning("WeCom media file not found: {}", media_ref)
+                return None
         else:
             path = Path(os.path.expanduser(media_ref))
         if not path.is_file():

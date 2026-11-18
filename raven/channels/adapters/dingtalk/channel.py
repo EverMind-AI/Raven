@@ -10,8 +10,6 @@ import mimetypes
 import os
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
-from urllib.request import url2pathname
 
 from dingtalk_stream import (
     AckMessage,
@@ -249,9 +247,10 @@ class DingTalkChannel(ChannelBase):
 
         try:
             if media_ref.startswith("file://"):
-                # url2pathname is the platform-aware inverse of Path.as_uri(); a bare
-                # Path(urlparse(...).path) yields \C:\... on Windows and never resolves.
-                local_path = Path(url2pathname(unquote(urlparse(media_ref).path)))
+                local_path = file_uri_to_path(media_ref)
+                if local_path is None:
+                    logger.warning("DingTalk media file not found: {}", media_ref)
+                    return None, None, None
             else:
                 local_path = Path(os.path.expanduser(media_ref))
             if not local_path.is_file():
