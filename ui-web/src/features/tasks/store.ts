@@ -335,24 +335,33 @@ function liveRows(next: TaskRow[]): void {
   patch({ rows: next })
 }
 
-export async function refresh(): Promise<void> {
+/* Read the open conversation's rows. Answers whether the read landed: false
+   is a refusal (a gateway restarting under the page, say), not "no tasks", and
+   it is what lets the desk panel ask again instead of staying blank. Asking
+   again is the caller's decision -- the boot's own read does not. */
+export async function refresh(): Promise<boolean> {
   const src = source()
   const key = sessionCurrent()
   /* No source or no open conversation reads as no tasks, not as an error: a
      draft has no session for a task to be filed under, and a read asked before
      the seam is on has no list to ask. */
-  if (!src || !key) { patch({ rows: [], loaded: true }); return }
+  if (!src || !key) { patch({ rows: [], loaded: true }); return true }
   const tick = liveTick
-  const got = await src.list(key)
+  let got: TaskRow[]
+  try {
+    got = await src.list(key)
+  } catch {
+    return false
+  }
   /* Asked for one conversation, answered into whichever is open now: the
      reader can switch sessions while this is in flight. The same guard the
      agents lists, the deliveries shelf and the desk replay use. */
-  if (key !== sessionCurrent()) return
+  if (key !== sessionCurrent()) return true
   const answered = Array.isArray(got) ? got : []
   const held = new Map(store.get().rows.map((r) => [rowKey(r), r]))
   if (tick === liveTick) {
     patch({ rows: answered.map((r) => live.carryOutcome(held.get(rowKey(r)), r)), loaded: true })
-    return
+    return true
   }
   /* A frame landed while the read was out, so the answer is no longer the
      whole truth -- but only about the rows those frames named. Row by row:
@@ -381,6 +390,7 @@ export async function refresh(): Promise<void> {
   const named = new Set(answered.map(rowKey))
   const missed = store.get().rows.filter((r) => !named.has(rowKey(r)) && fresher(rowKey(r)))
   patch({ rows: [...missed, ...merged], loaded: true })
+  return true
 }
 
 /* The two groups the panel shows. A row is finished when it is not running --
