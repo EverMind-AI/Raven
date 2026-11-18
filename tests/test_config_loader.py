@@ -1632,6 +1632,52 @@ def test_a_config_past_the_first_pin_floor_moves_only_the_pins_the_next_floor_re
     assert loader.drain_migration_notices() == []
 
 
+# The stock commands floor 19 retired: what the Claude Code and Codex shims
+# shipped between floor 15 and floor 19. pi-acp did not move.
+_THIRD_RETIRED = (
+    "npx -y @agentclientprotocol/claude-agent-acp@0.94.0",
+    "npx -y @agentclientprotocol/codex-acp@2.2.2",
+)
+
+
+def test_a_config_past_the_second_pin_floor_moves_only_the_pins_the_third_floor_retired(tmp_path: Path) -> None:
+    """The pins moved again for the reasons the table gives -- codex-acp 2.2.2's
+    bundled codex 0.160.1 sits below 0.166.0, where the catalogue starts offering
+    gpt-6.2 -- and a config already past floor 15 keeps an older stock pin its
+    owner put back. A config at the floor keeps even its stock row.
+
+    The floors are literals, for the reason
+    test_the_retired_deep_research_section_goes_and_its_disabled_entry_stays gives.
+    """
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.config import loader
+
+    claude, codex = (THIRD_PARTY_SUBAGENT_PRESETS[key]["command"] for key in ("claude_code", "codex"))
+    put_back = _codex_row(_SECOND_RETIRED[1], name="Codex-put-back")
+    loader._migration_notices.clear()
+    data = {
+        "subagents": {
+            "agents": [
+                _claude_row(_THIRD_RETIRED[0]),
+                _codex_row(_THIRD_RETIRED[1]),
+                json.loads(json.dumps(put_back)),
+            ]
+        }
+    }
+    loader._migrate_config(data, from_version=18)
+
+    assert data["subagents"]["agents"] == [_claude_row(claude), _codex_row(codex), put_back]
+    assert sorted(n.split("]")[0] for n in loader.drain_migration_notices()) == [
+        "Migrated: subagents.agents[Claude Code",
+        "Migrated: subagents.agents[Codex",
+    ]
+
+    at_floor = {"subagents": {"agents": [_codex_row(_THIRD_RETIRED[1])]}}
+    loader._migrate_config(at_floor, from_version=19)
+    assert at_floor == {"subagents": {"agents": [_codex_row(_THIRD_RETIRED[1])]}}
+    assert loader.drain_migration_notices() == []
+
+
 def test_a_pi_row_stays_on_the_adapter_its_pi_can_answer(tmp_path: Path) -> None:
     """pi-acp 0.0.34 asks pi for its model's thinking levels as a session opens, which a
     pi older than 0.81.0 refuses as an unknown command, so no session opens (measured
@@ -1877,6 +1923,30 @@ def test_a_file_past_the_first_pin_floor_has_its_second_floor_pins_carried_in_th
     assert [a.command for a in cfg.subagents.agents] == [codex]
     assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [_codex_row(codex)]
     assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+
+
+def test_a_file_past_the_second_pin_floor_has_its_third_floor_pins_carried_in_the_file(tmp_path: Path) -> None:
+    """The file pass carries the same rows the in-memory pass does, and stamps the
+    floor it passed.
+
+    The stamp is the literal this floor writes, not ``CURRENT_CONFIG_VERSION``: a
+    stamp written from CURRENT cannot see the constant left behind while the floor
+    was added, which leaves every later load re-running the floor -- the lesson
+    ``test_a_stamped_seven_config_keeps_its_transition_row`` records for the input
+    side."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+
+    p = tmp_path / "config.json"
+    _write(p, {"subagents": {"agents": [_codex_row(_THIRD_RETIRED[1])]}})
+    _stamp_path(p).write_text(json.dumps({"version": 18}), encoding="utf-8")
+
+    drain_migration_notices()
+    cfg = load_config(p)
+
+    codex = THIRD_PARTY_SUBAGENT_PRESETS["codex"]["command"]
+    assert [a.command for a in cfg.subagents.agents] == [codex]
+    assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [_codex_row(codex)]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": 19}
 
 
 def test_an_address_the_settings_dialog_only_showed_leaves_the_file_once(tmp_path: Path) -> None:
