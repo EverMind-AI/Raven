@@ -97,7 +97,8 @@ class PptGenerateImageTool(Tool):
     )
     _MINIMAX_REFERENCES = (
         "one picture to match: a figure id of this deck, a file name under its sources, or an absolute path. "
-        "MiniMax keeps the character it shows -- one per call -- and a manner goes in the prompt, not here"
+        "MiniMax keeps the character it shows -- one per call, and a second named is not sent -- so a manner goes "
+        "in the prompt, not here"
     )
     description = _DESCRIPTION
     timeout_seconds = 360.0

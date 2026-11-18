@@ -1102,8 +1102,9 @@ you ask for is then what the page **lacks**, not what it already carries.
 **Hand the model the material; do not describe it.** `references` takes up to six pictures
 -- the logo file, the mark the brand actually uses, the template's own illustration, an
 earlier generation the new one is a series with -- as figure ids, source file names or
-absolute paths. A MiniMax deployment keeps the first one only, so the character it has to
-stay consistent with goes in that one. A described logo comes back as a different logo.
+absolute paths. A MiniMax deployment keeps the first one only -- a second named is not
+sent -- so the character it has to stay consistent with goes in that one. A described logo
+comes back as a different logo.
 
 **Say where the type goes, and ask for no type.** Name the region the title needs by side
 and by share -- "the left 55% of the canvas stays almost pure dark, reserved for title text
