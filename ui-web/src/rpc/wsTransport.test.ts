@@ -250,6 +250,31 @@ describe('a call made before the socket is open', () => {
     expect((await failure(answer)).message).toBe('not connected')
   })
 
+  /* The close can land between `send`'s CONNECTING check and the moment the
+     held call registers its listeners: the socket fires its close into an
+     empty list, so waiting for the event alone leaves that call pending for
+     the life of the page. The state read after the registrations closes it. */
+  it('fails a held call whose socket closed before its listeners attached', async () => {
+    const { h, ws } = connecting()
+    const register = ws.addEventListener.bind(ws)
+    ws.addEventListener = (type, fn, options) => {
+      if (type === 'open') ws.readyState = FakeSocket.CLOSED
+      register(type, fn, options)
+    }
+
+    let outcome = 'pending'
+    void h.transport.call('session.list', {}).then(
+      () => { outcome = 'resolved' },
+      (e: unknown) => { outcome = (e as Error).message }
+    )
+    /* `call` rejects a turn after `send` does, so the hand-off needs two
+       turns of the queue before the outcome is visible here. */
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(outcome).toBe('not connected')
+  })
+
   it('still fails fast when there is no socket at all', async () => {
     const h = harness()
 

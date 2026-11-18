@@ -31,9 +31,11 @@ const REJOIN_MAX_WAIT_MS = 8_000
 const REJOIN_FIRST_WAIT_MS = 1_500
 const REJOIN_GROWTH = 1.6
 
-/* Not `WebSocket.CONNECTING`: the transport must be constructible where no
-   global WebSocket exists, which is how its own tests drive it. */
+/* Not `WebSocket.CONNECTING` / `WebSocket.OPEN`: the transport must be
+   constructible where no global WebSocket exists, which is how its own tests
+   drive it. */
 const CONNECTING = 0
+const OPEN = 1
 
 /** The slice of a WebSocket this transport uses, so a test can supply one. */
 export interface WebSocketLike {
@@ -293,6 +295,14 @@ export class WsTransport implements RpcTransport {
         { once: true }
       )
       ws.addEventListener('close', () => reject(new RpcError(-1, 'not connected')), { once: true })
+      /* Both listeners are on before the state is read. A socket already
+         closing or closed when a call is held here can never fire either event
+         for this call -- the close it would have waited for has already gone
+         out -- so without the state read the call would stay pending for the
+         life of the page. Only a socket still connecting (or already open, an
+         event this task cannot have missed) is left to the listeners. */
+      const state = ws.readyState
+      if (state !== CONNECTING && state !== OPEN) reject(new RpcError(-1, 'not connected'))
     })
   }
 
