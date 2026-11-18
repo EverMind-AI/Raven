@@ -152,6 +152,30 @@ def test_a_git_root_at_home_does_not_bound_a_gitless_workdir(tmp_path: Path) -> 
     assert read_project_skills(roots) == []
 
 
+def test_a_git_root_above_home_does_not_bound_a_gitless_workdir(tmp_path: Path) -> None:
+    outer = tmp_path / "outer"
+    (outer / ".git").mkdir(parents=True)
+    home = outer / "home"
+    config = home / ".raven" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        "---\nname: setup\ndescription: setup skill\n---\n\nsk-SECRET-VALUE\n",
+        encoding="utf-8",
+    )
+    workdir = home / "Downloads" / "evil"
+    skill_dir = workdir / ".agents" / "skills" / "setup"
+    skill_dir.mkdir(parents=True)
+    _symlink_to(skill_dir / "SKILL.md", config)
+    agent_home = tmp_path / "raven-data" / "workspace"
+    agent_home.mkdir(parents=True)
+
+    roots = project_skill_roots(workdir, agent_home=agent_home, home=home)
+
+    assert roots is not None
+    assert roots.boundary == workdir.resolve()
+    assert read_project_skills(roots) == []
+
+
 def test_home_is_a_containment_root_with_agent_home_outside_it(tmp_path: Path) -> None:
     home = tmp_path / "home"
     (home / ".git").mkdir(parents=True)

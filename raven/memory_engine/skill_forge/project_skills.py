@@ -56,8 +56,8 @@ def project_skill_roots(
     """Resolve the project's skill directories for one working directory.
 
     ``boundary`` is the git root, or the working directory when there is no
-    git ancestor or the nearest one is home, agent home, or an ancestor of
-    agent home. Paths resolving into the user-level ``.agents`` tree or agent
+    git ancestor or the nearest one is home, an ancestor of home, agent home, or an
+    ancestor of agent home. Paths resolving into the user-level ``.agents`` tree or agent
     home are never collected. Returns ``None`` when no directory qualifies.
     """
     home_r = (home or Path.home()).resolve()
@@ -67,7 +67,7 @@ def project_skill_roots(
     start = workdir.resolve()
     chain = [start, *start.parents]
     git_root = next((d for d in chain if (d / ".git").exists()), None)
-    if git_root in excluded:
+    if git_root in {*excluded, *home_r.parents}:
         git_root = None
     walk = chain[: chain.index(git_root) + 1] if git_root is not None else [start]
     boundary = git_root or start
