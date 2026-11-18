@@ -31,6 +31,7 @@ from raven.context_engine.runtime_context import (
     mcp_notice,
     told_notices,
     with_runtime_context,
+    without_runtime_context,
 )
 from raven.context_engine.segments.render import RUNTIME_CONTEXT_TAG
 from raven.contracts.harness import (
@@ -823,3 +824,28 @@ def test_pruning_tool_results_alone_touches_no_notice_blocks():
     assert carrier is messages[1], "a user message is never the pruner's to edit"
     assert result.messages[-1] is question and MCP_NOTICE_HEADER not in str(question["content"])
     assert told_notices(result.messages) == {"github": _AUTH}
+
+
+def test_a_summary_never_takes_the_question_out_of_the_turn():
+    """The verbatim tail is budgeted, and one large tool result can push the
+    question past it. The question must stay anyway: it is the turn's own
+    words, and the envelope a retold notice is said on. Summarizing it away
+    drops the ask and leaves the note nowhere to be said again."""
+    provider = _BriefProvider()
+    memory = _compacting_memory(provider)
+    block = f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{_AUTH}"
+    question = _question()
+    call = {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function"}]}
+    result_msg = {"role": "tool", "tool_call_id": "c1", "content": "payload " * 4_000}
+    messages = [*_pressured_turn(question, block), call, result_msg]
+    state = WindowState(image_window=1, session_key="s1", last_context_used=17_000)
+
+    result = asyncio.run(memory.shrink(messages, pressure=WindowPressure.PROACTIVE, state=state, model="m"))
+
+    assert provider.calls == 1, "the tool result is over the tail budget, so the summary is owed"
+    assert result.changed
+    assert any(
+        m.get("role") == "user" and without_runtime_context(m) == without_runtime_context(question)
+        for m in result.messages
+    ), "the turn's question may not be summarized away"
+    assert told_notices(result.messages) == {"github": _AUTH}, "the note the summary took away is told again"
