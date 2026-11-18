@@ -2196,3 +2196,23 @@ def test_list_sessions_rescans_a_transcript_that_grew(tmp_path: Path):
     manager.save(grown)
 
     assert manager.list_sessions()[0]["message_count"] == 2
+
+
+def test_list_sessions_skips_a_transcript_it_cannot_stat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A path that vanished between glob and stat is left out, not raised."""
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("cli:one")
+    session.add_message("user", "hello")
+    manager.save(session)
+    [path] = list((tmp_path / "sessions").rglob("*.jsonl"))
+
+    real_stat = Path.stat
+
+    def failing_stat(self: Path, *args, **kwargs):
+        if self == path:
+            raise OSError("gone between glob and stat")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", failing_stat)
+
+    assert manager.list_sessions() == []
