@@ -258,6 +258,12 @@ export interface SessionUsage {
    * True when context_used is a tiktoken estimate of a resumed transcript, not a measurement.
    */
   context_estimated?: boolean;
+  /**
+   * The window divided: tokens by part, keyed system / tools / conversation / files / memory / skills, as the last measured turn recorded them. Absent when that turn measured none, or the conversation predates the record.
+   */
+  context_parts?: {
+    [k: string]: number;
+  } | null;
 }
 /**
  * One stored message in wire form: ``content`` renamed to ``text``.
@@ -7579,6 +7585,12 @@ export interface SessionUsageResult {
    * True when context_used is a tiktoken estimate.
    */
   context_estimated: boolean;
+  /**
+   * The window divided: tokens by part, keyed system / tools / conversation / files / memory / skills, as the last measured turn recorded them. Absent when that turn measured none, or the conversation predates the record.
+   */
+  context_parts?: {
+    [k: string]: number;
+  } | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

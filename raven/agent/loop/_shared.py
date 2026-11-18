@@ -175,6 +175,12 @@ def _stamp_reasoning_ms(messages: list[dict[str, Any]], response: Any) -> None:
 # log whole, so the log is not that.
 _CONTEXT_USED_KEY = "_context_used"
 
+# The window divided, kept beside the reading it belongs to and on the same
+# terms: measured on the request that reading came from, so a resume can draw
+# the card's parts without re-measuring a stored log that is not what the model
+# was sent.
+_CONTEXT_PARTS_KEY = "_context_parts"
+
 
 def _window_reading(usage: dict[str, Any] | None) -> int:
     """How full a call left the window: its prompt plus its reply, in tokens.
@@ -214,15 +220,22 @@ def _call_window(response: Any) -> int:
     return 0 if _reads_no_window(response) else _window_reading(getattr(response, "usage", None))
 
 
-def _stamp_context_used(messages: list[dict[str, Any]], response: Any) -> None:
-    """Put a model call's window reading on the assistant entry that stands for it.
+def _stamp_context_used(
+    messages: list[dict[str, Any]],
+    response: Any,
+    parts: dict[str, int] | None = None,
+) -> None:
+    """Put a model call's window reading, and its breakdown, on the assistant entry.
 
     Absent when the provider reported no usage, and absent means unknown: a
-    resume reads the newest entry that has one.
+    resume reads the newest entry that has one. ``parts`` rides only with a
+    reading -- a breakdown of a prompt no reading describes is not filed.
     """
     used = _call_window(response)
     if used > 0 and messages:
         messages[-1][_CONTEXT_USED_KEY] = used
+        if parts:
+            messages[-1][_CONTEXT_PARTS_KEY] = dict(parts)
 
 
 def _first_line(text: str) -> str:

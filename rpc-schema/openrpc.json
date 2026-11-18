@@ -8576,6 +8576,16 @@
             "context_estimated": {
               "type": "boolean",
               "description": "True when context_used is a tiktoken estimate."
+            },
+            "context_parts": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "description": "The window divided: tokens by part, keyed system / tools / conversation / files / memory / skills, as the last measured turn recorded them. Absent when that turn measured none, or the conversation predates the record."
             }
           }
         }
@@ -13248,6 +13258,16 @@
           "context_estimated": {
             "type": "boolean",
             "description": "True when context_used is a tiktoken estimate of a resumed transcript, not a measurement."
+          },
+          "context_parts": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "The window divided: tokens by part, keyed system / tools / conversation / files / memory / skills, as the last measured turn recorded them. Absent when that turn measured none, or the conversation predates the record."
           }
         },
         "required": [

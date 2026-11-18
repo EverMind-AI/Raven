@@ -2223,6 +2223,14 @@ class SessionUsageResult(_Strict):
     )
     context_percent: int = Field(..., description="context_used as a percentage of context_max.")
     context_estimated: bool = Field(..., description="True when context_used is a tiktoken estimate.")
+    context_parts: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "The window divided: tokens by part, keyed system / tools / conversation / "
+            "files / memory / skills, as the last measured turn recorded them. Absent when "
+            "that turn measured none, or the conversation predates the record."
+        ),
+    )
 
 
 class SessionHistoryParams(_Strict):
@@ -4363,6 +4371,14 @@ class SessionUsage(_Strict):
     context_estimated: bool | None = Field(
         default=None,
         description="True when context_used is a tiktoken estimate of a resumed transcript, not a measurement.",
+    )
+    context_parts: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "The window divided: tokens by part, keyed system / tools / conversation / "
+            "files / memory / skills, as the last measured turn recorded them. Absent when "
+            "that turn measured none, or the conversation predates the record."
+        ),
     )
 
 

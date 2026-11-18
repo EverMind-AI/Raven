@@ -1796,7 +1796,10 @@ forwarding through `tool_call`, whose message is named for the tool that
 produced it. A `SKILL.md` read through `read_file` or `exec` is not counted:
 the split follows what the skill subsystem wrote, not what a general-purpose
 tool happened to read. Carried on the wire as `context_parts` on a turn's
-usage, and absent until a turn has measured one.
+usage, and absent until a turn has measured one. A turn files its breakdown on
+the reply that carries its window reading, and a resumed session reads the two
+off that same reply -- an older breakdown describes a prompt the newer reading
+did not measure.
 _Avoid_: "segments" for these — a Segment is a piece the context engine assembles
 the prompt from, not a share of the window.
 

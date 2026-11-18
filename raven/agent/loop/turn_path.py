@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from raven.agent.context.silence import is_silence, reads_loose_silence, teaches_silence
 from raven.agent.loop._shared import (
     _ABORTED_ACTION_REPLY,
+    _CONTEXT_PARTS_KEY,
     _CONTEXT_USED_KEY,
     _DELEGATED_KEY,
     _HOOK_INJECTED_KEY,
@@ -372,7 +373,11 @@ _SAID_LOG_MAX_CHARS = 2000
 _TURN_TRANSIENT_KEYS = ("_recovery_synthetic", ATTACHED_IMAGE_KEY)
 
 
-def _stamp_context_used_on_kept(messages: list[dict[str, Any]], response: Any) -> None:
+def _stamp_context_used_on_kept(
+    messages: list[dict[str, Any]],
+    response: Any,
+    parts: dict[str, int] | None = None,
+) -> None:
     """Put the reading of a call whose reply is not filed on the newest row that is.
 
     An empty reply never becomes a row of its own in the session: recovery
@@ -383,7 +388,7 @@ def _stamp_context_used_on_kept(messages: list[dict[str, Any]], response: Any) -
     is the turn's question it is already on disk and the stamp never reaches
     it: the turn either files a row of its own later, which takes a newer
     reading, or ends on the marker ``_save_broken_turn`` files, which carries
-    it.
+    it. ``parts`` rides with the reading, for the reason ``_shared`` states.
     """
     used = _call_window(response)
     if used <= 0:
@@ -391,6 +396,8 @@ def _stamp_context_used_on_kept(messages: list[dict[str, Any]], response: Any) -
     for message in reversed(messages):
         if not any(message.get(key) for key in _TURN_TRANSIENT_KEYS):
             message[_CONTEXT_USED_KEY] = used
+            if parts:
+                message[_CONTEXT_PARTS_KEY] = dict(parts)
             return
 
 
@@ -1006,7 +1013,7 @@ class TurnPathMixin:
         turn_log: TurnLog | None = None,
         rungs_used: set[str] | None = None,
         reply_awaited: bool = False,
-        window_reading: dict[str, int] | None = None,
+        window_reading: dict[str, Any] | None = None,
         silence_taught: bool = False,
         turn_start_idx: int = 0,
         session_effort: str | None = None,
@@ -1418,9 +1425,14 @@ class TurnPathMixin:
             messages = self.context.add_assistant_message(messages, final)
             if silent:
                 messages[-1][_SILENT_KEY] = True
-            _stamp_context_used(messages, last)
+            _stamp_context_used(messages, last, measured_parts)
             return final
 
+        # The breakdown measured for the response in hand, carried to every
+        # stamp of it. Declared before the loop because the partial-reply path
+        # closes over it: a continuation that raises ends the turn on the cut
+        # answer from the iteration before, whose measurement this still holds.
+        measured_parts: dict[str, int] | None = None
         while iteration < iteration_cap:
             # Checked here and not mid-generation: cancelling a call in flight
             # discards a finished generation and leaves no answer, and a deadline
@@ -1771,10 +1783,18 @@ class TurnPathMixin:
                 # the prompt was billed as (see ``_window_reading``), and a
                 # call can give none (see ``_call_window``).
                 context_used = _call_window(response)
+                # The window divided, measured on the request this reading came
+                # from: the stored reply carries it so a resume can draw the
+                # card's parts without a live report.
+                measured_parts = (
+                    measure_parts(call_messages, call_tools, self._last_window_parts) if context_used > 0 else None
+                )
                 if context_used > 0:
                     window.last_context_used = context_used
                     if window_reading is not None:
                         window_reading["context_used"] = context_used
+                        if measured_parts is not None:
+                            window_reading["context_parts"] = measured_parts
             if usage_sink is not None and response.usage and context_used <= 0 and usage_sink.get("context_used"):
                 # No reading -- a block of zeros, or an account ``_call_window``
                 # does not take as one -- so the gauge stays on the call before
@@ -1818,7 +1838,11 @@ class TurnPathMixin:
                 # The window divided, so a reader can be told what is filling it
                 # and not only how full it is. Measured on the request that was
                 # sent, which is the one the count above belongs to.
-                usage_sink["context_parts"] = measure_parts(call_messages, call_tools, self._last_window_parts)
+                usage_sink["context_parts"] = (
+                    measured_parts
+                    if measured_parts is not None
+                    else measure_parts(call_messages, call_tools, self._last_window_parts)
+                )
 
             # Recoveries that retry this iteration. The classifier on the response
             # says what kind of refusal this was; the Memory role says whether it
@@ -1879,7 +1903,7 @@ class TurnPathMixin:
                         # leaves dangling calls that strict providers reject.
                         final_content = str(decision.short_circuit_result)
                         messages = self.context.add_assistant_message(messages, final_content)
-                        _stamp_context_used(messages, response)
+                        _stamp_context_used(messages, response, measured_parts)
                         break
                 # Blocking a call is handled where the call is: the
                 # branch below refuses it and cancels the siblings the
@@ -1920,7 +1944,7 @@ class TurnPathMixin:
                     thinking_blocks=response.thinking_blocks,
                 )
                 _stamp_reasoning_ms(messages, response)
-                _stamp_context_used(messages, response)
+                _stamp_context_used(messages, response, measured_parts)
 
                 for tool_call_index, tool_call in enumerate(response.tool_calls):
                     tools_used.append(tool_call.name)
@@ -2403,7 +2427,7 @@ class TurnPathMixin:
                     status = "error"
                     error_detail = _llm_failure_detail(clean, verdict)
                     error_full = response_failure_text(clean, response.call_record)
-                    _stamp_context_used_on_kept(messages, response)
+                    _stamp_context_used_on_kept(messages, response, measured_parts)
                     break
 
                 if recovery.parts:
@@ -2420,7 +2444,7 @@ class TurnPathMixin:
                         carried_gate = None
 
                 if not (clean or "").strip():
-                    _stamp_context_used_on_kept(messages, response)
+                    _stamp_context_used_on_kept(messages, response, measured_parts)
 
                 # Empty-response recovery. A reply with no tool call is read for
                 # what it is (``reply_kind``) and ``decide`` names the move; an
@@ -2750,7 +2774,7 @@ class TurnPathMixin:
                     if decision.short_circuit_result is not None:
                         final_content = str(decision.short_circuit_result)
                         messages = self.context.add_assistant_message(messages, final_content)
-                        _stamp_context_used(messages, response)
+                        _stamp_context_used(messages, response, measured_parts)
                         break
                 else:
                     await _settle_silence(silence_gate, silent=ends_silent, dropped_marker=dropped_marker)
@@ -2774,7 +2798,7 @@ class TurnPathMixin:
                     thinking_blocks=response.thinking_blocks,
                 )
                 _stamp_reasoning_ms(messages, response)
-                _stamp_context_used(messages, response)
+                _stamp_context_used(messages, response, measured_parts)
                 # Kept in the history, as the row it is, and filed as a marker so a
                 # reload does not read it as an answer.
                 silent = ends_silent
@@ -3421,7 +3445,7 @@ class TurnPathMixin:
         # A turn that fails or is stopped after calls that each came back empty
         # or as an error has filed no row of its own, and the question it would
         # otherwise end on is already on disk, so its marker carries the reading.
-        reading: dict[str, int] = {}
+        reading: dict[str, Any] = {}
 
         async def _attempt(seed: list[dict], attempt: int):
             pending.update(rerun=False, reasons=[])
@@ -3625,6 +3649,7 @@ class TurnPathMixin:
                 streamed,
                 status="cancelled",
                 context_used=reading.get("context_used"),
+                context_parts=reading.get("context_parts"),
             )
             self._park_task_board(key, live["log"].added(), turn_received_at, req.turn_id)
             raise
@@ -3642,6 +3667,7 @@ class TurnPathMixin:
                 reason=str(exc),
                 full_detail=attach_full_detail(exc),
                 context_used=reading.get("context_used"),
+                context_parts=reading.get("context_parts"),
             )
             self._park_task_board(key, live["log"].added(), turn_received_at, req.turn_id)
             raise
@@ -3659,6 +3685,7 @@ class TurnPathMixin:
                 reason=describe_failure(exc),
                 full_detail=attach_full_detail(exc),
                 context_used=reading.get("context_used"),
+                context_parts=reading.get("context_parts"),
             )
             self._park_task_board(key, live["log"].added(), turn_received_at, req.turn_id)
             raise
@@ -3960,6 +3987,7 @@ class TurnPathMixin:
         full_detail: str | None = None,
         inbound_original: str | None = None,
         context_used: int | None = None,
+        context_parts: dict[str, int] | None = None,
     ) -> None:
         """Persist what a cancelled or failed turn got as far as producing.
 
@@ -3983,6 +4011,8 @@ class TurnPathMixin:
           ``context_used`` is the newest window the turn measured, filed on the
           marker because it is the newest row: a resume reads the window from
           there, and a turn whose calls left no row of their own has no other.
+          ``context_parts`` rides beside it, measured on the same request, so
+          the card's breakdown survives the same resume.
 
         ``received_at`` and ``inbound_original`` describe the turn's question,
         which ``_process_message`` files before the attempt starts and hands
@@ -4049,6 +4079,8 @@ class TurnPathMixin:
             }
             if context_used:
                 marker[_CONTEXT_USED_KEY] = context_used
+                if context_parts:
+                    marker[_CONTEXT_PARTS_KEY] = dict(context_parts)
             tail.append(marker)
             self._save_turn(session, tail, 0, received_at=received_at, inbound_original=inbound_original)
             self.sessions.save(session)
@@ -4326,6 +4358,7 @@ class TurnPathMixin:
                 (_REASONING_MS_KEY, "reasoning_ms"),
                 (_TOOL_DURATION_MS_KEY, "duration_ms"),
                 (_CONTEXT_USED_KEY, "context_used"),
+                (_CONTEXT_PARTS_KEY, "context_parts"),
             ):
                 # Renamed for the same reason as the diff above. A duration or a
                 # window reading is a property of the part it measures, so it is
