@@ -62,11 +62,61 @@ def test_only_adjacent_arrivals_fold_together() -> None:
     ]
 
 
-def test_a_stored_mid_turn_entry_is_never_labelled_again() -> None:
-    """Replayed history carries the plain ``mid_turn`` of an entry already
-    saved. Only the private spelling means "this arrived during the turn now
-    running"; labelling the stored one would put the header on a question the
-    model answered turns ago."""
+def test_the_live_path_does_not_label_a_stored_entry() -> None:
+    """Only the private spelling means "this arrived during the turn now
+    running". The live path leaves a saved entry's plain ``mid_turn`` alone; the
+    replay path folds it, because that is the shape the turn was sent with."""
     messages = [{"role": "user", "content": "only the last quarter", "mid_turn": True}]
 
     assert merge_mid_turn(messages) is messages
+
+
+def test_the_two_spellings_of_the_stored_mark_agree() -> None:
+    """The loop owns the name; the history strategy spells it locally rather
+    than loading the loop. Nothing but this test holds the two together."""
+    from raven.agent.loop._shared import _STORED_MID_TURN_KEY
+    from raven.context_engine.history_trimmer import STORED_MID_TURN_KEY
+
+    assert STORED_MID_TURN_KEY == _STORED_MID_TURN_KEY
+
+
+def test_a_replayed_run_is_folded_the_way_it_was_sent() -> None:
+    """A saved entry carries the plain ``mid_turn``. On the replay path that is
+    the same fact the private spelling states live, and the provider's cached
+    prefix only matches when the run is folded back into one message."""
+    stored = [
+        {"role": "user", "content": "summarise the report"},
+        {"role": "user", "content": "skip 2023", "mid_turn": True},
+        {"role": "user", "content": "Q4 only", "mid_turn": True},
+    ]
+
+    replayed = merge_mid_turn(stored, replay=True)
+
+    assert [m["content"] for m in replayed] == [
+        "summarise the report",
+        f"{_MID_TURN_HEADER}\n\nskip 2023\n\nQ4 only",
+    ]
+
+
+def test_the_live_path_still_ignores_a_stored_mark() -> None:
+    """Without ``replay`` the plain spelling says nothing: the turn now running
+    added nothing, and the list comes back untouched."""
+    stored = [{"role": "user", "content": "Q4 only", "mid_turn": True}]
+
+    assert merge_mid_turn(stored) is stored
+
+
+def test_two_replayed_runs_stay_separate_when_work_sits_between() -> None:
+    stored = [
+        {"role": "user", "content": "go", "mid_turn": True},
+        {"role": "assistant", "content": "working"},
+        {"role": "user", "content": "change of plan", "mid_turn": True},
+    ]
+
+    replayed = merge_mid_turn(stored, replay=True)
+
+    assert [m["content"] for m in replayed] == [
+        f"{_MID_TURN_HEADER}\n\ngo",
+        "working",
+        f"{_MID_TURN_HEADER}\n\nchange of plan",
+    ]
