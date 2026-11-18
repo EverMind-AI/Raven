@@ -1,0 +1,55 @@
+name: Desktop
+
+on:
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop.yml'
+      # The page's half of the shell bridge. The Python contract test holds the
+      # two sides together, but a change here should still build the window.
+      - 'ui-web/src/app/connection.ts'
+      - 'ui-web/src/state/look.ts'
+      - 'ui-web/src/state/shellWindow.ts'
+      - 'tests/test_desktop_shell_contract.py'
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck:
+    name: swift typecheck
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # The app is a single top-level source file, so typechecking it is also
+      # checking that the window, the shell bridge and the WebKit delegates
+      # still compile together. It needs no simulator, signing identity or GUI.
+      - name: Typecheck the window
+        run: >-
+          /usr/bin/swiftc -typecheck
+          -target "$(uname -m)-apple-macosx12.0"
+          -framework Cocoa -framework WebKit desktop/macos/RavenDesktop.swift
+
+      - name: Typecheck the icon renderer
+        run: >-
+          /usr/bin/swiftc -typecheck
+          -target "$(uname -m)-apple-macosx12.0"
+          -framework Cocoa -framework WebKit desktop/macos/render_svg.swift
+
+      # The navigation matrix decides whether a click becomes a page or a file.
+      # Getting it wrong replaces the window with the file, which is exactly the
+      # bug this step exists to keep out.
+      - name: Check the navigation policy
+        run: |
+          /usr/bin/swiftc -O -framework Cocoa -framework WebKit \
+            -target "$(uname -m)-apple-macosx12.0" \
+            -o "$RUNNER_TEMP/raven-desktop" desktop/macos/RavenDesktop.swift
+          /usr/bin/vtool -show-build "$RUNNER_TEMP/raven-desktop" |
+            grep -F "minos 12.0"
+          RAVEN_DESKTOP_SELFTEST=1 "$RUNNER_TEMP/raven-desktop"

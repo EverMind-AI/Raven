@@ -9,6 +9,7 @@ raven/                 # 共享运行时、功能引擎，以及 CLI/RPC/ACP 接
 agents/                # 由已安装的 Raven 与插件组装而成的专用 Agent
 plugins-dist/          # everos-memory、everos-cloud-memory、design-engine 和 ppt-engine 发行包
 ui-web/                # 浏览器界面，桌面窗口也使用同一页面
+desktop/               # 围绕网页界面的原生桌面窗口（macOS）
 ui-tui/                # React/Ink 终端界面
 rpc-schema/            # 交互式客户端共用的 OpenRPC 契约
 schemas/               # 生成的 Agent 与插件 JSON Schema
