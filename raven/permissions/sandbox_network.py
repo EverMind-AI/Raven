@@ -57,7 +57,8 @@ _MIN_PROGRAM = 24
 _MAX_EVIDENCE_PROGRAM = 300
 _MAX_REASON = 80
 _SHARED_NOTE = (
-    "Every conversation shares this sandbox, so what you allow here stays allowed for all of them until Raven restarts."
+    "What you allow here for the session or always is opened in the sandbox every conversation shares, "
+    "so it stays allowed for all of them until Raven restarts."
 )
 
 
@@ -203,9 +204,13 @@ async def _prompt(
             timeout_s=config.judge_timeout_seconds,
         )
 
-    # The main sandbox is every conversation's: what is opened in it stays open
-    # for all of them until Raven restarts, and every prompt says so.
-    shared = executor is not None and GRANTS.is_shared(executor)
+    # The sandbox every conversation shares runs on the union of every scope's
+    # grants, so a session or always answer here opens the target there too --
+    # and a refused sandbox registered under no scope is that one. Either way
+    # the gate holds the answer to the configured mode and this prompt says
+    # what it reaches: a conversation's own looser mode speaks for that
+    # conversation alone.
+    shared = bool(scope) or (executor is not None and GRANTS.is_shared(executor))
     description = "The sandbox blocked these connections while a command was running. Allow them?" + (
         f" {_SHARED_NOTE}" if shared else ""
     )

@@ -227,7 +227,8 @@ async def test_another_sandbox_that_did_not_sync_leaves_the_approval_told_as_ope
 
 
 SHARED_NOTE = (
-    "Every conversation shares this sandbox, so what you allow here stays allowed for all of them until Raven restarts."
+    "What you allow here for the session or always is opened in the sandbox every conversation shares, "
+    "so it stays allowed for all of them until Raven restarts."
 )
 
 
@@ -243,20 +244,21 @@ async def test_a_prompt_about_the_shared_sandbox_says_so_in_its_description(gran
     assert call["evidence"]["shared"] is True
 
 
-@pytest.mark.parametrize("registered", [None, "conv-own"], ids=["shared", "own"])
-async def test_a_conversations_own_looser_mode_does_not_open_the_shared_sandbox(grants, monkeypatch, registered):
-    """One conversation switched to full speaks for its own sandbox; the one every
-    conversation shares is opened automatically only at the mode they all run at."""
+async def test_a_conversations_own_looser_mode_does_not_open_the_shared_sandbox(grants, monkeypatch):
+    """One conversation switched to full speaks for its own sandboxes only: the approval
+    reaches the sandbox every conversation shares as well, so the gate holds it to the
+    mode they all run at and the prompt says what it reaches."""
     monkeypatch.setattr(session_module, "_MODES", {"conv-own": "full"})
-    responder, sandbox = Responder(ApprovalChoice.DENY), FakeSandbox()
-    grants.register(sandbox, registered)
-    await _handle(responder, [CURL], sandbox, config=PermissionsConfig(mode="ask"), conversation="conv-own")
-    if registered is None:
-        (call,) = responder.calls
-        assert SHARED_NOTE in call["description"], "the person deciding is told every conversation shares it"
-        assert sandbox.granted == [] and grants.grants_for(None) == frozenset()
-    else:
-        assert responder.calls == [] and sandbox.granted, "the conversation's own sandbox follows its own mode"
+    shared, own = FakeSandbox(), FakeSandbox()
+    grants.register(shared, None)
+    grants.register(own, "conv-own")
+    responder = Responder(ApprovalChoice.DENY)
+    await _handle(responder, [CURL], own, config=PermissionsConfig(mode="ask"), conversation="conv-own")
+    (call,) = responder.calls
+    assert SHARED_NOTE in call["description"], "the person deciding is told what a session answer reaches"
+    assert call["evidence"]["shared"] is True
+    assert own.granted == [] and shared.granted == []
+    assert grants.grants_for(None) == frozenset() and grants.grants_for("conv-own") == frozenset()
 
 
 async def test_the_shared_sandbox_still_opens_automatically_at_the_configured_mode(grants):
@@ -266,12 +268,18 @@ async def test_the_shared_sandbox_still_opens_automatically_at_the_configured_mo
     assert responder.calls == [] and sandbox.granted
 
 
-async def test_a_prompt_about_a_conversation_sandbox_leaves_the_note_out(grants):
+async def test_a_prompt_about_a_conversation_sandbox_says_what_the_session_reaches(grants):
+    """The approval is opened in the sandbox every conversation shares as well, so the
+    prompt says so however the answer comes."""
     responder, sandbox = Responder(ApprovalChoice.ALLOW), FakeSandbox()
     grants.register(sandbox, "conv")
     await _handle(responder, [CURL], sandbox)
     (call,) = responder.calls
-    assert call["description"] == "The sandbox blocked these connections while a command was running. Allow them?"
+    assert (
+        call["description"]
+        == f"The sandbox blocked these connections while a command was running. Allow them? {SHARED_NOTE}"
+    )
+    assert call["evidence"]["shared"] is True
 
 
 async def test_a_deny_rule_is_never_asked(grants):
@@ -393,13 +401,26 @@ async def test_an_address_given_as_an_ip_stays_blocked_with_nobody_to_ask(grants
     assert "The sandbox network policy blocked: /usr/bin/curl -> 169.254.169.254:80." in notice.text
 
 
-async def test_the_prompt_says_when_the_sandbox_is_every_conversations(grants):
+async def test_every_prompt_says_what_a_session_answer_reaches(grants):
+    """However the refused sandbox is registered, a session or always answer is opened
+    in the sandbox every conversation shares, so both prompts say so."""
     shared, own = FakeSandbox(), FakeSandbox()
     grants.register(shared, None)
     responder = Responder(ApprovalChoice.DENY)
     await _handle(responder, [CURL], shared)
     await _handle(responder, [CURL], own)
-    assert [call["evidence"]["shared"] for call in responder.calls] == [True, False]
+    assert [call["evidence"]["shared"] for call in responder.calls] == [True, True]
+
+
+async def test_the_shared_sandbox_says_so_even_without_a_conversation(grants):
+    """A refused sandbox registered under no scope is widened by the load itself, so
+    the prompt says what it reaches however the turn is keyed -- even a turn with
+    nobody to ask, whose refusal record is where the description lands."""
+    responder, sandbox = Responder(ApprovalChoice.DENY), FakeSandbox()
+    grants.register(sandbox, None)
+    _, turn = await _handle(responder, [CURL], sandbox, conversation="")
+    assert responder.calls == []
+    assert SHARED_NOTE in turn.refusals[-1].reason
 
 
 async def test_smart_mode_lets_the_reviewer_open_what_the_command_needs(grants, monkeypatch):

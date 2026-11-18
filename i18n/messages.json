@@ -7204,8 +7204,8 @@
       "zh": "内容过长，这里只显示了前一部分"
     },
     "gui.confirm.ev.net_shared": {
-      "en": "Every conversation shares this sandbox, so what you allow here stays allowed until Raven restarts.",
-      "zh": "所有会话共用这个沙箱，这里允许的连接会一直有效，直到 Raven 重启。"
+      "en": "What you allow here for the session or always is opened in the sandbox every conversation shares, so it stays allowed until Raven restarts.",
+      "zh": "你在这里为本次会话或永久允许的连接，会开放到所有会话共用的那个沙箱，会一直有效，直到 Raven 重启。"
     },
     "gui.confirm.land.always": {
       "en": "Won't ask again for: {pattern}, in every working directory",
