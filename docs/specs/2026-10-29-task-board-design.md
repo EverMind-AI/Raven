@@ -285,8 +285,8 @@ reply has already gone out and shutdown drains it like the others.
 **Input.** The message list `_run_agent_loop` returned, cut to the turn
 (`TurnLog.cut_to_turn`): the system message the turn's last call sent, the turn's opening
 message and its own rows as that call's window held them -- a picture the endpoint refused
-stays withdrawn; when a head summary took the opening's place, the log's opening comes back
-beside it -- plus its final answer, with the same tools array, and
+stays withdrawn; when a head summary took the opening's place, the opening comes back beside
+it in the last form the window held it -- plus its final answer, with the same tools array, and
 one appended user-role instruction rendered from `raven/templates/prompts/{en,zh}/
 task_board_update.md` through `raven.i18n.prompt`. It is the shape the early-exit synthesis
 call already uses (`_synthesize_final_on_exhaustion` in `turn_path.py`: "the turn's own conversation plus
@@ -577,10 +577,11 @@ model sent is salvaged before anything is parked: each `groups` entry keeps only
 that pass on their own -- a status the step on its group already sets goes, the summary
 written beside it stays -- and a text past its limit stands as written. A step with a fault
 of its own -- an unknown group, a bad status -- is dropped when it places no work and another
-step is left to write, so one bad step does not cost the turn's other matters their steps.
-The rest of its steps and its placement are kept whole, so they are still written and its work
-placed; only a fault in a step that places work, in every step, or in the placement -- a handle
-left out -- leaves no update to be had. Then, as
+step is left to write, and a group stepped twice keeps the step that places work, else the
+first that asks the user something, else its first, so one bad step does not cost the turn's
+other matters their steps. The rest of its steps and its placement are kept whole, so they are
+still written and its work placed; only a fault in a step that places work, in every step, or
+in the placement -- a handle left out -- leaves no update to be had. Then, as
 when the post-turn call fails after the provider's retries, or the turn itself errored or was
 stopped ("Which turns"), the turn's handles are appended
 to `unassigned` with the turn's id, a warning is logged, and the next turn's update must place

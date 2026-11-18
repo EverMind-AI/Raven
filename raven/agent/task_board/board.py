@@ -504,6 +504,18 @@ def _faulty(raw: Mapping[str, Any], known: Set[str]) -> bool:
     return bool(rules.problems)
 
 
+def _one_per_group(steps: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    def weight(raw: Mapping[str, Any]) -> tuple[bool, bool]:
+        return bool(_tasks(raw)), bool(raw.get("questions"))
+
+    best: dict[str, Mapping[str, Any]] = {}
+    for raw in steps:
+        group = raw.get("group")
+        if isinstance(group, str) and (group not in best or weight(raw) > weight(best[group])):
+            best[group] = raw
+    return [raw for raw in steps if _tasks(raw) or not isinstance(raw.get("group"), str) or best[raw["group"]] is raw]
+
+
 def salvage(board: Board, args: Mapping[str, Any]) -> dict[str, Any]:
     """The last update a model never got accepted, cut back to what the board can still take.
 
@@ -512,9 +524,10 @@ def salvage(board: Board, args: Mapping[str, Any]) -> dict[str, Any]:
     group keeps its first such entry. Applied with ``allow_long``, its text past a
     limit stands as written. A step with a fault of its own is dropped when it places no
     work and another step is left to write, so one bad step does not cost every other
-    matter its step; with none left there is nothing to save. A step that places work
-    stays, and a fault there, or in where the work is placed, is still refused, and the
-    work parked.
+    matter its step; with none left there is nothing to save. A group stepped twice keeps
+    the step that places work, else the first that asks the user something, else its first.
+    A step that places work stays, and a fault there, or in where the work is placed, is
+    still refused, and the work parked.
     """
     out = dict(args)
     known = {g.id for g in board.groups}
@@ -522,7 +535,7 @@ def salvage(board: Board, args: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(steps, list) and all(isinstance(raw, Mapping) for raw in steps):
         sound = [raw for raw in steps if _tasks(raw) or not _faulty(raw, known)]
         if sound:
-            out["steps"] = steps = sound
+            out["steps"] = steps = _one_per_group(sound)
     changes = args.get("groups")
     if changes is None:
         return out

@@ -114,7 +114,8 @@ def withdrawn_image_note(source: dict[str, Any], *, index: int, total: int, reas
     for it again" rather than a bare "elided" it has to guess about. ``reason`` is
     ``budget`` (the turn's pictures outgrew their byte budget and collapsed to the
     newest few), ``superseded`` (a fixed count moved past it), ``refused`` (the
-    endpoint would not take the request's pictures) or ``context`` (an overflow).
+    endpoint would not take the request's pictures), ``context`` (an overflow) or
+    ``summary`` (a head summary took the place of the message that showed it).
     Written once, when the picture leaves; the same inputs always give the same
     text.
     """
@@ -129,6 +130,8 @@ def withdrawn_image_note(source: dict[str, Any], *, index: int, total: int, reas
         why = f"{_REFUSED} this request's pictures as too large."
     elif reason == "context":
         why = f"{_ELIDED} to fit the context window."
+    elif reason == "summary":
+        why = f"{_ELIDED} with the start of this turn, which a summary now stands for."
     elif reason == "budget":
         why = f"{_OUTGREW} outgrew their byte budget, so only the {keep} newest image-bearing result(s) keep theirs."
     elif keep == 0:

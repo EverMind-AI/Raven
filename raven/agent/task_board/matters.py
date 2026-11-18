@@ -18,11 +18,12 @@ _W = "0-9A-Za-z_"
 # ASCII-only boundaries on purpose: a Chinese character right beside a token ends it, the way
 # a space does, since Chinese prose runs a PR number into the words around it. Every repeat is
 # bounded: a title is the model's text, and an unbounded one rescans the rest of a long run
-# from every start in it.
+# from every start in it. A colon belongs to a path only as a drive (``D:/``): after a path it
+# starts the words about it, ``path: summary`` or ``file.py:LINE``.
 _ANCHOR = re.compile(
     r"(?P<ref>#\d{1,10})(?!\d)"
     r"|`(?P<code>[^`\n]{3,100})`"
-    rf"|(?P<path>[{_W}.:%~-]{{0,100}}[{_W}:%~-]/[{_W}./:%~-]{{1,100}})"
+    rf"|(?P<path>(?:(?<![{_W}])[A-Za-z]:|[{_W}.%~-]{{0,100}}[{_W}%~-])/[{_W}./%~-]{{1,100}})"
     rf"|(?P<file>[{_W}-]{{2,60}}\.[A-Za-z]{{2,5}})(?![{_W}])"
     rf"|(?<![{_W}.])(?P<version>v?\d{{1,10}}(?:\.\d{{1,10}}){{1,4}})(?![{_W}])"
     rf"|(?<![{_W}.#])(?P<number>\d{{3,20}})(?![{_W}.])"

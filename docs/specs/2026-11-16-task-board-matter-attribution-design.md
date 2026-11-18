@@ -37,8 +37,9 @@ Three things cause it.
 - A matter the turn only mentions gets no step.
 - Holds on the flash-class models Raven runs the host on, not only on the strongest one.
 - The guarantees the fence existed for stay: a bad step on another group never costs a
-  delegated result's group its step, every dispatch is placed, every question the reply
-  asked lands on a step.
+  delegated result's group its step, every dispatch is placed, and an update that is written
+  carries every question the reply asked on a step (a salvage may drop a faulty step that
+  asked one; with the fence that update was refused whole).
 
 ## Non-goals
 
@@ -176,9 +177,10 @@ sentence from an earlier turn all fail, and the refusal says how to fix it.
 A step that opens a new group (`new_title`) needs no `matters` entry: it has no id to answer
 for, and the placement rules already cover the work it carries. When every attempt is refused,
 `salvage` writes the last update, dropping a step with a fault of its own that places no work
-when another step is left to write -- one bad step must not cost an owner its step, which the
-fence used to protect by dropping every other matter; faults in `matters` alone never stop a
-salvage.
+when another step is left to write, and keeping one step per group (the step that places work,
+else the first that asks the user something, else the first) -- one bad step must not cost an
+owner its step, which the fence used to protect by dropping every other matter; faults in
+`matters` alone never stop a salvage.
 
 ### 5. No fence
 
@@ -196,9 +198,10 @@ The post-turn call no longer sends the turn's whole window. It sends:
   a pass withdrew, stays withdrawn, or the board call meets the same refusal;
 - the turn's own rows as the window last sent them (an elided body stays elided), mid-turn
   messages included;
-- when a head summary took the opening's place, the log's own opening instead (without
-  pictures the window no longer carries), followed by that summary, which stands for the
-  turn's early rows and any message sent while it ran that they held;
+- when a head summary took the opening's place, the opening in the last form the window held
+  it (a picture a pass withdrew stays withdrawn, and none comes back when the window carries
+  none), followed by that summary, which stands for the turn's early rows and any message
+  sent while it ran that they held;
 - the instruction.
 
 `TurnLog.cut_to_turn(window)` builds it: the log marks the opening, a mark a pass's copy keeps
