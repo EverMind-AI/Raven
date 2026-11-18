@@ -1507,11 +1507,24 @@ class WiringMixin:
         )
         if skill_registry is not None or self._skill_hub_client is not None:
             from raven.agent.tools.skill_hub import FindSkillTool, ReadSkillTool, UseSkillTool, router_held_hit
-            from raven.config.live import skill_hub_enabled
+            from raven.config.live import project_skills_enabled, skill_hub_enabled
+            from raven.memory_engine import ProjectSkills
 
             def skills_router():
                 return getattr(self.context_engine, "skills_router", None)
 
+            # A sub-agent is given no project skills, matching the router source
+            # the leader process alone mounts; the tools answer ``project/`` ids
+            # with "not available to this agent."
+            project_skills = (
+                None
+                if is_subagent_process()
+                else ProjectSkills(
+                    agent_home=self.workspace,
+                    workdir_reader=workdir.current,
+                    enabled_reader=lambda: project_skills_enabled(self._live_config),
+                )
+            )
             self.tools.register(
                 ReadSkillTool(
                     client=self._skill_hub_client,
@@ -1521,6 +1534,7 @@ class WiringMixin:
                     blocklist_reader=self._skill_blocklist_reader,
                     enabled_reader=lambda: skill_hub_enabled(self._live_config),
                     held_hit=router_held_hit(skills_router),
+                    project=project_skills,
                 ),
             )
             # Discovery on the model's own terms, through the same router the
@@ -1545,6 +1559,7 @@ class WiringMixin:
                     enabled_reader=lambda: skill_hub_enabled(self._live_config),
                     auto_install=self._skill_auto_install,
                     held_hit=router_held_hit(skills_router),
+                    project=project_skills,
                     install_audit_path=(
                         self.workspace / "skills" / "hub" / "installs.jsonl"
                         if self._skill_hub_client is not None

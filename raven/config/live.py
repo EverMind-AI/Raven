@@ -799,6 +799,65 @@ def skill_hub_enabled(live: LiveConfig) -> bool:
     return answer
 
 
+def project_skills_on(raw: Any) -> bool:
+    """Whether a config, as the file writes it, leaves the project skill source on.
+
+    Mirrors :func:`skill_hub_on`: the loader's migrations run first, on a copy,
+    because some of them never reach the file, and both top-level spellings are
+    accepted. A shape this reader cannot validate answers off, the way the Hub's
+    does -- the source reads files the project carries, and a file the loader
+    would refuse is not consent to read them. A ``projectSkills`` node that is
+    absent or null was never written and answers the schema default, which is on.
+    """
+    from raven.config.loader import _migrate_config
+    from raven.config.raven import ProjectSkillsConfig
+
+    default = ProjectSkillsConfig().enabled
+    if not isinstance(raw, dict):
+        return False
+    try:
+        data = _migrate_config(copy.deepcopy(raw), pop_extension_keys=False)
+    except Exception:  # noqa: BLE001 - a file the loader cannot walk is not consent
+        return False
+    camel = data.get("skillForge")
+    snake = data.get("skill_forge")
+    if camel is not None and snake is not None:
+        return False
+    block = camel if camel is not None else snake
+    if not isinstance(block, dict):
+        return default
+    value = block.get("projectSkills")
+    if value is None:
+        value = block.get("project_skills")
+    if value is None:
+        return default
+    try:
+        cfg = ProjectSkillsConfig.model_validate(value)
+    except Exception:  # noqa: BLE001 - a block the loader refuses is not consent
+        return False
+    return cfg.enabled
+
+
+_PROJECT_ANSWERS: "weakref.WeakKeyDictionary[LiveConfig, tuple[dict[str, Any], bool]]" = weakref.WeakKeyDictionary()
+
+
+def project_skills_enabled(live: LiveConfig) -> bool:
+    """Whether the project skill source may run, read on every ask.
+
+    Read live rather than captured at loop start so switching the source off
+    stops the next search, not the next process. The answer is kept per parsed
+    file, the way :func:`skill_hub_enabled` keeps the Hub's, so the migration
+    runs once per change of the bytes rather than once per search.
+    """
+    raw = live.raw()
+    kept = _PROJECT_ANSWERS.get(live)
+    if kept is not None and kept[0] is raw:
+        return kept[1]
+    answer = project_skills_on(raw)
+    _PROJECT_ANSWERS[live] = (raw, answer)
+    return answer
+
+
 _LAST_VALID_PERMISSIONS: "weakref.WeakKeyDictionary[LiveConfig, Any]" = weakref.WeakKeyDictionary()
 
 

@@ -33,10 +33,11 @@ raven skill get --help
 raven skill block --help
 ```
 
-SkillForge uses three sources: local files, skills/cases recalled through the
-configured memory backend, and remote Skill Hub candidates. Availability
-depends on configuration and service connectivity; a catalog result is not
-proof that a bundle is installed or its required tools exist.
+SkillForge uses four sources: local files, skills/cases recalled through the
+configured memory backend, remote Skill Hub candidates, and project skills kept
+in the working directory's repository. Availability depends on configuration
+and service connectivity; a catalog result is not proof that a bundle is
+installed or its required tools exist.
 
 Searching Skill Hub sends text off the machine. The source is on by default and
 uses the shared catalog (`https://skillhub.evermind.ai`); a config may name
@@ -56,6 +57,37 @@ turns; the model uses `find_skill` to search and `read_skill` to fetch a body.
 Only skills marked `always` sit in the system prompt. Choosing skills costs a
 turn no extra model calls, though a lookup can still reach the Skill Hub, and
 not every turn receives a menu.
+
+### Skill directories { #skill-directories }
+
+A skill goes in one of two directories, depending on whether it is for the
+user or for one project:
+
+- **Agent home's `skills/`** — the user-level directory, `skills/` under the
+  agent home: `~/.raven/workspace/skills` by default, moved by `RAVEN_HOME`
+  and by the `--home` option of `raven agent`, `raven gateway` and `raven tui`.
+- **The project's `.agents/skills`** — read from the turn's working directory
+  up to its git root, each directory on the way contributing one; when both
+  hold the same skill name, the nearest directory is the one offered. With no
+  git root above the working directory, only that directory is read. The flat
+  `<name>/SKILL.md` layout is the one recognized, and a symlink counts only
+  when its resolved target stays inside the git root. Neither the user's home
+  nor agent home, nor agent home's ancestors, is ever a project directory.
+
+Project skills appear in the same name/description menu and through
+`find_skill` as `project/<name>`, and `read_skill` / `use_skill` resolve those
+ids per turn against the turn's own working directory, so two sessions in two
+checkouts never see each other's project skills. A project skill is never
+injected into the system prompt, whatever its frontmatter says. Only the leader
+agent reads them; a sub-agent does not. The source is on by default and can be
+switched off with `skillForge.projectSkills.enabled`; either direction applies
+to the next search, with no restart.
+
+An installer that writes the same layout can put a skill in the project:
+
+```bash
+gh skill install <owner>/<repo> skills/<name>/SKILL.md --dir .agents/skills
+```
 
 Bundle downloads have a separate consent setting:
 

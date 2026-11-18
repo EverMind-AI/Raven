@@ -1864,7 +1864,7 @@ the box). Its own distribution rather than part of the raven wheel, found throug
 the group's other distributed members: a deck-building toolchain, a visual-design
 engine, and the hosted memory backend below.) Provides dual-track semantic recall — the user track (episodes/profiles,
 injected into the `# Memory` segment) and the agent track (skills/cases, one of
-SkillForge's three sources at RRF weight 0.9). The name refers to the external package
+SkillForge's four sources at RRF weight 0.9). The name refers to the external package
 [EverMind-AI/EverOS](https://github.com/EverMind-AI/EverOS); the in-tree code is only an
 adapter. The same plugin also contributes the `understand_media` multimodal-parsing tool.
 
@@ -1935,11 +1935,11 @@ _Avoid_: importing `memory_engine.consolidate.consolidator` (or any other submod
 from outside the engine.
 
 **SkillForge** (`memory_engine/skill_forge/`):
-A skill retrieval subsystem — it fuses candidates from three sources
+A skill retrieval subsystem — it fuses candidates from four sources
 (local BM25-indexed files, self-evolved skills recalled from the pluggable `MemoryBackend`
-— typically the EverOS plugin — and remote skills from the Skill Hub) via weighted RRF,
-and offers them to the agent through the Scent Menu and the skill tools (see Skill
-Discovery).
+— typically the EverOS plugin — remote skills from the Skill Hub, and the project's own
+skills under `.agents/skills`) via weighted RRF, and offers them to the agent through the
+Scent Menu and the skill tools (see Skill Discovery and Project skill).
 Skill distillation/evolution is handled by the local extraction pipeline
 (`skillForge.extraction`), not by SkillForge itself — that pipeline distils skills out of
 finished turns into the workspace cache, calls no service and needs no memory plugin;
@@ -1957,10 +1957,11 @@ model fetches bodies itself through `find_skill` (intent-bearing search over the
 same router) and `read_skill`. A local id reads from the registry; a memory-backend id
 (an evolved skill or a case from the agent track) has no file, so the router holds the
 hits it returned and `read_skill` / `use_skill` serve that hit's text, verbatim, until a
-restart or a memory switch drops it, after which `find_skill` puts it back. The system
-prefix carries only the `always` skills (`# Active Skills`), and no model call is spent
-choosing skills. The push pipeline
-(an LLM query rewriter and gate, selected bodies in the prompt) and its
+restart or a memory switch drops it, after which `find_skill` puts it back. A
+`project/<name>` id is not read from those held hits: it resolves per turn against the
+project's own `.agents/skills` (see Project skill). The system prefix carries only the
+`always` skills (`# Active Skills`), and no model call is spent choosing skills. The push
+pipeline (an LLM query rewriter and gate, selected bodies in the prompt) and its
 `skillForge.discovery` / `llmGate*` / `rewrite*` / `injectionMode` settings were
 retired 2026-11-13; the config loader drops those keys from older files. A built-in
 (raven-loop) sub-agent is shown agent home's skills as a directory instead and reads one
@@ -1969,6 +1970,27 @@ with its own `read_skill`, the same registry route, so a run fenced by
 _Avoid_: calling the Scent Menu a segment — it is advisory tail-of-sequence data
 (wrapped untrusted), never part of the system prompt; and conflating `find_skill`
 (search, returns ids + descriptions) with `read_skill` (body fetch by id).
+
+**Project skill** (`memory_engine/skill_forge/project_skills.py`):
+A skill the repository itself carries: a flat `<name>/SKILL.md` under a `.agents/skills`
+directory found by walking from the running turn's working directory to the nearest
+ancestor holding a `.git` entry, inclusive (the working directory alone when it has none),
+the nearest directory winning a name collision. The `project` router source offers each as
+`project/<name>`, and `read_skill` / `use_skill` resolve that id against the turn's own
+project at read time — never from the router's held hits, which may belong to another
+session's project. Neither the user's home nor agent home nor any ancestor of agent home
+is a project directory; a symlink counts only when its resolved target stays inside the
+git root; a deeper `SKILL.md` is not a project skill. Project skills are never
+`always`-injected: `always` and `inject` frontmatter are ignored, and the system prefix
+carries none of them. The index is per project — a process-wide cache keyed by the resolved
+directory tuple and its git-root boundary, rebuilt when a fingerprint of the directories
+changes — and the leader agent is the only one that reads it: a process launched as a
+sub-agent mounts no project source and its tools answer `project/` with "not available to
+this agent". The switch is `skillForge.projectSkills.enabled`, default on, read live: off
+stops the next search and the next `project/` resolution, and a shape the loader refuses
+reads off too.
+_Avoid_: "workspace skill" — that is agent home's `skills/` layer, read by the local
+source and a different directory.
 
 **Skill Hub** (`skill_hub/`):
 A remote OpenAPI skill marketplace, configured via `skillForge.router.hub` (`endpoint` /

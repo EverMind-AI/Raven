@@ -30,6 +30,7 @@ from raven.config.live import (
     held,
     hold_for_this_turn,
     max_tool_iterations,
+    project_skills_enabled,
     reasoning_effort,
     skill_hub_enabled,
 )
@@ -357,6 +358,56 @@ class TestTheHubSwitch:
         _write(path, {"skillRouter": {"hub": {"endpoint": "https://legacy.test", "enabled": False}}})
         assert skill_hub_enabled(live) is False
         assert len(calls) == 2
+
+
+class TestProjectSkillsEnabled:
+    """The project source's switch is read live for the same reason the Hub's
+    is: turning it off must stop the next search, not the next process."""
+
+    def _live(self, tmp_path: Path, payload: dict) -> LiveConfig:
+        path = tmp_path / "config.json"
+        _write(path, payload)
+        return LiveConfig(path)
+
+    def test_no_block_is_on(self, tmp_path: Path) -> None:
+        assert project_skills_enabled(self._live(tmp_path, {})) is True
+
+    def test_an_explicit_off_is_off(self, tmp_path: Path) -> None:
+        live = self._live(tmp_path, {"skillForge": {"projectSkills": {"enabled": False}}})
+        assert project_skills_enabled(live) is False
+
+    def test_the_snake_spelling_is_read(self, tmp_path: Path) -> None:
+        live = self._live(tmp_path, {"skill_forge": {"project_skills": {"enabled": False}}})
+        assert project_skills_enabled(live) is False
+
+    def test_an_invalid_block_is_off(self, tmp_path: Path) -> None:
+        """A value the loader refuses is not consent: the source reads the
+        project's own files, so a refused shape answers off the way the Hub's
+        does, rather than falling back to the schema default."""
+        live = self._live(tmp_path, {"skillForge": {"projectSkills": {"enabled": "maybe"}}})
+        assert project_skills_enabled(live) is False
+
+    def test_a_bare_false_is_off(self, tmp_path: Path) -> None:
+        """The schema wants a block, so a hand-written ``false`` in its place is
+        a shape it would refuse -- and an explicit off is still an off switch."""
+        live = self._live(tmp_path, {"skillForge": {"projectSkills": False}})
+        assert project_skills_enabled(live) is False
+
+    def test_a_bare_null_is_not_written(self, tmp_path: Path) -> None:
+        """Null is the absence of the key rather than a value: the default stands."""
+        live = self._live(tmp_path, {"skillForge": {"projectSkills": None}})
+        assert project_skills_enabled(live) is True
+
+    def test_both_spellings_are_off_like_the_loader(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.json"
+        _write(
+            path,
+            {
+                "skillForge": {"projectSkills": {"enabled": True}},
+                "skill_forge": {"project_skills": {"enabled": True}},
+            },
+        )
+        assert project_skills_enabled(LiveConfig(path)) is False
 
 
 class TestThePlaybookSwitch:

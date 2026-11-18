@@ -1,11 +1,11 @@
 """SkillForgeRouter machinery — multi-source skill retrieval + RRF fusion.
 
 The package holds :class:`LocalSkillCatalog` (the local pool and its
-rendering), the three sources :class:`LocalSkillSource`,
-:class:`BackendSkillSource` and :class:`HubSkillSource`, the
-:class:`SkillForgeRouter` that fans out over them with weighted RRF
-(``rrf_merge_weighted``). Its consumers are the context engine's scent
-menu and the ``find_skill`` tool.
+rendering), the four sources :class:`LocalSkillSource`,
+:class:`BackendSkillSource`, :class:`HubSkillSource` and
+:class:`ProjectSkillSource`, the :class:`SkillForgeRouter` that fans out
+over them with weighted RRF (``rrf_merge_weighted``). Its consumers are the
+context engine's scent menu and the ``find_skill`` tool.
 
 The :class:`ForgeSkillSource` Protocol is **host-internal**: the sources are
 hardcoded, not a plugin contribution point. Third-party extension of skill
@@ -21,6 +21,8 @@ from raven.memory_engine.skill_forge.catalog import LocalSkillCatalog
 from raven.memory_engine.skill_forge.fusion import RRF_K, rrf_merge_weighted
 from raven.memory_engine.skill_forge.hub_source import HubSkillSource
 from raven.memory_engine.skill_forge.local_source import LocalSkillSource
+from raven.memory_engine.skill_forge.project_skills import ProjectSkills
+from raven.memory_engine.skill_forge.project_source import ProjectSkillSource
 from raven.memory_engine.skill_forge.router import SkillForgeRouter
 from raven.memory_engine.skill_forge.types import ForgeSkillSource, RouterHit
 
@@ -29,6 +31,8 @@ __all__ = [
     "HubSkillSource",
     "LocalSkillCatalog",
     "LocalSkillSource",
+    "ProjectSkillSource",
+    "ProjectSkills",
     "RRF_K",
     "RouterHit",
     "SkillForgeRouter",
