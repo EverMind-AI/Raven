@@ -250,11 +250,14 @@ describe('a call made before the socket is open', () => {
     expect((await failure(answer)).message).toBe('not connected')
   })
 
-  /* The close can land between `send`'s CONNECTING check and the moment the
-     held call registers its listeners: the socket fires its close into an
-     empty list, so waiting for the event alone leaves that call pending for
-     the life of the page. The state read after the registrations closes it. */
-  it('fails a held call whose socket closed before its listeners attached', async () => {
+  /* What this pins is the `WebSocketLike` shape, not a race a browser runs: an
+     implementation may settle the socket while its listeners are being
+     registered, so the close event goes out to an empty list and waiting for
+     the event alone would leave the call pending. The state read after the
+     registrations rejects it. The fake flips `readyState` inside
+     `addEventListener` to stand in for such an implementation; a native socket
+     changes state only between tasks and cannot reach this window. */
+  it('fails a held call whose socket is already closed when the state is read', async () => {
     const { h, ws } = connecting()
     const register = ws.addEventListener.bind(ws)
     ws.addEventListener = (type, fn, options) => {

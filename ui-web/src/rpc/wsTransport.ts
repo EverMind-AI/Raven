@@ -295,12 +295,17 @@ export class WsTransport implements RpcTransport {
         { once: true }
       )
       ws.addEventListener('close', () => reject(new RpcError(-1, 'not connected')), { once: true })
-      /* Both listeners are on before the state is read. A socket already
-         closing or closed when a call is held here can never fire either event
-         for this call -- the close it would have waited for has already gone
-         out -- so without the state read the call would stay pending for the
-         life of the page. Only a socket still connecting (or already open, an
-         event this task cannot have missed) is left to the listeners. */
+      /* Both listeners are on before the state is read. This read guards the
+         `WebSocketLike` contract, not a race the browser can run: a native
+         socket moves `readyState` only between tasks, so it cannot change
+         between `send`'s CONNECTING check and this line. An implementation
+         that settles synchronously, or a future `await` before these
+         registrations, can hand over a socket already closing or closed whose
+         close event has gone out, and waiting for the event alone would leave
+         that call pending for the life of the page. Only a connecting socket
+         is left to the listeners; an `OPEN` read is trusted because the
+         browser path cannot deliver the open event before `connect()` marks
+         the socket opened. */
       const state = ws.readyState
       if (state !== CONNECTING && state !== OPEN) reject(new RpcError(-1, 'not connected'))
     })
