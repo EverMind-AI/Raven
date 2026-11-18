@@ -11871,6 +11871,10 @@
       "en": "New knowledge base",
       "zh": "新建知识库"
     },
+    "gui.knowledge.creating": {
+      "en": "Creating...",
+      "zh": "正在创建…"
+    },
     "gui.knowledge.no_embedding": {
       "en": "Store the documents without indexing them yet",
       "zh": "\u5148\u4fdd\u5b58\u6587\u6863\uff0c\u6682\u4e0d\u5efa\u7acb\u7d22\u5f15"
