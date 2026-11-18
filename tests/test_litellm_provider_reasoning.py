@@ -11,7 +11,9 @@ priority, and other providers are left as they were.
 DeepSeek's thinking mode documents a 400 for a request that continues from a
 tool result unless the tool-call message carries ``reasoning_content``. A step
 the model took without thinking has none, so a request bound for a DeepSeek
-model sends the key empty there, while real reasoning rides unchanged.
+model sends a non-empty placeholder there: OpenRouter drops an empty value
+before DeepSeek sees it, while direct DeepSeek accepts the same placeholder.
+Real reasoning rides unchanged.
 """
 
 from __future__ import annotations
@@ -149,7 +151,7 @@ def _sent_tool_calls(kwargs: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 @pytest.mark.asyncio
-async def test_a_deepseek_tool_call_without_reasoning_sends_it_empty(monkeypatch):
+async def test_a_deepseek_tool_call_without_reasoning_sends_a_placeholder(monkeypatch):
     """A step that did think keeps its reasoning, a stored null is filled like
     a missing key, and no other message gains the key."""
     seen = _capture_chat(monkeypatch)
@@ -160,7 +162,7 @@ async def test_a_deepseek_tool_call_without_reasoning_sends_it_empty(monkeypatch
         *_tool_round("call_00_third", reasoning_content=None),
     ]
     await _provider("deepseek").chat(messages=messages, model="deepseek/deepseek-v4-flash")
-    assert [m.get("reasoning_content") for m in _sent_tool_calls(seen[0])] == ["Read the first file.", "", ""]
+    assert [m.get("reasoning_content") for m in _sent_tool_calls(seen[0])] == ["Read the first file.", " ", " "]
     assert [m["role"] for m in seen[0]["messages"] if "reasoning_content" in m] == ["assistant"] * 3
 
 
@@ -170,7 +172,7 @@ async def test_the_streaming_path_carries_the_reasoning_key_too(monkeypatch):
     messages = [{"role": "user", "content": "read it"}, *_tool_round("call_00_only")]
     async for _ in _provider("deepseek").chat_stream(messages=messages, model="deepseek/deepseek-v4-pro"):
         pass
-    assert [m.get("reasoning_content") for m in _sent_tool_calls(seen[0])] == [""]
+    assert [m.get("reasoning_content") for m in _sent_tool_calls(seen[0])] == [" "]
 
 
 @pytest.mark.asyncio
@@ -178,7 +180,7 @@ async def test_a_deepseek_model_behind_another_provider_carries_it_too(monkeypat
     seen = _capture_chat(monkeypatch)
     messages = [{"role": "user", "content": "read it"}, *_tool_round("call_00_only")]
     await _provider("huggingface").chat(messages=messages, model="huggingface/deepseek-ai/DeepSeek-V4-Pro")
-    assert [m.get("reasoning_content") for m in _sent_tool_calls(seen[0])] == [""]
+    assert [m.get("reasoning_content") for m in _sent_tool_calls(seen[0])] == [" "]
 
 
 @pytest.mark.asyncio
