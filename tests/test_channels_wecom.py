@@ -77,13 +77,15 @@ def test_extract_mixed():
 def test_extract_image_downloads_and_labels(monkeypatch):
     import raven.channels.adapters.wecom.channel as wecom_mod
 
-    monkeypatch.setattr(wecom_mod, "save_media_bytes", lambda channel, data, name: Path("/m/abcd_pic.jpg"))
+    saved = Path("/m/abcd_pic.jpg")
+    monkeypatch.setattr(wecom_mod, "save_media_bytes", lambda channel, data, name: saved)
     ch = _channel()
     ch._client = AsyncMock()
     ch._client.download_file = AsyncMock(return_value=(b"\x89PNG", "pic.jpg"))
     out = asyncio.run(ch._extract({"image": {"url": "u", "aeskey": "k"}}, "image"))
     assert "[image: pic.jpg]" in out
-    assert "[Image: source: /m/abcd_pic.jpg]" in out
+    # str(saved) so the expected separators match whatever platform renders the path.
+    assert f"[Image: source: {saved}]" in out
 
 
 def test_extract_file_uses_provided_name_over_server_name(monkeypatch):
