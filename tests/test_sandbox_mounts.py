@@ -96,11 +96,13 @@ class TestTranslateProcessPath:
         assert table.translate_process_path("/srv/work") == "/workspace"
         assert table.translate_process_path("/srv/work/d") == "/workspace/d"
 
-    def test_a_windows_sibling_sharing_the_roots_prefix_is_not_translated(self, tmp_path, monkeypatch):
+    def test_a_windows_root_alone_and_its_prefixed_siblings_stay_distinct(self, tmp_path, monkeypatch):
         table = _table(tmp_path)
         monkeypatch.setattr(table, "roots", lambda: [(PureWindowsPath("C:/workspace"), "/workspace")])
-        translated = table.translate_process_path(r"C:\workspace\pkgs;C:\workspace-old\pkgs;C:\workshop\pkgs")
-        assert translated == r"/workspace/pkgs;C:\workspace-old\pkgs;C:\workshop\pkgs"
+        translated = table.translate_process_path(
+            r"C:\workspace\pkgs;C:\workspace-old\pkgs;C:\workspaces\pkgs;C:\workspace"
+        )
+        assert translated == r"/workspace/pkgs;C:\workspace-old\pkgs;C:\workspaces\pkgs;/workspace"
 
 
 class TestMountList:
