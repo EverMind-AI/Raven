@@ -1925,6 +1925,30 @@ def test_a_file_past_the_first_pin_floor_has_its_second_floor_pins_carried_in_th
     assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
 
 
+def test_a_file_past_the_second_pin_floor_has_its_third_floor_pins_carried_in_the_file(tmp_path: Path) -> None:
+    """The file pass carries the same rows the in-memory pass does, and stamps the
+    floor it passed.
+
+    The stamp is the literal this floor writes, not ``CURRENT_CONFIG_VERSION``: a
+    stamp written from CURRENT cannot see the constant left behind while the floor
+    was added, which leaves every later load re-running the floor -- the lesson
+    ``test_a_stamped_seven_config_keeps_its_transition_row`` records for the input
+    side."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+
+    p = tmp_path / "config.json"
+    _write(p, {"subagents": {"agents": [_codex_row(_THIRD_RETIRED[1])]}})
+    _stamp_path(p).write_text(json.dumps({"version": 18}), encoding="utf-8")
+
+    drain_migration_notices()
+    cfg = load_config(p)
+
+    codex = THIRD_PARTY_SUBAGENT_PRESETS["codex"]["command"]
+    assert [a.command for a in cfg.subagents.agents] == [codex]
+    assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [_codex_row(codex)]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": 19}
+
+
 def test_an_address_the_settings_dialog_only_showed_leaves_the_file_once(tmp_path: Path) -> None:
     """Connecting a key-only vendor from the settings dialog sent the address its
     field merely shows -- Google's bare host, Anthropic's -- and the section kept
