@@ -1491,7 +1491,7 @@ class SessionManager:
             # The scan cache returns the same parsed record on every hit, so the
             # caller gets its own copy of the one mutable field rather than a
             # handle into the cache.
-            metadata = data.get("metadata")
+            metadata = data.get("metadata", {})
             sessions.append(
                 {
                     "key": key,

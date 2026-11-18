@@ -2281,3 +2281,132 @@ def test_list_sessions_rescans_after_an_undecodable_transcript_becomes_readable(
     os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
 
     assert [entry["key"] for entry in manager.list_sessions()] == ["cli:bad"]
+
+
+def test_save_invalidates_the_scan_cache_when_the_stamp_would_not_change(tmp_path: Path):
+    """A save that rewrites a transcript is listed fresh, not from the cache.
+
+    The cache is keyed on ``(st_mtime_ns, st_size)``, and a same-size rewrite
+    can land in the same mtime tick. The rewrite is made through ``save`` here:
+    the turn is cut and retold with a message of the same length, and the mtime
+    is put back on the cached value, so only the explicit drop can tell the
+    listing that the file changed.
+    """
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("cli:one")
+    session.add_message("user", "hello")
+    manager.save(session)
+    # A rewrite save first, so the file the cache records and the rewrite the
+    # test makes below share a line-ending convention on every platform.
+    session.undo_last_turn()
+    session.add_message("user", "world")
+    manager.save(session)
+    path = manager.session_path("cli:one")
+    before = path.stat()
+    assert manager.list_sessions()[0]["last_message_preview"] == "world"
+    assert path in manager._scan_cache
+
+    session.undo_last_turn()
+    session.add_message("user", "again")
+    manager.save(session)
+    after = path.stat()
+    assert after.st_size == before.st_size, "the regression needs the stamp to stay put"
+    os.utime(path, ns=(after.st_atime_ns, before.st_mtime_ns))
+
+    listed = manager.list_sessions()
+    assert listed[0]["last_message_preview"] == "again"
+    assert listed[0]["message_count"] == 1
+
+
+def test_append_metadata_patch_invalidates_the_scan_cache(tmp_path: Path):
+    """A patch is visible to the very next listing, even on a colliding stamp.
+
+    An append always changes the size, so the stamp alone would usually notice
+    it; the explicit drop covers a clock that hands the same mtime back. The
+    cache entry is seeded with the stamp the append will leave, which is the
+    case the drop exists for.
+    """
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("cli:one")
+    session.add_message("user", "hello")
+    manager.save(session)
+    path = manager.session_path("cli:one")
+    manager.list_sessions()
+    cached = manager._scan_cache[path]
+
+    patch = {"archived": True}
+    last = manager._scan_file(path)[0]
+    merged = {**(last.get("metadata") or {}), **patch}
+    line = json.dumps({**last, "metadata": merged}, ensure_ascii=False)
+    appended_size = path.stat().st_size + len((line + "\n").encode("utf-8"))
+    appended_mtime = cached[0] + 1_000_000_000
+    manager._scan_cache[path] = (appended_mtime, appended_size, cached[2])
+
+    assert manager.append_metadata_patch("cli:one", patch) is True
+    stat = path.stat()
+    assert stat.st_size == appended_size
+    os.utime(path, ns=(stat.st_atime_ns, appended_mtime))
+
+    [listed] = manager.list_sessions()
+    assert listed["metadata"].get("archived") is True
+
+
+def test_a_session_recreated_after_delete_is_scanned_fresh(tmp_path: Path):
+    """A new transcript at a deleted session's path never reads the old entry.
+
+    ``delete`` drops the cached scan itself because the stamp alone can match:
+    a same-key session rewritten to the same size can share the removed file's
+    mtime. The replacement is written by another manager, as a second client
+    would, and its stamp is put back on the old one.
+    """
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("cli:one")
+    session.add_message("user", "old!")
+    manager.save(session)
+    path = manager.session_path("cli:one")
+    before = path.stat()
+    assert manager.list_sessions()[0]["last_message_preview"] == "old!"
+
+    assert manager.delete("cli:one") is True
+
+    other = SessionManager(tmp_path)
+    recreated = other.get_or_create("cli:one")
+    recreated.add_message("user", "new!")
+    other.save(recreated)
+    after = path.stat()
+    assert after.st_size == before.st_size, "the regression needs the stamp to stay put"
+    os.utime(path, ns=(after.st_atime_ns, before.st_mtime_ns))
+
+    assert manager.list_sessions()[0]["last_message_preview"] == "new!"
+
+
+def test_list_sessions_metadata_is_a_top_level_copy(tmp_path: Path):
+    """A caller editing the returned record must not edit the cached parse.
+
+    Only the top level is copied: a nested dict or list is still shared with
+    the cache, which is the accepted trade-off for not deep-copying every
+    listing.
+    """
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("cli:one")
+    session.add_message("user", "hello")
+    session.metadata["note"] = "kept"
+    manager.save(session)
+
+    first = manager.list_sessions()[0]
+    assert first["metadata"]["note"] == "kept"
+    first["metadata"]["note"] = "changed"
+
+    assert manager.list_sessions()[0]["metadata"]["note"] == "kept"
+
+
+def test_list_sessions_reports_empty_metadata_for_a_legacy_record(tmp_path: Path):
+    """A metadata record from before the field existed lists as ``{}``, not None."""
+    path = tmp_path / "sessions" / "tui" / "legacy01.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({"_type": "metadata", "key": "tui:legacy01", "created_at": "2026-01-01T00:00:00+00:00"}) + "\n",
+        encoding="utf-8",
+    )
+
+    assert SessionManager(tmp_path).list_sessions()[0]["metadata"] == {}
