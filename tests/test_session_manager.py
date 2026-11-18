@@ -3,6 +3,7 @@
 import gc
 import json
 import multiprocessing
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -2216,3 +2217,67 @@ def test_list_sessions_skips_a_transcript_it_cannot_stat(tmp_path: Path, monkeyp
     monkeypatch.setattr(Path, "stat", failing_stat)
 
     assert manager.list_sessions() == []
+
+
+def test_the_scan_cache_evicts_the_least_recently_used_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The cache is bounded; past the limit the entry scanned longest ago goes.
+
+    The limit is lowered so the test walks the same eviction branch without
+    writing a couple thousand transcripts.
+    """
+    monkeypatch.setattr(manager_mod, "_SCAN_CACHE_LIMIT", 2)
+    manager = SessionManager(tmp_path)
+    paths = []
+    for name in ("one", "two", "three"):
+        session = manager.get_or_create(f"cli:{name}")
+        session.add_message("user", name)
+        manager.save(session)
+        paths.append(manager.session_path(f"cli:{name}"))
+
+    for path in paths:
+        assert manager._scan_listed(path)[0] is not None
+
+    assert list(manager._scan_cache) == paths[1:]
+    assert {entry["key"] for entry in manager.list_sessions()} == {"cli:one", "cli:two", "cli:three"}
+
+
+def test_list_sessions_rescans_an_equal_size_rewrite_with_a_newer_mtime(tmp_path: Path):
+    """The stamp carries mtime as well as size, so a same-size rewrite is seen."""
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("cli:one")
+    session.add_message("user", "hello")
+    manager.save(session)
+    [path] = list((tmp_path / "sessions").rglob("*.jsonl"))
+    assert manager.list_sessions()[0]["last_message_preview"] == "hello"
+
+    raw = path.read_bytes()
+    rewritten = raw.replace(b"hello", b"world")
+    assert len(rewritten) == len(raw), "the rewrite must not change the byte count"
+    path.write_bytes(rewritten)
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+
+    listed = manager.list_sessions()
+    assert listed[0]["last_message_preview"] == "world"
+    assert listed[0]["message_count"] == 1
+
+
+def test_list_sessions_rescans_after_an_undecodable_transcript_becomes_readable(tmp_path: Path):
+    """A cached decode failure is retried when the file changes, not kept forever."""
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("cli:bad")
+    session.add_message("user", "hello")
+    manager.save(session)
+    [path] = list((tmp_path / "sessions").rglob("*.jsonl"))
+    readable = path.read_bytes()
+
+    path.write_bytes(b"\xff\xfe\x00\x01")
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+    assert manager.list_sessions() == []
+
+    path.write_bytes(readable)
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+
+    assert [entry["key"] for entry in manager.list_sessions()] == ["cli:bad"]
