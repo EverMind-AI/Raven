@@ -28,4 +28,19 @@ describe('a task thread\'s rail', () => {
     const box = decls('.tkstepsum', tasks)
     expect(['border', 'border-left'].filter((prop) => box.has(prop))).toEqual([])
   })
+
+  /* The rail is one unbroken line: it starts where a mark ends and ends where
+     the next mark begins. Both ends are the mark's own geometry rather than a
+     length the text can change, and the step that carries it has no margin --
+     a pseudo element cannot paint across one, which is what left each event's
+     line stopping short of the next. */
+  it('spans from a mark\'s lower edge to the next mark\'s upper edge', () => {
+    const px = (value) => Number.parseFloat(value)
+    const mark = decls('.tkmark', tasks)
+    const rail = decls('.tkstep:not(:last-child)::after', tasks)
+    const step = decls('.tkstep:not(:last-child)', tasks)
+    expect(rail.get('top')).toBe(`${px(mark.get('top')) + px(mark.get('height'))}px`)
+    expect(rail.get('bottom')).toBe(`${-px(mark.get('top'))}px`)
+    expect(['margin', 'margin-top', 'margin-bottom'].filter((prop) => step.has(prop))).toEqual([])
+  })
 })
