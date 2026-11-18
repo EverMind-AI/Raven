@@ -152,6 +152,19 @@ def test_a_git_root_at_home_does_not_bound_a_gitless_workdir(tmp_path: Path) -> 
     assert read_project_skills(roots) == []
 
 
+def test_a_git_root_above_home_does_not_bound_a_gitless_workdir(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    (root / ".git").mkdir(parents=True)
+    home = root / "home"
+    workdir = home / "Downloads" / "evil"
+    workdir.mkdir(parents=True)
+    _skill(home / "Downloads/.agents/skills", "planted")
+    agent_home = tmp_path / "elsewhere" / "workspace"
+    agent_home.mkdir(parents=True)
+
+    assert project_skill_roots(workdir, agent_home=agent_home, home=home) is None
+
+
 def test_home_is_a_containment_root_with_agent_home_outside_it(tmp_path: Path) -> None:
     home = tmp_path / "home"
     (home / ".git").mkdir(parents=True)
