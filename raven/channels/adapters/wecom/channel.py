@@ -9,8 +9,11 @@ import os
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
+
 from loguru import logger
 from wecom_aibot_sdk import WSClient, generate_req_id
+from wecom_aibot_sdk.upload import WECOM_UPLOAD_MAX_BYTES
 
 from raven.channels.base import ChannelBase
 from raven.channels.contract import Capabilities
@@ -20,7 +23,7 @@ from raven.channels.media import file_uri_to_path, safe_name, save_media_bytes
 _MSG_TYPE_LABEL = {"image": "[image]", "voice": "[voice]", "file": "[file]", "mixed": "[mixed content]"}
 _DEDUP_CAP = 1000
 _FRAMES_CAP = 1000
-_MAX_MEDIA_BYTES = 200 * 1024 * 1024  # WeCom upload protocol cap (SDK upload.py)
+_MAX_MEDIA_BYTES = WECOM_UPLOAD_MAX_BYTES  # the SDK's own upload cap; never drift from it
 
 
 class WecomChannel(ChannelBase):
@@ -213,7 +216,7 @@ class WecomChannel(ChannelBase):
                 continue
             logger.error("WeCom media send failed for {}", media_ref)
             # Tell the user instead of dropping the attachment silently.
-            await self._send_text(chat_id, f"[Attachment send failed: {safe_name(media_ref)}]")
+            await self._send_text(chat_id, f"[Attachment send failed: {self._media_display_name(media_ref)}]")
 
     async def _send_text(self, chat_id: str, text: str) -> None:
         frame = self._frames.get(chat_id)
@@ -241,8 +244,24 @@ class WecomChannel(ChannelBase):
                 await self._client.send_media_message(chat_id, path)
             return True
         except Exception as e:
+            if transient_network(e):
+                raise  # ws drop / timeout: the hub retries the delivery
             logger.error("Error sending WeCom media ref={} err={}", media_ref, e)
             return False
+
+    @staticmethod
+    def _media_display_name(media_ref: str) -> str:
+        """The name a failure notice shows: a ``file://`` ref is resolved first,
+        so the user reads ``report.pdf`` rather than its percent-encoded tail."""
+        if media_ref.startswith("file://"):
+            resolved = file_uri_to_path(media_ref)
+            if resolved is not None:
+                return safe_name(str(resolved))
+            try:
+                return safe_name(unquote(urlparse(media_ref).path))
+            except ValueError:
+                return safe_name(media_ref)
+        return safe_name(media_ref)
 
     @staticmethod
     def _resolve_media_path(media_ref: str) -> str | None:

@@ -700,6 +700,12 @@ async def test_read_media_bytes_missing(tmp_path, monkeypatch):
     assert await ch._read_media_bytes(str(tmp_path / "nope.txt")) == (None, None, None)
 
 
+async def test_read_media_bytes_remote_file_uri_refused(tmp_path, monkeypatch):
+    """A file:// URI naming another machine is not a local path."""
+    ch = _make_channel(tmp_path, monkeypatch)
+    assert await ch._read_media_bytes("file://server/share/x.csv") == (None, None, None)
+
+
 async def test_send_media_ref_http_image_shortcut(tmp_path, monkeypatch):
     """A public image URL is sent by reference — no read/upload."""
     ch = _make_channel(tmp_path, monkeypatch)

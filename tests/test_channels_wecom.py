@@ -267,6 +267,81 @@ def test_send_media_failure_notice_only_when_text_sendable():
     ch._client.reply_stream.assert_not_awaited()
 
 
+def test_send_media_remote_file_uri_reports_failure():
+    """A file:// URI naming another host is refused before any upload."""
+    ch = _channel()
+    ch._client = AsyncMock()
+    ch._frames["c1"] = SimpleNamespace(body={})
+    asyncio.run(ch.send("c1", "", media=["file://server/share/x.pdf"]))
+    ch._client.reply_media.assert_not_awaited()
+    assert "[Attachment send failed: x.pdf]" in ch._client.reply_stream.await_args.args[2]
+
+
+def test_send_media_unparsable_file_uri_reports_failure():
+    """A malformed URI is refused, and its notice still names something."""
+    ch = _channel()
+    ch._client = AsyncMock()
+    ch._frames["c1"] = SimpleNamespace(body={})
+    asyncio.run(ch.send("c1", "", media=["file://[bad/x.pdf"]))
+    ch._client.reply_media.assert_not_awaited()
+    assert "[Attachment send failed:" in ch._client.reply_stream.await_args.args[2]
+
+
+def test_send_media_failure_notice_names_file_uri_by_basename(tmp_path):
+    """The notice reads the file's name, not the percent-encoded URI tail."""
+    target = tmp_path / "report.pdf"
+    target.write_bytes(b"%PDF")
+    ch = _channel()
+    ch._client = AsyncMock()
+    ch._client.reply_media = AsyncMock(side_effect=RuntimeError("nope"))
+    ch._frames["c1"] = SimpleNamespace(body={})
+    asyncio.run(ch.send("c1", "", media=[target.as_uri()]))
+    assert "[Attachment send failed: report.pdf]" in ch._client.reply_stream.await_args.args[2]
+
+
+def test_send_media_transient_failure_reraises(tmp_path):
+    """A transient network error is re-raised for the hub to retry, like the
+    text path, instead of becoming a permanent failure notice."""
+    f = tmp_path / "report.pdf"
+    f.write_bytes(b"%PDF")
+    ch = _channel()
+    ch._client = AsyncMock()
+    ch._client.reply_media = AsyncMock(side_effect=ConnectionResetError("ws dropped"))
+    ch._frames["c1"] = SimpleNamespace(body={})
+    with pytest.raises(ConnectionResetError):
+        asyncio.run(ch.send("c1", "hi", media=[str(f)]))
+
+
+def test_send_two_attachments_both_sent(tmp_path):
+    """Every attachment in the list is uploaded, not only the first."""
+    first = tmp_path / "one.pdf"
+    first.write_bytes(b"1")
+    second = tmp_path / "two.pdf"
+    second.write_bytes(b"2")
+    ch = _channel()
+    ch._client = AsyncMock()
+    ch._frames["c1"] = SimpleNamespace(body={})
+    asyncio.run(ch.send("c1", "two files", media=[str(first), str(second)]))
+    assert ch._client.reply_media.await_count == 2
+    assert [call.args[1] for call in ch._client.reply_media.await_args_list] == [str(first), str(second)]
+
+
+def test_send_media_continues_after_one_upload_failure(tmp_path):
+    """One attachment's failure does not abort the rest of the list."""
+    first = tmp_path / "one.pdf"
+    first.write_bytes(b"1")
+    second = tmp_path / "two.pdf"
+    second.write_bytes(b"2")
+    ch = _channel()
+    ch._client = AsyncMock()
+    ch._client.reply_media = AsyncMock(side_effect=[RuntimeError("boom"), None])
+    ch._frames["c1"] = SimpleNamespace(body={})
+    asyncio.run(ch.send("c1", "", media=[str(first), str(second)]))
+    assert ch._client.reply_media.await_count == 2
+    assert [call.args[1] for call in ch._client.reply_media.await_args_list] == [str(first), str(second)]
+    assert "[Attachment send failed: one.pdf]" in ch._client.reply_stream.await_args.args[2]
+
+
 def test_send_replies_with_cached_frame():
     ch = _channel()
     ch._client = AsyncMock()
