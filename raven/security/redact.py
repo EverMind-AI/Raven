@@ -68,6 +68,7 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("github", re.compile(r"()(gh[pousr]_[A-Za-z0-9]{16,})")),
     ("gitlab", re.compile(r"()(glpat-[A-Za-z0-9_-]{16,})")),
     ("slack", re.compile(r"()(xox[abposr]-[A-Za-z0-9-]{10,})")),
+    ("huggingface", re.compile(r"()(?<![A-Za-z0-9_])(hf_[A-Za-z0-9]{20,})")),
     ("google", re.compile(r"()(AIza[0-9A-Za-z_-]{30,})")),
     ("aws-access-key", re.compile(r"()((?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16})")),
     ("anthropic-legacy", re.compile(r"()(sk_live_[A-Za-z0-9]{16,})")),
@@ -75,6 +76,8 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "jwt",
         re.compile(r"()(?<![A-Za-z0-9_-])(eyJ[A-Za-z0-9_-]{10,}+\.[A-Za-z0-9_-]{10,}+\.[A-Za-z0-9_-]{10,}+)"),
     ),
+    # A Cookie / Set-Cookie header carries the session credential as its whole value.
+    ("cookie", re.compile(r"((?:Set-)?Cookie\s*+:\s*+)([^\r\n\"']{6,})", re.IGNORECASE)),
     # A scan or call-record cap may have removed the closing armour.
     ("pem", re.compile(r"(-----BEGIN [A-Z ]*PRIVATE KEY-----)([\s\S]+?)(?=-----END|\Z)")),
     # A heredoc or echo piping a credential into a file.
@@ -101,7 +104,7 @@ MAX_SCAN_CHARS = 256 * 1024
 _TRUNCATED_SECRETS: tuple[tuple[re.Pattern[str], re.Pattern[str]], ...] = (
     (
         re.compile(
-            r"()(?<![A-Za-z0-9_-])((?:sk-|gh[pousr]_|glpat-|xox[abposr]-|AIza|A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA|eyJ)"
+            r"()(?<![A-Za-z0-9_-])((?:sk-|gh[pousr]_|hf_|glpat-|xox[abposr]-|AIza|A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA|eyJ)"
             r"[A-Za-z0-9_.-]*+)\Z"
         ),
         re.compile(r"[A-Za-z0-9_.-]*+"),
