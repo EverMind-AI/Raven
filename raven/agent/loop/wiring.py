@@ -1515,10 +1515,12 @@ class WiringMixin:
 
             # A sub-agent is given no project skills, matching the router source
             # the leader process alone mounts; the tools answer ``project/`` ids
-            # with "not available to this agent."
+            # with "not available to this agent." A host that turned the router
+            # master switch off mounts no source either, so the same answer
+            # covers it.
             project_skills = (
                 None
-                if is_subagent_process()
+                if is_subagent_process() or not self._skill_router_enabled
                 else ProjectSkills(
                     agent_home=self.workspace,
                     workdir_reader=workdir.current,

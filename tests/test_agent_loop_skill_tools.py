@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import TurnPolicy
+from raven.agent.loop.bundles import EngineWiring, TurnPolicy
 from raven.agent.loop.wiring import WiringMixin
 from raven.config.raven import HubSourceConfig, SkillForgeRouterConfig
 from raven.providers.base import LLMProvider, LLMResponse
@@ -55,6 +55,52 @@ def test_both_skill_tools_register_with_a_default_config(loop) -> None:
     assert getattr(loop.context.skills, "registry", None) is not None
     assert loop.tools.has("read_skill"), "the body route does not depend on the Hub being on"
     assert loop.tools.has("use_skill")
+
+
+def _router_off_loop(tmp_path: Path):
+    return AgentLoop(
+        provider=_StubProvider(),
+        workspace=tmp_path / "ws",
+        model="stub",
+        policy=TurnPolicy(max_iterations=2),
+        engine=EngineWiring(skill_forge_router_config=SkillForgeRouterConfig(enabled=False)),
+    )
+
+
+def test_the_router_master_switch_off_leaves_no_project_source(tmp_path: Path) -> None:
+    """The router is never built, so the tools get no ``ProjectSkills``: the
+    same "not available to this agent" a sub-agent's reads answer with."""
+    loop = _router_off_loop(tmp_path)
+    absent = "Error: project skills are not available to this agent."
+
+    assert loop.context_engine.skills_router is None
+    assert asyncio.run(loop.tools.get("read_skill").execute("project/pdf-tools")) == absent
+    assert asyncio.run(loop.tools.get("use_skill").execute("project/pdf-tools")) == absent
+
+
+def test_the_router_master_switch_off_answers_find_skill_with_no_retrieval(tmp_path: Path) -> None:
+    loop = _router_off_loop(tmp_path)
+
+    assert asyncio.run(loop.tools.get("find_skill").execute("write a changelog")).startswith(
+        "Error: skill retrieval is not available"
+    )
+
+
+def test_the_router_master_switch_on_still_mounts_the_project_source(tmp_path: Path) -> None:
+    """The contrast the off case needs: the default loop is the one every other
+    test in this file builds, and its ``project/`` read reaches the project
+    index rather than stopping at a missing source."""
+    loop = AgentLoop(
+        provider=_StubProvider(),
+        workspace=tmp_path / "ws",
+        model="stub",
+        policy=TurnPolicy(max_iterations=2),
+        engine=EngineWiring(skill_forge_router_config=SkillForgeRouterConfig()),
+    )
+
+    assert loop.context_engine.skills_router is not None
+    answered = asyncio.run(loop.tools.get("read_skill").execute("project/pdf-tools"))
+    assert "not available to this agent" not in answered
 
 
 def test_the_hub_client_is_built_while_switched_off(tmp_path: Path) -> None:

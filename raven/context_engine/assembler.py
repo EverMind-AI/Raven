@@ -125,7 +125,8 @@ class ContextAssembler(ContextEngine):
         self._mints_source_refs = mints_source_refs
         self._scent = scent
         self.skills_router = None
-        """Set by the factory: the SkillForgeRouter behind find_skill."""
+        """Set by the factory: the SkillForgeRouter behind find_skill, left
+        None when its master switch (``skillForge.router.enabled``) is off."""
         self._builders = sorted(builders, key=lambda b: b.order)
         self._phase_a = [b for b in self._builders if not b.needs_prefix]
         self._phase_b = [b for b in self._builders if b.needs_prefix]

@@ -126,15 +126,23 @@ def build_context_engine(
     # read between them.
     live = LiveConfig()
 
-    router = _build_router(
-        builder=builder,
-        backend=backend,
-        memory_config=memory_config,
-        skill_forge_router_config=skill_forge_router_config,
-        skill_hub_client=skill_hub_client,
-        hub_enabled_reader=lambda: skill_hub_enabled(live),
-        project_enabled_reader=lambda: project_skills_enabled(live),
-    )
+    # The master switch is read once, where the router is built: a deployment
+    # that throws it off restarts into a host that mounts no source at all, so
+    # no reader downstream has to ask. ``None`` is the state every consumer
+    # already reads as "no retrieval here" -- ``FindSkillTool`` says so, the
+    # tools' held hits come back empty, and the memory-backend rebind skips a
+    # missing router rather than mounting a source into one.
+    router = None
+    if skill_forge_router_config.enabled:
+        router = _build_router(
+            builder=builder,
+            backend=backend,
+            memory_config=memory_config,
+            skill_forge_router_config=skill_forge_router_config,
+            skill_hub_client=skill_hub_client,
+            hub_enabled_reader=lambda: skill_hub_enabled(live),
+            project_enabled_reader=lambda: project_skills_enabled(live),
+        )
 
     builders = [
         IdentitySegmentBuilder(
@@ -175,15 +183,19 @@ def build_context_engine(
 
     # The menu is where the everos and hub sources first meet the policy: it
     # enforces the blocklist and the safety bar at advertising time, and
-    # read_skill / use_skill enforce them again on the detail metadata.
-    scent = ScentMenu(
-        router,
-        policy=SkillPolicy.create(
-            min_safety=skill_forge_router_config.hub.min_safety,
-            blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
-            blocklist_reader=blocklist_reader,
-        ),
-    )
+    # read_skill / use_skill enforce them again on the detail metadata. With
+    # the router off there is nothing to advertise, so the engine carries no
+    # menu either.
+    scent = None
+    if router is not None:
+        scent = ScentMenu(
+            router,
+            policy=SkillPolicy.create(
+                min_safety=skill_forge_router_config.hub.min_safety,
+                blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
+                blocklist_reader=blocklist_reader,
+            ),
+        )
     dropped = frozenset(getattr(config, "drop_segments", None) or ())
     # The history slot's builder is named for its strategy now; ``curator`` is
     # what a config written before the registry calls it, so either name drops
@@ -214,7 +226,8 @@ def build_context_engine(
         mints_source_refs=strategy.mints_source_refs and not history_dropped,
         turn_scratch=getattr(getattr(config, "cache", None), "turn_scratch", True),
     )
-    # The find_skill tool searches through the same router the scent menu reads.
+    # The find_skill tool searches through the same router the scent menu
+    # reads; a master switch that is off leaves the engine with neither.
     engine.skills_router = router
     return engine
 
