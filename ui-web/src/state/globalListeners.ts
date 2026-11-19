@@ -128,6 +128,13 @@ export function installEscapeOrder(): void {
   document.addEventListener('keydown', onEscapeOrder)
 }
 
+/* The code-block copy control alone. A surface that draws prose without the
+   rest of the page -- the file preview window -- boots none of the listeners
+   below, and its listings still carry the button. */
+export function installCodeCopy(): void {
+  document.addEventListener('click', copyCodeBlock)
+}
+
 /** Every document- and window-level listener the page holds. Called once. */
 export function installGlobalListeners(): void {
   /* A link in an answer belongs to the reader's own browser, never to the
@@ -173,7 +180,7 @@ export function installGlobalListeners(): void {
   document.addEventListener('mousedown', shellDrag)
   document.addEventListener('dblclick', shellZoom)
   document.addEventListener('selectionchange', clampSelection)
-  document.addEventListener('click', copyCodeBlock)
+  installCodeCopy()
   installEscapeOrder()
   document.addEventListener('keydown', onSettingsKey)
   /* The loaded page. The splash is the boot sequence's to lift, so what is

@@ -13,12 +13,17 @@ import { createRoot } from 'react-dom/client'
 
 import { PreviewWindow } from '../features/workspace/PreviewWindow'
 import { setCurrent } from '../lib/session'
+import { installCodeCopy } from '../state/globalListeners'
 import '../state/lang/store'
 
 import type { PreviewRequest } from '../features/workspace/preview'
 
 export function bootPreview(request: PreviewRequest): void {
   setCurrent(request.session)
+  /* The one page listener this window's markup needs: a fenced code block's
+     copy control is delegated on the document, and none of the page's other
+     listeners belong on a window that shows one file. */
+  installCodeCopy()
   /* The static shells and the shell's own regions are hidden together by
      `html[data-preview]` in features/workspace/styles.css: the splash is a
      first-frame shell this page has no use for, and the body it was served

@@ -411,6 +411,11 @@ describe('prose renderer, a markdown file as a document', () => {
       + ' href="#mdoc-fn-1" role="doc-noteref">1</a>')
     expect(doc.html).toContain('<a class="workspace-md-ref" id="mdoc-fnref-2"'
       + ' href="#mdoc-fn-2" role="doc-noteref">2</a>')
+    /* The repeated reference keeps the number and carries no second id: the
+       backlink returns to the first one. */
+    const refs = doc.html.match(/<a class="workspace-md-ref"[^>]*>/g) ?? []
+    expect(refs).toHaveLength(3)
+    expect(refs.filter((ref) => ref.includes('id="mdoc-fnref-1"'))).toHaveLength(1)
     expect(doc.html).toContain('<li id="mdoc-fn-1">the b note '
       + '<a class="workspace-md-back" href="#mdoc-fnref-1" role="doc-backlink">↩</a></li>')
     expect(doc.html).toContain('<li id="mdoc-fn-2">the a note ')

@@ -395,12 +395,15 @@ function makeInline(doc?: DocContext): Inline {
     if (doc) t_ = t_.replace(/\[\^([^\]\s]+)\]/g, (whole: string, label: string) => {
       if (!doc.notes.has(label)) return whole
       let n = doc.numbers.get(label)
+      const first = n == null
       if (n == null) {
         n = doc.numbers.size + 1
         doc.numbers.set(label, n)
         doc.order.push(label)
       }
-      return keep(`<a class="workspace-md-ref" id="${doc.prefix}-fnref-${n}"`
+      /* One id per note, on the reference its backlink returns to: a repeated
+         reference keeps the number but not a second copy of the id. */
+      return keep(`<a class="workspace-md-ref"${first ? ` id="${doc.prefix}-fnref-${n}"` : ''}`
         + ` href="#${doc.prefix}-fn-${n}" role="doc-noteref">${n}</a>`)
     })
     /* TeX, held out whole like a code span and for the same reason: `a_1` and
