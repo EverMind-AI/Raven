@@ -28,6 +28,14 @@ not read for these tools, and the OpenRouter key is never sent to MiniMax. An em
 
 ## Images
 
+Set the image model to `MiniMax-H3-Image` or `MiniMax-H3-Image-Highspeed` for
+text-to-image generation. Both use `POST /v1/images/generations` on the global
+(`api.minimax.io`) or China (`api.minimax.cn`) endpoint. They accept an optional
+`aspect_ratio` and require a text-only prompt. Generation may take ten minutes.
+A timed-out request can still finish and incur a charge, so avoid resubmitting it.
+
+The legacy image models keep their existing behavior:
+
 - Route: `POST /v1/image_generation`, the picture returned inline.
 - Models: `image-01` (the default) and `image-01-live`.
 - `aspect_ratio`: `1:1`, `16:9`, `4:3`, `3:2`, `2:3`, `3:4`, `9:16`, `21:9`.

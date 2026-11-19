@@ -1068,6 +1068,9 @@ class ToolRegistry:
                     return verdict
 
             ceiling = (spec or tool).timeout_seconds or self.DEFAULT_TOOL_TIMEOUT_S
+            timeout_for = getattr(tool, "timeout_for", None)
+            if timeout_for is not None:
+                ceiling = timeout_for(params) or ceiling
             # The body sees the gate that admitted it, so an action it finds
             # while it runs is asked about the same way (raven.permissions.runtime).
             if tool.blocking_for(params):

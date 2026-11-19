@@ -2067,7 +2067,9 @@ def _minimax_image_tool(monkeypatch, handler, workspace: Path, **section) -> Ima
     address and key in place."""
     transport = httpx.MockTransport(handler)
     real_client = httpx.AsyncClient
-    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    monkeypatch.setattr(
+        media_gen.httpx, "AsyncClient", lambda **kw: real_client(transport=transport, timeout=kw["timeout"])
+    )
     recorder = section.pop("usage_recorder", None)
     fields = {"provider": "minimax", "api_base": "https://api.minimax.io/v1", "api_key": "mm-key", "model": "image-01"}
     return ImageGenerateTool(SimpleNamespace(**{**fields, **section}), workspace=workspace, usage_recorder=recorder)
@@ -2281,6 +2283,104 @@ async def test_a_minimax_picture_keeps_the_format_its_bytes_declare(monkeypatch,
     tool = _minimax_image_tool(monkeypatch, lambda _r: _minimax_answer(pictures=[jpeg]), tmp_path)
     out = json.loads(await tool.execute("portrait"))
     assert Path(out["paths"][0]).suffix == ".jpg" and Path(out["paths"][0]).read_bytes() == _JPG
+
+
+@pytest.mark.parametrize(
+    ("model", "provider", "base", "host"),
+    [
+        ("MiniMax-H3-Image", "minimax", "https://api.minimax.io/v1", "api.minimax.io"),
+        ("MiniMax-H3-Image-Highspeed", "minimax_cn_api", "https://api.minimaxi.com/v1", "api.minimax.cn"),
+        ("MiniMax-H3-Image", "minimax", "https://relay.example/proxy/v1", "relay.example/proxy"),
+    ],
+)
+async def test_minimax_h3_generates_text_at_the_configured_region(monkeypatch, tmp_path, model, provider, base, host):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(
+            200, json={"data": [{"b64_json": _B64}, {"error": {"code": "1027", "message": "withheld"}}]}
+        )
+
+    tool = _minimax_image_tool(monkeypatch, handler, tmp_path, model=model, provider=provider, api_base=base)
+    answer = json.loads(await tool.execute("portrait", aspect_ratio="3:2"))
+    assert answer["success"] and Path(answer["paths"][0]).read_bytes() == _PNG
+    assert answer["errors"] == [{"code": "1027", "message": "withheld"}]
+    (request,) = requests
+    assert str(request.url) == f"https://{host}/v1/images/generations"
+    assert request.headers["authorization"] == "Bearer mm-key"
+    assert request.extensions["timeout"]["read"] >= 600
+    assert tool.timeout_for({}) > request.extensions["timeout"]["read"]
+    assert json.loads(request.content) == {
+        "model": model,
+        "prompt": "portrait",
+        "n": 1,
+        "response_format": "b64_json",
+        "aspect_ratio": "3:2",
+    }
+
+
+@pytest.mark.parametrize("case", ["reference", "timeout", "http_error", "item_error", "url"])
+async def test_minimax_h3_returns_failures_without_resubmitting(monkeypatch, tmp_path, case):
+    posts = []
+    error = {"code": "1027", "message": "withheld"}
+
+    def handler(request):
+        if request.method == "GET":
+            assert "authorization" not in request.headers
+            return httpx.Response(200, content=_PNG, headers={"content-type": "image/png"})
+        posts.append(request)
+        if case == "timeout":
+            raise httpx.ReadTimeout("timed out")
+        if case == "http_error":
+            return httpx.Response(
+                422, json={"type": "error", "error": {"type": "invalid_request_error", "message": "withheld"}}
+            )
+        if case == "url":
+            return httpx.Response(200, json={"data": [{"url": "https://8.8.8.8/result.png"}]})
+        return httpx.Response(200, json={"data": [{"error": error}]})
+
+    tool = _minimax_image_tool(monkeypatch, handler, tmp_path, model="MiniMax-H3-Image")
+    answer = json.loads(await tool.execute("portrait", images=["missing.jpg"] if case == "reference" else None))
+    assert len(posts) == (0 if case == "reference" else 1)
+    if case == "reference":
+        assert "text prompt" in answer["error"]
+    elif case == "timeout":
+        assert answer["retryable"] is False and answer["error"] == "ReadTimeout"
+    elif case == "http_error":
+        assert answer["error"] == "HTTP 422" and "withheld" in answer["detail"]
+    elif case == "url":
+        assert Path(answer["paths"][0]).read_bytes() == _PNG
+    else:
+        assert answer["detail"] == [error] and answer["retryable"] is False
+
+
+async def test_h3_deadline_follows_the_model_selected_for_this_call(monkeypatch, tmp_path):
+    from raven.agent.tools.registry import ToolRegistry
+
+    tool = _minimax_image_tool(monkeypatch, None, tmp_path, model="")
+    registry = ToolRegistry()
+    registry.register(tool)
+    deadlines = []
+    timeout = asyncio.timeout
+
+    def tracked(seconds):
+        deadlines.append(seconds)
+        return timeout(seconds)
+
+    async def execute(**kwargs):
+        return "done"
+
+    monkeypatch.setattr(asyncio, "timeout", tracked)
+    monkeypatch.setattr(tool, "execute", execute)
+    for model, provider, override, ceiling in (
+        ("", "minimax", "minimax/MiniMax-H3-Image", 660),
+        ("image-01", "minimax", "MiniMax-H3-Image", registry.DEFAULT_TOOL_TIMEOUT_S),
+        ("MiniMax-H3-Image", "", "", registry.DEFAULT_TOOL_TIMEOUT_S),
+    ):
+        tool._config.model, tool._config.provider = model, provider
+        assert await registry.execute("image_generate", {"prompt": "portrait", "model": override}) == "done"
+        assert deadlines[-1] == ceiling
 
 
 def test_the_image_tool_says_what_references_do_on_the_provider_it_runs_on() -> None:
