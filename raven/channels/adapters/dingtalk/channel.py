@@ -10,7 +10,6 @@ import mimetypes
 import os
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
 
 from dingtalk_stream import (
     AckMessage,
@@ -26,7 +25,7 @@ from raven.channels.adapters.dingtalk import parsing
 from raven.channels.adapters.dingtalk.api import DingTalkAPI
 from raven.channels.base import ChannelBase
 from raven.channels.contract import Capabilities
-from raven.channels.media import save_media_bytes
+from raven.channels.media import file_uri_to_path, save_media_bytes
 
 _RECONNECT_DELAY_S = 5
 _REPLY_TITLE = "Raven Reply"
@@ -248,7 +247,10 @@ class DingTalkChannel(ChannelBase):
 
         try:
             if media_ref.startswith("file://"):
-                local_path = Path(unquote(urlparse(media_ref).path))
+                local_path = file_uri_to_path(media_ref)
+                if local_path is None:
+                    logger.warning("DingTalk media file not found: {}", media_ref)
+                    return None, None, None
             else:
                 local_path = Path(os.path.expanduser(media_ref))
             if not local_path.is_file():
