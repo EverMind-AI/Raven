@@ -465,6 +465,37 @@ def test_index_search_ranks_by_bm25_and_get_by_name() -> None:
     assert idx.get("nope") is None
 
 
+def _search_index() -> ProjectSkillIndex:
+    return ProjectSkillIndex(
+        [
+            _meta("pdf-tools", "Extract text from PDF files"),
+            _meta("pdf-merge", "Merge PDF documents"),
+            _meta("weather", "Forecasts"),
+        ]
+    )
+
+
+def test_index_search_scores_the_same_when_the_stop_flag_never_fires() -> None:
+    idx = _search_index()
+
+    assert idx.search("pdf text", 5, should_stop=lambda: False) == idx.search("pdf text", 5)
+
+
+def test_index_search_stops_scoring_once_the_flag_fires() -> None:
+    idx = _search_index()
+
+    assert idx.search("pdf text", 5, should_stop=lambda: True) == []
+
+    reads: list[int] = []
+
+    def should_stop() -> bool:
+        reads.append(1)
+        return len(reads) > 1
+
+    assert idx.search("pdf text", 5, should_stop=should_stop) == []
+    assert len(reads) == 2
+
+
 def test_the_fingerprint_tracks_skill_file_changes(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     roots = _roots(repo)

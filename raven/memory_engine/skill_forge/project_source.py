@@ -5,12 +5,14 @@ Each search resolves the working directory bound to the running turn through
 each turn only its own project's skills. A cold index and the scoring over it
 are each waited on for a short bound only: the router gathers every source with
 no per-source timeout, so a large project must cost its turn a missing menu
-line, never a stalled assembly.
+line, never a stalled assembly. A scoring worker left behind by that bound is
+told to stop at its next query term instead of ranking for nobody.
 """
 
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import TYPE_CHECKING, Any
 
 from raven.memory_engine.skill_forge.types import RouterHit
@@ -39,13 +41,19 @@ class ProjectSkillSource:
         index = await self._project.index(wait_s=self._wait_s)
         if index is None:
             return []
+        stop = threading.Event()
         try:
             ranked = await asyncio.wait_for(
-                asyncio.to_thread(index.search, query, k),
+                asyncio.to_thread(index.search, query, k, should_stop=stop.is_set),
                 self._wait_s,
             )
         except TimeoutError:
             return []
+        finally:
+            # Set on every exit: on success the worker has already returned, so
+            # the flag only ever reaches a worker this search left behind --
+            # one whose wait expired or whose turn was cancelled.
+            stop.set()
         return [
             RouterHit(
                 qualified_id=f"project/{meta.name}",
