@@ -203,8 +203,10 @@ search, with no restart. A block rather than a bare boolean leaves room for late
 `skillForge.router.enabled` is the router's own master switch, and it is read once, where
 the factory builds the router. `false` leaves the engine with no router at all: no source
 is mounted, so the scent menu has nothing to advertise and carries no menu either, and
-`find_skill` answers that skill retrieval is not available in this deployment. The tools
-take the same gate — a host that throws the switch mounts no `ProjectSkills`, so
+`find_skill` stays registered for the explanation, but its schema now says skill
+retrieval is disabled in this deployment and a call answers that it is not available.
+The tools take the same gate -- a host that throws the switch mounts no
+`ProjectSkills`, so
 `read_skill("project/<name>")` and `use_skill("project/<name>")` answer that project
 skills are not available to this agent, the sentence a sub-agent's already gets. The
 memory-backend rebind reads the router per switch and skips a missing one, so turning

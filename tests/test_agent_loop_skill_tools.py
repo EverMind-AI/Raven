@@ -86,6 +86,48 @@ def test_the_router_master_switch_off_answers_find_skill_with_no_retrieval(tmp_p
     )
 
 
+def _find_skill_description(loop) -> str:
+    return next(
+        d["function"]["description"] for d in loop.tools.get_definitions() if d["function"]["name"] == "find_skill"
+    )
+
+
+def test_the_router_master_switch_off_keeps_the_library_out_of_the_schema(tmp_path: Path) -> None:
+    """The tool stays registered so a call is explained, but the schema the
+    model reads must not advertise a search that cannot run."""
+    described = _find_skill_description(_router_off_loop(tmp_path))
+
+    assert "110k" not in described
+    assert "16 categories" not in described
+    assert "disabled in this deployment" in described
+
+
+def test_the_router_master_switch_on_keeps_the_hub_library_in_the_schema(tmp_path: Path, monkeypatch) -> None:
+    """The contrast: the same loop with the switch on still advertises the
+    library the hub switch reports as searched."""
+    import json
+
+    from raven import home as raven_home
+
+    config = tmp_path / "config.json"
+    hub = {"endpoint": "http://hub.test", "enabled": True}
+    config.write_text(json.dumps({"skillForge": {"router": {"hub": hub}}}), encoding="utf-8")
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: config)
+    raven_home.set_config_path(config)
+    loop = AgentLoop(
+        provider=_StubProvider(),
+        workspace=tmp_path / "ws",
+        model="stub",
+        policy=TurnPolicy(max_iterations=2),
+        engine=EngineWiring(skill_forge_router_config=SkillForgeRouterConfig(hub=HubSourceConfig(**hub))),
+    )
+
+    try:
+        assert "110k" in _find_skill_description(loop)
+    finally:
+        asyncio.run(loop._skill_hub_client.aclose())
+
+
 def test_the_router_master_switch_on_still_mounts_the_project_source(tmp_path: Path) -> None:
     """The contrast the off case needs: the default loop is the one every other
     test in this file builds, and its ``project/`` read reaches the project
