@@ -626,9 +626,7 @@ SECTIONS: tuple[Section, ...] = (
     Section(
         "context",
         "How history is compacted into the prompt",
-        (
-            Setting("context.pinnedSkillIds", "Skills kept in context once read", "list", _E.RELOAD),
-        ),
+        (Setting("context.pinnedSkillIds", "Skills kept in context once read", "list", _E.RELOAD),),
     ),
     Section(
         "proactive",

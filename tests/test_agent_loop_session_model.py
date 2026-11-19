@@ -371,9 +371,7 @@ def test_a_stored_model_is_restored_onto_a_resumed_session(tmp_path) -> None:
         workspace=tmp_path,
         model="boot/model",
         provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(
-            context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()
-        ),
+        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()),
     )
 
     assert loop.session_model("tui:a") == "boot/model", "a fresh process has no override"
@@ -396,9 +394,7 @@ def test_a_stored_model_that_cannot_be_built_leaves_the_default(tmp_path) -> Non
         workspace=tmp_path,
         model="boot/model",
         provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(
-            context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()
-        ),
+        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()),
     )
 
     loop.restore_session_model("tui:a", "gemini-2.5-flash")
@@ -420,9 +416,7 @@ def _restorable_loop(tmp_path, stored: dict[str, dict[str, str]]) -> AgentLoop:
         workspace=tmp_path,
         model="boot/model",
         provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(
-            context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()
-        ),
+        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()),
     )
     for key, metadata in stored.items():
         record = loop.sessions.get_or_create(key)

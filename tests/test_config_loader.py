@@ -1927,13 +1927,14 @@ def test_a_file_past_the_first_pin_floor_has_its_second_floor_pins_carried_in_th
 
 def test_a_file_past_the_second_pin_floor_has_its_third_floor_pins_carried_in_the_file(tmp_path: Path) -> None:
     """The file pass carries the same rows the in-memory pass does, and stamps the
-    floor it passed.
+    generation it passed.
 
-    The stamp is the literal this floor writes, not ``CURRENT_CONFIG_VERSION``: a
-    stamp written from CURRENT cannot see the constant left behind while the floor
-    was added, which leaves every later load re-running the floor -- the lesson
-    ``test_a_stamped_seven_config_keeps_its_transition_row`` records for the input
-    side."""
+    The stamp is the literal generation this load must reach (20), not the floor
+    being exercised: a CURRENT left behind while a new floor is added would
+    stamp 19 here, and every later load would re-run the floor. The input side
+    of the same lesson is
+    ``test_a_stamped_seven_config_keeps_its_transition_row``.
+    """
     from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
 
     p = tmp_path / "config.json"
@@ -1946,7 +1947,7 @@ def test_a_file_past_the_second_pin_floor_has_its_third_floor_pins_carried_in_th
     codex = THIRD_PARTY_SUBAGENT_PRESETS["codex"]["command"]
     assert [a.command for a in cfg.subagents.agents] == [codex]
     assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [_codex_row(codex)]
-    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": 19}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": 20}
 
 
 def test_an_address_the_settings_dialog_only_showed_leaves_the_file_once(tmp_path: Path) -> None:

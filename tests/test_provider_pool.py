@@ -492,7 +492,10 @@ def test_an_unusable_pin_is_reported_once() -> None:
     sink_id = logger.add(lambda message: said.append(message.record["message"]), level="WARNING")
     try:
         resolve_pin = live_pin_resolver(
-            _AskedPool(), lambda: ("unpaired", None), key="subagents.explorer.model", follower="built-in agent 'explorer'"
+            _AskedPool(),
+            lambda: ("unpaired", None),
+            key="subagents.explorer.model",
+            follower="built-in agent 'explorer'",
         )
         assert resolve_pin() is None
         assert resolve_pin() is None
@@ -518,7 +521,10 @@ def test_a_later_different_unusable_pin_is_reported_on_its_own() -> None:
     try:
         configured = {"pin": ("unpaired", None)}
         resolve_pin = live_pin_resolver(
-            _AskedPool(), lambda: configured["pin"], key="subagents.explorer.model", follower="built-in agent 'explorer'"
+            _AskedPool(),
+            lambda: configured["pin"],
+            key="subagents.explorer.model",
+            follower="built-in agent 'explorer'",
         )
         assert resolve_pin() is None
         configured["pin"] = ("unpaired", "deepseek")
