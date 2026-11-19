@@ -687,6 +687,14 @@ async def test_read_media_bytes_local_file(tmp_path, monkeypatch):
     assert data == b"hello" and name == "doc.txt"
 
 
+async def test_read_media_bytes_file_uri(tmp_path, monkeypatch):
+    ch = _make_channel(tmp_path, monkeypatch)
+    f = tmp_path / "plain name.csv"
+    f.write_bytes(b"csv")
+    data, name, _ct = await ch._read_media_bytes(f.as_uri())
+    assert data == b"csv" and name == "plain name.csv"
+
+
 async def test_read_media_bytes_missing(tmp_path, monkeypatch):
     ch = _make_channel(tmp_path, monkeypatch)
     assert await ch._read_media_bytes(str(tmp_path / "nope.txt")) == (None, None, None)

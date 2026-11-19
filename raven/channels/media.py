@@ -62,7 +62,6 @@ def file_uri_to_path(uri: str) -> Path | None:
     if parsed.netloc:
         # url2pathname folds the localhost authority away; Path keeps the UNC host.
         return Path(f"//{parsed.netloc}{unquote(parsed.path)}")
-    target = unquote(parsed.path)
-    if not target:
+    if not parsed.path:
         return None
-    return Path(url2pathname(target))
+    return Path(url2pathname(parsed.path))

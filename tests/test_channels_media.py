@@ -45,6 +45,12 @@ def test_file_uri_to_path_resolves_local_uri(tmp_path):
     assert p == f
 
 
+def test_file_uri_to_path_decodes_percent_encoding_once(tmp_path):
+    f = tmp_path / "pct%20name.csv"
+    f.write_text("x")
+    assert media.file_uri_to_path(f.as_uri()) == f
+
+
 def test_file_uri_to_path_keeps_localhost_share():
     p = media.file_uri_to_path("file://localhost/C%24/data/x.csv")
     if os.name == "nt":
