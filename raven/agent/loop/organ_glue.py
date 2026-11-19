@@ -182,9 +182,9 @@ class OrganGlueMixin:
         :class:`ContextAssembler`, whose scent menu offers skills and
         populates ``injected_skill_ids`` in the assembled metadata whenever
         ``skillForge.router.enabled`` mounts a router; with the switch off
-        there is no menu and nothing is injected. Kept as a method (rather
-        than inlined) because tests pin it; it no longer branches on engine
-        name.
+        there is no menu, so the metadata carries no injected ids. Kept as a
+        method (rather than inlined) because tests pin it; it no longer
+        branches on engine name.
         """
         return True
 

@@ -200,22 +200,22 @@ A `ProjectSkillSource` beside `LocalSkillSource` in `memory_engine/skill_forge/`
 Hub switch (`config/live.py`, `skill_hub_enabled`): setting it to `false` stops the next
 search, with no restart. A block rather than a bare boolean leaves room for later knobs.
 
-`skillForge.router.enabled` is the router's own master switch, and it is read once, where
-the factory builds the router. `false` leaves the engine with no router at all: no source
-is mounted, so the scent menu has nothing to advertise and carries no menu either, and
-`find_skill` stays registered for the explanation, but its schema now says skill
-retrieval is disabled in this deployment and a call answers that it is not available.
-The tools take the same gate -- a host that throws the switch mounts no
-`ProjectSkills`, so
-`read_skill("project/<name>")` and `use_skill("project/<name>")` answer that project
-skills are not available to this agent, the sentence a sub-agent's already gets. The
-memory-backend rebind reads the router per switch and skips a missing one, so turning
-memory on live does not grow a router behind the switch's back. What the switch does not
-reach is the on-disk registry: an `always` / `inject` skill still rides the system prompt
-and `read_skill("local/<name>")` still renders it, and the Hub lane still answers to its
-own switch (`skill_hub_enabled`). Because it is read at build time, a deployment that
-wants it off sets it in the file and restarts; that is the promise its docstring has made
-since 2026-06-28, and it is now what holds.
+`skillForge.router.enabled` is the router's own master switch, and it is read at boot:
+where the factory builds the router, and again where the tool gate asks. `false` leaves
+the engine with no router at all: no source is mounted, so the scent menu has nothing to
+advertise and carries no menu either, and `find_skill` stays registered for the
+explanation, but its schema now says skill retrieval is disabled in this deployment and a
+call answers that it is not available. The tools take the same gate -- a host that throws
+the switch mounts no `ProjectSkills`, so `read_skill("project/<name>")` and
+`use_skill("project/<name>")` answer that project skills are not available to this agent,
+the sentence a sub-agent's already gets. The memory-backend rebind reads the router per
+switch and skips a missing one, so turning memory on live does not grow a router behind
+the switch's back. What the switch does not reach is the on-disk registry: an `always` /
+`inject` skill still rides the system prompt and `read_skill("local/<name>")` still
+renders it, and the Hub lane still answers to its own switch (`skill_hub_enabled`).
+Because it is read at build time, a deployment that wants it off sets it in the file and
+restarts; that is the promise its docstring has made since 2026-06-28, and it is now what
+holds.
 
 ### 5.7 Documentation
 
