@@ -1,6 +1,7 @@
 """Tests for raven.channels.media - traversal-safe, collision-safe writes."""
 
 import os
+from pathlib import PureWindowsPath
 
 import raven.channels.media as media
 
@@ -78,6 +79,16 @@ def test_file_uri_to_path_localhost_keeps_authority_for_windows(monkeypatch):
     p = media.file_uri_to_path("file://localhost/C%24/data/x.csv")
     expected = r"\\localhost\C$\data\x.csv" if os.name == "nt" else "//localhost/C$/data/x.csv"
     assert str(p) == expected
+
+
+def test_file_uri_to_path_windows_unc_normalizes(monkeypatch):
+    """The Windows branch builds a UNC string; PureWindowsPath checks the
+    spelling a Windows host will normalize it to, even when the suite runs on
+    POSIX."""
+    monkeypatch.setattr(media, "_IS_WINDOWS", True)
+    p = media.file_uri_to_path("file://localhost/C%24/data/x.csv")
+    assert p is not None
+    assert str(PureWindowsPath(str(p))) == r"\\localhost\C$\data\x.csv"
 
 
 def test_file_uri_to_path_refuses_remote_host():

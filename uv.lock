@@ -4598,7 +4598,7 @@ requires-dist = [
     { name = "websocket-client", marker = "extra == 'channel-mochat'", specifier = ">=1.9.0,<2.0.0" },
     { name = "websockets", marker = "extra == 'channel-discord'", specifier = ">=16.0,<17.0" },
     { name = "websockets", marker = "extra == 'channel-whatsapp'", specifier = ">=16.0,<17.0" },
-    { name = "wecom-aibot-sdk-python", marker = "extra == 'channel-wecom'", specifier = ">=0.1.5" },
+    { name = "wecom-aibot-sdk-python", marker = "extra == 'channel-wecom'", specifier = ">=0.1.7" },
     { name = "zstandard", specifier = ">=0.25.0" },
 ]
 provides-extras = ["channel-telegram", "channel-slack", "channel-discord", "channel-whatsapp", "channel-matrix", "channel-feishu", "channel-wecom", "channel-mochat", "channel-qq", "channel-dingtalk", "channel-email", "channel-weixin", "channels", "tools", "sandbox", "browser", "dev", "eval", "segmenter"]
