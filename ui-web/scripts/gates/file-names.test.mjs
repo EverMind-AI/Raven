@@ -31,6 +31,7 @@ const GATES = root(new URL('.', import.meta.url))
    component's. The way off this list is the file's own name. */
 const NOT_COMPONENTS = {
   'main.tsx': 'the entry point: it mounts the roots the manifests declare and exports nothing',
+  'chrome/previewBoot.tsx': 'the preview window\'s boot -- it holds one element and exports the verb that mounts it',
   'features/browser/mount.tsx': 'the browser view\'s root handling -- it holds JSX but exports verbs',
   'features/composer/mount.tsx': 'the dock\'s four roots and the verbs the page\'s machinery calls',
   'features/subagents/mount.tsx': 'the agents view\'s root handling, the browser view\'s twin',

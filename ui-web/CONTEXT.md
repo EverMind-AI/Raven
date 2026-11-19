@@ -323,6 +323,17 @@ _Avoid_: "trajectory replay" for it -- that is the Runtime's Trajectory Replay
 (`raven trajectory replay`), a re-run of the harness against a recording; this
 re-runs nothing and only redraws the entries the list store holds.
 
+**Preview window**:
+A page of the same bundle that shows one file and nothing else:
+`features/workspace/preview.ts` owns its address (`?preview=1&path=...&session=...`)
+and the window name that makes a second open reuse the first, and
+`src/chrome/previewBoot.tsx` boots it in place of the page's own boot. It is
+not a second UI -- what it draws is the workspace pane's `FileBody` -- so a
+kind that renders in the pane renders in the window, and the page's shell,
+socket and session list never run there.
+_Avoid_: "pop-up" for this in code and copy. The browser may make it a tab, and
+the query, the i18n key and the component all say preview window.
+
 **Region**:
 One of the things `src/App.tsx` renders at the body, in the standing order
 `src/state/portals.ts`'s `BOOT_BODY_ORDER` declares: `div.app`, the collapse's

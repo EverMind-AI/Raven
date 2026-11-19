@@ -5113,6 +5113,14 @@
       "en": "Expand to full window",
       "zh": "展开全屏"
     },
+    "gui.ws.expand_reader": {
+      "en": "Read full screen",
+      "zh": "全屏阅读"
+    },
+    "gui.ws.exit_reader": {
+      "en": "Leave full screen",
+      "zh": "退出全屏"
+    },
     "gui.ws.file_big": {
       "en": "Too large to render here.",
       "zh": "太大了，没法在这里渲染。"
@@ -5172,6 +5180,26 @@
     "gui.ws.file_source": {
       "en": "Source",
       "zh": "源码"
+    },
+    "gui.ws.file_window": {
+      "en": "Open in a window",
+      "zh": "在新窗口打开"
+    },
+    "gui.ws.show_rendered": {
+      "en": "Show rendered",
+      "zh": "显示渲染结果"
+    },
+    "gui.ws.show_source": {
+      "en": "Show source",
+      "zh": "显示源码"
+    },
+    "gui.ws.footnotes": {
+      "en": "Footnotes",
+      "zh": "脚注"
+    },
+    "gui.ws.outline": {
+      "en": "Outline",
+      "zh": "大纲"
     },
     "gui.ws.unseen_tab": {
       "en": "{n} new",

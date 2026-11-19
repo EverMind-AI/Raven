@@ -8,6 +8,7 @@ import { installComposerPalette } from './app/install'
 import { dropNoJs, markStart } from './app/splash'
 import * as panes from './chrome/behaviour/panes'
 import * as scrollbars from './chrome/behaviour/scrollbars'
+import { bootPreview } from './chrome/previewBoot'
 import { installLinkTrap } from './features/browser/store'
 import * as composer from './features/composer/mount'
 import * as dagRun from './features/dag/mount'
@@ -18,6 +19,7 @@ import { ModelApp } from './features/model/ModelPicker'
 import * as rail from './features/rail/store'
 import * as settingsChrome from './features/settings/wire'
 import * as subagents from './features/subagents/store'
+import { previewRequestOf } from './features/workspace/preview'
 import * as workspace from './features/workspace/store'
 import { WorkspaceApp } from './features/workspace/WorkspacePage'
 import { warm as warmHighlighter } from './lib/highlight'
@@ -37,10 +39,15 @@ import { setWsPane } from './state/wsPane'
  * chrome that wires itself over what they render, and the one transport.
  *
  * Nothing is published on window and nothing is injected from outside any
- * more: every line below is this bundle calling a module of its own, in the
- * order the concatenated page script ran them in. That order is the whole
- * reason this file is a straight line rather than a set of install()s --
+ * more: every line of bootPage() below is this bundle calling a module of its
+ * own, in the order the concatenated page script ran them in. That order is the
+ * whole reason it is a straight line rather than a set of install()s --
  * several of these steps read what an earlier one wrote.
+ *
+ * One address does not run it. A file preview window is a page of this bundle
+ * with one file on it and no conversation, so it boots its own root and none
+ * of the steps below (chrome/previewBoot.tsx); the two are chosen at the end
+ * of the file.
  */
 
 /* The page's own root, committed before anything reaches into what it renders.
@@ -55,149 +62,159 @@ import { setWsPane } from './state/wsPane'
  * as it asks, and the chrome's Escape chain clicks that button. A plain
  * render() would commit in a later task, after all of them.
  */
-const appRoot = createRoot(document.createElement('div'))
-flushSync(() => appRoot.render(<App />))
+function bootPage(): void {
+  const appRoot = createRoot(document.createElement('div'))
+  flushSync(() => appRoot.render(<App />))
 
-/* Every listener the page holds on the document or the window, in the order
-   they are declared in (state/globalListeners.ts). Here rather than in each
-   module's own install() because the order is a contract and a contract needs
-   one place; after the root above, because a handler may reach for what it
-   renders, and because the root's own listener is react-dom's to register. */
-installGlobalListeners()
+  /* Every listener the page holds on the document or the window, in the order
+     they are declared in (state/globalListeners.ts). Here rather than in each
+     module's own install() because the order is a contract and a contract needs
+     one place; after the root above, because a handler may reach for what it
+     renders, and because the root's own listener is react-dom's to register. */
+  installGlobalListeners()
 
-/* The panel the workspace, browser and sub-agent views are drawn inside, handed
-   to the islands that ask it something rather than imported by them
-   (state/wsPane.ts). */
-setWsPane(ws)
+  /* The panel the workspace, browser and sub-agent views are drawn inside, handed
+     to the islands that ask it something rather than imported by them
+     (state/wsPane.ts). */
+  setWsPane(ws)
 
-/* The desk, handed to the two island stores that open something in it. Handed
-   rather than reached for: features/desk/store imports both of them
-   back and subscribes to one as it evaluates, so an import the other way would
-   run that subscription against a half-built module -- which is also why the
-   panel those stores ask about is handed to them (state/wsPane.ts). Here,
-   before the first frame, because either store may be asked to open a pane
-   from the moment the page is on screen. */
-subagents.setAgentPane({ openAgent: desk.openDeskAgent, openAgentRecord: desk.openDeskAgentRecord })
-workspace.setDeskOpener(desk.openDeskFile)
+  /* The desk, handed to the two island stores that open something in it. Handed
+     rather than reached for: features/desk/store imports both of them
+     back and subscribes to one as it evaluates, so an import the other way would
+     run that subscription against a half-built module -- which is also why the
+     panel those stores ask about is handed to them (state/wsPane.ts). Here,
+     before the first frame, because either store may be asked to open a pane
+     from the moment the page is on screen. */
+  subagents.setAgentPane({ openAgent: desk.openDeskAgent, openAgentRecord: desk.openDeskAgentRecord })
+  workspace.setDeskOpener(desk.openDeskFile)
 
 
-session.onChange(() => {
-  sheets.sync()
-  dagRun.sync()
-  /* The dock's own repaint: the "+" is a menu on a draft and the file picker
-     in a conversation, and the field's placeholder says which, so both follow
-     the conversation on screen rather than only the dock's own changes. */
-  composer.goPaint()
-  /* The desk palette is open or shut per conversation, and this is the event
-     that says which one is on screen -- see features/desk/store.ts's sync. */
-  desk.sync()
-  rail.draw()
-})
+  session.onChange(() => {
+    sheets.sync()
+    dagRun.sync()
+    /* The dock's own repaint: the "+" is a menu on a draft and the file picker
+       in a conversation, and the field's placeholder says which, so both follow
+       the conversation on screen rather than only the dock's own changes. */
+    composer.goPaint()
+    /* The desk palette is open or shut per conversation, and this is the event
+       that says which one is on screen -- see features/desk/store.ts's sync. */
+    desk.sync()
+    rail.draw()
+  })
 
-/* Not a listener: the subscription to the frames the agent pushes, for a page
-   it opens before this view is ever shown. */
-installLinkTrap()
+  /* Not a listener: the subscription to the frames the agent pushes, for a page
+     it opens before this view is ever shown. */
+  installLinkTrap()
 
-/* The dock's own listeners -- the field, the send button, the file picker, the
-   drop target, the pill. Registered here rather than on the first paint
-   because the markup is already in the document; the handlers read the
-   translator and the composer source lazily, which is what makes that safe
-   this early. */
-composer.install()
-/* The chrome that wires itself over the static markup, which is already parsed
-   by the time this bundle runs: the page script below is the LAST thing in the
-   body. Installing here rather than from the shell keeps each module's wiring
-   next to the behaviour it belongs to. What each of these installs is
-   element-level -- the grips -- except the scrollbars, which raise the layer
-   their thumbs are parked in. */
-scrollbars.install()
-panes.install()
+  /* The dock's own listeners -- the field, the send button, the file picker, the
+     drop target, the pill. Registered here rather than on the first paint
+     because the markup is already in the document; the handlers read the
+     translator and the composer source lazily, which is what makes that safe
+     this early. */
+  composer.install()
+  /* The chrome that wires itself over the static markup, which is already parsed
+     by the time this bundle runs: the page script below is the LAST thing in the
+     body. Installing here rather than from the shell keeps each module's wiring
+     next to the behaviour it belongs to. What each of these installs is
+     element-level -- the grips -- except the scrollbars, which raise the layer
+     their thumbs are parked in. */
+  scrollbars.install()
+  panes.install()
 
-/* The model picker renders nothing until asked. One root at the body rather
-   than a host inside a page: the popover is anchored to whatever button opened
-   it -- the composer chip or a settings row -- and belongs to neither. The
-   wrapper is inert for layout; .mpick is position: fixed.
+  /* The model picker renders nothing until asked. One root at the body rather
+     than a host inside a page: the popover is anchored to whatever button opened
+     it -- the composer chip or a settings row -- and belongs to neither. The
+     wrapper is inert for layout; .mpick is position: fixed.
 
-   The layer comes from state/portals.ts, which declares where each of the four
-   standing layers belongs: this one shares its `--z` step with the two composer
-   popovers, and being appended before them is the whole of what puts it under
-   them. */
-createRoot(portals.host('picker')).render(<ModelApp />)
+     The layer comes from state/portals.ts, which declares where each of the four
+     standing layers belongs: this one shares its `--z` step with the two composer
+     popovers, and being appended before them is the whole of what puts it under
+     them. */
+  createRoot(portals.host('picker')).render(<ModelApp />)
 
-/* Every island whose root goes into a box the page renders, from the one
-   declaration each domain makes (features/manifests.ts): the page's own body
-   for the six that own one, and a named host for the three that do not -- the
-   onboarding shell page.html carries, the rail's row list and the settings
-   dialog's panes.
+  /* Every island whose root goes into a box the page renders, from the one
+     declaration each domain makes (features/manifests.ts): the page's own body
+     for the six that own one, and a named host for the three that do not -- the
+     onboarding shell page.html carries, the rail's row list and the settings
+     dialog's panes.
 
-   It throws on a missing box rather than mounting nothing. Nine copies of
-   `if (host)` stood here, and every one of them could only ever do one thing:
-   leave an island unmounted, silently, on a page that looked built. Each box is
-   committed by the App root above, so an absent one is a bug. */
-for (const domain of MANIFESTS) {
-  if (!domain.root) continue
-  const id = domain.host ?? pageOf(domain.page as string)?.bodyId
-  const box = id ? document.getElementById(id) : null
-  if (!box) throw new Error(`main.tsx: no #${String(id)} to mount the ${domain.domain} island in`)
-  createRoot(box).render(createElement(domain.root))
+     It throws on a missing box rather than mounting nothing. Nine copies of
+     `if (host)` stood here, and every one of them could only ever do one thing:
+     leave an island unmounted, silently, on a page that looked built. Each box is
+     committed by the App root above, so an absent one is a bug. */
+  for (const domain of MANIFESTS) {
+    if (!domain.root) continue
+    const id = domain.host ?? pageOf(domain.page as string)?.bodyId
+    const box = id ? document.getElementById(id) : null
+    if (!box) throw new Error(`main.tsx: no #${String(id)} to mount the ${domain.domain} island in`)
+    createRoot(box).render(createElement(domain.root))
+  }
+
+  const deskRoot = createRoot(portals.host('desk'))
+  queueMicrotask(() => deskRoot.render(<DeskApp />))
+
+  /* The workspace island mounts lazily: #wsBody is shared ground -- the agents
+     and browser tabs draw into it through their own island roots, so the
+     workspace root exists only while a workspace view is up (see
+     workspace/store.draw). */
+  workspace.setRenderer(() => createElement(WorkspaceApp))
+
+
+  /* The one data entry point, installed before anything can ask for it. Every
+     mode has one now: a page served by a raven gets the socket, and a page opened
+     from disk or with ?stub=1 gets the offline fixture library, which answers the
+     same contract (rpc/chooseTransport.ts). */
+  setGateway(chooseTransport())
+
+  /* What the concatenated page script did while it ran, in the order it ran it.
+     It was a third inline <script> after this bundle, then a list of install()
+     calls, and now it is this: each line belongs to the module that owns the
+     thing it does, and the order between them is the order that script had.
+
+     Before the boot below and for the same reason the script was last then: each
+     of these reaches for the chrome this file has just wired and for the island
+     roots mounted above, and the boot reaches for them. */
+
+  /* If this bundle runs at all, the no-script marker goes. */
+  dropNoJs()
+  /* The session pointer starts on the offline fixture's first conversation, and
+     the boot's own claim clears it again a few lines below: the two writes
+     together are what keeps a reload's "come back here" note off fixture noise
+     (app/boot.ts's claimFirstFrame, state/session/resume.ts). */
+  session.setCurrent('a')
+  /* The half of the composer's source no transport answers, before the settings
+     seam adds its own member to the same object. */
+  installComposerPalette()
+  /* What a match does is the panel's (state/ws.ts); the moment the split point is
+     watched from is here, after every listener the page registers itself. */
+  ws.watchNarrow()
+  /* The rail's own fold, watched from the same moment for the same reason. */
+  watchRailFold()
+  /* The whole-page redraw a language pick asks for, then the settings transport
+     and the model chip. */
+  langEffects.install()
+  settingsChrome.install()
+  /* The splash is up; this is the clock the floor on its display time measures
+     from (app/splash.ts). */
+  markStart()
+
+  /* The page's own boot: the seam, the pushes, the actions, then everything a
+     first frame needs from the gateway (app/boot.ts). */
+  boot()
+  /* After `boot()`, not before: its first step asks the socket to connect, and a
+     call made during that handshake is held rather than rejected. The history is
+     not part of the first frame, so it is not awaited. */
+  composer.initHistory()
+  /* Last, and in background tasks of its own: nothing on the first frame needs
+     the code highlighter, and the first listing to close should not have to
+     build it (lib/highlight.ts). */
+  warmHighlighter()
 }
 
-const deskRoot = createRoot(portals.host('desk'))
-queueMicrotask(() => deskRoot.render(<DeskApp />))
-
-/* The workspace island mounts lazily: #wsBody is shared ground -- the agents
-   and browser tabs draw into it through their own island roots, so the
-   workspace root exists only while a workspace view is up (see
-   workspace/store.draw). */
-workspace.setRenderer(() => createElement(WorkspaceApp))
-
-
-/* The one data entry point, installed before anything can ask for it. Every
-   mode has one now: a page served by a raven gets the socket, and a page opened
-   from disk or with ?stub=1 gets the offline fixture library, which answers the
-   same contract (rpc/chooseTransport.ts). */
-setGateway(chooseTransport())
-
-/* What the concatenated page script did while it ran, in the order it ran it.
-   It was a third inline <script> after this bundle, then a list of install()
-   calls, and now it is this: each line belongs to the module that owns the
-   thing it does, and the order between them is the order that script had.
-
-   Before the boot below and for the same reason the script was last then: each
-   of these reaches for the chrome this file has just wired and for the island
-   roots mounted above, and the boot reaches for them. */
-
-/* If this bundle runs at all, the no-script marker goes. */
-dropNoJs()
-/* The session pointer starts on the offline fixture's first conversation, and
-   the boot's own claim clears it again a few lines below: the two writes
-   together are what keeps a reload's "come back here" note off fixture noise
-   (app/boot.ts's claimFirstFrame, state/session/resume.ts). */
-session.setCurrent('a')
-/* The half of the composer's source no transport answers, before the settings
-   seam adds its own member to the same object. */
-installComposerPalette()
-/* What a match does is the panel's (state/ws.ts); the moment the split point is
-   watched from is here, after every listener the page registers itself. */
-ws.watchNarrow()
-/* The rail's own fold, watched from the same moment for the same reason. */
-watchRailFold()
-/* The whole-page redraw a language pick asks for, then the settings transport
-   and the model chip. */
-langEffects.install()
-settingsChrome.install()
-/* The splash is up; this is the clock the floor on its display time measures
-   from (app/splash.ts). */
-markStart()
-
-/* The page's own boot: the seam, the pushes, the actions, then everything a
-   first frame needs from the gateway (app/boot.ts). */
-boot()
-/* After `boot()`, not before: its first step asks the socket to connect, and a
-   call made during that handshake is held rather than rejected. The history is
-   not part of the first frame, so it is not awaited. */
-composer.initHistory()
-/* Last, and in background tasks of its own: nothing on the first frame needs
-   the code highlighter, and the first listing to close should not have to
-   build it (lib/highlight.ts). */
-warmHighlighter()
+/* A file preview window shows one file and nothing else. The page's own
+ * boot -- the socket, the session list, the rail, the composer -- belongs to
+ * the conversation, so an address that asks for a preview boots only the
+ * window and none of the straight line above. */
+const preview = previewRequestOf(location.search)
+if (preview) bootPreview(preview)
+else bootPage()

@@ -13,6 +13,12 @@
    whole hit area. */
 .workspace-file-acts { display: flex; align-items: center; flex: none; }
 
+/* The window, reading-mode and compact-mode buttons draw on the same 14px
+   stroke grid as the folder and the new-tab button they sit beside. */
+.workspace-window.ghost-ic svg,
+.workspace-reader.ghost-ic svg,
+.workspace-mode.ghost-ic svg { width: 14px; height: 14px; }
+
 /* A file's folder and a change's counts, as the muted line after the name in
    a desk pane's header. The folder in the face paths are written in. */
 .workspace-dir { font-family: var(--mono); font-size: 11px; }
@@ -73,3 +79,229 @@
   border-left-color: color-mix(in srgb, var(--ink) 28%, transparent);
 }
 .workspace-bin-more svg { width: 14px; height: 14px; }
+
+/* ── a Markdown file read as a document ───────────────────────────────
+   The EverMe file preview's document reader, ported: the same card-per-section
+   layout, outline column, type scale and two breakpoints, set in Raven's own
+   theme tokens. The breakpoints are data attributes because the component
+   measures its own box -- the document lives in a pane, so the window says
+   nothing about the room it has, and the desktop shell's WebKit predates
+   container queries. */
+
+.workspace-md-slot { position: relative; display: inline-flex; flex: none; }
+.workspace-md-slot:empty { display: none; }
+
+.workspace-mddoc {
+  width: min(100%, 1152px);
+  min-height: 100%;
+  margin-inline: auto;
+  padding: 28px 22px 60px;
+  /* The reader's canvas, with the quote tint's glow at its top-right: the
+     cards are laid on this, so the ground has to be here and not the pane's. */
+  background:
+    radial-gradient(ellipse 650px 360px at 76% 0%,
+      color-mix(in oklab, var(--gold) 7%, var(--surface)), transparent 80%),
+    var(--surface);
+}
+
+.workspace-mddoc .workspace-md-body {
+  min-width: 0; padding: 0; color: var(--text);
+  font-size: 14px; line-height: 1.85;
+}
+
+/* An addressed heading must clear the bar above the pane when jumped to. */
+.workspace-md-body :is(a, li, h1, h2, h3, h4, h5, h6)[id] { scroll-margin-top: 33px; }
+
+/* Narrow: the title and its lead, then a card per section. */
+.workspace-md-body .workspace-md-intro { margin: 0 0 29px; }
+.workspace-md-body .workspace-md-intro h1 {
+  max-width: 20ch; margin: 0 0 12px; color: var(--text);
+  font-size: 32px; font-weight: 750; line-height: 1.26; letter-spacing: -.035em;
+  text-wrap: balance;
+}
+.workspace-md-body .workspace-md-intro p { max-width: 65ch; margin: 0; color: var(--muted); }
+.workspace-md-body .workspace-md-section:not(:first-child) { margin-top: 26px; }
+.workspace-md-body .workspace-md-section > :is(h1, h2, h3, h4, h5, h6) {
+  margin: 0 0 9px; color: var(--text); font-size: 21px; font-weight: 700; line-height: 1.35;
+}
+
+.workspace-md-body .workspace-md-paper {
+  min-width: 0; padding: 16px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--paper);
+  box-shadow: 0 2px 4px color-mix(in srgb, var(--text) 4%, transparent);
+}
+.workspace-md-body .workspace-md-paper:empty { display: none; }
+.workspace-md-body .workspace-md-paper > :first-child { margin-top: 0; }
+.workspace-md-body .workspace-md-paper > :last-child { margin-bottom: 0; }
+.workspace-md-body .workspace-md-paper > p { margin-block: 0 12px; }
+.workspace-md-body .workspace-md-paper li + li { margin-top: 4px; }
+
+/* The document's ink and accents: links and list markers take the warm accent,
+   strong text the heading ink. */
+.workspace-md-body li::marker,
+.workspace-md-body a { color: var(--gold); }
+.workspace-md-body strong { color: var(--text); }
+
+.workspace-md-body blockquote {
+  padding: 10px 13px; border-inline-start: 3px solid var(--gold);
+  border-radius: 0 9px 9px 0;
+  background: color-mix(in oklab, var(--gold) 7%, var(--paper));
+  color: var(--text);
+}
+
+.workspace-md-body :not(pre) > code {
+  padding: .14em .4em; border-radius: 5px;
+  background: var(--raised); color: inherit; font-size: .85em;
+}
+
+/* A footnote reference is a small badge, not a superscript. */
+.workspace-md-body a.workspace-md-ref {
+  display: inline-block; min-width: 16px; margin-inline: 3px; padding-inline: 4px;
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--gold) 16%, var(--paper));
+  font-size: 10px; font-weight: 650; line-height: 16px; text-align: center;
+  text-decoration: none;
+}
+.workspace-md-body .workspace-md-back {
+  margin-inline-start: 3px; color: var(--muted); text-decoration: none;
+}
+
+/* A table and a listing are cards on the paper. */
+.workspace-md-body .tw { border: 1px solid var(--line); border-radius: 10px; }
+.workspace-md-body .tw :is(th, td) {
+  padding: 9px 13px; border-color: var(--line); font-size: .94em;
+}
+.workspace-md-body .tw th { background: var(--raised); color: var(--text); }
+.workspace-md-body .tw tbody tr:nth-child(even) { background: var(--surface); }
+.workspace-md-body .tw tbody tr:last-child td { border-bottom: 0; }
+
+.workspace-md-body .cblk { margin: 16px 0; }
+.workspace-md-body .cblk.lang {
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+}
+.workspace-md-body .cblk.lang > pre { border-color: var(--line); }
+.workspace-md-body .cblk .cbhd { height: 36px; background: var(--raised); color: var(--text); }
+.workspace-md-body .cblk .cblang { font-family: inherit; text-transform: uppercase; }
+.workspace-md-body .cblk .cbcp { color: var(--muted); }
+
+/* The fold-away outline, mounted into the bar. */
+.workspace-md-menu summary {
+  display: flex; min-height: 32px; align-items: center; gap: 5px; padding: 0 7px;
+  border-radius: 7px; background: var(--raised); color: var(--muted);
+  font-size: 12px; cursor: pointer; list-style: none;
+}
+.workspace-md-menu summary::-webkit-details-marker { display: none; }
+.workspace-md-menu[data-tight] summary span { display: none; }
+.workspace-md-pop {
+  position: absolute; z-index: 2;
+  inset-block-start: calc(100% + 6px); inset-inline-end: 0;
+  min-width: min(200px, calc(100% - 28px)); max-width: calc(100% - 28px);
+  max-height: min(58dvh, 460px); overflow: auto; padding: 10px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--paper);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 13%, transparent);
+}
+
+/* The outline column. */
+.workspace-md-outline {
+  display: none; position: sticky; top: 30px;
+  min-width: 0; max-height: calc(100dvh - 130px); overflow: auto;
+}
+.workspace-md-outline-title {
+  display: flex; align-items: center; gap: 7px; margin-bottom: 12px;
+  color: var(--muted); font-size: 12px; font-weight: 650;
+}
+.workspace-md-links {
+  display: grid; gap: 3px; padding-inline-start: 8px;
+  border-inline-start: 1px solid var(--line);
+}
+.workspace-md-links a {
+  position: relative; display: block; padding: 7px 9px; border-radius: 7px;
+  color: var(--muted); font-size: 13px; line-height: 1.45;
+  overflow-wrap: anywhere; text-decoration: none;
+}
+.workspace-md-nested { padding-inline-start: 20px; font-size: 12px; }
+.workspace-md-links a:hover { background: var(--raised); }
+.workspace-md-links a[aria-current="location"] {
+  background: color-mix(in oklab, var(--gold) 16%, var(--paper));
+  color: var(--gold); font-weight: 650;
+}
+.workspace-md-links a[aria-current="location"]::before {
+  position: absolute; inset-block: 7px; inset-inline-start: -9px;
+  width: 2px; border-radius: 2px; background: var(--gold); content: "";
+}
+
+/* Narrower than a small phone: the menu keeps its glyph, the page tightens,
+   and the title drops a step. */
+.workspace-mddoc[data-tight] { padding-inline: 15px; }
+.workspace-mddoc[data-tight] .workspace-md-intro h1 { font-size: 27px; }
+
+/* Wide: the outline gets its own column and the reader steps up. */
+.workspace-mddoc[data-wide] { padding: 45px 40px 84px; }
+.workspace-mddoc[data-outline][data-wide] {
+  display: grid;
+  grid-template-columns: minmax(137px, 0.22fr) minmax(0, 1fr);
+  gap: var(--md-gap, 40px);
+  align-items: start;
+}
+.workspace-mddoc[data-outline][data-wide] > .workspace-md-outline {
+  display: block; grid-column: 1; grid-row: 1;
+}
+.workspace-mddoc[data-outline][data-wide] > .workspace-md-body { grid-column: 2; grid-row: 1; }
+
+.workspace-mddoc[data-wide] .workspace-md-body { font-size: 16px; }
+.workspace-mddoc[data-wide] .workspace-md-intro { margin-bottom: 42px; }
+.workspace-mddoc[data-wide] .workspace-md-intro h1 {
+  max-width: min(20ch, 640px); margin-bottom: 18px;
+  font-size: var(--md-h1, 43px); line-height: 1.22;
+}
+.workspace-mddoc[data-wide] .workspace-md-intro p { font-size: 17px; }
+.workspace-mddoc[data-wide] .workspace-md-paper { padding: 23px 27px; border-radius: 15px; }
+.workspace-mddoc[data-wide] .workspace-md-section:not(:first-child) { margin-top: 37px; }
+.workspace-mddoc[data-wide] .workspace-md-section > :is(h1, h2, h3, h4, h5, h6) {
+  margin-bottom: 13px; font-size: 26px;
+}
+
+/* Reading mode: the pane, and nothing else, over the whole window. */
+[data-reader] {
+  position: fixed; inset: 0; z-index: 65; width: 100%;
+  background: var(--paper);
+}
+[data-reader] > .fpane { flex: 1; }
+/* Full screen is the reader filling the window: the document drops its
+   reading-width cap and its own edge, so nothing is left blank beside it. */
+[data-reader] .workspace-mddoc { width: 100%; margin-inline: 0; padding-top: 14px; }
+
+
+/* ── a file on a page of its own ──────────────────────────────────────
+   The preview window (src/chrome/previewBoot.tsx) boots nothing but this:
+   the page's own shell is hidden by the flag its boot sets, and the body
+   below is the same FileBody the pane draws. */
+
+html[data-preview] body { margin: 0; overflow: hidden; background: var(--paper); }
+html[data-preview] #splash,
+html[data-preview] #noJs,
+html[data-preview] #onb { display: none !important; }
+#previewRoot { height: 100vh; height: 100dvh; }
+
+.workspace-preview { display: flex; flex-direction: column; height: 100%; background: var(--paper); }
+.workspace-preview-head {
+  display: flex; flex: none; align-items: center; gap: 10px;
+  height: 52px; padding: 0 12px 0 16px;
+  border-bottom: .5px solid var(--line);
+}
+.workspace-preview-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text); font-size: 14px; font-weight: 600;
+}
+.workspace-preview-kind { flex: none; color: var(--faint); font-size: 11.5px; }
+.workspace-preview-seg { display: flex; flex: none; gap: 1px; }
+.workspace-preview-seg button {
+  padding: 3px 9px; border: .5px solid var(--line); border-radius: 6px;
+  background: transparent; color: var(--muted); cursor: pointer; font-size: 12px;
+}
+.workspace-preview-seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); }
+.workspace-preview-body { flex: 1; min-height: 0; overflow: auto; }
+.workspace-preview-body > .fview { min-height: 100%; }
+.workspace-preview-body > .fview .workspace-md-body { max-width: 100%; }
