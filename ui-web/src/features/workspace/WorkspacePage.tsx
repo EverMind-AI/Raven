@@ -1,5 +1,5 @@
 import { Download04Icon } from '@hugeicons/core-free-icons'
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { Icon } from '../../components/Icon'
 import { PaneHead, PaneHeadSeg, usePaneHead } from '../../components/PaneHead'
@@ -40,6 +40,9 @@ const ICO = {
   win: 'M4 8.5A2.5 2.5 0 0 1 6.5 6h11A2.5 2.5 0 0 1 20 8.5v7a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 15.5ZM4.5 9.5h15',
   expand: 'M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5',
   shrink: 'M4 9h5V4M20 9h-5V4M4 15h5v5M20 15h-5v5',
+  view: 'M2.5 12s3.6-6.2 9.5-6.2S21.5 12 21.5 12s-3.6 6.2-9.5 6.2S2.5 12 2.5 12Z'
+    + 'M8.4 12a3.6 3.6 0 1 0 7.2 0 3.6 3.6 0 0 0-7.2 0Z',
+  source: 'M8.5 8 5 12l3.5 4M15.5 8 19 12l-3.5 4M13 5.5l-2 13',
 }
 
 const FT_ICO = {
@@ -381,6 +384,8 @@ export function FileView({ ws, file = ws.file }: { ws: WsShared; file?: WsFile |
   const inPane = !!usePaneHead()
   const [reader, setReader] = useState(false)
   const [menuSlot, setMenuSlot] = useState<HTMLSpanElement | null>(null)
+  const frame = useRef<HTMLDivElement>(null)
+  const [compact, setCompact] = useState(false)
   const f = file
   const view = f ? String(f.seq ?? f.path) : null
   useEffect(() => {
@@ -394,10 +399,30 @@ export function FileView({ ws, file = ws.file }: { ws: WsShared; file?: WsFile |
     document.addEventListener('keydown', leave)
     return () => document.removeEventListener('keydown', leave)
   }, [reader])
+  /* Under 570px the rendered/source pair is one icon button: two labelled tabs
+     beside a title and a document's own controls left the name at "/...". An
+     unmeasured box (no layout) is not narrow -- the pair is what the bar
+     served before there was a width to read. */
+  useEffect(() => {
+    const root = frame.current
+    if (!root) return
+    const read = (): void => {
+      const width = root.clientWidth
+      if (width > 0) setCompact(width < 570)
+    }
+    read()
+    if (typeof ResizeObserver === 'undefined') return
+    const watcher = new ResizeObserver(read)
+    watcher.observe(root)
+    return () => watcher.disconnect()
+  }, [])
   if (!store.source().canBrowse) return <div className="wsnote">{t('gui.ws.file_unreadable')}</div>
-  const read = f?.kind === 'md' ? { reader, onReader: () => setReader(!reader), menuSlot: setMenuSlot } : {}
+  const read = {
+    compact,
+    ...(f?.kind === 'md' ? { reader, onReader: () => setReader(!reader), menuSlot: setMenuSlot } : {}),
+  }
   return (
-    <div className="fwrap" data-reader={reader ? '1' : undefined}>
+    <div className="fwrap" ref={frame} data-reader={reader ? '1' : undefined}>
       {inPane ? <FileHead f={f} {...read} /> : <Fbar f={f} {...read} />}
       <div className="fpane">
         {!f ? (
@@ -444,8 +469,27 @@ function CopyPath({ path }: { path: string }): JSX.Element {
   )
 }
 
-function ViewSeg({ f }: { f: WsFile }): JSX.Element | null {
+function ViewSeg({ f, compact = false }: { f: WsFile; compact?: boolean }): JSX.Element | null {
   if (!TWO_VIEWS[f.kind]) return null
+  const flip = (): void => {
+    f.raw = !f.raw
+    store.redraw()
+  }
+  if (compact) {
+    const said = t(f.raw ? 'gui.ws.show_rendered' : 'gui.ws.show_source')
+    return (
+      <button
+        type="button"
+        className="ghost-ic tipdn workspace-mode"
+        data-tip={said}
+        aria-label={said}
+        aria-pressed={f.raw}
+        onClick={flip}
+      >
+        <Ico d={f.raw ? ICO.view : ICO.source} />
+      </button>
+    )
+  }
   return (
     <PaneHeadSeg
       options={[{ key: 'rendered', label: t('gui.ws.file_rendered') }, { key: 'source', label: t('gui.ws.file_source') }]}
@@ -467,6 +511,8 @@ type ReaderProps = {
   onReader?: () => void
   /* Where the header mounts the fold-away outline, when the file is markdown. */
   menuSlot?: (el: HTMLSpanElement | null) => void
+  /* Under 570px the rendered/source pair collapses to one icon button. */
+  compact?: boolean
 }
 
 function FileActs({ f, reader = false, onReader }: {
@@ -568,7 +614,7 @@ function FileHead({ f, ...reader }: { f: WsFile | null } & ReaderProps): JSX.Ele
     <PaneHead title={name} tip={f.path} titleRef={copyMenu(f)}
       meta={dir ? <span className="workspace-dir">{dir}</span> : null}>
       <span className="workspace-md-slot" ref={reader.menuSlot} />
-      <ViewSeg f={f} />
+      <ViewSeg f={f} compact={reader.compact} />
       <CopyPath path={f.path} />
       <FileActs f={f} {...reader} />
     </PaneHead>
@@ -593,7 +639,7 @@ function Fbar({ f, ...reader }: { f: WsFile | null } & ReaderProps): JSX.Element
       )}
       <span className="fsp" />
       {f ? <span className="workspace-md-slot" ref={reader.menuSlot} /> : null}
-      {f ? <ViewSeg f={f} /> : null}
+      {f ? <ViewSeg f={f} compact={reader.compact} /> : null}
       {f ? <span className="workspace-file-acts"><FileActs f={f} {...reader} /></span> : null}
     </div>
   )

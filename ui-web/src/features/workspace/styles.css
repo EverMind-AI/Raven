@@ -13,10 +13,11 @@
    whole hit area. */
 .workspace-file-acts { display: flex; align-items: center; flex: none; }
 
-/* The window and reading-mode buttons draw on the same 14px stroke grid as the
-   folder and the new-tab button they sit beside. */
+/* The window, reading-mode and compact-mode buttons draw on the same 14px
+   stroke grid as the folder and the new-tab button they sit beside. */
 .workspace-window.ghost-ic svg,
-.workspace-reader.ghost-ic svg { width: 14px; height: 14px; }
+.workspace-reader.ghost-ic svg,
+.workspace-mode.ghost-ic svg { width: 14px; height: 14px; }
 
 /* A file's folder and a change's counts, as the muted line after the name in
    a desk pane's header. The folder in the face paths are written in. */

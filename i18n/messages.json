@@ -5185,6 +5185,14 @@
       "en": "Open in a window",
       "zh": "在新窗口打开"
     },
+    "gui.ws.show_rendered": {
+      "en": "Show rendered",
+      "zh": "显示渲染结果"
+    },
+    "gui.ws.show_source": {
+      "en": "Show source",
+      "zh": "显示源码"
+    },
     "gui.ws.footnotes": {
       "en": "Footnotes",
       "zh": "脚注"

@@ -980,6 +980,29 @@ describe('workspace island', () => {
     expect(document.querySelector('.fview .prose h1')?.textContent).toBe('Title')
   })
 
+  it('collapses the rendered and source pair to one button in a narrow bar', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 420 })
+    try {
+      install(emptyWs({
+        file: {
+          path: '/repo/docs/README.md', kind: 'md', raw: false,
+          text: '# Title\n\nbody', err: null, size: null, loading: false, seq: 9,
+        },
+      }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+      await mount()
+      /* The pair is gone; one button says what the click would show. */
+      expect(document.querySelector('.fbar .pane-head-seg')).toBeNull()
+      await act(async () => { screen.getByLabelText('gui.ws.show_source').click() })
+      expect(screen.getByLabelText('gui.ws.show_rendered')).toBeTruthy()
+      expect(document.querySelector('.fview .prose')).toBeNull()
+      expect(screen.getByText('# Title').closest('.code')).not.toBeNull()
+    } finally {
+      if (descriptor) Object.defineProperty(HTMLElement.prototype, 'clientWidth', descriptor)
+      else Reflect.deleteProperty(HTMLElement.prototype, 'clientWidth')
+    }
+  })
+
   it('keeps its rendered shape', async () => {
     install(emptyWs({
       changes: [
