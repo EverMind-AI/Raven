@@ -61,6 +61,58 @@ def _finish_after(held: str | None, incoming: str) -> str:
     return held if held in DECLINED_FINISH_REASONS else incoming
 
 
+def _answered_with_a_document(record: CallRecord | None) -> str | None:
+    """The content-type of a stream request answered by a JSON document.
+
+    An event stream arrives ``text/event-stream``; ``application/json`` means
+    the endpoint answered the request as a document -- it does not speak the
+    protocol this provider called it with, or the path is not the one it called
+    -- so the empty stream the cut branch below sees is that answer failing to
+    parse, not a connection that died mid-reply.
+    """
+    if record is None:
+        return None
+    for name, value in (record.headers or {}).items():
+        if name.lower().endswith("content-type") and "application/json" in str(value).lower():
+            return str(value)
+    return None
+
+
+def _cut_account(answered_document: str | None, elapsed: float, reasoning_chars: int) -> tuple[str, str]:
+    """The category and detail for a stream the upstream closed with nothing delivered.
+
+    A request for a stream that a JSON document answered was never treated as
+    one -- the endpoint does not speak the protocol this provider called it
+    with -- so that account names the mismatch rather than the connection, the
+    fact a person holding the config can act on. Anything else was cut
+    mid-reply and stays a transport failure.
+    """
+    if answered_document is not None:
+        logger.warning(
+            "the stream request came back as {} rather than an event stream; treating it as a protocol mismatch",
+            answered_document,
+        )
+        return (
+            "protocol_mismatch",
+            f"the endpoint answered the stream request with a JSON document "
+            f"({answered_document}) instead of an event stream after {elapsed:.0f}s; "
+            f"the address this provider is pointed at does not speak its protocol, "
+            f"so no reply can arrive - check the provider's protocol and base URL, "
+            f"not the connection ({reasoning_chars} chars of reasoning were lost)",
+        )
+    logger.warning(
+        "the stream ended without the upstream's terminal chunk after {:.0f}s "
+        "({} chars of reasoning, no content or tool call); treating it as a transport failure",
+        elapsed,
+        reasoning_chars,
+    )
+    return (
+        "network",
+        f"the model's reply was cut off by the connection after {elapsed:.0f}s, "
+        f"before any content arrived ({reasoning_chars} chars of reasoning were lost)",
+    )
+
+
 def _transport_failed(
     finish_reason: str | None,
     content_buf: list[str],
@@ -482,15 +534,12 @@ async def stream_llm_call(
             if finish_made_up and not content_buf and not tool_call_slots and not had_error:
                 elapsed = time.monotonic() - attempt_t0
                 reasoning_chars = sum(len(part) for part in reasoning_buf)
-                logger.warning(
-                    "the stream ended without the upstream's terminal chunk after {:.0f}s "
-                    "({} chars of reasoning, no content or tool call); treating it as a transport failure",
-                    elapsed,
-                    reasoning_chars,
-                )
+                # Either account keeps the cut's recovery flags: what the loop
+                # does with the verdict is unchanged, only what it says.
+                cut_category, cut_detail = _cut_account(_answered_with_a_document(record), elapsed, reasoning_chars)
                 stop_thinking()
                 cut_verdict: ErrorClassification | None = ErrorClassification(
-                    "network", retryable=True, should_fallback=True
+                    cut_category, retryable=True, should_fallback=True
                 )
                 if rendered() and not retry_after_output:
                     # The thought is already on the watcher's screen, so the
@@ -502,12 +551,7 @@ async def stream_llm_call(
                 # In the canonical error shape, so the readers of that shape (the
                 # loop's failure report, the CLI's diagnosis) keep this account.
                 return LLMResponse(
-                    content=canonical_llm_error(
-                        "network",
-                        None,
-                        f"the model's reply was cut off by the connection after {elapsed:.0f}s, "
-                        f"before any content arrived ({reasoning_chars} chars of reasoning were lost)",
-                    ),
+                    content=canonical_llm_error(cut_category, None, cut_detail),
                     finish_reason="error",
                     error_classification=cut_verdict,
                     usage=final_usage or {},
