@@ -277,7 +277,13 @@ class WecomChannel(ChannelBase):
         if not path.is_file():
             logger.warning("WeCom media file not found: {}", path)
             return None
-        size = path.stat().st_size
+        try:
+            size = path.stat().st_size
+        except OSError:
+            # Removed between the existence check and the size read: report it
+            # as missing here rather than let it escape as a retryable failure.
+            logger.warning("WeCom media file not found: {}", path)
+            return None
         if size > _MAX_MEDIA_BYTES:
             logger.warning("WeCom media too large: {} bytes, cap {} (ref {})", size, _MAX_MEDIA_BYTES, media_ref)
             return None
