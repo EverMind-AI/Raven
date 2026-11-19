@@ -380,6 +380,7 @@ function BinNote({ f, title, detail }: { f: WsFile; title?: string; detail?: str
 export function FileView({ ws, file = ws.file }: { ws: WsShared; file?: WsFile | null }): JSX.Element {
   const inPane = !!usePaneHead()
   const [reader, setReader] = useState(false)
+  const [menuSlot, setMenuSlot] = useState<HTMLSpanElement | null>(null)
   const f = file
   const view = f ? String(f.seq ?? f.path) : null
   useEffect(() => {
@@ -394,7 +395,7 @@ export function FileView({ ws, file = ws.file }: { ws: WsShared; file?: WsFile |
     return () => document.removeEventListener('keydown', leave)
   }, [reader])
   if (!store.source().canBrowse) return <div className="wsnote">{t('gui.ws.file_unreadable')}</div>
-  const read = f?.kind === 'md' ? { reader, onReader: () => setReader(!reader) } : {}
+  const read = f?.kind === 'md' ? { reader, onReader: () => setReader(!reader), menuSlot: setMenuSlot } : {}
   return (
     <div className="fwrap" data-reader={reader ? '1' : undefined}>
       {inPane ? <FileHead f={f} {...read} /> : <Fbar f={f} {...read} />}
@@ -406,7 +407,7 @@ export function FileView({ ws, file = ws.file }: { ws: WsShared; file?: WsFile |
           </div>
         ) : (
           <div className="fbody">
-            <FileBody key={view ?? undefined} f={f} />
+            <FileBody key={view ?? undefined} f={f} menuSlot={menuSlot} />
           </div>
         )}
       </div>
@@ -461,7 +462,12 @@ function ViewSeg({ f }: { f: WsFile }): JSX.Element | null {
    pane already draws, and what no program on the host has to be handed to. */
 const IN_WINDOW = new Set(['md', 'html', 'csv', 'json', 'diff', 'code'])
 
-type ReaderProps = { reader?: boolean; onReader?: () => void }
+type ReaderProps = {
+  reader?: boolean
+  onReader?: () => void
+  /* Where the header mounts the fold-away outline, when the file is markdown. */
+  menuSlot?: (el: HTMLSpanElement | null) => void
+}
 
 function FileActs({ f, reader = false, onReader }: {
   f: WsFile
@@ -561,6 +567,7 @@ function FileHead({ f, ...reader }: { f: WsFile | null } & ReaderProps): JSX.Ele
   return (
     <PaneHead title={name} tip={f.path} titleRef={copyMenu(f)}
       meta={dir ? <span className="workspace-dir">{dir}</span> : null}>
+      <span className="workspace-md-slot" ref={reader.menuSlot} />
       <ViewSeg f={f} />
       <CopyPath path={f.path} />
       <FileActs f={f} {...reader} />
@@ -585,6 +592,7 @@ function Fbar({ f, ...reader }: { f: WsFile | null } & ReaderProps): JSX.Element
         <span className="nm">{t('gui.ws.file_none')}</span>
       )}
       <span className="fsp" />
+      {f ? <span className="workspace-md-slot" ref={reader.menuSlot} /> : null}
       {f ? <ViewSeg f={f} /> : null}
       {f ? <span className="workspace-file-acts"><FileActs f={f} {...reader} /></span> : null}
     </div>
@@ -604,7 +612,10 @@ function diffLineCls(line: string): string {
   return ''
 }
 
-export function FileBody({ f }: { f: WsFile }): JSX.Element {
+export function FileBody({ f, menuSlot }: {
+  f: WsFile
+  menuSlot?: HTMLElement | null
+}): JSX.Element {
   const asSource = TWO_VIEWS[f.kind] ? f.raw : !RENDERED[f.kind]
   const asImage = f.kind === 'img' || (f.kind === 'svg' && !asSource)
   const asFrame = (f.kind === 'pdf' || f.kind === 'html') && !asSource
@@ -652,7 +663,7 @@ export function FileBody({ f }: { f: WsFile }): JSX.Element {
   } else if (f.text == null) {
     body = <div className="vspin">{t('gui.ws.file_loading')}</div>
   } else if (f.kind === 'md' && !asSource) {
-    body = <MarkdownDocument text={f.text} />
+    body = <MarkdownDocument text={f.text} menuSlot={menuSlot} />
   } else if (f.kind === 'csv' && !asSource) {
     body = <CsvTable text={f.text} tab={/\.tsv$/i.test(f.path)} />
   } else if (f.kind === 'bin' && looksBinary(f.text)) {

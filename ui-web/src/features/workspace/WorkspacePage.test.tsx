@@ -928,8 +928,10 @@ describe('workspace island', () => {
     const installHeading = document.getElementById('mdoc-install')!
     expect(installHeading.tagName).toBe('H2')
     expect(installHeading.textContent).toBe('Install')
-    /* Narrow panes read the same list out of the fold-away copy. */
-    expect(document.querySelector('.workspace-md-compact')).not.toBeNull()
+    /* Narrow panes read the same list out of the fold-away copy the bar
+       carries. The harness draws the bar, not a pane header, so the copy is
+       mounted into that bar's slot. */
+    expect(document.querySelector('.fbar .workspace-md-menu')).not.toBeNull()
   })
 
   it('reads a markdown file full screen until Escape leaves it', async () => {

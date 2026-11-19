@@ -4,17 +4,31 @@
  *
  * The markup comes from lib/prose.ts's mdDocument -- a pure string, like every
  * other piece of prose this page draws. What is here is only what a string
- * cannot do: which heading the reader is at, and what clicking an anchor does.
- * The outline is drawn twice (a column and a fold-away) because the two are
- * one list at two widths; the sheet shows one at a time.
+ * cannot do: which heading the reader is at, what clicking an anchor does, and
+ * the one measurement the layout needs (whether the pane is wide enough for
+ * the outline's own column; narrow, the same list is a menu in the header).
+ *
+ * The layout, the type scale and the two breakpoints are the EverMe file
+ * preview's document reader, ported. The breakpoints are measured rather than
+ * spelled as media queries: the document lives in a pane, so the window says
+ * nothing about the room it has, and the desktop shell runs on a WebKit that
+ * predates container queries.
  */
 
+import { LeftToRightListBulletIcon } from '@hugeicons/core-free-icons'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
+import { Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import { mdDocument } from '../../lib/prose'
 
 import type { JSX, MouseEvent } from 'react'
+
+/** The outline gets its own column from this width up. */
+const WIDE = 900
+/** Under this width the menu's button keeps only its glyph. */
+const TIGHT = 380
 
 /** The nearest ancestor that scrolls, or null when the window owns the scroll
  *  (a page of its own, as a file preview window is). */
@@ -25,12 +39,11 @@ function scrollParent(node: HTMLElement): HTMLElement | null {
   return null
 }
 
-/* A pane wide enough to hold the outline beside the text. Read from the
-   document's own box, not the window: the pane is a column of the page, and a
-   wide window with a narrow pane still folds the outline away. */
-const WIDE = 1000
-
-export function MarkdownDocument({ text }: { text: string }): JSX.Element {
+export function MarkdownDocument({ text, menuSlot }: {
+  text: string
+  /** The header box the fold-away outline mounts into, when the bar has one. */
+  menuSlot?: HTMLElement | null
+}): JSX.Element {
   const footnotes = t('gui.ws.footnotes')
   const doc = useMemo(() => mdDocument(text, 'mdoc', footnotes), [text, footnotes])
   const frame = useRef<HTMLDivElement>(null)
@@ -38,11 +51,22 @@ export function MarkdownDocument({ text }: { text: string }): JSX.Element {
   const compact = useRef<HTMLDetailsElement>(null)
   const [active, setActive] = useState('')
   const [wide, setWide] = useState(false)
+  const [tight, setTight] = useState(false)
 
   useEffect(() => {
     const root = frame.current
     if (!root) return
-    const read = (): void => setWide(root.clientWidth >= WIDE)
+    /* The two container-relative lengths the reader is set in: the gap
+       between the outline and the text, and the title's size, both 4.1% of
+       the box they sit in. */
+    const read = (): void => {
+      const width = root.clientWidth
+      setWide(width >= WIDE)
+      setTight(width <= TIGHT)
+      const share = Math.round(width * 0.041)
+      root.style.setProperty('--md-gap', `${Math.min(64, Math.max(32, share))}px`)
+      root.style.setProperty('--md-h1', `${Math.min(54, Math.max(43, share))}px`)
+    }
     read()
     if (typeof ResizeObserver === 'undefined') return
     const watcher = new ResizeObserver(read)
@@ -114,19 +138,21 @@ export function MarkdownDocument({ text }: { text: string }): JSX.Element {
   )
 
   return (
-    <div className="workspace-mddoc" ref={frame} data-outline={doc.headings.length > 0 ? '1' : undefined}
-      data-wide={wide ? '1' : undefined}>
+    <div
+      ref={frame}
+      className="workspace-mddoc"
+      data-outline={doc.headings.length > 0 ? '1' : undefined}
+      data-wide={wide ? '1' : undefined}
+      data-tight={tight ? '1' : undefined}
+    >
       {doc.headings.length > 0 ? (
-        <>
-          <aside className="workspace-md-outline">
-            <div className="workspace-md-outline-title">{outline}</div>
-            {links('wide')}
-          </aside>
-          <details className="workspace-md-compact" ref={compact}>
-            <summary>{outline}</summary>
-            <div className="workspace-md-pop">{links('compact')}</div>
-          </details>
-        </>
+        <aside className="workspace-md-outline">
+          <div className="workspace-md-outline-title">
+            <Icon icon={LeftToRightListBulletIcon} size={14} />
+            {outline}
+          </div>
+          {links('wide')}
+        </aside>
       ) : null}
       <article
         ref={article}
@@ -137,6 +163,18 @@ export function MarkdownDocument({ text }: { text: string }): JSX.Element {
         }}
         dangerouslySetInnerHTML={{ __html: doc.html }}
       />
+      {menuSlot && !wide && doc.headings.length > 0
+        ? createPortal(
+          <details className="workspace-md-menu" ref={compact} data-tight={tight ? '1' : undefined}>
+            <summary>
+              <Icon icon={LeftToRightListBulletIcon} size={15} />
+              <span>{outline}</span>
+            </summary>
+            <div className="workspace-md-pop">{links('menu')}</div>
+          </details>,
+          menuSlot,
+        )
+        : null}
     </div>
   )
 }

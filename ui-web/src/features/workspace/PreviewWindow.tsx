@@ -24,6 +24,7 @@ export function PreviewWindow({ path }: { path: string }): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   const [file] = useState(() => store.makeFile(path))
   const [raw, setRaw] = useState(false)
+  const [menuSlot, setMenuSlot] = useState<HTMLSpanElement | null>(null)
   /* The pane switches this flag on the same object it loaded; so does the
      window, which keeps the bytes read rather than re-reading for a redraw. */
   file.raw = raw
@@ -38,6 +39,7 @@ export function PreviewWindow({ path }: { path: string }): JSX.Element {
         <span className="workspace-preview-name" title={file.path}>{name}</span>
         <span className="workspace-preview-kind">{t('gui.ws.file_kind', { k: file.kind })}</span>
         <span className="fsp" />
+        <span className="workspace-md-slot" ref={setMenuSlot} />
         {both ? (
           <span className="workspace-preview-seg">
             <button type="button" aria-pressed={!raw} onClick={() => setRaw(false)}>
@@ -70,7 +72,7 @@ export function PreviewWindow({ path }: { path: string }): JSX.Element {
         </button>
       </header>
       <div className="workspace-preview-body">
-        <FileBody f={file} />
+        <FileBody f={file} menuSlot={menuSlot} />
       </div>
     </div>
   )

@@ -400,8 +400,8 @@ function makeInline(doc?: DocContext): Inline {
         doc.numbers.set(label, n)
         doc.order.push(label)
       }
-      return keep(`<sup class="workspace-md-ref" id="${doc.prefix}-fnref-${n}">`
-        + `<a href="#${doc.prefix}-fn-${n}" role="doc-noteref">${n}</a></sup>`)
+      return keep(`<a class="workspace-md-ref" id="${doc.prefix}-fnref-${n}"`
+        + ` href="#${doc.prefix}-fn-${n}" role="doc-noteref">${n}</a>`)
     })
     /* TeX, held out whole like a code span and for the same reason: `a_1` and
        `x*y` inside a formula are not emphasis, and the passes below would eat

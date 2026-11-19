@@ -34,10 +34,30 @@ describe('a markdown document outline', () => {
     const restore = setWidth(640)
     const view = render(<MarkdownDocument text={TEXT} />)
     expect(view.container.querySelector('.workspace-mddoc')?.getAttribute('data-wide')).toBeNull()
-    /* Both copies are drawn; the stylesheet shows one, and the narrow one is
-       the summary row above the text. */
-    expect(view.container.querySelector('.workspace-md-compact')).not.toBeNull()
     expect(view.container.querySelector('.workspace-md-outline')).not.toBeNull()
+    /* Without a bar to mount into there is no second copy. */
+    expect(view.container.querySelector('.workspace-md-menu')).toBeNull()
     restore()
+  })
+
+  it('mounts the fold-away outline into the bar it was given', () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const restore = setWidth(640)
+    const view = render(<MarkdownDocument text={TEXT} menuSlot={host} />)
+    expect(host.querySelector('.workspace-md-menu')).not.toBeNull()
+    expect(view.container.querySelector('.workspace-md-menu')).toBeNull()
+    restore()
+    host.remove()
+  })
+
+  it('keeps the bar empty once the outline has a column of its own', () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const restore = setWidth(1200)
+    render(<MarkdownDocument text={TEXT} menuSlot={host} />)
+    expect(host.querySelector('.workspace-md-menu')).toBeNull()
+    restore()
+    host.remove()
   })
 })

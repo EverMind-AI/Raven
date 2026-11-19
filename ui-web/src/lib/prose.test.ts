@@ -407,9 +407,10 @@ describe('prose renderer, a markdown file as a document', () => {
   it('numbers footnotes by their first reference and links each one back', () => {
     wire()
     const doc = mdDocument('one[^b] two[^a] again[^b]\n\n[^a]: the a note\n[^b]: the b note')
-    expect(doc.html).toContain('<sup class="workspace-md-ref" id="mdoc-fnref-1">'
-      + '<a href="#mdoc-fn-1" role="doc-noteref">1</a></sup>')
-    expect(doc.html).toContain('<a href="#mdoc-fn-2" role="doc-noteref">2</a>')
+    expect(doc.html).toContain('<a class="workspace-md-ref" id="mdoc-fnref-1"'
+      + ' href="#mdoc-fn-1" role="doc-noteref">1</a>')
+    expect(doc.html).toContain('<a class="workspace-md-ref" id="mdoc-fnref-2"'
+      + ' href="#mdoc-fn-2" role="doc-noteref">2</a>')
     expect(doc.html).toContain('<li id="mdoc-fn-1">the b note '
       + '<a class="workspace-md-back" href="#mdoc-fnref-1" role="doc-backlink">↩</a></li>')
     expect(doc.html).toContain('<li id="mdoc-fn-2">the a note ')
