@@ -953,6 +953,62 @@ def test_upgrade_helper_installs_the_release_plugins_beside_the_wheel(
     assert "Raven upgraded: 0.1.3 -> 0.1.4" in capsys.readouterr().out
 
 
+def test_the_upgrade_helper_fetches_the_resources_it_just_installed(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """The installers land the knowledge reader's models; an upgrade never
+    did, so an install upgraded in place started without them until someone
+    ran `raven resources` by hand. The helper runs the same best-effort fetch
+    from the environment uv just wrote -- its own -I interpreter is the base
+    Python, which has no raven in it."""
+    tool = tmp_path / "tool"
+    (tool / "raven" / "bin").mkdir(parents=True)
+    py = tool / "raven" / "bin" / "python"
+    py.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setenv("UV_TOOL_DIR", str(tool))
+    fetched: list[list[str]] = []
+
+    def run(argv, **kwargs):
+        if argv[0] == str(py):
+            fetched.append(list(argv))
+        return Mock(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    assert helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"]) == 0
+    assert fetched == [[str(py), "-m", "raven.resources", "--optional"]]
+    out = capsys.readouterr().out
+    assert out.index("Raven upgraded: 0.1.3 -> 0.1.4") < out.index("Downloading the word dictionary")
+
+
+def test_a_resource_download_the_upgrade_cannot_finish_leaves_the_upgrade_done(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """`--optional` is the whole contract the installers run it under, so the
+    helper holds the same line: a host that cannot be reached costs the models,
+    not the upgrade."""
+    tool = tmp_path / "tool"
+    (tool / "raven" / "bin").mkdir(parents=True)
+    py = tool / "raven" / "bin" / "python"
+    py.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setenv("UV_TOOL_DIR", str(tool))
+
+    def run(argv, **kwargs):
+        return Mock(returncode=1 if argv[0] == str(py) else 0)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    assert helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"]) == 0
+    err = capsys.readouterr().err
+    assert "resource download failed" in err and "raven resources" in err
+
+
 def test_upgrade_helper_names_the_total_size_before_uv_takes_the_terminal(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

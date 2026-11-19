@@ -159,4 +159,4 @@ def test_asking_for_it_by_name_says_when_it_is_missing(monkeypatch) -> None:
     with collecting() as notes:
         _parse(_scanned(), ocr=True)
 
-    assert any("text recognizer is not installed" in note for note in notes)
+    assert any("text recognizer is not installed" in note and "raven resources" in note for note in notes)
