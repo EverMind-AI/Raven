@@ -268,7 +268,9 @@
   background: var(--paper);
 }
 [data-reader] > .fpane { flex: 1; }
-[data-reader] .workspace-mddoc { padding-top: 14px; }
+/* Full screen is the reader filling the window: the document drops its
+   reading-width cap and its own edge, so nothing is left blank beside it. */
+[data-reader] .workspace-mddoc { width: 100%; margin-inline: 0; padding-top: 14px; }
 
 
 /* ── a file on a page of its own ──────────────────────────────────────
