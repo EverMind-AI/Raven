@@ -267,12 +267,15 @@ def test_send_media_failure_notice_only_when_text_sendable():
     ch._client.reply_stream.assert_not_awaited()
 
 
-def test_send_media_remote_file_uri_reports_failure():
-    """A file:// URI naming another host is refused before any upload."""
+def test_send_media_remote_file_uri_reports_failure(tmp_path):
+    """A file:// URI naming another host is refused even when its path happens
+    to exist locally: the host is what is being refused, not a missing file."""
+    real = tmp_path / "x.pdf"
+    real.write_bytes(b"%PDF")
     ch = _channel()
     ch._client = AsyncMock()
     ch._frames["c1"] = SimpleNamespace(body={})
-    asyncio.run(ch.send("c1", "", media=["file://server/share/x.pdf"]))
+    asyncio.run(ch.send("c1", "", media=[f"file://server{real}"]))
     ch._client.reply_media.assert_not_awaited()
     assert "[Attachment send failed: x.pdf]" in ch._client.reply_stream.await_args.args[2]
 
@@ -297,6 +300,42 @@ def test_send_media_failure_notice_names_file_uri_by_basename(tmp_path):
     ch._frames["c1"] = SimpleNamespace(body={})
     asyncio.run(ch.send("c1", "", media=[target.as_uri()]))
     assert "[Attachment send failed: report.pdf]" in ch._client.reply_stream.await_args.args[2]
+
+
+def test_send_media_failure_notice_decodes_file_uri_basename(tmp_path):
+    """A space in the name distinguishes a decoded basename from the raw URI
+    tail: ``my report 1.pdf``, never ``my%20report%201.pdf``."""
+    target = tmp_path / "my report 1.pdf"
+    target.write_bytes(b"%PDF")
+    ch = _channel()
+    ch._client = AsyncMock()
+    ch._client.reply_media = AsyncMock(side_effect=RuntimeError("nope"))
+    ch._frames["c1"] = SimpleNamespace(body={})
+    asyncio.run(ch.send("c1", "", media=[target.as_uri()]))
+    notice = ch._client.reply_stream.await_args.args[2]
+    assert "[Attachment send failed: my report 1.pdf]" in notice
+    assert "my%20report%201.pdf" not in notice
+
+
+def test_resolve_media_path_treats_a_stat_failure_as_missing(monkeypatch, tmp_path):
+    """A file removed between the existence check and the size read is reported
+    as missing, not left to escape ``send()`` as an OSError the hub retries."""
+    f = tmp_path / "vanishing.pdf"
+    f.write_bytes(b"%PDF")
+    real_is_file = Path.is_file
+    real_stat = Path.stat
+
+    def is_file(self):
+        return True if self == f else real_is_file(self)
+
+    def stat(self, *args, **kwargs):
+        if self == f:
+            raise FileNotFoundError(str(self))
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "is_file", is_file)
+    monkeypatch.setattr(Path, "stat", stat)
+    assert WecomChannel._resolve_media_path(str(f)) is None
 
 
 def test_send_media_transient_failure_reraises(tmp_path):

@@ -95,6 +95,14 @@ def test_file_uri_to_path_refuses_remote_host():
     assert media.file_uri_to_path("file://server/share/x.csv") is None
 
 
+def test_file_uri_to_path_refuses_remote_host_even_when_path_exists(tmp_path):
+    """The host is what is refused: a remote URI whose path happens to exist
+    locally must still resolve to None, never to that local file."""
+    real = tmp_path / "x.csv"
+    real.write_text("x")
+    assert media.file_uri_to_path(f"file://server{real}") is None
+
+
 def test_file_uri_to_path_refuses_non_file_uri():
     assert media.file_uri_to_path("http://example.com/x.csv") is None
 
