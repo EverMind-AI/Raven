@@ -11,7 +11,9 @@ list, and the SkillForgeRouter its scent menu and ``find_skill`` share from:
   working directory).
 
 With no backend the engine still constructs (recall lane yields [],
-router mounts Local and Project). AgentLoop always delegates skill
+router mounts Local and Project). ``skillForge.router.enabled`` is the one
+switch that removes the router itself: off, the engine carries neither a
+router nor a scent menu. AgentLoop always delegates skill
 selection to the engine (``_uses_default_engine`` is always True), and
 ``_collect_injected_skill_ids`` prefers the assembled-metadata stash.
 """
@@ -117,6 +119,7 @@ def _build_engine(
     memory_config: MemoryConfig | None = None,
     model: str = "stub",
     skill_forge_config: SkillForgeConfig | None = None,
+    router_enabled: bool = True,
     rrf_k: int | None = None,
     provider_pool=None,
 ) -> ContextAssembler:
@@ -134,6 +137,7 @@ def _build_engine(
         memory_config=memory_config or MemoryConfig(),
         skill_forge_router_config=SkillForgeRouterConfig(
             hub=hub_config or HubSourceConfig(endpoint=hub_endpoint),
+            enabled=router_enabled,
             **({} if rrf_k is None else {"rrf_k": rrf_k}),
         ),
         skill_forge_config=skill_forge_config or SkillForgeConfig(),
@@ -343,6 +347,40 @@ class TestSkillForgeRouterAssembly:
             skill_forge_router_config=SkillForgeRouterConfig(weights={"project": 0.5}),
         )
         assert {s.name: s.weight for s in router._sources}["project"] == 0.5
+
+
+class TestRouterMasterSwitch:
+    """``skillForge.router.enabled``, read where the router is built.
+
+    Off leaves the engine with no router and no scent menu, which is what the
+    field's docstring has promised since it was added; on is the default every
+    other test in this file already exercises.
+    """
+
+    def test_off_leaves_no_router_and_no_scent_menu(self, tmp_path: Path) -> None:
+        engine = _build_engine(tmp_path, backend=_FakeBackend(), router_enabled=False)
+
+        assert engine.skills_router is None
+        assert engine._scent is None
+
+    def test_off_never_builds_the_router(self, tmp_path: Path, monkeypatch) -> None:
+        """Not built and then dropped: constructing it would already have
+        opened a Hub client and mounted a project source."""
+        built: list[dict] = []
+        monkeypatch.setattr(
+            "raven.context_engine.factory._build_router",
+            lambda **kwargs: built.append(kwargs) or None,
+        )
+
+        _build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint="http://hub.test", router_enabled=False)
+
+        assert built == []
+
+    def test_on_builds_the_router_and_the_menu_over_it(self, tmp_path: Path) -> None:
+        engine = _build_engine(tmp_path, backend=_FakeBackend())
+
+        assert engine.skills_router is not None
+        assert engine._scent._router is engine.skills_router
 
 
 class TestCuratorPinWiring:
