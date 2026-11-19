@@ -2,9 +2,9 @@
 
 A prompt cache keys on every block up to its breakpoint, and the system message
 is rebuilt each turn from segments -- the first of which (identity, the bootstrap
-files) read the same every time, while the rest (the Curator's working state,
-and with turn scratch off the memory recall and the skill router's hits) are
-derived from what the user just said. One breakpoint at the end of that message
+files) read the same every time, while the rest (the memory recall, the skill
+router's hits, and the history slot rebuilt for this turn) are derived from what
+the user just said. One breakpoint at the end of that message
 therefore changes key on every new turn and re-bills the stable head in front
 of it.
 
@@ -18,13 +18,13 @@ from __future__ import annotations
 import pytest
 
 from raven.context_engine.assembler import _SEG_SEP, _stable_prefix_chars
+from raven.context_engine.history.compacting import CompactingHistoryBuilder
 from raven.context_engine.segments import (
     ActiveSkillsSegmentBuilder,
     BootstrapSegmentBuilder,
     IdentitySegmentBuilder,
     MemorySegmentBuilder,
 )
-from raven.context_engine.segments.curator import CuratorSegmentBuilder
 from raven.providers.prompt_cache import STABLE_PREFIX_KEY
 
 
@@ -73,12 +73,12 @@ class TestTheRunOfStableSegments:
 class TestWhenPhaseBIsTheOnlyThingThatFollows:
     """An all-stable phase A is not the end of the message if phase B appends.
 
-    The Curator runs in phase B on every turn it has anything to say, and the
+    The history strategy's builder runs in phase B every turn, and the
     segments in front of it can all be stable at once: identity and bootstrap
     present, memory and both skill segments contributing nothing. Read over
     phase A alone that run looks terminal, and a boundary at the end of the
     message is worth nothing -- so it used to be dropped, and the assembled
-    message went out as `IDENTITY<sep>CURATOR` carrying no key. That is the
+    message went out as `IDENTITY<sep>HISTORY` carrying no key. That is the
     exact miss this measurement exists to remove.
     """
 
@@ -89,9 +89,9 @@ class TestWhenPhaseBIsTheOnlyThingThatFollows:
 
         prefix = _SEG_SEP.join(text for _, text, _ in parts)
         assert chars == len(prefix) + len(_SEG_SEP)
-        finished = prefix + _SEG_SEP + "CURATOR"
+        finished = prefix + _SEG_SEP + "HISTORY"
         assert finished[:chars] == prefix + _SEG_SEP
-        assert finished[chars:] == "CURATOR"
+        assert finished[chars:] == "HISTORY"
 
     def test_nothing_following_still_declares_nothing(self):
         parts = _parts(("IDENT", True), ("BOOT", True))
@@ -117,14 +117,14 @@ class TestWhenPhaseBIsTheOnlyThingThatFollows:
             async def build(self, ctx: AssemblyContext) -> Segment:
                 return Segment(text=self.text)
 
-        class _Curator:
-            name, order, needs_prefix, stable = "curator", 6, True, False
+        class _History:
+            name, order, needs_prefix, stable = "compacting", 6, True, False
 
             async def build(self, ctx: AssemblyContext) -> Segment:
-                return Segment(text="CURATOR")
+                return Segment(text="HISTORY")
 
         eng = ContextAssembler(
-            [_PhaseA("identity", 1, "IDENT"), _PhaseA("boot", 2, "BOOT"), _Curator()],
+            [_PhaseA("identity", 1, "IDENT"), _PhaseA("boot", 2, "BOOT"), _History()],
             lambda: [],
         )
 
@@ -133,10 +133,10 @@ class TestWhenPhaseBIsTheOnlyThingThatFollows:
         )
 
         system = ac.messages[0]
-        assert STABLE_PREFIX_KEY in system, "an all-stable phase A with a Curator tail declares a head"
+        assert STABLE_PREFIX_KEY in system, "an all-stable phase A with a history tail declares a head"
         chars = system[STABLE_PREFIX_KEY]
         assert system["content"][:chars] == "IDENT" + _SEG_SEP + "BOOT" + _SEG_SEP
-        assert system["content"][chars:] == "CURATOR"
+        assert system["content"][chars:] == "HISTORY"
 
     async def test_an_all_stable_message_with_no_tail_declares_nothing(self):
         from raven.context_engine import ContextAssembler, TurnContext
@@ -176,7 +176,7 @@ class TestTheShippedSegmentsDeclareThemselves:
             (BootstrapSegmentBuilder, True, "the bootstrap files as they are on disk"),
             (MemorySegmentBuilder, False, "host memory is picked per message; recall queries it"),
             (ActiveSkillsSegmentBuilder, True, "the always-on set, chosen without the message"),
-            (CuratorSegmentBuilder, False, "working state recomputed for this turn"),
+            (CompactingHistoryBuilder, False, "the history slot is rebuilt for this turn"),
         ],
     )
     def test_each_builder_says_whether_it_reads_the_message(self, builder, stable, why):

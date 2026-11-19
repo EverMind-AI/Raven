@@ -282,9 +282,9 @@ class CompactingHistoryBuilder:
         binding = resolve(None, self._fallback)
         window = self.context_window_tokens
         # This strategy's own rule rather than the budget's: the Memory role
-        # reserves the model's whole output ceiling, which is the Curator's
-        # arithmetic, while the trigger here is defined against the reply room
-        # the headroom policy has learned (see ``raven.context_engine.headroom``).
+        # reserves the model's whole output ceiling, while the trigger here is
+        # defined against the reply room the headroom policy has learned (see
+        # ``raven.context_engine.headroom``).
         headroom_tokens = self._reply_headroom(binding, window)
 
         prefix = ctx.prefix

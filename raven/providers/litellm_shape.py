@@ -269,8 +269,8 @@ class LiteLLMShape(LLMProvider):
 
         The second one is the one that survives a turn. A breakpoint keys its
         cache on every block up to and including itself, and the tail of this
-        message -- the memory recall, the skill router's hits, the Curator's
-        working state -- is rebuilt from whatever the user just said. So the
+        message -- the memory recall and the skill router's hits -- is rebuilt
+        from whatever the user just said. So the
         end-of-message breakpoint changes key on
         every new turn and re-bills the identity and bootstrap text in front of
         it that never changed at all. Splitting at the boundary gives that head

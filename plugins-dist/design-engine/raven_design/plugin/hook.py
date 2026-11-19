@@ -56,7 +56,7 @@ Here both ride the loop's own hook phases, per the amended verdict:
   above is the one the caller dispatched into, and this turn's files are not
   in it, so the engine names the directory they are in on the same reply that
   names them. The rewritten reply is what ``context_engine.after_turn``
-  receives, so Curator bookkeeping sees the appended tails (bounded, replaced
+  receives, so history bookkeeping sees the appended tails (bounded, replaced
   each turn; the ppt after_send rides the same channel) -- the session record
   and the memory store do not.
 """

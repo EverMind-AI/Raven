@@ -346,8 +346,8 @@ def _stamp_turn_observers(messages: list[dict[str, Any]], metadata: dict[str, An
     The loop_hooks paper files ``metadata["observers"]`` on THE TURN'S message
     at persist time, so the search never crosses ``turn_base``: an answerless
     turn has no seat, and the assembled window can share dict objects with the
-    session record (the curator candidate view), so stamping an earlier
-    message would rewrite filed history in place.
+    session record, so stamping an earlier message would rewrite filed history
+    in place.
     """
     if not metadata:
         return
@@ -1576,10 +1576,10 @@ class TurnPathMixin:
             # onto mid-conversation, which is what this block was added for.
             #
             # The switch it used to set lived on the provider *object* and was
-            # never unset, so every later consumer of that object -- the Curator,
-            # a subagent, Sentinel, the session titler -- kept sending with no
-            # breakpoints at all. That was named as known residue when this block
-            # landed; asking the request instead is what retires it.
+            # never unset, so every later consumer of that object -- a subagent,
+            # Sentinel, the session titler -- kept sending with no breakpoints
+            # at all. That was named as known residue when this block landed;
+            # asking the request instead is what retires it.
 
             # TokenWise before-hook: strategies may rewrite messages, tools,
             # or model (e.g. CacheOptimizer marks cache_control blocks).
@@ -4559,8 +4559,8 @@ class TurnPathMixin:
         # failure never leaves the user a delivered message no turn recorded.
         # The after-turn work a normal turn does in _process_message is reduced
         # to what a no-model delivery needs: backend.store indexes the message;
-        # after_turn is a no-op without a turn_id; consolidation is the curator's
-        # job on its next assemble.
+        # after_turn is a no-op without a turn_id; the history strategy reclaims
+        # space on its next assemble.
         if req.deliver_text is not None:
             session = self.sessions.get_or_create(cid)
             msg = {"role": "assistant", "content": req.deliver_text}

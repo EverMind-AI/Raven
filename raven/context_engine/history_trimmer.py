@@ -1,7 +1,7 @@
-"""History trimming — the Curator's contribution to ``*history``.
+"""History trimming — the shared projection from session messages to ``*history``.
 
-Owned by :class:`CuratorAssembler`, which calls these operations to decide
-which session messages reach the model:
+Called by the history strategy that needs it -- the compacting strategy calls
+these operations to decide which session messages reach the model:
 
 - **adjacency closure** (:meth:`canonical_ids`) — if a tool call is
   selected its result messages come along, and vice versa, so the
@@ -16,10 +16,8 @@ which session messages reach the model:
   it fits -- a tool call and its results as one unit (:meth:`tool_group`),
   so what fits is also what the provider accepts.
 
-This is the *only* code path that selects ``*history``. The
-``# Curator Working State`` section is rendered by
-:class:`CuratorSegmentBuilder` from the plan's working-state text — it is
-not this module's concern.
+This is the *only* code path that selects ``*history``. Any segment 6 text is
+the strategy builder's own concern, not this module's.
 """
 
 from __future__ import annotations

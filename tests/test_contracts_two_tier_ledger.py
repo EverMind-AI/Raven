@@ -279,7 +279,7 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
         "def f():\n"
         "    from loguru import logger\n"
         "if TYPE_CHECKING:\n"
-        "    from raven.context_engine.curator import TurnContext\n"
+        "    from raven.context_engine.assembler import ContextAssembler\n"
         "__tier__ = 'contract'\n__all__ = []\n"
     )
     got = check_imports(pkg)

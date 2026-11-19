@@ -55,8 +55,9 @@ SECTION_GUIDE: dict[str, str] = {
 """The eight headings and what each one is for, in the order they are written.
 
 Named for concepts Raven already had rather than borrowed from another
-harness: ``Goal`` / ``Decisions`` / ``Open Threads`` are the Curator's working
-state, so a reader moving between strategies meets the same words. ``Pointers``
+harness: ``Goal`` / ``Decisions`` / ``Open Threads`` are the working-state
+vocabulary the context engine already used, so a reader moving between
+strategies meets the same words. ``Pointers``
 is the one no other harness can have -- a section of refs with no prose only
 means something where a ref can be cashed.
 

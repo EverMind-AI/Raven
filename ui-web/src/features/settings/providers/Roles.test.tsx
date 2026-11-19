@@ -83,19 +83,21 @@ describe('model roles', () => {
   })
 
   it('a keyed role writes its model then its provider; clearing writes null to both', async () => {
-    const { calls } = install()
+    const data = snap()
+    data.raw.sessionTitle = { model: 'anthropic/claude-sonnet-4-5', provider: 'openrouter' }
+    const { calls } = install(data)
     await mount('model')
-    expect(pill('gui.settings.roles.curator').textContent).toContain('anthropic/claude-sonnet-4-5')
+    expect(pill('gui.settings.roles.title').textContent).toContain('anthropic/claude-sonnet-4-5')
     await pick('gui.settings.roles.title', 'claude-sonnet-4-5')
     expect(sets(calls)).toEqual([
       { key: 'sessionTitle.model', value: 'claude-sonnet-4-5' },
       { key: 'sessionTitle.provider', value: 'anthropic' },
     ])
     calls.length = 0
-    await act(async () => { fireEvent.click(screen.getByLabelText('gui.settings.roles.clear {"role":"gui.settings.roles.curator"}')) })
+    await act(async () => { fireEvent.click(screen.getByLabelText('gui.settings.roles.clear {"role":"gui.settings.roles.title"}')) })
     expect(sets(calls)).toEqual([
-      { key: 'context.curatorModel', value: null },
-      { key: 'context.curatorProvider', value: null },
+      { key: 'sessionTitle.model', value: null },
+      { key: 'sessionTitle.provider', value: null },
     ])
   })
 
@@ -445,7 +447,7 @@ describe('model roles', () => {
   it('rolesUsing counts a role following the chat model through the chat provider', () => {
     const data = snap()
     expect(rolesUsing(data, 'anthropic').map((r) => r.id)).toEqual(['chat', 'title'])
-    expect(rolesUsing(data, 'openrouter').map((r) => r.id)).toEqual(['curator', 'memllm'])
+    expect(rolesUsing(data, 'openrouter').map((r) => r.id)).toEqual(['memllm'])
     expect(rolesUsing(data, 'anthropic', 'claude-sonnet-4-5')).toEqual([])
     expect(rolesUsing(data, 'openrouter', 'openai/gpt-4o').map((r) => r.id)).toEqual(['memllm'])
   })

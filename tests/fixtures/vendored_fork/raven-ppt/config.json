@@ -66,9 +66,6 @@
       "renderConcurrency": 2
     }
   },
-  "context": {
-    "curator_model": ""
-  },
   "memory": {
     "backend": "everos",
     "userId": "raven-ppt",

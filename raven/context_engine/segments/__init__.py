@@ -1,9 +1,8 @@
 """System-prompt segment builders.
 
-Each module here defines one :class:`SegmentBuilder` (seg1–4 plus the
-Curator). They all share the same interface and are assembled uniformly
-by :class:`ContextAssembler`. ``render.py`` holds the shared low-level
-rendering helpers.
+Each module here defines one :class:`SegmentBuilder` (seg1–4). They all share
+the same interface and are assembled uniformly by :class:`ContextAssembler`.
+``render.py`` holds the shared low-level rendering helpers.
 """
 
 from raven.context_engine.segments.active_skills import ActiveSkillsSegmentBuilder

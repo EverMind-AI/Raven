@@ -1,9 +1,9 @@
 """Two invariants of the context-builder design.
 
-Invariant 1 — Curator output boundary: the Curator contributes only
-``*history`` and segment 6 (``# Curator Working State``). It never
-touches system segments 1–5. Concretely, injecting a working state is
-purely additive at the tail; the rest of the prompt is byte-identical.
+Invariant 1 — history-slot output boundary: the history strategy's builder
+contributes only ``*history`` and, when it has one, its own segment 6 text.
+It never touches system segments 1–5. Concretely, injecting a working state
+is purely additive at the tail; the rest of the prompt is byte-identical.
 
 Invariant 2 — one owner per segment: each memory / skill block has
 exactly one home. The transitional ``# Recalled memory`` and
@@ -25,6 +25,7 @@ import pytest
 from raven.agent.context import ContextBuilder
 from raven.config.raven import ContextConfig
 from raven.context_engine import ContextAssembler, TurnContext
+from raven.context_engine.history.compacting import CompactingHistoryBuilder
 from raven.context_engine.scent import ScentMenu
 from raven.context_engine.segments import (
     ActiveSkillsSegmentBuilder,
@@ -32,7 +33,6 @@ from raven.context_engine.segments import (
     IdentitySegmentBuilder,
     MemorySegmentBuilder,
 )
-from raven.context_engine.segments.curator import CuratorSegmentBuilder
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.context import AssemblyContext, Segment
 from raven.contracts.memory import Memory
@@ -44,10 +44,10 @@ def builder(tmp_path: Path) -> ContextBuilder:
     return ContextBuilder(workspace=tmp_path)
 
 
-class _FakeCurator:
+class _FakeHistory:
     """Stand-in phase-B builder: emits a fixed working-state seg + history."""
 
-    name = "curator"
+    name = "compacting"
     order = 6
     needs_prefix = True
 
@@ -57,7 +57,7 @@ class _FakeCurator:
 
     async def build(self, ctx: AssemblyContext) -> Segment:
         assert ctx.prefix is not None  # phase B contract
-        text = f"# Curator Working State\n\n{self._ws}" if self._ws else ""
+        text = f"# History Working State\n\n{self._ws}" if self._ws else ""
         return Segment(text=text, history=self._history)
 
 
@@ -65,9 +65,9 @@ def _budget() -> TokenBudget:
     return TokenBudget(100_000, 4_000, 2_000, 1_000, 93_000)
 
 
-async def _assemble(builder: ContextBuilder, curator, **kw):
+async def _assemble(builder: ContextBuilder, history_builder, **kw):
     eng = ContextAssembler(
-        [IdentitySegmentBuilder(builder.workspace), curator],
+        [IdentitySegmentBuilder(builder.workspace), history_builder],
         lambda: [],
     )
     return await eng.assemble("s", [], _budget(), turn=TurnContext(current_message="hi"))
@@ -90,38 +90,38 @@ def _full_prompt(ac) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Invariant 1 — Curator only writes *history + segment 6
+# Invariant 1 — the history slot writes *history + its own segment 6
 # ---------------------------------------------------------------------------
 
 
-class TestCuratorBoundary:
+class TestHistorySlotBoundary:
     async def test_working_state_is_purely_additive_tail(
         self,
         builder: ContextBuilder,
     ) -> None:
-        """The Curator's seg6 appends at the tail; the prefix (seg1–5) is
+        """The strategy's seg6 appends at the tail; the prefix (seg1–5) is
         byte-identical with or without it."""
-        base = await _assemble(builder, _FakeCurator(""))
-        with_ws = await _assemble(builder, _FakeCurator("goals: ship it"))
+        base = await _assemble(builder, _FakeHistory(""))
+        with_ws = await _assemble(builder, _FakeHistory("goals: ship it"))
         base_sys = base.messages[0]["content"]
         ws_sys = with_ws.messages[0]["content"]
         assert ws_sys.startswith(base_sys)
-        assert ws_sys[len(base_sys) :] == "\n\n---\n\n# Curator Working State\n\ngoals: ship it"
+        assert ws_sys[len(base_sys) :] == "\n\n---\n\n# History Working State\n\ngoals: ship it"
 
     async def test_segments_1_to_5_independent_of_working_state(
         self,
         builder: ContextBuilder,
     ) -> None:
-        a = (await _assemble(builder, _FakeCurator("state A"))).messages[0]["content"]
-        b = (await _assemble(builder, _FakeCurator("state B-different"))).messages[0]["content"]
-        assert a.split("# Curator Working State")[0] == b.split("# Curator Working State")[0]
+        a = (await _assemble(builder, _FakeHistory("state A"))).messages[0]["content"]
+        b = (await _assemble(builder, _FakeHistory("state B-different"))).messages[0]["content"]
+        assert a.split("# History Working State")[0] == b.split("# History Working State")[0]
 
-    async def test_history_slot_is_curator_owned(
+    async def test_history_slot_is_owned_by_the_strategy(
         self,
         builder: ContextBuilder,
     ) -> None:
         hist = [{"role": "user", "content": "earlier"}]
-        ac = await _assemble(builder, _FakeCurator("", history=hist))
+        ac = await _assemble(builder, _FakeHistory("", history=hist))
         # messages = [system, *history, user] → history sits in the middle.
         assert ac.messages[1] == {"role": "user", "content": "earlier"}
 
@@ -150,7 +150,7 @@ class TestOneOwnerPerSegment:
             [
                 IdentitySegmentBuilder(builder.workspace),
                 MemorySegmentBuilder(builder.memory, backend),
-                _FakeCurator("ws"),
+                _FakeHistory("ws"),
             ],
             lambda: [],
             scent=ScentMenu(router),
@@ -166,8 +166,8 @@ class TestOneOwnerPerSegment:
         assert "local/s" in _user_text(ac)
         assert "# Skills" not in prompt
         # Working state is the single, final segment of the system slot.
-        assert prompt.count("# Curator Working State") == 1
-        assert ac.messages[0]["content"].rstrip().endswith("# Curator Working State\n\nws")
+        assert prompt.count("# History Working State") == 1
+        assert ac.messages[0]["content"].rstrip().endswith("# History Working State\n\nws")
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +254,7 @@ class TestEngineAssembledInvariants:
                 BootstrapSegmentBuilder(builder.workspace),
                 MemorySegmentBuilder(builder.memory, backend),
                 ActiveSkillsSegmentBuilder(builder.skills),
-                CuratorSegmentBuilder(
+                CompactingHistoryBuilder(
                     workspace=builder.workspace,
                     config=ContextConfig(),
                     provider=_Provider(),
@@ -312,7 +312,7 @@ class _EchoSource:
 _ESPRESSO = "compare espresso brewing methods"
 
 
-class _HistoryCurator(_FakeCurator):
+class _HistoryReplayer(_FakeHistory):
     """A phase-B builder that hands back the session it was given."""
 
     async def build(self, ctx: AssemblyContext) -> Segment:
@@ -327,7 +327,7 @@ def _prefix_engine(builder: ContextBuilder, **kw) -> ContextAssembler:
             BootstrapSegmentBuilder(builder.workspace),
             MemorySegmentBuilder(builder.memory, _EchoBackend()),
             ActiveSkillsSegmentBuilder(builder.skills),
-            _HistoryCurator(""),
+            _HistoryReplayer(""),
         ],
         lambda: [],
         scent=ScentMenu(SkillForgeRouter([_EchoSource()])),

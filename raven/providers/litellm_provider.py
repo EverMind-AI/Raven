@@ -388,7 +388,7 @@ class LiteLLMProvider(LiteLLMShape):
         if self._supports_cache_control(original_model):
             # Asked of this request, not of the process. A strategy that placed
             # marks upstream stamps them; every other caller in this process --
-            # the Curator, a subagent, Sentinel, the session titler -- reaches
+            # a subagent, Sentinel, the session titler -- reaches
             # here without a strategy in front of it and still wants its own.
             if not self.disable_auto_cache_control and not prompt_cache.marks_already_placed(messages):
                 messages, tools = self._apply_cache_control(messages, tools)
@@ -529,7 +529,7 @@ class LiteLLMProvider(LiteLLMShape):
         if self._supports_cache_control(original_model):
             # Asked of this request, not of the process. A strategy that placed
             # marks upstream stamps them; every other caller in this process --
-            # the Curator, a subagent, Sentinel, the session titler -- reaches
+            # a subagent, Sentinel, the session titler -- reaches
             # here without a strategy in front of it and still wants its own.
             if not self.disable_auto_cache_control and not prompt_cache.marks_already_placed(messages):
                 messages, tools = self._apply_cache_control(messages, tools)

@@ -1378,8 +1378,8 @@ async def session_compress(
 
     Returns the TUI's ``SessionCompressResponse`` subset — before/after token
     estimates, message counts, and a ``summary`` the clients print verbatim.
-    ``noop`` marks the cases where nothing moved: no consolidator (the Curator
-    context engine owns compaction), an empty session, or no safe boundary.
+    ``noop`` marks the cases where nothing moved: no consolidator (the history
+    strategy owns compaction), an empty session, or no safe boundary.
     """
     session_key = params.get("session_id", "")
     if not session_key:

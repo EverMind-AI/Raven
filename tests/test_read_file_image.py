@@ -150,7 +150,7 @@ def test_read_file_reports_a_corrupt_image_instead_of_raising(tmp_path: Path) ->
 
 def test_registry_boundary_stays_a_str_with_blocks_riding_along(tmp_path: Path) -> None:
     """Callers that put the result straight into a message (sentinel, subagents,
-    curator, tracing) must keep receiving something that *is* a str."""
+    tracing) must keep receiving something that *is* a str."""
     _write_image(tmp_path / "chart.png", (300, 200))
     registry = ToolRegistry()
     registry.register(ReadFileTool(workspace=tmp_path))

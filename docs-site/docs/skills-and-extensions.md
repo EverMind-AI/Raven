@@ -174,15 +174,16 @@ state. Memory persistence is not a backup of the entire transcript.
 
 ## Context pressure is not long-term learning
 
-Curator selects history for the next context window. Its fast path avoids a
-model call below pressure thresholds; its slow path can spend bounded model
-calls producing a plan, with deterministic fallback when no valid plan arrives.
-Archived messages can be retained verbatim on disk and retrieved later, but
-are not necessarily present in every prompt.
+The history strategy keeps the conversation verbatim until the context window
+nears its trigger. Past that it first shortens large tool results to a one-line
+record plus a `[[ref ...]]` pointer the model can read back, then drops whole
+groups behind a fold, and past that writes an eight-section summary checkpoint.
+Removed messages can be retained verbatim on disk and retrieved later, but are
+not necessarily present in every prompt.
 
-In-turn **Compaction** is different: it can prune older tool-result bodies and
-summarize the transcript head while retaining recent messages. It defaults to
-off and does not write long-term memory notes. To opt in:
+In-turn **Compaction** is a different mechanism: it can prune older tool-result
+bodies and summarize the transcript head while retaining recent messages. It
+defaults to off and does not write long-term memory notes. To opt in:
 
 ```json
 {
@@ -198,8 +199,9 @@ off and does not write long-term memory notes. To opt in:
 
 Merge rather than replace the rest of your agent configuration. Compaction
 can use the turn's model and incur charges; it does not enlarge the provider's
-actual context limit. Curator and compaction are not substitutes for an
-explicit task brief or a source file that the agent can re-read.
+actual context limit. The history strategy and in-turn compaction are not
+substitutes for an explicit task brief or a source file that the agent can
+re-read.
 
 ## Diagnose missing recall or skills
 
@@ -209,7 +211,7 @@ explicit task brief or a source file that the agent can re-read.
 | A skill is listed but unused | Whether its body was fetched, required tools, blocklist, and selected agent |
 | No skill appeared after a task | Actual backend extraction support; `skillForge.extraction` alone does not activate a host pipeline |
 | Long task lost a detail | Archived versus in-window history, compaction, and a retrievable source |
-| Unexpected model cost | Backend extraction, embedding, and the Curator slow path |
+| Unexpected model cost | Backend extraction, embedding, and the history strategy's summary call |
 
 Memory views may expose private sessions and inferred preferences.
 Backend-specific deletion and retention controls must be checked separately;

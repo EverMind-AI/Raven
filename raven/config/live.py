@@ -51,7 +51,6 @@ __all__ = [
     "held",
     "context_window_tokens",
     "cron_default_timezone",
-    "curator_pin",
     "default_live",
     "default_model",
     "exec_timeout",
@@ -85,11 +84,10 @@ def hold_for_this_turn(**resolved: Any) -> Iterator[None]:
 
     Reading live is right for a preference and wrong in the middle of a turn: a
     turn asks several times, sometimes minutes apart -- the iteration cap is
-    first read after context assembly, and the curator asks for its pin once per
-    step of a tool-calling conversation that carries the previous steps with it.
-    Answering those differently splits one piece of work across two settings:
-    the new model continues the old one's partial plan, or a cap lowered
-    mid-flight stops a request that was already running.
+    first read after context assembly, and a subsystem pin is asked for per
+    call. Answering those differently splits one piece of work across two
+    settings: the new model continues the old one's partial plan, or a cap
+    lowered mid-flight stops a request that was already running.
 
     So a turn holds what it reads, the way it holds its model binding. Values
     passed here are resolved at the boundary, which is what the cap needs: read
@@ -675,20 +673,6 @@ def _block_pin(live: LiveConfig, blocks: tuple[str, ...], model_field: str, prov
         return value if isinstance(value, str) and value else None
 
     return field(model_field), field(provider_field)
-
-
-def curator_pin(live: LiveConfig) -> tuple[str | None, str | None]:
-    """``context.curatorModel`` and the provider serving it, read live.
-
-    Read per curation rather than resolved once when the context engine is
-    built, so that repointing the curator on a settings surface reaches the
-    next turn instead of the next restart. ``permissions.judgeModel`` and
-    ``sessionTitle.model`` are read this way too.
-
-    Turning the pair into a binding stays with the caller: that goes through
-    the provider pool, which is where the cost of building one is visible.
-    """
-    return _block_pin(live, ("context",), "curator_model", "curator_provider")
 
 
 def disabled_tool_names(live: LiveConfig) -> frozenset[str]:

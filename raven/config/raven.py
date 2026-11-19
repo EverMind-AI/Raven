@@ -53,7 +53,7 @@ class _Base(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Feature 1 — Context Management (Curator)
+# Feature 1 — Context Management
 # ---------------------------------------------------------------------------
 
 
@@ -400,75 +400,33 @@ class ContextHistoryConfig(_Base):
     strategy: str = "compacting"
     """Which builder fills the history slot.
 
-    ``compacting``, the default, hands the conversation over verbatim
-    until the window nears its trigger, then prunes large tool results to a
-    one-line record and a ref, folds what it drops, and past that writes an
-    eight-section checkpoint. ``curator`` is the earlier strategy, tuned by the
-    flat ``context.*`` Curator keys and kept so a deployment can go back to it.
-    Anything else is refused at startup, naming the two.
+    ``compacting`` hands the conversation over verbatim until the window nears
+    its trigger, then prunes large tool results to a one-line record and a
+    ref, folds what it drops, and past that writes an eight-section checkpoint.
+    Anything else is refused at startup.
     """
 
     compacting: ContextCompactionConfig = Field(default_factory=ContextCompactionConfig)
-    """The compacting strategy's own settings; ignored under ``curator``."""
+    """The compacting strategy's own settings."""
 
 
 class ContextConfig(_Base):
-    """Context engine tuning: which host segments render, and the Curator knobs."""
+    """Context engine tuning: which host segments render, and what may not be dropped."""
 
     drop_segments: list[str] = Field(default_factory=list)
     """Host prompt segments this agent does without, by builder name
-    (``identity``, ``bootstrap``, ``memory``, ``active_skills``, ``curator``). A product with its own identity and contract in its bootstrap
+    (``identity``, ``bootstrap``, ``memory``, ``active_skills``, ``compacting``). A product with its own identity and contract in its bootstrap
     files drops ``identity`` so the model is not told it is two things; a
     research agent that keeps no long-term memory drops ``memory``. Unknown
     names are ignored. Empty renders every segment, as before."""
-
-    # Curator history-lane knobs.
-    fast_path_threshold: float = 0.60
-    """Curator Fast Path cutoff. Below this % of budget → zero-LLM pass-through."""
-
-    curator_model: str | None = None
-    """Model for the Curator agent loop (Slow Path). Unset means the Curator
-    runs on the model of the conversation it is curating.
-
-    Worth setting, and worth setting to something small: one slow-path pass is
-    a bounded agent loop of up to 12 tool-calling requests, so it is per-turn
-    housekeeping rather than an answer, and unset means a long conversation
-    pays conversation-model prices for it. Pair it with ``curator_provider``:
-    a model id alone does not say which credential serves it, and a model id
-    without a key of its own is not a configured subsystem -- the Curator
-    falls back to the conversation rather than send that id on the
-    conversation's key."""
-
-    curator_provider: str | None = None
-    """Which configured provider serves ``curator_model``.
-
-    Set this whenever the id alone is ambiguous, which is most of the time
-    once a gateway is involved: ``openrouter`` with ``anthropic/claude-haiku-4-5``
-    and ``anthropic`` with ``claude-haiku-4-5`` are both valid, name different
-    credentials and different bills, and only you know which was meant.
-
-    Unset, the pin goes to your configured gateway if you have one -- it serves
-    whatever id it is handed -- and only without a gateway is the vendor derived
-    from the id. Neither is a guess you should rely on."""
-
-    curator_timeout_seconds: float = 30.0
-    """Max wall time for one Curator slow-path invocation before fallback."""
-
-    relevance_decay: float = 0.95
-    """Per-turn decay factor for non-recent message relevance."""
-
-    relevance_reference_boost: float = 0.15
-    """Boost applied when assistant response references older message content."""
-
-    protect_first_n: int = 3
-    """Number of head exchanges always preserved in context."""
 
     pinned_skill_ids: list[str] = Field(default_factory=lambda: ["local/subagent-dag-orchestration"])
     """Skills whose fetched body is pinned into every later context window.
 
     A skill body arrives as a ``use_skill`` / ``read_skill`` tool result, which
-    is an ordinary history message: only the first ``protect_first_n`` exchanges
-    are protected, so a body read mid-session is dropped like any other old one.
+    is an ordinary history message: only the opening exchanges the strategy
+    protects (``context.history.compacting.headKeepMessages``) survive on age
+    alone, so a body read mid-session is dropped like any other old one.
     For instruction material that is usually fine -- re-fetch it. It is not fine
     when a tool's own description says "unless the guide is already in your
     context": the agent cannot observe whether it still is, so it either
@@ -480,9 +438,6 @@ class ContextConfig(_Base):
     DAG guide, whose wiring rules the tool description cannot restate in full.
     Re-fetching the same id supersedes the earlier pin, so one body is never
     pinned twice. Set to ``[]`` to disable."""
-
-    archive_dir: str = "memory/.curator/archive"
-    """Relative path under workspace for lossless message archives."""
 
     history: ContextHistoryConfig = Field(default_factory=ContextHistoryConfig)
     """Which strategy fills the history slot, and its own settings."""
@@ -1085,9 +1040,9 @@ class ToolResultLifecycleConfig(_Base):
     enabled: bool = False
     full_retention_turns: int = 3
     summary_retention_turns: int = 10
-    placeholder_text: str = "[Tool result archived — retrievable via Curator]"
+    placeholder_text: str = "[Tool result archived — retrievable via context_retrieve]"
     summary_model: str | None = None
-    """Unset means the conversation's own model. See ``curator_model``."""
+    """Unset means the conversation's own model."""
 
 
 class TokenWiseConfig(_Base):

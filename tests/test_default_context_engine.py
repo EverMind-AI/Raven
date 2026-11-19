@@ -3,8 +3,8 @@
 Formerly the ``DefaultContextEngine`` two-track tests. The two tracks
 (``backend.recall`` for ``# Memory`` + ``SkillForgeRouter`` for the scent
 menu) are now the EverOS lane of the single :class:`UnifiedContextEngine`.
-These tests exercise that lane through the fast path (empty history → no
-Curator LLM call), which is where the recall / router outputs land in the
+These tests exercise that lane through the fast path (empty history, so no
+compaction runs), which is where the recall / router outputs land in the
 prompt.
 """
 
@@ -19,6 +19,7 @@ import pytest
 from raven.agent.context import ContextBuilder
 from raven.config.raven import ContextConfig
 from raven.context_engine import ContextAssembler, TurnContext
+from raven.context_engine.history.compacting import CompactingHistoryBuilder
 from raven.context_engine.scent import ScentMenu
 from raven.context_engine.segments import (
     ActiveSkillsSegmentBuilder,
@@ -26,7 +27,6 @@ from raven.context_engine.segments import (
     IdentitySegmentBuilder,
     MemorySegmentBuilder,
 )
-from raven.context_engine.segments.curator import CuratorSegmentBuilder
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.memory import Memory
 from raven.memory_engine.skill_forge import RouterHit, SkillForgeRouter
@@ -175,7 +175,7 @@ def _engine(
             memory_top_k=memory_top_k,
         ),
         ActiveSkillsSegmentBuilder(builder.skills),
-        CuratorSegmentBuilder(
+        CompactingHistoryBuilder(
             workspace=builder.workspace,
             config=ContextConfig(),
             provider=_StubProvider(),
@@ -198,8 +198,8 @@ class TestEngineIdentity:
         assert eng.name == "context_assembler"
 
     def test_owns_compaction_is_true(self, builder: ContextBuilder) -> None:
-        # The unified engine owns its own archival compaction (Curator
-        # lane), so AgentLoop hands it the full append-only log and skips
+        # The unified engine owns its own archival compaction (the history
+        # strategy's), so AgentLoop hands it the full append-only log and skips
         # the host MemoryConsolidator.
         eng = _engine(builder, router=SkillForgeRouter([]), backend=_StubBackend())
         assert eng.owns_compaction is True
@@ -435,22 +435,22 @@ class TestFailureSemantics:
         self,
         builder: ContextBuilder,
     ) -> None:
-        """The prefix-dependent phase is isolated the same way: a Curator that
-        raises loses its segment and is named, and the turn still assembles on
-        the prefix and the raw history."""
+        """The prefix-dependent phase is isolated the same way: a history
+        builder that raises loses its segment and is named, and the turn still
+        assembles on the prefix and the raw history."""
 
         class _Boom:
-            name = "curator-boom"
+            name = "history-boom"
             order = 60
             needs_prefix = True
 
             async def build(self, ctx):
-                raise RuntimeError("curator down")
+                raise RuntimeError("history down")
 
         eng = _engine(builder, router=SkillForgeRouter([]), backend=_StubBackend())
         eng._phase_b = [*eng._phase_b, _Boom()]
         ac = await eng.assemble("s", [], _budget(), turn=_turn())
-        assert ac.metadata["degraded_segments"] == ["curator-boom"]
+        assert ac.metadata["degraded_segments"] == ["history-boom"]
         assert ac.messages is not None
 
     async def test_single_skill_source_failure_isolated(
