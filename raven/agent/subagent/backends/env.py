@@ -317,9 +317,23 @@ def _capture_windows(*, consequence: str) -> dict[str, str] | None:
         # Union rather than replace: the machine+user stores are the PATH a
         # *new* terminal gets, but raven's own launcher's bin (MinGit/usr/bin,
         # conda) reached this process's PATH without touching the stores, and
-        # a child spawned from the gateway needs every one of them.
+        # a child spawned from the gateway needs every one of them. An entry
+        # already listed is not listed again: the live PATH repeats most of the
+        # stores' own, and the doubled tail has measured past what npm's bin
+        # spawn carries, leaving the child cmd unable to resolve its own shims.
         live = captured.get("PATH", "")
-        captured["PATH"] = ";".join([*stored, live] if live else stored)
+        union: list[str] = []
+        seen: set[str] = set()
+        for part in [*stored, live] if live else stored:
+            for entry in part.split(";"):
+                if not entry:
+                    continue
+                key = entry.rstrip("\\").lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                union.append(entry)
+        captured["PATH"] = ";".join(union)
     return captured
 
 
