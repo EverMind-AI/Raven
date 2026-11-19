@@ -25,12 +25,30 @@ function scrollParent(node: HTMLElement): HTMLElement | null {
   return null
 }
 
+/* A pane wide enough to hold the outline beside the text. Read from the
+   document's own box, not the window: the pane is a column of the page, and a
+   wide window with a narrow pane still folds the outline away. */
+const WIDE = 1000
+
 export function MarkdownDocument({ text }: { text: string }): JSX.Element {
   const footnotes = t('gui.ws.footnotes')
   const doc = useMemo(() => mdDocument(text, 'mdoc', footnotes), [text, footnotes])
+  const frame = useRef<HTMLDivElement>(null)
   const article = useRef<HTMLElement>(null)
   const compact = useRef<HTMLDetailsElement>(null)
   const [active, setActive] = useState('')
+  const [wide, setWide] = useState(false)
+
+  useEffect(() => {
+    const root = frame.current
+    if (!root) return
+    const read = (): void => setWide(root.clientWidth >= WIDE)
+    read()
+    if (typeof ResizeObserver === 'undefined') return
+    const watcher = new ResizeObserver(read)
+    watcher.observe(root)
+    return () => watcher.disconnect()
+  }, [])
 
   useEffect(() => {
     const root = article.current
@@ -96,7 +114,8 @@ export function MarkdownDocument({ text }: { text: string }): JSX.Element {
   )
 
   return (
-    <div className="workspace-mddoc" data-outline={doc.headings.length > 0 ? '1' : undefined}>
+    <div className="workspace-mddoc" ref={frame} data-outline={doc.headings.length > 0 ? '1' : undefined}
+      data-wide={wide ? '1' : undefined}>
       {doc.headings.length > 0 ? (
         <>
           <aside className="workspace-md-outline">

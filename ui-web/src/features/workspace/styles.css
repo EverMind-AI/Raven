@@ -89,22 +89,24 @@
 .workspace-md-body > .workspace-md-section,
 .workspace-md-intro { max-width: 760px; margin-left: auto; margin-right: auto; }
 
-@media (min-width: 1000px) {
-  .workspace-mddoc[data-outline] {
-    display: grid; grid-template-columns: minmax(0, 1fr) 208px;
-    gap: 26px; align-items: start; padding: 8px 26px 48px;
-  }
-  .workspace-mddoc[data-outline] > .workspace-md-body { grid-column: 1; }
-  .workspace-mddoc[data-outline] > .workspace-md-outline { grid-column: 2; grid-row: 1; }
-  .workspace-md-compact { display: none; }
+/* The wide shape is the document's own width, not the window's: the component
+   measures its box and sets data-wide (MarkdownDocument.tsx), so a narrow pane
+   in a wide window still folds the outline away. */
+.workspace-mddoc[data-outline][data-wide] {
+  display: grid; grid-template-columns: minmax(0, 1fr) 208px;
+  gap: 26px; align-items: start; padding: 8px 26px 48px;
 }
+.workspace-mddoc[data-outline][data-wide] > .workspace-md-body { grid-column: 1; }
+.workspace-mddoc[data-outline][data-wide] > .workspace-md-outline {
+  display: block; grid-column: 2; grid-row: 1;
+}
+.workspace-mddoc[data-wide] .workspace-md-compact { display: none; }
 
 .workspace-md-outline {
   display: none; position: sticky; top: 2px;
   max-height: 80vh; overflow: auto;
   padding: 4px 0 8px 13px; border-left: .5px solid var(--line);
 }
-@media (min-width: 1000px) { .workspace-md-outline { display: block; } }
 .workspace-md-outline-title {
   margin-bottom: 7px; color: var(--faint); font-size: 10.5px; font-weight: 600;
   letter-spacing: .05em; text-transform: uppercase;
