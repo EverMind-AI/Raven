@@ -119,11 +119,13 @@
 .workspace-md-nested { padding-left: 11px !important; font-size: 12px !important; }
 
 .workspace-md-compact {
-  margin: 10px 14px 0; padding: 6px 10px; border-radius: 8px;
-  background: var(--surface); color: var(--muted); font-size: 12.5px;
+  max-width: 760px; margin: 10px auto 0; padding: 7px 0 9px;
+  border-bottom: .5px solid var(--line);
+  color: var(--muted); font-size: 12px; letter-spacing: .02em;
 }
 .workspace-md-compact > summary { cursor: pointer; }
-.workspace-md-pop { margin-top: 6px; }
+.workspace-md-compact[open] { border-bottom-color: transparent; }
+.workspace-md-pop { margin-top: 5px; }
 
 /* Document type, one step up from an answer's: a file is read, not scanned. */
 .workspace-md-body h1 {
