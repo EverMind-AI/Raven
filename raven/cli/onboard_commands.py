@@ -1326,6 +1326,21 @@ def _collect_credentials(
                 "GigaChat API console, not a typical API key.[/dim]"
             )
 
+        # A GLM Coding Plan subscription is spent only on Zhipu's
+        # Anthropic-compatible endpoint, and a glm model name does not imply
+        # that wire, so a plan key pasted into this entry buys nothing and
+        # every call comes back in a shape the entry cannot read.
+        if normalize_provider_name(provider) in ("zai", "bigmodel"):
+            from raven.providers.registry import find_by_name
+
+            plan_endpoint = dict(find_by_name(provider).native_api_bases)["anthropic"]
+            console.print(
+                "  [dim]A GLM Coding Plan key is spent only on Zhipu's "
+                f"Anthropic-compatible endpoint ({plan_endpoint}), not on the "
+                "pay-as-you-go API this entry speaks. To use one, add a provider "
+                "with protocol anthropic pointed at that address.[/dim]"
+            )
+
     # Pure interactive path (no creds came from flags): prompt field-by-field
     # with empty-submit = back; backing out of the first field rewinds to the
     # provider picker.

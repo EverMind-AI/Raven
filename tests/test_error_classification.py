@@ -448,8 +448,13 @@ def test_the_category_table_answers_for_every_category_the_classifier_can_reach(
     source = inspect.getsource(LLMProvider._classify)
     reached = set(_re.findall(r'ErrorClassification\(\s*(?:category=)?"([a-z_]+)"', source))
     assert "unknown" in reached  # the fallback arm; a sanity check on the scrape
-    reached |= {"tool_image_unsupported", "upstream_transport_failure"}
+    reached |= {"tool_image_unsupported", "upstream_transport_failure", "protocol_mismatch"}
     assert reached <= set(_LLM_ERROR_SUMMARIES)
+
+    assert llm_error_summary("protocol_mismatch") == (
+        "The endpoint does not speak the protocol this provider is configured for. "
+        "The runtime log has the provider's own account."
+    )
 
     assert llm_error_summary("auth", "openrouter") == (
         "The provider rejected the credentials (openrouter). The runtime log has the provider's own account."
