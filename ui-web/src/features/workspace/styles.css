@@ -73,3 +73,127 @@
   border-left-color: color-mix(in srgb, var(--ink) 28%, transparent);
 }
 .workspace-bin-more svg { width: 14px; height: 14px; }
+
+/* ── a Markdown file read as a document ───────────────────────────────
+   The pane's own reading column: an outline beside it when there is room,
+   a fold-away one when there is not, and the document's typography in
+   between. The markup is lib/prose.ts's mdDocument; nothing here knows what
+   a heading is beyond the name it was given. */
+
+.workspace-mddoc { padding: 6px 16px 42px; }
+.workspace-mddoc[data-outline] { padding-top: 2px; }
+
+/* The reading column never grows past a line length a reader can follow, and
+   the outline keeps its own column instead of pushing the text. */
+.workspace-mddoc .workspace-md-body { padding: 0; font-size: 14.5px; line-height: 1.75; }
+.workspace-md-body > .workspace-md-section,
+.workspace-md-intro { max-width: 760px; margin-left: auto; margin-right: auto; }
+
+@media (min-width: 1000px) {
+  .workspace-mddoc[data-outline] {
+    display: grid; grid-template-columns: minmax(0, 1fr) 208px;
+    gap: 26px; align-items: start; padding: 8px 26px 48px;
+  }
+  .workspace-mddoc[data-outline] > .workspace-md-body { grid-column: 1; }
+  .workspace-mddoc[data-outline] > .workspace-md-outline { grid-column: 2; grid-row: 1; }
+  .workspace-md-compact { display: none; }
+}
+
+.workspace-md-outline {
+  display: none; position: sticky; top: 2px;
+  max-height: 80vh; overflow: auto;
+  padding: 4px 0 8px 13px; border-left: .5px solid var(--line);
+}
+@media (min-width: 1000px) { .workspace-md-outline { display: block; } }
+.workspace-md-outline-title {
+  margin-bottom: 7px; color: var(--faint); font-size: 10.5px; font-weight: 600;
+  letter-spacing: .05em; text-transform: uppercase;
+}
+.workspace-md-links { display: flex; flex-direction: column; gap: 1px; }
+.workspace-md-links a {
+  display: block; padding: 2px 0; border-radius: 4px;
+  color: var(--muted); font-size: 12.5px; line-height: 1.5; text-decoration: none;
+}
+.workspace-md-links a:hover { color: var(--text); }
+.workspace-md-links a[aria-current="location"] { color: var(--text); font-weight: 600; }
+.workspace-md-nested { padding-left: 11px !important; font-size: 12px !important; }
+
+.workspace-md-compact {
+  margin: 10px 14px 0; padding: 6px 10px; border-radius: 8px;
+  background: var(--surface); color: var(--muted); font-size: 12.5px;
+}
+.workspace-md-compact > summary { cursor: pointer; }
+.workspace-md-pop { margin-top: 6px; }
+
+/* Document type, one step up from an answer's: a file is read, not scanned. */
+.workspace-md-body h1 {
+  margin: 0 0 10px; color: var(--text); font-size: 26px; font-weight: 650;
+  letter-spacing: -.01em; line-height: 1.3;
+}
+.workspace-md-body h2 { margin: 30px 0 10px; color: var(--text); font-size: 20px; font-weight: 650; line-height: 1.35; }
+.workspace-md-body h3 { margin: 22px 0 8px; color: var(--text); font-size: 16.5px; font-weight: 600; line-height: 1.4; }
+.workspace-md-body h4 { margin: 18px 0 6px; color: var(--text); font-size: 14.5px; font-weight: 600; }
+.workspace-md-body h5,
+.workspace-md-body h6 { margin: 14px 0 6px; color: var(--muted); font-size: 13.5px; font-weight: 600; }
+.workspace-md-body [data-mh] { scroll-margin-top: 12px; }
+.workspace-md-body [data-mh]:focus { outline: none; }
+
+.workspace-md-intro {
+  margin-bottom: 18px; padding-bottom: 16px;
+  border-bottom: .5px solid var(--line);
+}
+.workspace-md-intro p { color: var(--muted); font-size: 15.5px; }
+
+.workspace-md-notes { margin-top: 34px; padding-top: 14px; border-top: .5px solid var(--line); }
+.workspace-md-notes ol { margin: 8px 0 0; padding-left: 20px; }
+.workspace-md-notes li { color: var(--muted); font-size: 13px; }
+.workspace-md-ref { font-size: 11px; }
+.workspace-md-ref a,
+.workspace-md-back { text-decoration: none; }
+.workspace-md-back { margin-left: 3px; color: var(--faint); }
+.workspace-md-back:hover { color: var(--text); }
+
+/* Reading mode: the pane, and nothing else, over the whole window. */
+[data-reader] {
+  position: fixed; inset: 0; z-index: 65; width: 100%;
+  background: var(--paper);
+}
+[data-reader] > .fpane { flex: 1; }
+[data-reader] .workspace-mddoc { padding-top: 14px; }
+
+/* Both frame buttons draw on the same 14px stroke grid as the folder and the
+   new-tab button they sit beside. */
+.workspace-window.ghost-ic svg,
+.workspace-reader.ghost-ic svg { width: 14px; height: 14px; }
+
+/* ── a file on a page of its own ──────────────────────────────────────
+   The preview window (src/chrome/previewBoot.tsx) boots nothing but this:
+   the page's own shell is hidden by the flag its boot sets, and the body
+   below is the same FileBody the pane draws. */
+
+html[data-preview] body { margin: 0; overflow: hidden; background: var(--paper); }
+html[data-preview] #splash,
+html[data-preview] #noJs,
+html[data-preview] #onb { display: none !important; }
+#previewRoot { height: 100vh; height: 100dvh; }
+
+.workspace-preview { display: flex; flex-direction: column; height: 100%; background: var(--paper); }
+.workspace-preview-head {
+  display: flex; flex: none; align-items: center; gap: 10px;
+  height: 52px; padding: 0 12px 0 16px;
+  border-bottom: .5px solid var(--line);
+}
+.workspace-preview-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text); font-size: 14px; font-weight: 600;
+}
+.workspace-preview-kind { flex: none; color: var(--faint); font-size: 11.5px; }
+.workspace-preview-seg { display: flex; flex: none; gap: 1px; }
+.workspace-preview-seg button {
+  padding: 3px 9px; border: .5px solid var(--line); border-radius: 6px;
+  background: transparent; color: var(--muted); cursor: pointer; font-size: 12px;
+}
+.workspace-preview-seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); }
+.workspace-preview-body { flex: 1; min-height: 0; overflow: auto; }
+.workspace-preview-body > .fview { min-height: 100%; }
+.workspace-preview-body > .fview .workspace-md-body { max-width: 100%; }
