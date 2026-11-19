@@ -3009,6 +3009,18 @@
       "en": "Local EverOS is not running",
       "zh": "本地 EverOS 没有运行"
     },
+    "gui.mem.band_hi": {
+      "zh": "高",
+      "en": "High"
+    },
+    "gui.mem.band_mid": {
+      "zh": "中",
+      "en": "Medium"
+    },
+    "gui.mem.band_lo": {
+      "zh": "低",
+      "en": "Low"
+    },
     "gui.mem.meta_confidence": {
       "zh": "信心",
       "en": "Confidence"

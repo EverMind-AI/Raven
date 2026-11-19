@@ -208,6 +208,40 @@ describe('memory island', () => {
     expect(await screen.findByText('gui.mem.pick')).toBeTruthy()
   })
 
+  it('shows the scores as numbers, banded on one scale', async () => {
+    install({
+      list: async () => ({
+        items: [item({ kind: 'agent_skill', subject: 'the skill', confidence: 0.86, maturity_score: 0.72, quality_score: 85 })],
+        total: 1,
+      }),
+    })
+    await mount()
+    await act(async () => {
+      row('the skill').click()
+    })
+    /* Numbers, not meters: a score can be quoted back, and one scale says the
+       same thing for both of them -- the skill's confidence and its maturity
+       are read against each other. A quality score that arrives on a 0-100
+       scale is the same number, so it reads the same way. */
+    expect(screen.getByText('86%')).toBeTruthy()
+    expect(screen.getByText('72%')).toBeTruthy()
+    expect(screen.getByText('85%')).toBeTruthy()
+    expect(screen.getAllByText('gui.mem.band_hi').length).toBe(2)
+    expect(screen.getAllByText('gui.mem.band_mid').length).toBe(1)
+    expect(document.querySelectorAll('.memstrip .memscore').length).toBe(3)
+    /* The band is a word beside a dot, never the colour alone. */
+    expect(screen.getByText('gui.mem.band_mid').getAttribute('data-band')).toBe('mid')
+  })
+
+  it('draws no score block for a memory that carries no scores', async () => {
+    install()
+    await mount()
+    await act(async () => {
+      row('shipped the island').click()
+    })
+    expect(document.querySelector('.memstrip')).toBeNull()
+  })
+
   it('switches kind through a stat and reloads with it', async () => {
     const asked: string[] = []
     install({
