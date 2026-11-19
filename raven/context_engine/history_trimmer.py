@@ -270,8 +270,8 @@ class HistoryTrimmer:
         Ranked by the group a candidate would remove, not by the candidate:
         a group with any protected member is a protected group, so a
         protection boundary that falls inside a parallel-call exchange
-        (``protect_first_n`` counting the call but not its results) cannot be
-        used to take the protected call out through an unprotected result.
+        cannot be used to take the protected call out through an unprotected
+        result.
         Unprotected groups go first, in selection order,
         skipping one whose removal would re-anchor a protected id out of the
         history; protected groups go only after that, under the same rule;
