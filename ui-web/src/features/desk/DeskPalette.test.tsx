@@ -1713,6 +1713,39 @@ describe('resizing by the corner grab', () => {
 
       expect(palette()?.style.height).toBe(shortOfTheCard)
     })
+
+    /* The corner is the one handle an anchored palette can be widened from,
+       and widening it is not a statement about its height. A sideways pull
+       used to settle at the clamped height and clear `fill`, so the desk that
+       had been reaching its limit stopped doing so -- and when the card slid
+       away, the space it left stood empty under the palette. */
+    it('keeps reaching the limit after a sideways pull let go over the card', async () => {
+      launcherAt(42)
+      const place = composerAt(700, { right: 836 })
+      await shelf()
+      /* Opened filling, and clamped by the card that runs under it. */
+      expect(palette()?.style.height).toBe(shortOfTheCard)
+
+      await pull(0, -50)
+      expect(palette()?.style.width).toBe('350px')
+      expect(palette()?.style.height).toBe(shortOfTheCard)
+      expect((JSON.parse(localStorage.getItem(DESK_GEOMETRY_KEY) as string) as { fill?: boolean }).fill).toBe(true)
+
+      place({ right: 600 })
+      await relayout()
+
+      expect(palette()?.style.height).toBe(`${700 - (42 + DESK_ANCHOR_GAP)}px`)
+    })
+
+    it('reads a few pixels of vertical drift as the same sideways pull', async () => {
+      launcherAt(42)
+      composerAt(700, { right: 836 })
+      await shelf()
+
+      await pull(3, -50)
+
+      expect((JSON.parse(localStorage.getItem(DESK_GEOMETRY_KEY) as string) as { fill?: boolean }).fill).toBe(true)
+    })
   })
 
   /* A desk the reader has not sized reaches the bottom: down to the composer
