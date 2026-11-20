@@ -19,6 +19,7 @@ import re
 from typing import Any
 
 from raven.context_engine.segments.render import RUNTIME_CONTEXT_TAG
+from raven.utils.image_store import expand_images
 
 RUNTIME_CONTEXT_KEY = "_runtime_context"
 """Set on the envelope the assembler built, holding the lines it opened with.
@@ -64,7 +65,7 @@ def replayed_content(message: dict[str, Any]) -> Any:
     A user entry filed before the field existed, and every other entry, comes
     back as it is.
     """
-    content = message.get("content")
+    content = expand_images(message.get("content"), message)
     lines = message.get(RUNTIME_CONTEXT_FIELD)
     if message.get("role") != "user" or not isinstance(lines, str) or not lines:
         return content

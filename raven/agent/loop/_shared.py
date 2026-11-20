@@ -652,11 +652,12 @@ _DELEGATED_KEY = "_delegated"
 
 
 def _strip_inline_images(content: list[Any]) -> list[Any]:
-    """Replace inline base64 images with a text placeholder, for persistence.
+    """Replace inline base64 images with a text placeholder.
 
-    Images live for exactly the turn that produced them. Keeping the bytes would
-    bloat the session JSONL by megabytes per picture, and every later turn would
-    replay them to the model — paying for an image nobody asked about again.
+    The placeholder-only projection, for callers that keep no archived refs. The
+    save path uses :func:`~raven.utils.image_store.capture_images`, which archives
+    the exact data URI in the message's private refs so a later turn can send the
+    same picture again.
 
     A *new* list is returned: the input is the live message the model is still
     working from this turn, and `_save_turn` only shallow-copies the entry, so
