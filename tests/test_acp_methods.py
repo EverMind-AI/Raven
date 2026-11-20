@@ -2650,3 +2650,48 @@ class TestPlaybookCharter:
         _, _, result = await self._staged(rig, {"raven.playbook": {"prompt": "only A"}}, bind=False)
 
         assert result["result"] == {"stopReason": "cancelled"}
+
+
+@pytest.mark.asyncio
+async def test_the_closing_turn_runs_after_background_work(rig, monkeypatch):
+    """A held prompt must end by itself: nothing else runs a turn there."""
+    from types import SimpleNamespace
+
+    from raven.agent.tools import background_exec
+
+    snapshots = iter(
+        [
+            [{"task_id": "bg-1", "command": "make all", "log_path": "/tmp/bg-1.log"}],
+            [],
+            [],
+        ]
+    )
+    monkeypatch.setattr(background_exec, "running", lambda session_key=None: next(snapshots, []))
+
+    monkeypatch.setattr("raven.acp.methods.BACKGROUND_POLL_S", 0)
+    session = SimpleNamespace(session_id="s1", session_key="cli:c")
+
+    await rig.methods._resume_after_background(session, {"background": True, "untilMs": None})
+
+    params = rig.stack.params_for("turn.send")
+    assert params["session_key"] == "cli:c"
+    assert "bg-1" in params["content"] and "make all" in params["content"]
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_hold_reaps_what_it_was_waiting_on(rig, monkeypatch):
+    """Cancelling the prompt must not leave the command running unseen."""
+    from types import SimpleNamespace
+
+    from raven.agent.tools import background_exec
+
+    reaped: list[str] = []
+    monkeypatch.setattr(
+        background_exec,
+        "running",
+        lambda session_key=None: [{"task_id": "bg-9", "command": "sleep 99", "log_path": "/tmp/l"}],
+    )
+    monkeypatch.setattr(background_exec, "reap", lambda task_id: reaped.append(task_id) or True)
+
+    rig.methods._reap_background(SimpleNamespace(session_id="s1", session_key="cli:c"))
+    assert reaped == ["bg-9"]
