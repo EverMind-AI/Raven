@@ -195,7 +195,15 @@ def _visible_body(preview: str, direction: str) -> str:
 def _file_full_output(workspace: Path, body: str, *, now: datetime | None) -> Path | None:
     directory = tool_output_dir(workspace)
     try:
+        # A pre-existing tool-output symlink would make mkdir, chmod, open and
+        # prune all act on its target. Refuse it, and re-check containment after
+        # mkdir so a path that escaped through any other link is refused too.
+        if directory.is_symlink():
+            raise OSError(f"refusing symlinked tool-output directory: {directory}")
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        root = workspace.resolve()
+        if directory.is_symlink() or not directory.resolve().is_relative_to(root):
+            raise OSError(f"tool-output directory escapes the workspace: {directory}")
         try:
             directory.chmod(0o700)
         except OSError:
