@@ -973,7 +973,10 @@ def test_the_upgrade_helper_fetches_the_resources_it_just_installed(
     def run(argv, **kwargs):
         if argv[0] == str(py):
             fetched.append(list(argv))
-        return Mock(returncode=0)
+        # stdout="" because on Windows the helper's pre-install process probe
+        # reads it; an auto-Mock's .split() is not joinable and the run dies
+        # before uv, which Linux never reaches.
+        return Mock(returncode=0, stdout="")
 
     monkeypatch.setattr(subprocess, "run", run)
     helper_main = _load_upgrade_helper()
@@ -999,7 +1002,9 @@ def test_a_resource_download_the_upgrade_cannot_finish_leaves_the_upgrade_done(
     monkeypatch.setenv("UV_TOOL_DIR", str(tool))
 
     def run(argv, **kwargs):
-        return Mock(returncode=1 if argv[0] == str(py) else 0)
+        # stdout="" for the same reason as the fetch test: on Windows the
+        # helper's pre-install process probe joins what it reads.
+        return Mock(returncode=1 if argv[0] == str(py) else 0, stdout="")
 
     monkeypatch.setattr(subprocess, "run", run)
     helper_main = _load_upgrade_helper()
