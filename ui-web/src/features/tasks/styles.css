@@ -749,8 +749,6 @@
 }
 .tkqtext { flex: 1; min-width: 0; color: var(--text); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
 .tkqtext::before { content: counter(tkq) ". "; color: var(--muted); }
-/* Ignore is an icon button in both of its places -- beside one question and
-   beside the group's Answer: a 22px box, so the whole square is the target. */
 .tkqignore,
 .tkaskbtn[data-kind="ignore"] {
   display: inline-flex;
