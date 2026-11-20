@@ -363,3 +363,21 @@ def wire_overrides(provider: str | None, model: str | None) -> dict[str, Any]:
         if normalize_provider_name(owner) == name and needle in lowered:
             out.update(body)
     return out
+
+
+def replay_gates(provider: Any, model: str) -> tuple[bool, bool]:
+    """The live assembly's vision and tool-image verdicts for ``provider``/``model``.
+
+    Resolves the :class:`ProviderSpec` the way the live path does, so a
+    ``vision_override`` or ``image_tool_result_override`` reaches a replayed
+    message. A verdict learned from a refused tool image lives on the loop's
+    cache and is not visible here.
+    """
+    spec = None
+    try:
+        from raven.providers.registry import find_by_model
+
+        spec = find_by_model(model)
+    except Exception:
+        pass
+    return supports_vision(model, spec, provider), supports_image_tool_result(provider, model, spec)

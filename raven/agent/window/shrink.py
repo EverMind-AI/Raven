@@ -51,10 +51,10 @@ MAX_IMAGE_STRIP_RETRIES = 2
 # The image window. Pictures a tool showed stay in the request while all of
 # them together fit the configured budget (``agents.defaults.imageWindowBudgetBytes``,
 # base64 bytes as they travel, carried on ``RecoveryLimits``); when they do not,
-# every older tool/attached message and every picture from an earlier turn
-# loses its pictures at once, each replaced by a note saying what it showed and
-# how to see it again. The picture on the current question counts toward the
-# budget but is never withdrawn. Pictures stay for as long as a turn runs otherwise, and
+# every older tool/attached message and every other user picture loses its
+# pictures at once, each replaced by a note saying what it showed and how to see
+# it again. The picture on the current question counts toward the budget but is
+# never withdrawn. Pictures stay for as long as a turn runs otherwise, and
 # one deck build reached 75 of them in a single request (26.6 MB decoded, 35.5 MB
 # encoded) before OpenRouter refused it with 413, four times across two runs; the
 # refusals were measured to start at about 26.3 MB decoded, i.e. 35.1 MB on the
@@ -237,8 +237,8 @@ def window_images(
     refusal ladder want. With ``budget`` (base64 bytes, the size the pictures
     have on the wire and what the request body is charged), nothing happens while
     the pictures still live in the transcript fit under it, and the moment they do
-    not, the older tool/attached messages and every picture from an earlier turn
-    lose theirs at once.
+    not, the older tool/attached messages and every other user picture lose
+    theirs at once.
     A collapse rather than a slide because each withdrawal is a break in the
     prefix an upstream cache can match: sliding one message out per new batch
     broke the prefix on 16 of 60 calls in one measured run (19 of 41 in the
@@ -259,13 +259,13 @@ def window_images(
 
     The pictures tools showed, on either transport: a ``tool`` message where
     the endpoint carries them there, the following ``user`` message the loop
-    attached where it does not. A picture the user sent in an earlier turn is a
-    result like those: it counts toward the budget and is withdrawn with the
-    older tool pictures when the budget is crossed. The picture on this turn's
-    question, and any the reader sent after it, is the subject of the turn: it
-    counts toward the budget but is never withdrawn. Remote references count
-    toward ``keep`` but weigh nothing in the budget: their size is unknowable
-    without fetching them.
+    attached where it does not. A picture the user sent on another turn, or
+    after the question, is a result like those: it counts toward the budget and
+    is withdrawn with the older tool pictures when the budget is crossed. The
+    picture on this turn's question is the subject of the turn: it counts toward
+    the budget but is never withdrawn. Remote references count toward ``keep``
+    but weigh nothing in the budget: their size is unknowable without fetching
+    them.
 
     Returns ``(messages_changed, pictures_withdrawn)``; ``(0, 0)`` means
     nothing had to go.
@@ -277,13 +277,10 @@ def window_images(
         if isinstance(m.get("content"), list) and any(is_image_part(p) for p in m["content"])
     ]
     tools = [i for i in bearing if messages[i].get("role") == "tool" or messages[i].get(ATTACHED_IMAGE_KEY)]
-    earlier_users = [
+    user_pictures = [
         i
         for i in bearing
-        if messages[i].get("role") == "user"
-        and not messages[i].get(ATTACHED_IMAGE_KEY)
-        and question is not None
-        and i < question
+        if messages[i].get("role") == "user" and not messages[i].get(ATTACHED_IMAGE_KEY) and i != question
     ]
     if budget is not None:
         live = sum(wire_image_bytes(p) for i in bearing for p in messages[i]["content"])
@@ -292,8 +289,8 @@ def window_images(
     # ``max`` because a negative keep would slice from the other end and
     # withdraw the newest pictures instead of the oldest.
     keep = max(0, keep)
-    stale = (tools[:-keep] if keep else tools) + earlier_users
-    earlier = set(earlier_users)
+    stale = (tools[:-keep] if keep else tools) + user_pictures
+    earlier = {i for i in user_pictures if question is not None and i < question}
     pictures = 0
     for i in stale:
         pictures += sum(1 for p in messages[i]["content"] if is_image_part(p))

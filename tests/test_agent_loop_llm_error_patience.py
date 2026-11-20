@@ -740,6 +740,19 @@ def test_the_current_questions_picture_is_never_withdrawn() -> None:
     assert _pictures_in(messages[0]) == 1
 
 
+def test_the_window_withdraws_a_post_question_picture() -> None:
+    """Only the current question's picture is exempt. A picture the reader sent
+    after it, or before it, is a result and can be withdrawn under pressure."""
+    question = {"role": "user", "content": [text_block("do it"), _picture("Q")]}
+    correction = {"role": "user", "content": [_picture("M")], "_mid_turn_user": True}
+    messages = [question, correction]
+
+    assert shrink.window_images(messages, 0, reason="budget") == (1, 1)
+    assert _pictures_in(messages[0]) == 1, "the current question keeps its picture"
+    assert _pictures_in(messages[1]) == 0
+    assert "This turn's pictures" in messages[1]["content"][0]["text"]
+
+
 def test_a_closed_window_withdraws_the_newest_picture_and_says_why() -> None:
     """Window zero is what a size refusal leaves behind: every picture comes out,
     the newest included, and the note blames the endpoint rather than a newer batch."""
