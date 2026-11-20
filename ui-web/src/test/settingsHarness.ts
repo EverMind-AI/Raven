@@ -141,9 +141,9 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
       { id: 'cancel_dag', name: 'cancel dag', group: 'collab', reach: 'local', one: 'cancels a dag', on: true, builtin: false },
     ],
     skills: [
-      { name: 'git-flow', description: 'Branch and merge the house way', source: 'builtin', always: true, hub: false, hub_id: '' },
-      { name: 'sql-style', description: 'Names and indents for the database', source: 'workspace', always: false, hub: true, hub_id: 'sh-sql-style' },
-      { name: 'notes', description: 'Personal notes', source: 'workspace', always: false, hub: false, hub_id: '' },
+      { name: 'git-flow', description: 'Branch and merge the house way', source: 'builtin', always: true, hub: false, hub_id: '', blocked: false },
+      { name: 'sql-style', description: 'Names and indents for the database', source: 'workspace', always: false, hub: true, hub_id: 'sh-sql-style', blocked: false },
+      { name: 'notes', description: 'Personal notes', source: 'workspace', always: false, hub: false, hub_id: '', blocked: false },
     ],
     mcp: [
       { name: 'github', transport: 'http', state: 'error', connected: false, tool_count: 3, enabled: true, auth: 'apikey', credentialed: true, error: 'boom' },

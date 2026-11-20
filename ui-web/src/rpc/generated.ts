@@ -402,6 +402,10 @@ export interface ExtSkillRow {
    */
   hub: boolean;
   hub_id: string;
+  /**
+   * On skillForge.blocklist, so retrieval and injection skip it. The row is still listed here because this is the surface a person turns it back on from.
+   */
+  blocked: boolean;
 }
 export interface ExtToolRow {
   name: string;

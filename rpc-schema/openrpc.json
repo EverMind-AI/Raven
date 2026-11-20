@@ -13562,6 +13562,10 @@
           },
           "hub_id": {
             "type": "string"
+          },
+          "blocked": {
+            "description": "On skillForge.blocklist, so retrieval and injection skip it. The row is still listed here because this is the surface a person turns it back on from.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -13570,7 +13574,8 @@
           "source",
           "always",
           "hub",
-          "hub_id"
+          "hub_id",
+          "blocked"
         ],
         "type": "object"
       },

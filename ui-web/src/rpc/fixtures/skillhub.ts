@@ -123,7 +123,7 @@ export function createSkillhub(env: FixtureEnv, ext: ExtFixture): SkillhubFixtur
         const e = HUB_FIXTURE.find((h) => h.id === p.id)
         if (e && !ext.skills.some((s) => s.name === e.name)) {
           ext.skills.push({ name: e.name, description: e.description, source: e.source,
-            always: false, hub: true, hub_id: e.id })
+            always: false, hub: true, hub_id: e.id, blocked: false })
         }
         return {
           name: e ? e.name : '', path: `~/.raven/skills/${e ? e.name : ''}`, files: ['SKILL.md'],

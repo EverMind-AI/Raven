@@ -282,6 +282,55 @@ async def test_ext_list_calls_a_skill_hub_installed_whichever_installer_stamped_
     assert (by_name["by-hand"]["hub"], by_name["by-hand"]["hub_id"]) == (False, "")
 
 
+async def test_ext_list_says_which_rows_the_runtime_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """This listing keeps blocked skills on purpose -- the page is where a
+    person turns one back on -- so each row has to say whether retrieval
+    skipped it. Read from the catalog's live reader, which is the list the
+    runtime applied: a re-read of the config file disagrees with it on case and
+    whitespace, and the row would then be marked the wrong way."""
+    from raven.memory_engine.skill_forge import LocalSkillCatalog
+    from raven.rpc.models import ExtSkillRow
+
+    workspace = tmp_path / "workspace"
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+    for name in ("hidden", "kept"):
+        skill_dir = workspace / "skills" / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"---\nname: {name}\ndescription: d\n---\n\nBody text.\n")
+
+    catalog = LocalSkillCatalog(
+        workspace,
+        builtin_skills_dir=builtin,
+        start_watcher=False,
+        blocklist_reader=lambda: frozenset({"hidden"}),
+    )
+
+    from raven.config import loader as config_loader
+    from raven.config import raven as raven_config
+
+    monkeypatch.setattr(config_loader, "load_config", lambda: SimpleNamespace(tools=SimpleNamespace(mcp_servers={})))
+    monkeypatch.setattr(
+        raven_config,
+        "load_raven_config",
+        lambda: SimpleNamespace(skill_forge=None, plugins=SimpleNamespace(disabled=[])),
+    )
+    monkeypatch.setattr(console_module, "_hub_marker_name", lambda: None)
+    loop = SimpleNamespace(
+        context=SimpleNamespace(skills=catalog),
+        tools=SimpleNamespace(tool_names=[], get=lambda _name: None),
+    )
+
+    result = await console_module.ext_list({}, agent_loop_factory=lambda: loop)
+
+    rows = {s["name"]: s for s in result["skills"]}
+    assert set(rows) == {"hidden", "kept"}, "the listing keeps blocked skills, so both rows must be here"
+    assert rows["hidden"]["blocked"] is True
+    assert rows["kept"]["blocked"] is False
+    for row in rows.values():
+        ExtSkillRow.model_validate(row)
+
+
 # ---------------------------------------------------------------------------
 # system.upgrade refuses outside a running gateway
 # ---------------------------------------------------------------------------

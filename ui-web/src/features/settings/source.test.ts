@@ -310,7 +310,7 @@ describe('settings source', () => {
 
   it('the snapshot carries the wire rows the inventory read, untouched', async () => {
     const mod = await load({ 'ext.list': {
-      skills: [{ name: 's', description: 'd', source: 'builtin', always: true, hub: false, hub_id: '' }],
+      skills: [{ name: 's', description: 'd', source: 'builtin', always: true, hub: false, hub_id: '', blocked: false }],
       plugins: [], tools: [],
       mcp: [{ name: 'm', transport: 'http', state: 'connected', connected: true, tool_count: 1, enabled: true, auth: 'oauth', credentialed: false }],
     } })

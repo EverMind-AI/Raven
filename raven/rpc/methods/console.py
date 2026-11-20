@@ -32,6 +32,7 @@ from raven.rpc.files import UPLOAD_DIR as _UPLOAD_DIR
 from raven.rpc.files import viewer_root as _viewer_root_from
 from raven.rpc.files import workspace_root as _workspace_root
 from raven.rpc.folder_dialog import pick_dir_argv
+from raven.skill_hub.policy import is_blocked
 from raven.utils.atomic_io import atomic_update
 
 if TYPE_CHECKING:
@@ -152,6 +153,12 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
         marker_name = _hub_marker_name()
         meta_name = _install_meta_name()
         try:
+            # This listing keeps blocked skills on purpose -- the page is how a
+            # person finds one and turns it back on -- so it has to say which
+            # they are. Asked of the catalog, not of the config file: the
+            # catalog's reader is the list the runtime enforced, so a raw copy
+            # that differs in case or whitespace cannot mark the wrong row.
+            blocked_now = getattr(catalog, "blocklist", frozenset())
             for m in catalog.gather_all_skills():
                 path = getattr(m, "path", None)
                 hub_id = ""
@@ -174,6 +181,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
                         "always": bool(getattr(m, "always", False)),
                         "hub": from_market or from_bundle,
                         "hub_id": hub_id,
+                        "blocked": is_blocked(blocked_now, m.name),
                     }
                 )
         except Exception:

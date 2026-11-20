@@ -211,6 +211,18 @@ class LocalSkillCatalog:
         return is_blocked(self._current_blocklist(), name)
 
     @property
+    def blocklist(self) -> frozenset[str]:
+        """The names this catalog currently hides, from the live reader.
+
+        The surfaces that deliberately keep blocked skills
+        (:meth:`gather_all_skills`) mark them through this rather than
+        re-reading the config file: the reader is what retrieval applied, and
+        a page-side copy of the raw list drifts from it on case, surrounding
+        whitespace and the legacy block spellings the loader normalizes.
+        """
+        return self._current_blocklist()
+
+    @property
     def registry(self) -> SkillRegistry:
         return self._registry
 

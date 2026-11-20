@@ -4725,6 +4725,13 @@ class ExtSkillRow(_Strict):
     always: bool
     hub: bool = Field(..., description="Installed from the skill hub, so skillhub.remove can uninstall it.")
     hub_id: str
+    blocked: bool = Field(
+        ...,
+        description=(
+            "On skillForge.blocklist, so retrieval and injection skip it. The row is still listed here "
+            "because this is the surface a person turns it back on from."
+        ),
+    )
 
 
 class ExtPluginRow(_Strict):
