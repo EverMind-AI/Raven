@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from raven.utils.image_store import IMAGE_REFS_KEY
 from raven.utils.images import is_image_part, is_inline_image
 
 # Marks the synthetic user message that carries images a transport cannot put in
@@ -29,8 +30,10 @@ ATTACHED_IMAGE_KEY = "_attached_image"
 #: transcript and read when it leaves it, so the note that stands in for a withdrawn
 #: picture can say which tool showed which page in which round. Not sent (the
 #: provider allow-list drops it) and not filed in the session (``_save_turn`` pops
-#: it): the picture lives for the turn only, and so does its provenance. The
-#: tracing ``llm.input`` artifact records the request as handed to the provider,
+#: it): the provenance lives for the turn only, while the picture itself is
+#: archived in the message's private refs and replayed from them. The tracing
+#: ``llm.input`` artifact
+#: records the request as handed to the provider,
 #: before the allow-list, so on a stock install the entries do appear there,
 #: beside the pictures they describe.
 IMAGE_SOURCES_KEY = "_image_sources"
@@ -160,4 +163,5 @@ def without_pictures(message: dict[str, Any], *, reason: str = "superseded", kee
         parts.append({"type": "text", "text": note})
     clean = dict(message)
     clean["content"] = parts
+    clean.pop(IMAGE_REFS_KEY, None)
     return clean

@@ -1,7 +1,8 @@
 """read_file's image branch: preprocessing, capability routing, persistence.
 
-Covers the invariant that makes the feature safe to ship — base64 reaches the
-model for exactly one turn and never reaches disk.
+Covers the invariant that makes the feature safe to ship: base64 reaches the
+model and is archived in the session's private image refs, while the display
+content keeps the placeholder.
 """
 
 from __future__ import annotations
@@ -374,9 +375,10 @@ def test_strip_inline_images_leaves_remote_urls_alone() -> None:
 
 
 @pytest.mark.parametrize("role", ["tool", "user"])
-def test_save_turn_never_writes_base64_to_the_session(role: str, tmp_path: Path) -> None:
-    """Regression: a list-shaped tool result skipped the char-cap guard entirely,
-    so a multi-megabyte data URI landed in the JSONL — unrecoverably."""
+def test_save_turn_keeps_base64_out_of_the_display_content(role: str, tmp_path: Path) -> None:
+    """The display content keeps a placeholder; the exact data URI is archived in
+    the message's private refs. A list-shaped result skipped the char cap, so the
+    split is what keeps a multi-megabyte URI out of transcript views."""
     from unittest.mock import MagicMock
 
     from raven.agent.loop.main import AgentLoop
@@ -406,8 +408,259 @@ def test_save_turn_never_writes_base64_to_the_session(role: str, tmp_path: Path)
     assert {"type": "text", "text": "[image]"} in stored
     # The path survives, so the model can ask to see the image again.
     assert any("/tmp/x.png" in str(part) for part in stored)
+    assert session.messages[0]["_image_refs"][0]["url"] == big
     # And the in-flight message still holds the picture.
     assert messages[0]["content"][1]["type"] == "image_url"
+
+
+# --------------------------------------------------------------------------
+# exact replay of inline images
+# --------------------------------------------------------------------------
+
+
+def _png_header(width: int = 1000, height: int = 1000) -> bytes:
+    return b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0dIHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big")
+
+
+def _data_uri(raw: bytes, mime: str = "image/png") -> str:
+    return f"data:{mime};base64,{base64.b64encode(raw).decode()}"
+
+
+def _saving_loop(tmp_path: Path):
+    from datetime import datetime
+    from unittest.mock import MagicMock
+
+    from raven.agent.loop.main import AgentLoop
+
+    loop = object.__new__(AgentLoop)
+    loop._now_fn = MagicMock(return_value=datetime(2026, 11, 20, 12, 0))
+    loop.workspace = tmp_path
+    return loop
+
+
+def test_tool_image_is_saved_as_a_ref_and_replayed_byte_identical(tmp_path: Path) -> None:
+    from raven.agent.loop.main import AgentLoop
+    from raven.context_engine.history_trimmer import HistoryTrimmer
+    from raven.session.manager import Session
+
+    uri = _data_uri(_png_header())
+    live = [
+        {"type": "text", "text": "a chart"},
+        {"type": "image_url", "image_url": {"url": uri, "detail": "high"}},
+    ]
+    session = Session(key="cli:u")
+
+    AgentLoop._save_turn(
+        _saving_loop(tmp_path),
+        session,
+        [{"role": "tool", "tool_call_id": "c1", "name": "read_file", "content": live}],
+        0,
+    )
+
+    saved = session.messages[0]
+    assert saved["content"] == [{"type": "text", "text": "a chart"}, {"type": "text", "text": "[image]"}]
+    assert "base64" not in json.dumps(saved["content"])
+    ref = saved["_image_refs"][0]
+    assert ref["at"] == 1
+    assert ref["url"] == uri
+
+    replayed = HistoryTrimmer.history_from_ids(session.messages, [0])[0]
+    assert replayed["content"] == live
+    assert "_image_refs" not in replayed
+
+
+def test_the_session_archives_the_exact_image_wire_form(tmp_path: Path) -> None:
+    from raven.agent.loop.main import AgentLoop
+    from raven.context_engine.history_trimmer import HistoryTrimmer
+    from raven.session.manager import Session
+    from raven.utils.images import image_block
+
+    uri = _data_uri(_png_header())
+    session = Session(key="cli:u")
+    AgentLoop._save_turn(
+        _saving_loop(tmp_path),
+        session,
+        [{"role": "tool", "tool_call_id": "c1", "content": [image_block(uri)]}],
+        0,
+    )
+
+    saved = session.messages[0]
+    assert saved["content"] == [{"type": "text", "text": "[image]"}]
+    assert saved["_image_refs"][0]["url"] == uri
+    assert uri in json.dumps(saved)
+    assert "_image_store" not in saved
+    media = tmp_path / "media"
+    assert not media.exists() or not any(media.rglob("*"))
+
+    replayed = HistoryTrimmer.history_from_ids(session.messages, [0])[0]
+    assert replayed["content"] == [image_block(uri)]
+
+
+def test_user_image_with_runtime_context_replays_the_sent_message(tmp_path: Path) -> None:
+    from raven.agent.context import ContextBuilder
+    from raven.agent.loop.main import AgentLoop
+    from raven.context_engine.history_trimmer import HistoryTrimmer
+    from raven.context_engine.runtime_context import RUNTIME_CONTEXT_KEY, with_runtime_context
+    from raven.session.manager import Session
+    from raven.utils.images import image_block
+
+    tag = ContextBuilder._RUNTIME_CONTEXT_TAG
+    lines = f"{tag}\nCurrent Time: 2026-11-20 12:00 (Friday) (UTC)\nChat ID: u"
+    live = with_runtime_context(
+        lines,
+        [image_block(_data_uri(_png_header())), {"type": "text", "text": "what is this?"}],
+    )
+    session = Session(key="cli:u")
+
+    AgentLoop._save_turn(
+        _saving_loop(tmp_path),
+        session,
+        [{"role": "user", "content": live, RUNTIME_CONTEXT_KEY: lines}],
+        0,
+    )
+
+    saved = session.messages[0]
+    assert "base64" not in json.dumps(saved["content"])
+    assert saved["_image_refs"][0]["url"] == live[1]["image_url"]["url"]
+    assert saved["runtime_context"] == lines
+    assert [part.get("text") for part in saved["content"]] == ["[image]", "what is this?"]
+
+    replayed = HistoryTrimmer.history_from_ids(session.messages, [0])[0]
+    assert replayed["content"] == live
+
+
+def test_missing_image_url_falls_back_to_the_placeholder(tmp_path: Path) -> None:
+    from raven.agent.loop.main import AgentLoop
+    from raven.context_engine.history_trimmer import HistoryTrimmer
+    from raven.session.manager import Session
+    from raven.utils.images import image_block
+
+    session = Session(key="cli:u")
+    AgentLoop._save_turn(
+        _saving_loop(tmp_path),
+        session,
+        [{"role": "tool", "tool_call_id": "c1", "content": [image_block(_data_uri(_png_header()))]}],
+        0,
+    )
+
+    saved = session.messages[0]
+    saved["_image_refs"][0].pop("url")
+
+    replayed = HistoryTrimmer.history_from_ids(session.messages, [0])[0]
+    assert replayed["content"] == [{"type": "text", "text": "[image]"}]
+
+
+def test_saved_image_message_keeps_its_token_weight(tmp_path: Path) -> None:
+    from raven.agent.loop.main import AgentLoop
+    from raven.session.manager import Session
+    from raven.utils.images import image_block
+    from raven.utils.tokens import estimate_message_tokens
+
+    live = {"role": "tool", "tool_call_id": "c1", "content": [image_block(_data_uri(_png_header()))]}
+    session = Session(key="cli:u")
+    AgentLoop._save_turn(_saving_loop(tmp_path), session, [live], 0)
+
+    saved_tokens = estimate_message_tokens(session.messages[0])
+    live_tokens = estimate_message_tokens(live)
+    assert saved_tokens >= live_tokens
+    assert saved_tokens - live_tokens <= 3
+
+
+def test_malformed_image_url_falls_back_to_the_placeholder(tmp_path: Path) -> None:
+    from raven.agent.loop.main import AgentLoop
+    from raven.context_engine.history_trimmer import HistoryTrimmer
+    from raven.session.manager import Session
+    from raven.utils.images import image_block
+
+    session = Session(key="cli:u")
+    AgentLoop._save_turn(
+        _saving_loop(tmp_path),
+        session,
+        [{"role": "tool", "tool_call_id": "c1", "content": [image_block(_data_uri(_png_header()))]}],
+        0,
+    )
+
+    saved = session.messages[0]
+    saved["_image_refs"][0]["url"] = "not a data uri"
+
+    replayed = HistoryTrimmer.history_from_ids(session.messages, [0])[0]
+    assert replayed["content"] == [{"type": "text", "text": "[image]"}]
+
+
+def test_malformed_image_ref_extras_do_not_crash_replay(tmp_path: Path) -> None:
+    from raven.agent.loop.main import AgentLoop
+    from raven.context_engine.history_trimmer import HistoryTrimmer
+    from raven.session.manager import Session
+    from raven.utils.images import image_block
+
+    uri = _data_uri(_png_header())
+    session = Session(key="cli:u")
+    AgentLoop._save_turn(
+        _saving_loop(tmp_path),
+        session,
+        [{"role": "tool", "tool_call_id": "c1", "content": [image_block(uri)]}],
+        0,
+    )
+
+    saved = session.messages[0]
+    saved["_image_refs"][0]["part"] = "not a mapping"
+    saved["_image_refs"][0]["image_url"] = ["not", "a", "mapping"]
+    assert HistoryTrimmer.history_from_ids(session.messages, [0])[0]["content"] == [image_block(uri)]
+
+    saved["_image_refs"][0]["part"] = {"image_url": "bad", "type": "text"}
+    saved["_image_refs"][0]["image_url"] = {"url": "data:image/png;base64,bad", "detail": "high"}
+    replayed = HistoryTrimmer.history_from_ids(session.messages, [0])[0]
+    assert replayed["content"] == [{"type": "image_url", "image_url": {"url": uri, "detail": "high"}}]
+
+
+def test_session_jsonl_archives_the_image_and_reloads_the_picture(tmp_path: Path) -> None:
+    from raven.agent.loop.main import AgentLoop
+    from raven.context_engine.history_trimmer import HistoryTrimmer
+    from raven.session.manager import SessionManager
+
+    workspace = tmp_path / "ws"
+    manager = SessionManager(workspace)
+    session = manager.get_or_create("cli:u")
+    uri = _data_uri(_png_header())
+    live = [{"type": "text", "text": "a chart"}, {"type": "image_url", "image_url": {"url": uri}}]
+    AgentLoop._save_turn(
+        _saving_loop(workspace),
+        session,
+        [{"role": "tool", "tool_call_id": "c1", "content": live}],
+        0,
+    )
+    manager.save(session)
+
+    text = manager.session_path("cli:u").read_text(encoding="utf-8")
+    assert uri in text
+
+    reloaded = SessionManager(workspace).get_or_create("cli:u")
+    ids = [index for index, message in enumerate(reloaded.messages) if message.get("role") == "tool"]
+    assert "base64" not in json.dumps(reloaded.messages[ids[0]]["content"])
+    assert HistoryTrimmer.history_from_ids(reloaded.messages, ids)[0]["content"] == live
+
+
+def test_remote_image_url_is_not_copied_or_rewritten(tmp_path: Path) -> None:
+    from raven.agent.loop.main import AgentLoop
+    from raven.context_engine.history_trimmer import HistoryTrimmer
+    from raven.session.manager import Session
+
+    live = [
+        {"type": "text", "text": "a chart"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+    ]
+    session = Session(key="cli:u")
+    AgentLoop._save_turn(
+        _saving_loop(tmp_path),
+        session,
+        [{"role": "tool", "tool_call_id": "c1", "content": live}],
+        0,
+    )
+
+    saved = session.messages[0]
+    assert saved["content"] == live
+    assert "_image_refs" not in saved
+    assert HistoryTrimmer.history_from_ids(session.messages, [0])[0]["content"] == live
 
 
 # --------------------------------------------------------------------------

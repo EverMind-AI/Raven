@@ -455,7 +455,10 @@ def test_a_multipart_picture_row_is_filed_with_its_text_and_a_placeholder(tmp_pa
         {"type": "text", "text": "[image]"},
     ]
     assert any(row.get("content") == "done" for row in rows), "the row after the picture was filed"
-    assert "base64" not in path.read_text(encoding="utf-8")
+    # The display content carries no picture bytes. The archived copy lives in
+    # the row's private refs, which are what a replay expands.
+    assert "base64" not in json.dumps([row.get("content") for row in rows])
+    assert filed_picture["_image_refs"][0]["url"].startswith("data:image/png;base64,")
 
 
 def test_a_row_rewritten_after_it_was_filed_is_filed_in_its_new_form(tmp_path):

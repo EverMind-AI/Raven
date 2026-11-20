@@ -982,10 +982,9 @@ def build_user_content(
     so their paths are surfaced as a text note for the model to read on demand.
 
     Each image also gets its path named in the text, the same way non-image
-    attachments already do. The base64 lives for exactly this turn — it is
-    replaced by a placeholder on the way into the session — so without the path
-    the model loses any way to look at the picture again, and a follow-up
-    question about it has nothing to work from.
+    attachments already do. The base64 is archived in the session's private
+    image refs and replayed from them; the path is what lets the model read the
+    file again after the message is compacted away.
 
     ``can_see_images=False`` (the model has no vision) turns a picture into the
     same kind of note the other attachments get. Said out loud rather than
