@@ -384,7 +384,14 @@ _ITERATION_CAP_FROM_LOOP = object()
 #: row the loop holds (tool bodies are truncated on the way in).
 #: Loop name -> stored name. A row is written under the stored spelling, so a
 #: patch restates the key the file (and every reader) knows.
-_LATE_STAMP_KEYS = {"_replied_via_tool": REPLIED_VIA_TOOL, "observers": "observers"}
+_LATE_STAMP_KEYS = {
+    "_replied_via_tool": REPLIED_VIA_TOOL,
+    "observers": "observers",
+    _REASONING_MS_KEY: "reasoning_ms",
+    _TOOL_DURATION_MS_KEY: "duration_ms",
+    _CONTEXT_USED_KEY: "context_used",
+    _CONTEXT_PARTS_KEY: "context_parts",
+}
 
 
 def _stamp_context_used_on_kept(
@@ -4009,6 +4016,10 @@ class TurnPathMixin:
                     stored.update(patch["keys"])
 
         live["filed_ids"].update(self._save_turn(session, turn_msgs, filed_upto))
+        # Filing detail only: the rows the rest of the turn reads carry no key
+        # the file uses to write them under.
+        for row in getattr(session, "messages", ()):
+            row.pop("_row_id", None)
         turn_entries = session.messages[_turn_start() :]
         self.sessions.save(session)
         await self.harness.memory.after_turn(
@@ -4512,9 +4523,7 @@ class TurnPathMixin:
         # A row already on disk is never written twice: the incremental writer
         # and this one can disagree about where the filed prefix ends when the
         # record was rewritten mid-turn, and the identifier settles it.
-        already_filed = {
-            str(row.get("_row_id")) for row in getattr(session, "messages", ()) if row.get("_row_id")
-        }
+        already_filed = {str(row.get("_row_id")) for row in getattr(session, "messages", ()) if row.get("_row_id")}
         first_user_pending = received_at is not None
         # The turn's first user entry is the inbound message; hooks may have
         # rewritten what the model saw (a memo prepended, a reminder appended),

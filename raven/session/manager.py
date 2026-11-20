@@ -653,6 +653,10 @@ def read_session_file(path: Path, key: str) -> Session | None:
                 keys = patch.get("keys")
                 if index is not None and isinstance(keys, dict):
                     messages[index].update(keys)
+        # The identifier is a filing detail: readers get the rows the loop
+        # knows, without the key the file is written under.
+        for row in messages:
+            row.pop("_row_id", None)
         messages = repair_dangling_tool_calls(messages)
         session = Session(
             key=key,
