@@ -47,6 +47,7 @@ from raven.agent.window.images import without_pictures
 from raven.utils.images import is_image_part
 
 TURN_LOG_KEY = "_turn_log_seq"
+ROW_ID_KEY = "_row_id"
 """The stamp. Underscored so no provider payload carries it (every transport
 sends an allowlist of keys); the copies :meth:`TurnLog.messages` hands out do
 not carry it."""
@@ -138,6 +139,31 @@ class TurnLog:
             self._mark = len(messages)
         self._sync(messages)
 
+    def adopt_appended(self, messages: list[dict[str, Any]]) -> None:
+        """Follow ``messages`` only where it is the log's own list grown at the end.
+
+        The loop's last call may hand back a new list object rather than append
+        to the one the log follows, and that list can also be a window pass's
+        shrunken copy. A grown list is adopted and its appended rows recorded;
+        a shorter one, or one that differs anywhere before the end, is a view of
+        the record rather than the record and is left alone.
+        """
+        prior = self._live
+        if messages is prior:
+            self._sync(messages)
+            return
+        shared = min(len(prior), len(messages))
+        grown = len(messages) > len(prior)
+        same = all(
+            messages[index] is prior[index] or messages[index].get(TURN_LOG_KEY) == prior[index].get(TURN_LOG_KEY)
+            for index in range(shared)
+        )
+        if not (grown and same):
+            return
+        self._live = messages
+        self._mark = shared
+        self._sync(messages)
+
     def messages(self, transient_keys: Iterable[str] = ()) -> list[dict[str, Any]]:
         """The turn as it happened: the opening messages, then every message the
         turn added, in order, each in its latest version that is still itself.
@@ -217,6 +243,10 @@ class TurnLog:
                 continue
             seq = f"{self._token}:{len(self._entries)}"
             m[TURN_LOG_KEY] = seq
+            # The identifier a later turn_meta names this row by: the session
+            # file keeps it, and the turn's end can restate a stamp on a row it
+            # can no longer reach as a list position.
+            m.setdefault(ROW_ID_KEY, uuid.uuid4().hex[:16])
             self._index[seq] = len(self._entries)
             self._entries.append(m)
         self._mark = len(messages)
@@ -231,4 +261,4 @@ def _unstamped(message: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in message.items() if k != TURN_LOG_KEY}
 
 
-__all__ = ["OPENING_KEY", "STAND_IN_KEY", "TURN_LOG_KEY", "TurnLog"]
+__all__ = ["OPENING_KEY", "ROW_ID_KEY", "STAND_IN_KEY", "TURN_LOG_KEY", "TurnLog"]
