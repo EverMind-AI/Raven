@@ -1,5 +1,6 @@
 """Configuration schema using Pydantic."""
 
+import os
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args
 from urllib.parse import urlparse
@@ -413,6 +414,11 @@ class ProviderConfig(Base):
     """LLM provider configuration."""
 
     api_key: str = ""
+    # A variable that holds the key instead of this field, for a deployment
+    # whose keys live in a secret manager: config.json then carries a name,
+    # not the credential. Mutually exclusive with api_key, so a section
+    # states exactly one source (see _one_key_source).
+    api_key_env: str | None = None
     api_base: str | None = None
     # Optional wire default. When omitted, GPT models use Responses and Claude
     # models use Anthropic Messages; model_protocols can override either rule.
@@ -478,6 +484,33 @@ class ProviderConfig(Base):
 
         return {str(model): normalize_protocol(protocol) for model, protocol in value.items()}
 
+    @model_validator(mode="after")
+    def _one_key_source(self) -> "ProviderConfig":
+        """A section states exactly one key source, so neither can mask the other."""
+        if self.api_key and self.api_key_env:
+            raise ValueError("set apiKey or apiKeyEnv, not both")
+        return self
+
+    def _key_from_env(self) -> str:
+        """The value ``api_key_env`` names, which must be set and non-empty.
+
+        Raised here rather than letting an empty key reach the wire: LiteLLM
+        is handed ``api_key or "no-key"``, so a missing variable would fail
+        at the API as an auth error instead of naming the variable.
+        MissingCredentialsError, not ValueError, so the CLI, gateway and TUI
+        render it the way every other credential refusal is rendered.
+        """
+        from raven.providers.auth import MissingCredentialsError
+
+        name = self.api_key_env or ""
+        value = os.environ.get(name, "")
+        if not value:
+            raise MissingCredentialsError(
+                f"the environment variable {name!r} that apiKeyEnv names is not set",
+                remedy=f"Export {name}, or clear apiKeyEnv and set apiKey instead.",
+            )
+        return value
+
     @property
     def effective_api_key(self) -> str:
         """The key to send, which is not always the ``api_key`` field.
@@ -486,8 +519,12 @@ class ProviderConfig(Base):
         providers keep their key somewhere else. Gemini accepts a list, and a
         section holding only that list handed LiteLLM an empty string: the
         request left with no credential and failed at the API, having passed
-        every check that only asked whether credentials existed.
+        every check that only asked whether credentials existed. A set
+        ``api_key_env`` wins over both, resolved here in memory at the build
+        the factory does -- the credential never has to sit in config.json.
         """
+        if self.api_key_env:
+            return self._key_from_env()
         return self.api_key
 
 
@@ -525,6 +562,8 @@ class GeminiProviderConfig(ProviderConfig):
 
     @property
     def effective_api_key(self) -> str:
+        if self.api_key_env:
+            return self._key_from_env()
         if self.api_key_list:
             return self.api_key_list[0]
         return self.api_key

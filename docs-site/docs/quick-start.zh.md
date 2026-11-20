@@ -153,6 +153,24 @@ base URL 改指向 Anthropic 兼容端点也不会切换它的协议——每个
 一个 `protocol: anthropic`、`apiBase` 指向上述地址的服务商，可以在**设置 >
 模型服务商（Settings > Model providers）**中添加，也可以在
 `~/.raven/config.json` 里加一节。
+### 密钥放在环境变量里 { #keys-kept-in-an-environment-variable }
+
+把密钥放在秘密管理服务里的部署，不必再把密钥本身写进 `config.json`：在服务商
+配置段写变量名而不是值——设置 `apiKeyEnv`，Raven 在构建该服务商时于内存中
+解析它。
+
+```json
+{
+  "providers": {
+    "anthropic": { "apiKeyEnv": "ANTHROPIC_API_KEY" }
+  }
+}
+```
+
+在 Raven 运行的地方导出该变量（写进 shell 配置文件或服务单元），让 Raven 启动
+的每个进程都能收到。一个配置段只能写 `apiKey` 或 `apiKeyEnv` 之一，不能两者
+都写。变量未设置或为空时，Raven 会拒绝启动并点名该变量，而不是把空密钥发给
+API。
 
 ### 公司代理或私有 CA { #behind-a-corporate-proxy-or-private-ca }
 
