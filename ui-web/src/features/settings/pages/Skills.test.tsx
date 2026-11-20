@@ -113,9 +113,43 @@ describe('skills page', () => {
     expect(screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' })).toBe(hub)
   })
 
-  it('reads the blocklist from a snake_case skill_forge block', async () => {
-    /* A null camel block is dropped by the loader, so the snake one is what
-       runs; the page has to read the first non-null spelling, not truthiness. */
+  it('draws each row from the wire answer, not from the config file', async () => {
+    /* The runtime normalises the file's list before hiding a skill, and it
+       hides on a name that may differ in case or padding from the stored
+       entry. The rows carry the answer that was applied, so the page reads
+       them rather than re-deriving the set from the file. */
+    const data = snap()
+    data.raw.skillForge = { blocklist: ['git-flow'] }
+    data.skills = data.skills.map((r) => ({ ...r, blocked: r.name === 'notes' }))
+    install(data)
+    await mount('skills')
+    expect(screen.getByRole('switch', { name: 'git-flow' }).getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByRole('switch', { name: 'notes' }).getAttribute('aria-checked')).toBe('false')
+    const cards = [...document.querySelectorAll('.settings-card .settings-t')].map((el) => el.textContent)
+    expect(cards).toEqual([
+      'gui.settings.skills.hub_card',
+      'gui.settings.skills.builtin · 1',
+      'gui.settings.skills.workspace · gui.settings.skills.on_of {"on":1,"total":2}',
+    ])
+  })
+
+  it('turning a row on drops the file entry whatever case or padding it was typed with', async () => {
+    /* The runtime matches a blocked name case-insensitively and trimmed. A
+       write that compared exactly would leave a typed ` SIMPLE ` in the list,
+       so the switch would say on while the skill stayed blocked. */
+    const data = snap()
+    data.raw.skillForge = { blocklist: ['hidden-one', ' SIMPLE '] }
+    data.skills = data.skills.map((r) => (r.name === 'notes' ? { ...r, name: 'simple', blocked: true } : r))
+    const { calls } = install(data)
+    await mount('skills')
+    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'simple' })) })
+    expect(calls).toEqual([['set', { key: 'skillForge.blocklist', value: ['hidden-one'] }]])
+  })
+
+  it('a write starts from a snake_case skill_forge block, whatever the page draws', async () => {
+    /* The page draws the rows' wire answer; a write replaces the file's own
+       list, so it still has to read the spelling the file uses. A null camel
+       block is dropped by the loader, so the snake one is what runs. */
     expect(blocklist({ skillForge: null, skill_forge: { blocklist: ['git-flow'] } })).toEqual(['git-flow'])
     const data = snap()
     delete data.raw.skillForge
@@ -123,16 +157,10 @@ describe('skills page', () => {
     expect(blocklist(data.raw)).toEqual(['git-flow', 'notes'])
     const { calls } = install(data)
     await mount('skills')
-    const cards = [...document.querySelectorAll('.settings-card .settings-t')].map((el) => el.textContent)
-    expect(cards).toEqual([
-      'gui.settings.skills.hub_card',
-      'gui.settings.skills.builtin · gui.settings.skills.on_of {"on":0,"total":1}',
-      'gui.settings.skills.workspace · gui.settings.skills.on_of {"on":1,"total":2}',
-    ])
-    expect(screen.getByRole('switch', { name: 'git-flow' }).getAttribute('aria-checked')).toBe('false')
-    /* The write carries the list the page read, not [] beside the real one. */
+    /* git-flow is on in the rows, so the click turns it off and sends the
+       file's list with it added, not a bare ['git-flow'] beside the real one. */
     await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'git-flow' })) })
-    expect(calls).toEqual([['set', { key: 'skillForge.blocklist', value: ['notes'] }]])
+    expect(calls).toEqual([['set', { key: 'skillForge.blocklist', value: ['notes', 'git-flow'] }]])
   })
 
   it('the detail inspects the skill, renders its body, lists its files and opens one on the host', async () => {

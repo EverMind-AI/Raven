@@ -158,7 +158,10 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
             # they are. Asked of the catalog, not of the config file: the
             # catalog's reader is the list the runtime enforced, so a raw copy
             # that differs in case or whitespace cannot mark the wrong row.
-            blocked_now = getattr(catalog, "blocklist", frozenset())
+            # Read as an attribute, not through a default: a catalog that cannot
+            # answer this cannot be described, and defaulting to empty would
+            # report every row as active.
+            blocked_now = catalog.blocklist
             for m in catalog.gather_all_skills():
                 path = getattr(m, "path", None)
                 hub_id = ""

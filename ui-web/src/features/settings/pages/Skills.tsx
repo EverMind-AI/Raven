@@ -55,19 +55,28 @@ const TRIGGER: Record<string, string> = {
   rpc: 'gui.settings.skills.trig_rpc',
 }
 
+/* The write replaces the file's whole list, so it starts from the file's list;
+   the comparison is folded because the runtime matches a blocked name
+   case-insensitively, and the stored entry keeps whatever spelling was typed. */
+const fold = (name: string): string => name.trim().toLowerCase()
+
 function SkillSwitch({ name, off }: { name: string; off: boolean }): JSX.Element {
   const flip = (on: boolean): void => {
-    const list = blocklist(store.get().snap.raw)
-    const next = on ? list.filter((n) => n !== name) : [...list.filter((n) => n !== name), name]
-    void store.write('skillForge.blocklist', next, { remount: false })
+    const kept = blocklist(store.get().snap.raw).filter((n) => fold(n) !== fold(name))
+    void store.write('skillForge.blocklist', on ? kept : [...kept, name], { remount: false })
   }
   return <Switch on={!off} label={name} onChange={flip} />
 }
 
+/* The rows are the runtime's answer: the catalog normalises the blocklist
+   (case, surrounding whitespace, the legacy block spelling) before hiding a
+   skill, so a page-side copy of the file marks the wrong row. */
+const blockedRows = (rows: SkillRow[]): Set<string> => new Set(rows.filter((r) => r.blocked).map((r) => r.name))
+
 function SkillList(): JSX.Element {
   const s = store.get()
   const q = s.skq.trim().toLowerCase()
-  const blocked = new Set(blocklist(s.snap.raw))
+  const blocked = blockedRows(s.snap.skills)
   const matches = (r: SkillRow): boolean =>
     !q || r.name.toLowerCase().includes(q) || (r.description || '').toLowerCase().includes(q)
   const all: Array<[string, SkillRow[]]> = [
@@ -125,7 +134,7 @@ function SkillDetailView({ name }: { name: string }): JSX.Element {
   const s = store.get()
   const row = s.snap.skills.find((r) => r.name === name)
   const d = s.detail
-  const off = blocklist(s.snap.raw).includes(name)
+  const off = row ? row.blocked : false
   const back = (): void => store.set({ skill: null, detail: null })
   const uninstall = (): void => {
     confirm.ask(

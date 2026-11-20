@@ -142,7 +142,7 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     ],
     skills: [
       { name: 'git-flow', description: 'Branch and merge the house way', source: 'builtin', always: true, hub: false, hub_id: '', blocked: false },
-      { name: 'sql-style', description: 'Names and indents for the database', source: 'workspace', always: false, hub: true, hub_id: 'sh-sql-style', blocked: false },
+      { name: 'sql-style', description: 'Names and indents for the database', source: 'workspace', always: false, hub: true, hub_id: 'sh-sql-style', blocked: true },
       { name: 'notes', description: 'Personal notes', source: 'workspace', always: false, hub: false, hub_id: '', blocked: false },
     ],
     mcp: [

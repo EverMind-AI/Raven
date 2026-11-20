@@ -270,6 +270,12 @@ export const settingsSource: SettingsSource = {
   set: (key, value) => run((async () => {
     const r = await gateway().call('settings.set', { key, value: value as ParamsOf<'settings.set'>['value'] })
     await loadSettings()
+    /* A blocklist write changes what `ext.list` answers, and the skills page
+       draws each row's switch from that answer. `loadSettings` above re-reads
+       the file only, so without this the switch lands on the value it had and
+       reads as a refused write. Both spellings: the page writes one, a
+       hand-written config may carry the other. */
+    if (key === 'skillForge.blocklist' || key === 'skill_forge.blocklist') await loadExt()
     if (key.startsWith('plugins.config.everos-cloud-memory.')) { cloudProbe = loadEverosCloud(); await cloudProbe }
     void pushPermMode()
     /* Only when the server says a save costs something -- a reload-only key,
