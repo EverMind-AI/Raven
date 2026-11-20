@@ -155,6 +155,7 @@ from raven.spine.turn import AnswerlessTurnError
 from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
 from raven.tracing import config as tracing_config
+from raven.utils.images import is_image_part
 from raven.utils.tokens import estimate_message_tokens, estimate_prompt_tokens
 
 if TYPE_CHECKING:
@@ -3681,6 +3682,19 @@ class TurnPathMixin:
             "filed_ids": set(),
         }
 
+        def _holds_a_picture(messages_now: list[dict], start: int) -> int:
+            """The first row at or after ``start`` that carries a picture.
+
+            Such a row is not written yet: the writer drops pictures, and the
+            window replaces them with a note only after the step has run. Filing
+            it first left the file a body with neither the picture nor the note.
+            """
+            for index in range(start, len(messages_now)):
+                content = messages_now[index].get("content")
+                if isinstance(content, list) and any(is_image_part(part) for part in content):
+                    return index
+            return len(messages_now)
+
         def _persist_progress() -> None:
             """Append what this turn has produced so far, so a kill loses one step, not all of it.
 
@@ -3691,11 +3705,12 @@ class TurnPathMixin:
             log = live["log"]
             skip = live["persisted"]
             messages_now = log.messages()
-            if len(messages_now) <= skip:
+            upto = _holds_a_picture(messages_now, skip)
+            if upto <= skip:
                 return
             try:
-                live["filed_ids"].update(self._save_turn(session, list(messages_now), skip, final=False))
-                live["persisted"] = len(messages_now)
+                live["filed_ids"].update(self._save_turn(session, list(messages_now[:upto]), skip, final=False))
+                live["persisted"] = upto
                 self.sessions.save(session)
             except Exception:
                 logger.exception("incremental session write failed; the turn keeps running")
