@@ -198,7 +198,9 @@ def adopt(
     """
     _register_reaper()
     task_id = f"bg-{int(time.time() * 1000):x}-{os.getpid():x}"
-    task = BackgroundTask(task_id, command, pid, log_path or str(_log_path(task_id)), started_at or time.time(), session_key)
+    task = BackgroundTask(
+        task_id, command, pid, log_path or str(_log_path(task_id)), started_at or time.time(), session_key
+    )
     _OWN.append(task_id)
     _record(task)
     return task

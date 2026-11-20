@@ -846,6 +846,7 @@ def test_without_a_deadline_the_request_is_only_capped_by_the_ceiling(tmp_path):
     assert tool._bounded_timeout(5000) == 600
 
 
+@pytest.mark.slow
 def test_a_timed_out_command_is_adopted_instead_of_killed(tmp_path, monkeypatch):
     """The work is still the session's: it keeps running, its log grows, and
     the result says where to look rather than pretending it died."""
@@ -857,10 +858,10 @@ def test_a_timed_out_command_is_adopted_instead_of_killed(tmp_path, monkeypatch)
     tool = _tool(tmp_path)
 
     async def main() -> str:
-        result = await tool.execute(command="echo first; sleep 2; echo second", timeout=1)
+        result = await tool.execute(command="echo first; sleep 1.2; echo second", timeout=1)
         # The pipes are ours, so the pumping lives on this loop: keep it running
         # past the call the way a live turn does.
-        await asyncio.sleep(2.5)
+        await asyncio.sleep(1.0)
         return str(result)
 
     text = _run(main())
@@ -875,6 +876,7 @@ def test_a_timed_out_command_is_adopted_instead_of_killed(tmp_path, monkeypatch)
     background_exec.reap(task_id)
 
 
+@pytest.mark.slow
 def test_no_time_left_kills_instead_of_adopting(tmp_path, monkeypatch):
     """There is nothing to hand over when the turn's own clock has run out."""
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))

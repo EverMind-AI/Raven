@@ -235,9 +235,7 @@ class CodeExecutor(DirectExecutor):
         left = turn_clock.remaining()
         if left is not None and left <= 0:
             return None
-        task = background_exec.adopt(
-            command, pgid, session_key=turn_clock.session_key() or None
-        )
+        task = background_exec.adopt(command, pgid, session_key=turn_clock.session_key() or None)
         handle = open(task.log_path, "ab", buffering=0)
         handle.write(bytes(out) + bytes(err))
         for drain in drains:
