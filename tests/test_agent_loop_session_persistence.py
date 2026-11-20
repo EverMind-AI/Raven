@@ -179,3 +179,38 @@ def test_a_turn_meta_restates_a_row_by_its_identifier(tmp_path):
     filed = [m for m in session.messages if m.get("content") == "done"]
     assert filed and filed[0]["replied_via_tool"] is True
     assert "_row_id" not in filed[0], "the filing key is not handed to readers"
+
+
+def test_an_incremental_write_stops_before_a_picture():
+    """A picture row waits for the window, which is what names it in the file."""
+    from raven.agent.loop.turn_path import _incremental_upto
+
+    text = {"role": "assistant", "content": "looking"}
+    picture = {"role": "tool", "content": [{"type": "image_url", "image_url": {"url": "data:,"}}]}
+    after = {"role": "assistant", "content": "done"}
+
+    assert _incremental_upto([text, picture, after], 0) == 1
+    assert _incremental_upto([picture, after], 0) is None, "a leading picture leaves nothing to write"
+    assert _incremental_upto([text, after], 0) == 2
+    assert _incremental_upto([text, after], 2) is None, "nothing new is nothing to write"
+
+
+def test_a_grown_list_is_adopted_and_a_shrunken_one_is_not():
+    """The log follows the record grown at the end, never a window's view of it."""
+    from raven.agent.window.turn_log import TurnLog
+
+    opening = {"role": "user", "content": "hi"}
+    live = [opening]
+    log = TurnLog(live, 1)
+
+    appended = [opening, {"role": "assistant", "content": "one"}]
+    log.adopt_appended(appended)
+    assert [m.get("content") for m in log.messages()] == ["hi", "one"]
+
+    shorter = [opening]
+    log.adopt_appended(shorter)
+    assert [m.get("content") for m in log.messages()] == ["hi", "one"], "a shrunken view changes nothing"
+
+    stranger = [{"role": "user", "content": "different"}, {"role": "assistant", "content": "x"}]
+    log.adopt_appended(stranger)
+    assert [m.get("content") for m in log.messages()] == ["hi", "one"], "a list that differs early is a view"

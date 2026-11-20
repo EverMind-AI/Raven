@@ -343,6 +343,22 @@ def _without_scratch(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _incremental_upto(messages: list[dict[str, Any]], start: int) -> int | None:
+    """Where an incremental write stops, or None when it has nothing to write.
+
+    A row carrying a picture is not written yet: the writer drops pictures, and
+    the window replaces them with a note only after the step has run. Filing it
+    first left the file a body with neither the picture nor the note.
+    """
+    stop = len(messages)
+    for index in range(start, len(messages)):
+        content = messages[index].get("content")
+        if isinstance(content, list) and any(is_image_part(part) for part in content):
+            stop = index
+            break
+    return stop if stop > start else None
+
+
 def _stamp_turn_observers(messages: list[dict[str, Any]], metadata: dict[str, Any] | None, turn_base: int) -> None:
     """File the turn's observer record onto its last substantive assistant message.
 
@@ -3682,19 +3698,6 @@ class TurnPathMixin:
             "filed_ids": set(),
         }
 
-        def _holds_a_picture(messages_now: list[dict], start: int) -> int:
-            """The first row at or after ``start`` that carries a picture.
-
-            Such a row is not written yet: the writer drops pictures, and the
-            window replaces them with a note only after the step has run. Filing
-            it first left the file a body with neither the picture nor the note.
-            """
-            for index in range(start, len(messages_now)):
-                content = messages_now[index].get("content")
-                if isinstance(content, list) and any(is_image_part(part) for part in content):
-                    return index
-            return len(messages_now)
-
         def _persist_progress() -> None:
             """Append what this turn has produced so far, so a kill loses one step, not all of it.
 
@@ -3705,8 +3708,8 @@ class TurnPathMixin:
             log = live["log"]
             skip = live["persisted"]
             messages_now = log.messages()
-            upto = _holds_a_picture(messages_now, skip)
-            if upto <= skip:
+            upto = _incremental_upto(messages_now, skip)
+            if upto is None:
                 return
             try:
                 live["filed_ids"].update(self._save_turn(session, list(messages_now[:upto]), skip, final=False))
