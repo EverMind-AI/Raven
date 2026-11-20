@@ -64,6 +64,40 @@ def test_pinned_scan_takes_the_whole_exchange_and_supersedes_earlier_fetches() -
     assert pinned == {5, 6}
 
 
+def test_pinned_scan_covers_sibling_results_of_the_pinned_turn() -> None:
+    """The pin is the whole tool group, not the one result that carries the body.
+
+    A turn can fetch the guide and call another tool beside it, both answered
+    under one assistant message. Pinning only the fetch's own result would let
+    compaction keep a result whose call it dropped -- a prompt the provider
+    refuses -- which is why the answer is the same positional pairing the
+    trimmer drops whole groups by.
+    """
+    messages = [
+        {"role": "user", "content": "go"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "use_skill", "arguments": '{"skill_id": "local/guide"}'},
+                },
+                {"id": "c2", "type": "function", "function": {"name": "grep", "arguments": "{}"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "name": "use_skill", "content": "body"},
+        {"role": "tool", "tool_call_id": "c2", "name": "grep", "content": "hits"},
+    ]
+
+    assert pinned_message_ids(messages, ["local/guide"]) == {1, 2, 3}
+    # The same group from the body alone: selecting the pinned result pulls its
+    # call and every sibling result, so the kept exchange is one the log can
+    # have started with.
+    assert HistoryTrimmer.canonical_ids(messages, [0, 2]) == [0, 1, 2, 3]
+
+
 @pytest.mark.parametrize("tool_name", ["use_skill", "read_skill"])
 @pytest.mark.parametrize("inner_arguments", ["object", "string"])
 def test_pinned_scan_reads_a_skill_fetch_forwarded_through_tool_call(tool_name, inner_arguments) -> None:

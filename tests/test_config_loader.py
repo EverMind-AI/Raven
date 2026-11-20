@@ -1986,6 +1986,104 @@ def test_a_stamped_curator_config_still_loads_after_a_rollback(tmp_path: Path) -
     assert drain_migration_notices() == [], "the operator was told once, when the floor ran"
 
 
+def test_the_retired_strategy_name_is_matched_without_case_or_padding(tmp_path: Path) -> None:
+    """A hand-edited file writes the name however the person typed it.
+
+    The comparison is normalized, so ``"  CURATOR "`` is the retired strategy
+    and moves to ``compacting``. Comparing the raw value leaves such a file
+    holding a strategy the registry refuses, which is a startup failure rather
+    than a migration.
+    """
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"strategy": "  CURATOR "}}})
+    _stamp_path(p).write_text(json.dumps({"version": 20}), encoding="utf-8")
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.context.history.strategy == "compacting"
+
+
+def test_the_file_pass_rewrites_a_curator_config_and_stamps_the_new_floor(tmp_path: Path) -> None:
+    """The in-memory migration alone leaves the file naming the retired strategy.
+
+    The file pass is what makes the rewrite stick: without it the floor's own
+    generation never lands on disk, every later load re-runs the strip, and a
+    pre-retirement build sharing the home keeps reading keys this build cannot
+    load. So the file itself has to come out clean and the stamp has to move.
+    """
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "context": {
+                "history": {"strategy": "curator"},
+                "curatorModel": "m",
+                "dropSegments": ["curator"],
+            }
+        },
+    )
+    _stamp_path(p).write_text(json.dumps({"version": 19}), encoding="utf-8")
+    drain_migration_notices()
+
+    load_config(p)
+
+    written = json.loads(p.read_text(encoding="utf-8"))
+    assert written["context"]["history"]["strategy"] == "compacting"
+    assert written["context"]["dropSegments"] == ["compacting"]
+    assert "curatorModel" not in written["context"]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": 20}
+    assert [n for n in drain_migration_notices() if "retired" in n], "the rewrite is announced once"
+
+
+def test_every_retired_flat_key_spelling_leaves_the_config(tmp_path: Path) -> None:
+    """Both spellings of all eight knobs, as a pre-retirement build could write them.
+
+    ``ContextConfig`` forbids unknown keys, so a spelling the migration misses
+    fails the whole load -- the file is unreadable rather than merely carrying
+    dead settings. The list is spelled out here rather than read from the
+    migration constant: a key dropped from that tuple has to fail this test,
+    not shrink it.
+    """
+    from raven.config.raven import load_raven_config
+
+    retired = {
+        "fastPathThreshold": 0.4,
+        "fast_path_threshold": 0.4,
+        "curatorModel": "m",
+        "curator_model": "m",
+        "curatorProvider": "p",
+        "curator_provider": "p",
+        "curatorTimeoutSeconds": 12.0,
+        "curator_timeout_seconds": 12.0,
+        "relevanceDecay": 0.9,
+        "relevance_decay": 0.9,
+        "relevanceReferenceBoost": 0.2,
+        "relevance_reference_boost": 0.2,
+        "protectFirstN": 4,
+        "protect_first_n": 4,
+        "archiveDir": "memory/.curator/archive",
+        "archive_dir": "memory/.curator/archive",
+    }
+    assert len(retired) == 16, "eight knobs, two spellings each"
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {**retired, "history": {"strategy": "curator"}}})
+    _stamp_path(p).write_text(json.dumps({"version": 19}), encoding="utf-8")
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.context.history.strategy == "compacting"
+    assert not retired.keys() & set(cfg.context.model_dump(by_alias=True))
+    written = json.loads(p.read_text(encoding="utf-8"))
+    assert not retired.keys() & set(written["context"])
+    notices = drain_migration_notices()
+    assert any(all(f"context.{key}" in n for key in retired) for n in notices), "one notice names every key it removed"
+
+
 def test_an_address_the_settings_dialog_only_showed_leaves_the_file_once(tmp_path: Path) -> None:
     """Connecting a key-only vendor from the settings dialog sent the address its
     field merely shows -- Google's bare host, Anthropic's -- and the section kept

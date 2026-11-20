@@ -82,6 +82,9 @@
       "maxTokens": 8192
     }
   },
+  "context": {
+    "curatorModel": ""
+  },
   "memory": {
     "backend": "everos",
     "userId": "raven-design",
