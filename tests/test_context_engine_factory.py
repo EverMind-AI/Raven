@@ -689,3 +689,18 @@ def test_a_product_drops_the_host_segments_it_names(tmp_path: Path) -> None:
 def test_an_unknown_segment_name_drops_nothing(tmp_path: Path) -> None:
     full = [b.name for b in _engine_with(tmp_path, ContextConfig())._builders]
     assert [b.name for b in _engine_with(tmp_path, ContextConfig(drop_segments=["nope"]))._builders] == full
+
+
+def test_dropping_the_history_slot_also_withdraws_the_refs_it_would_mint(tmp_path: Path) -> None:
+    """An engine with no history builder cannot vouch for refs it never wrote.
+
+    ``AgentLoop`` registers ``context_retrieve`` on ``mints_source_refs``, so a
+    product that drops the history slot while still claiming the capability
+    gets a tool that answers "found nothing" every time the model reaches for
+    text it was told it could read back.
+    """
+    engine = _engine_with(tmp_path, ContextConfig(drop_segments=["compacting"]))
+
+    assert engine._phase_b == []
+    assert engine.mints_source_refs is False
+    assert _engine_with(tmp_path, ContextConfig(drop_segments=["identity"])).mints_source_refs is True

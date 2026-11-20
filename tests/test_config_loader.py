@@ -1950,6 +1950,42 @@ def test_a_file_past_the_second_pin_floor_has_its_third_floor_pins_carried_in_th
     assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": 20}
 
 
+def test_a_stamped_curator_config_still_loads_after_a_rollback(tmp_path: Path) -> None:
+    """A build from before the retirement reads generation 20 as current and keeps
+    writing ``strategy: curator`` and the flat keys back into the file.
+
+    The floor cannot help there -- it has already run -- so the load path strips
+    them again, or the whole config fails validation and the install cannot
+    start. Unlike the floor pass this rewrites nothing: the file keeps the keys
+    a pre-retirement build needs, and only this process's view is corrected.
+    """
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "context": {
+                "history": {"strategy": "curator"},
+                "curatorModel": "m",
+                "protectFirstN": 5,
+                "dropSegments": ["curator", "memory"],
+            }
+        },
+    )
+    _stamp_path(p).write_text(json.dumps({"version": 20}), encoding="utf-8")
+    before = p.read_text(encoding="utf-8")
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.context.history.strategy == "compacting"
+    assert cfg.context.drop_segments == ["compacting", "memory"], "the rename keeps its siblings"
+    assert not hasattr(cfg.context, "curator_model")
+    assert p.read_text(encoding="utf-8") == before, "the file serves a pre-retirement build; only this view moves"
+    assert drain_migration_notices() == [], "the operator was told once, when the floor ran"
+
+
 def test_an_address_the_settings_dialog_only_showed_leaves_the_file_once(tmp_path: Path) -> None:
     """Connecting a key-only vendor from the settings dialog sent the address its
     field merely shows -- Google's bare host, Anthropic's -- and the section kept
