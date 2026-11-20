@@ -23,6 +23,7 @@ from raven.agent.window.turn_log import TURN_LOG_KEY, TurnLog
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.config.schema import CompactionConfig
 from raven.context_engine.history_trimmer import HistoryTrimmer
+from raven.contracts.tool import Tool
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
@@ -567,3 +568,69 @@ def test_the_cap_is_the_configured_one_and_says_it_cut(workspace):
 def test_a_cap_of_zero_files_everything(workspace):
     body = "z" * 1_200_000
     assert _saved_tool_result(workspace, body, tool_result_max_chars=0) == body
+
+
+_HUGE_BODY = "\n".join(["x" * 100] * 50)
+
+
+class _HugeTool(Tool):
+    name = "huge_tool"
+    description = "Return a long deterministic result."
+    parameters = {"type": "object", "properties": {}, "required": []}
+
+    async def execute(self, **kwargs: Any) -> str:
+        return _HUGE_BODY
+
+
+@pytest.mark.asyncio
+async def test_a_tool_result_cut_to_the_cap_is_the_same_bytes_on_the_wire_and_in_the_log(workspace):
+    """The next turn's prefix cache only reuses what this turn sent.
+
+    Cutting only the session write leaves the model holding the full result and
+    the replay holding the cut one; the bytes diverge at the cap and everything
+    after it is re-prefilled. The cap has to land before the model reads it, and
+    the full body is filed beside the preview so the tail is still reachable.
+    """
+    from raven.config.raven import ContextConfig
+    from raven.session.refs import TOOL_RESULT_TRUNCATION_MARKER, is_truncated
+    from raven.session.tool_output import tool_output_dir
+
+    provider = _ScriptProvider(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="c1", name="huge_tool", arguments={})],
+                finish_reason="tool_calls",
+            ),
+            LLMResponse(content="done", finish_reason="stop"),
+            LLMResponse(content="second", finish_reason="stop"),
+        ]
+    )
+    agent = AgentLoop(
+        provider=provider,
+        workspace=workspace,
+        model="stub",
+        policy=TurnPolicy(max_iterations=4),
+        tools=ToolWiring(restrict_to_workspace=True),
+        engine=EngineWiring(context_config=ContextConfig(tool_result_max_bytes=1_000, tool_result_max_chars=0)),
+    )
+    agent.tools.register(_HugeTool())
+
+    await agent._process_message(_turn("go"), session_key=_KEY)
+    await agent._process_message(_turn("again"), session_key=_KEY)
+
+    sent = [m for m in provider.main_calls[1] if m.get("role") == "tool"][-1]
+    replayed = [m for m in provider.main_calls[2] if m.get("role") == "tool"][-1]
+    saved = [m for m in _reloaded(agent) if m.get("role") == "tool"][-1]
+    assert sent["content"] == replayed["content"]
+    assert sent["content"] == saved["content"]
+    assert is_truncated(saved["content"])
+    assert TOOL_RESULT_TRUNCATION_MARKER in saved["content"]
+    assert "[END UNTRUSTED" in saved["content"]
+    assert "x" * 2_000 not in saved["content"]
+    assert "Full output saved to:" in saved["content"]
+
+    files = sorted(tool_output_dir(workspace).glob("tool_*.txt"))
+    assert len(files) == 1
+    assert str(files[0].resolve()) in saved["content"]
+    assert files[0].read_text(encoding="utf-8") == _HUGE_BODY

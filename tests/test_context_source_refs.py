@@ -19,8 +19,16 @@ from pathlib import Path
 import pytest
 
 from raven.agent.tools.context_retrieve import ContextRetrieveTool
+from raven.security.trust import wrap_untrusted
 from raven.session.manager import Session, SessionManager
-from raven.session.refs import TOOL_RESULT_TRUNCATION_MARKER, TOOL_RESULT_VIEW_MAX_CHARS, session_ref, tool_result_view
+from raven.session.refs import (
+    TOOL_RESULT_TRUNCATION_MARKER,
+    TOOL_RESULT_VIEW_MAX_CHARS,
+    cap_tool_result,
+    is_truncated,
+    session_ref,
+    tool_result_view,
+)
 from raven.utils.refs import SourceRef
 from raven.utils.tokens import estimate_message_tokens
 
@@ -426,6 +434,14 @@ class TestScopeNaming:
         assert Session(key="cli:direct").revision.scope.endswith("@0")
 
 
+def test_a_tail_preview_marker_is_reported_truncated() -> None:
+    body = TOOL_RESULT_TRUNCATION_MARKER + "\nline 1\nline 2"
+    fenced = wrap_untrusted(body, source="exec")
+
+    assert is_truncated(fenced)
+    assert tool_result_view(fenced) == fenced
+
+
 def test_a_tool_result_view_cuts_long_text_and_says_how_much() -> None:
     assert tool_result_view("short") == "short"
     exact = "x" * TOOL_RESULT_VIEW_MAX_CHARS
@@ -445,3 +461,71 @@ def test_a_result_cut_at_filing_within_the_view_goes_out_as_stored() -> None:
 
     longer = "z" * (TOOL_RESULT_VIEW_MAX_CHARS + 500) + TOOL_RESULT_TRUNCATION_MARKER
     assert "500 more characters of the stored result" in tool_result_view(longer)
+
+
+def test_a_capped_tool_result_keeps_the_untrusted_fence_whole() -> None:
+    fenced = wrap_untrusted("x" * 5_000, source="exec")
+
+    capped = cap_tool_result(fenced, 1_000)
+
+    assert capped.startswith("[BEGIN UNTRUSTED exec #")
+    assert capped.endswith("]")
+    assert TOOL_RESULT_TRUNCATION_MARKER in capped
+    assert is_truncated(capped)
+    assert cap_tool_result(capped, 1_000) == capped
+    assert "x" * 1_000 in capped
+    assert "x" * 1_001 not in capped
+
+
+def test_a_capped_fenced_result_keeps_a_trusted_note_after_it() -> None:
+    fenced = wrap_untrusted("x" * 5_000, source="exec")
+    noted = f"{fenced}\n[note: the result was cut by policy]"
+
+    capped = cap_tool_result(noted, 1_000)
+
+    assert "[END UNTRUSTED exec #" in capped
+    assert capped.endswith("[note: the result was cut by policy]")
+
+
+def test_a_fenced_result_under_the_cap_is_unchanged() -> None:
+    fenced = wrap_untrusted("short", source="exec")
+
+    assert cap_tool_result(fenced, 1_000) == fenced
+    assert not is_truncated(fenced)
+
+
+def test_the_cap_counts_the_fenced_body_not_the_fence() -> None:
+    fenced = wrap_untrusted("x" * 1_000, source="exec")
+
+    assert len(fenced) > 1_000
+    assert cap_tool_result(fenced, 1_000) == fenced
+
+
+def test_a_zero_cap_leaves_a_fenced_result_alone() -> None:
+    fenced = wrap_untrusted("x" * 5_000, source="exec")
+
+    assert cap_tool_result(fenced, 0) == fenced
+
+
+def test_a_fenced_result_at_the_view_limit_is_returned_whole() -> None:
+    fenced = wrap_untrusted("y" * TOOL_RESULT_VIEW_MAX_CHARS, source="exec")
+
+    assert tool_result_view(fenced) == fenced
+
+
+def test_a_fenced_result_over_the_view_limit_counts_the_body() -> None:
+    fenced = wrap_untrusted("y" * (TOOL_RESULT_VIEW_MAX_CHARS + 500), source="exec")
+
+    assert "500 more characters of the stored result" in tool_result_view(fenced)
+
+
+def test_a_fenced_view_keeps_the_fence_and_the_managed_path() -> None:
+    fenced = wrap_untrusted("y" * (TOOL_RESULT_VIEW_MAX_CHARS + 500), source="exec")
+    hinted = f"{fenced}\nFull output saved to: /tmp/tool-output/tool_x.txt"
+
+    view = tool_result_view(hinted)
+
+    assert view.startswith("[BEGIN UNTRUSTED exec #")
+    assert "[END UNTRUSTED" in view
+    assert view.endswith("Full output saved to: /tmp/tool-output/tool_x.txt")
+    assert "500 more characters of the stored result" in view
