@@ -145,7 +145,8 @@ from raven.providers.base import bound_llm_detail, canonical_llm_error, llm_erro
 from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
 from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT
-from raven.session.refs import TOOL_RESULT_TRUNCATION_MARKER, tool_result_view
+from raven.session.refs import cap_tool_result, tool_result_view
+from raven.session.tool_output import bound_tool_result, direction_for
 from raven.session.turn_shape import REPLIED_VIA_TOOL, TakeBack, TakeBackStep
 from raven.spine.events import bound_failure_text
 from raven.spine.scheduler import describe_failure
@@ -983,6 +984,7 @@ class TurnPathMixin:
                 ],
             )
             self.context.add_tool_result(messages, call_id, autofill_resolver.TOOL_NAME, row.get("summary", ""))
+            messages[-1]["content"] = cap_tool_result(messages[-1]["content"], self._TOOL_RESULT_MAX_CHARS)
 
     def _answered_by_tool(self, turn_rows: list[dict]) -> bool:
         """Whether this turn's tools already handed the reader its answer.
@@ -2193,6 +2195,20 @@ class TurnPathMixin:
                         messages = self.context.add_tool_result(
                             messages, tool_call.id, result_name, model_text, trusted_note=watch_note, **provenance
                         )
+                    if messages and messages[-1].get("role") == "tool":
+                        # The cap lands here, before the next call reads the
+                        # result: the model and the session write must hold the
+                        # same bytes or the next turn's cached prefix breaks.
+                        # The full body goes to a managed file, so the preview
+                        # is the durable replay record rather than the whole
+                        # output being lost with the cut.
+                        messages[-1]["content"] = bound_tool_result(
+                            messages[-1]["content"],
+                            self.workspace,
+                            limits=self._TOOL_OUTPUT_LIMITS,
+                            direction=direction_for(result_name),
+                            readers=tuple(name for name in ("read_file", "grep") if self.tools.get(name) is not None),
+                        )
                     if messages:
                         # Dispatch to result, on the entry that answers the call.
                         # The live tool event was its only carrier, so a restored
@@ -2246,6 +2262,9 @@ class TurnPathMixin:
                                 skipped_call.id,
                                 skipped_call.name,
                                 SKIPPED_AFTER_BLOCKED_CALL,
+                            )
+                            messages[-1]["content"] = cap_tool_result(
+                                messages[-1]["content"], self._TOOL_RESULT_MAX_CHARS
                             )
                         break
                     # Track consecutive same-tool deterministic failures
@@ -4392,11 +4411,8 @@ class TurnPathMixin:
                 # it either — it guards `str` content only.
                 content = _strip_inline_images(content)
                 entry["content"] = content
-            cap = self._TOOL_RESULT_MAX_CHARS
-            if role == "tool" and isinstance(content, str) and cap and len(content) > cap:
-                # The marker is what retrieval reads to say a span was cut on the
-                # way to disk rather than pass a prefix off as the whole.
-                entry["content"] = content[:cap] + TOOL_RESULT_TRUNCATION_MARKER
+            if role == "tool":
+                entry["content"] = cap_tool_result(content, self._TOOL_RESULT_MAX_CHARS)
             elif role == "user":
                 if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
                     # Strip the runtime-context prefix, keep only the user text.
