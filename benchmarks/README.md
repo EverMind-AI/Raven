@@ -121,17 +121,6 @@ export CLAW_BENCH_ROOT="$PWD/../claw-bench"
     --max-iterations 40
 ```
 
-ClawBench with Curator context engine:
-```bash
-./benchmarks/clawbench/run.sh \
-    --clawbench-root "$CLAW_BENCH_ROOT" \
-    --limit 80 \
-    --session-id clawbench-stream-raven-curator-80 \
-    --context-engine curator \
-    --curator-model deepseek-v4-flash \
-    --max-iterations 40
-```
-
 Proactivity Eval (longrun, 30-day persona):
 ```bash
 uv run python benchmarks/proactivity_eval/runners/run.py \

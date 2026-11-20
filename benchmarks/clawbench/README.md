@@ -87,18 +87,6 @@ Run the first 80 tasks as one streaming session:
   --max-iterations 40
 ```
 
-Run with Curator enabled:
-
-```bash
-./benchmarks/clawbench/run.sh \
-  --clawbench-root "$CLAW_BENCH_ROOT" \
-  --limit 80 \
-  --session-id clawbench-stream-raven-curator-80 \
-  --context-engine curator \
-  --curator-model deepseek-v4-flash \
-  --max-iterations 40
-```
-
 Useful filters:
 
 ```bash
