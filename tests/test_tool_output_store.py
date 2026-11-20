@@ -193,3 +193,40 @@ def test_the_filed_body_is_owner_only_without_chmod(tmp_path: Path, monkeypatch:
 
     mode = _files(tmp_path)[0].stat().st_mode & 0o777
     assert mode == 0o600
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
+def test_a_symlinked_managed_directory_is_refused(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    victim = outside / "tool_victim.txt"
+    victim.write_text("keep", encoding="utf-8")
+    old = (datetime.now() - timedelta(days=8)).timestamp()
+    os.utime(victim, (old, old))
+    (workspace / "tool-output").symlink_to(outside, target_is_directory=True)
+    before_mode = outside.stat().st_mode & 0o777
+
+    bounded = bound_tool_result(wrap_untrusted(LONG_BODY, source="exec"), workspace, limits=BYTES)
+
+    assert is_truncated(bounded)
+    assert "Full output saved to:" not in bounded
+    assert sorted(p.name for p in outside.iterdir()) == ["tool_victim.txt"]
+    assert victim.exists()
+    assert outside.stat().st_mode & 0o777 == before_mode
+    assert (workspace / "tool-output").is_symlink()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
+def test_a_symlink_inside_the_workspace_is_also_refused(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    target = workspace / "elsewhere"
+    target.mkdir(parents=True)
+    (workspace / "tool-output").symlink_to(target, target_is_directory=True)
+
+    bounded = bound_tool_result(wrap_untrusted(LONG_BODY, source="exec"), workspace, limits=BYTES)
+
+    assert is_truncated(bounded)
+    assert "Full output saved to:" not in bounded
+    assert list(target.iterdir()) == []
