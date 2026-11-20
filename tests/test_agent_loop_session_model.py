@@ -21,33 +21,16 @@ spawned under.
 from __future__ import annotations
 
 import asyncio
-import json
 
 import pytest
 
 from raven.agent.loop.bundles import EngineWiring, TurnPolicy
 from raven.agent.loop.main import AgentLoop
 from raven.config.raven import ContextConfig, SkillForgeConfig
-from raven.context_engine.segments.curator import CuratorSegmentBuilder
 from raven.providers.base import LLMResponse
 from raven.providers.binding import ModelBinding, active_binding
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest, direct_lane
-
-
-def _configure_pins(**blocks: dict) -> None:
-    """Put a subsystem pin where the engine reads it: the config file.
-
-    Both pins are resolved per call from the file now, so a block handed to the
-    constructor is the shape the loader produces rather than the source of
-    truth. ``conftest`` hands every test its own HOME, so this writes a config
-    only this test can see.
-    """
-    from raven.config.loader import get_config_path
-
-    path = get_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(blocks), encoding="utf-8")
 
 
 class _Provider:
@@ -79,7 +62,7 @@ def _loop(tmp_path) -> AgentLoop:
         workspace=tmp_path,
         model="boot/model",
         engine=EngineWiring(
-            context_config=ContextConfig(history={"strategy": "curator"}),
+            context_config=ContextConfig(),
             skill_forge_config=SkillForgeConfig(),
         ),
     )
@@ -346,47 +329,6 @@ async def test_a_spawned_subagent_keeps_its_conversations_model(tmp_path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_an_unconfigured_subsystem_follows_the_conversation(tmp_path) -> None:
-    """The curator is unpinned here (no credentials for the default
-    ``curator_model``), so it reads the turn's model.
-    """
-    loop = _loop(tmp_path)
-    loop.set_session_binding("tui:a", _binding("prov-a", "vendor-a/model"))
-    curator = next(b for b in loop.context_engine._builders if isinstance(b, CuratorSegmentBuilder))
-
-    seen: dict[str, object] = {}
-
-    async def _body(*args, **kwargs):
-        seen["curator"] = curator.curator_model
-        return "done"
-
-    await _run(loop, "tui:a", _body)
-    assert seen["curator"] == "vendor-a/model"
-
-
-@pytest.mark.asyncio
-async def test_a_configured_subsystem_uses_its_own_pair(tmp_path) -> None:
-    """With a model *and* a credential of its own, a subsystem stops following
-    the conversation -- that is the whole point of configuring one.
-    """
-    loop = _loop(tmp_path)
-    loop.set_session_binding("tui:a", _binding("prov-a", "vendor-a/model"))
-    curator = next(b for b in loop.context_engine._builders if isinstance(b, CuratorSegmentBuilder))
-
-    pin = _binding("prov-pin", "vendor-pin/small")
-    curator._pin_resolver = lambda: pin
-
-    seen: dict[str, object] = {}
-
-    async def _body(*args, **kwargs):
-        seen["curator"] = curator.curator_model
-        return "done"
-
-    await _run(loop, "tui:a", _body)
-    assert seen["curator"] == "vendor-pin/small"
-
-
-@pytest.mark.asyncio
 async def test_a_request_without_a_conversation_falls_back_to_its_channel_key(tmp_path) -> None:
     """Non-TUI channels and cron arrive with no ``conversation``; the
     ``channel:chat_id`` key is the only one they get, so a switch stored under
@@ -412,70 +354,6 @@ async def test_a_request_without_a_conversation_falls_back_to_its_channel_key(tm
     assert seen == ["vendor-wa/model"]
 
 
-def test_a_configured_pin_survives_a_real_factory_build(tmp_path) -> None:
-    """The pin only becomes a pair when a pool is wired, and every entry point
-    must wire one -- without it a correctly credentialed ``curator_model`` is
-    silently ignored and the user is told it has no credentials.
-    """
-    from raven.config.schema import Config
-    from raven.providers.pool import ProviderPool
-
-    cfg = Config()
-    cfg.agents.defaults.model = "claude-opus-4-5"
-    cfg.agents.defaults.provider = "auto"
-    cfg.providers.anthropic.api_key = "sk-ant"
-    cfg.providers.gemini.api_key = "AIza"
-
-    _configure_pins(context={"curatorModel": "gemini-2.5-flash"})
-    context_config = ContextConfig(history={"strategy": "curator"})
-    loop = AgentLoop(
-        provider=_Provider("boot"),
-        workspace=tmp_path,
-        model="boot/model",
-        provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(context_config=context_config, skill_forge_config=SkillForgeConfig()),
-    )
-    curator = next(b for b in loop.context_engine._builders if isinstance(b, CuratorSegmentBuilder))
-
-    assert curator._pin_resolver() is not None, "a credentialed curator_model must become a pair"
-    assert curator.curator_model == "gemini-2.5-flash"
-    loop.set_session_binding("tui:a", _binding("prov-a", "vendor-a/model"))
-    assert curator.curator_model == "gemini-2.5-flash", "a configured subsystem does not follow the turn"
-
-
-def test_the_factory_hands_the_pool_the_pin_the_user_configured(tmp_path) -> None:
-    """Both halves of the configured pair have to reach the pool.
-
-    A gateway serving another vendor's model is exactly the case the id cannot
-    express: derived from ``claude-haiku-4-5`` the vendor is Anthropic, and the
-    curator would run on the Anthropic key while the user asked for the
-    gateway. Dropping the provider argument at the factory leaves the pin
-    looking configured and pointed at the wrong bill.
-    """
-    from raven.config.schema import Config
-    from raven.providers.pool import ProviderPool
-
-    cfg = Config()
-    cfg.agents.defaults.model = "claude-opus-4-5"
-    cfg.agents.defaults.provider = "auto"
-    cfg.providers.anthropic.api_key = "sk-ant"
-    cfg.providers.openrouter.api_key = "sk-or"
-
-    _configure_pins(context={"curatorModel": "claude-haiku-4-5", "curatorProvider": "openrouter"})
-    context_config = ContextConfig(history={"strategy": "curator"})
-    loop = AgentLoop(
-        provider=_Provider("boot"),
-        workspace=tmp_path,
-        model="boot/model",
-        provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(context_config=context_config, skill_forge_config=SkillForgeConfig()),
-    )
-    curator = next(b for b in loop.context_engine._builders if isinstance(b, CuratorSegmentBuilder))
-
-    assert curator._pin_resolver() is not None
-    assert curator._pin_resolver().provider.api_key == "sk-or", "the configured provider serves the pin"
-
-
 def test_a_stored_model_is_restored_onto_a_resumed_session(tmp_path) -> None:
     """The write half is useless without this read half. A switch has to
     survive a restart, or the user's choice lasts exactly as long as the
@@ -493,9 +371,7 @@ def test_a_stored_model_is_restored_onto_a_resumed_session(tmp_path) -> None:
         workspace=tmp_path,
         model="boot/model",
         provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(
-            context_config=ContextConfig(history={"strategy": "curator"}), skill_forge_config=SkillForgeConfig()
-        ),
+        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()),
     )
 
     assert loop.session_model("tui:a") == "boot/model", "a fresh process has no override"
@@ -518,9 +394,7 @@ def test_a_stored_model_that_cannot_be_built_leaves_the_default(tmp_path) -> Non
         workspace=tmp_path,
         model="boot/model",
         provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(
-            context_config=ContextConfig(history={"strategy": "curator"}), skill_forge_config=SkillForgeConfig()
-        ),
+        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()),
     )
 
     loop.restore_session_model("tui:a", "gemini-2.5-flash")
@@ -542,9 +416,7 @@ def _restorable_loop(tmp_path, stored: dict[str, dict[str, str]]) -> AgentLoop:
         workspace=tmp_path,
         model="boot/model",
         provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(
-            context_config=ContextConfig(history={"strategy": "curator"}), skill_forge_config=SkillForgeConfig()
-        ),
+        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()),
     )
     for key, metadata in stored.items():
         record = loop.sessions.get_or_create(key)
@@ -716,7 +588,7 @@ async def test_a_switched_turns_request_says_its_marks_are_already_placed(tmp_pa
 
     Asserted on the request rather than on the sender. This used to be a switch
     set on the provider object, which bound the right turn but never came back
-    off, so every later consumer of that same object -- the Curator, a subagent,
+    off, so every later consumer of that same object -- a subagent,
     Sentinel, the session titler -- kept sending with no breakpoints at all. The
     stamp travels with the request, so it binds this turn and nothing else.
     """
@@ -799,7 +671,7 @@ def _pooled_loop(tmp_path) -> tuple[AgentLoop, _Pool]:
         model="boot/model",
         provider_pool=pool,
         engine=EngineWiring(
-            context_config=ContextConfig(history={"strategy": "curator"}),
+            context_config=ContextConfig(),
             skill_forge_config=SkillForgeConfig(),
         ),
     )
@@ -903,7 +775,7 @@ def test_a_provider_that_cannot_name_its_vendor_is_never_re_paired(tmp_path) -> 
         model="anthropic/some-model",
         provider_pool=pool,
         engine=EngineWiring(
-            context_config=ContextConfig(history={"strategy": "curator"}),
+            context_config=ContextConfig(),
             skill_forge_config=SkillForgeConfig(),
         ),
     )

@@ -2,7 +2,7 @@
 
 ``Tool.execute`` may return ``str`` or :class:`ToolResult`, but every consumer
 of the registry other than the agent loop -- the sentinel action executor, the
-subagent manager, the context curator, tracing -- treats the return value as
+subagent manager, tracing -- treats the return value as
 model text and puts it straight into a message, a reply or an artifact. So the
 registry unwraps here and hands back a ``str`` with the display string attached.
 """

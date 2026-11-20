@@ -8963,14 +8963,6 @@
       "en": "The default model configuration a new session starts on",
       "zh": "新开会话时的默认模型配置"
     },
-    "gui.settings.roles.curator": {
-      "en": "Context compaction",
-      "zh": "上下文压缩"
-    },
-    "gui.settings.roles.curator_use": {
-      "en": "Tidies the history when a session outgrows its budget; a small model does",
-      "zh": "会话超出预算时整理历史，适合小模型"
-    },
     "gui.settings.roles.title": {
       "en": "Session naming",
       "zh": "会话命名"

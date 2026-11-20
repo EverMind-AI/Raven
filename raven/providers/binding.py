@@ -7,9 +7,9 @@ can update by halves.
 The binding is held in a :class:`~contextvars.ContextVar` rather than
 passed down, for two reasons. The turn path reads it at sixteen places
 across three packages -- ``raven.agent`` (the loop and the subagent
-manager), ``raven.context_engine`` (the curator and the history trimmer)
-and ``raven.memory_engine`` (the consolidator) -- and threading a parameter
-through all of them would touch far more code than it explains.
+manager), ``raven.context_engine`` (the history strategy and the history
+trimmer) and ``raven.memory_engine`` (the consolidator) -- and threading a
+parameter through all of them would touch far more code than it explains.
 More importantly, ``asyncio.create_task`` copies the current context, so
 work detached during a turn (a subagent, a consolidation task) keeps the
 binding it was started under for its whole life, which is exactly the
@@ -109,8 +109,8 @@ def active_window(fallback: int) -> int:
     """How much the running turn's model can hold, or ``fallback`` outside one.
 
     The counterpart of :func:`active_binding` for the subsystems that size
-    themselves against the window -- the history trimmer, the curator's
-    assembler and the consolidator. Each is built once and outlives any number
+    themselves against the window -- the history trimmer, the history builder
+    and the consolidator. Each is built once and outlives any number
     of turns, so a window copied at construction answers for the session that
     happened to build it and for no other.
     """

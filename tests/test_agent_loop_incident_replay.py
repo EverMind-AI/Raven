@@ -135,7 +135,7 @@ class _Gateway:
     """``acompletion`` as OpenRouter behaved that day.
 
     The turn's own calls stream. The loop also makes plain calls around a turn
-    (the context curator's selection pass); those are answered with a short
+    (the history strategy's selection pass); those are answered with a short
     text and are not the incident's requests, so the scenario is keyed on the
     streaming calls alone. Every request still counts for the protocol
     invariant: none may end on an assistant message.

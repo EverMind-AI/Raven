@@ -72,7 +72,7 @@ def set_ttl(ttl: str | None) -> None:
 #: Ownership is a fact about one request, not about the process: a process-wide
 #: switch would turn the provider's own placement off for every caller, while
 #: the strategy that places the marks instead runs at exactly one of them
-#: (``AgentLoop``'s call). The Curator, subagents, Sentinel, the session titler
+#: (``AgentLoop``'s call). Subagents, Sentinel, the session titler
 #: and the memory consolidator all reach a provider directly, and each keeps the
 #: breakpoints the provider places for it.
 #:
@@ -133,7 +133,7 @@ def cache_control() -> dict[str, str]:
 #:
 #: The system message is assembled from segments, and only the first few of them
 #: are stable: identity and the bootstrap files are the same every turn, while
-#: the memory recall, the skill router's hits and the Curator's working state are
+#: the memory recall and the skill router's hits are
 #: all derived from what the user just said. A breakpoint keys its cache on
 #: everything up to itself, so one placed at the end of that message carries
 #: the volatile tail into the key and misses on

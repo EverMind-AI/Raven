@@ -951,7 +951,6 @@ _MERGED_KEYS = frozenset(
         "tools.media.speech",
         "tools.media.video",
         "sessionTitle",
-        "context",
         "translate",
         "knowledge",
     }
@@ -1259,11 +1258,6 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "permissions.mode": _chk_enum("permissions.mode", "ask", "smart", "full"),
     "agents.defaults.maxToolIterations": _chk_int("agents.defaults.maxToolIterations", 1, 200),
     "agents.defaults.contextWindowTokens": _chk_int_or_null("agents.defaults.contextWindowTokens", 1024, 100_000_000),
-    "context.curatorModel": _chk_pin_model("context.curatorModel"),
-    "context.curatorProvider": _chk_pin_provider("context.curatorProvider"),
-    # The pin as one write, the way sessionTitle already is: a pair written a
-    # key at a time can be left half-changed by a dropped connection.
-    "context": _chk_pin_pair("context", "curatorModel", "curatorProvider"),
     # The three media tools share one config shape; speech's has no provider,
     # because only the image and video tools run elsewhere.
     "tools.media.speech": _chk_media_selection,

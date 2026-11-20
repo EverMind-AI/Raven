@@ -1,9 +1,10 @@
 """The default Memory strategy: the window this turn's model calls see.
 
-The context engine stays the thing that assembles -- it holds the Curator's
-working state and each segment builder's provider binding, and the builders
-were sized against this generation's context window, so a generation's window
-*is* its engine and replacing it is a new generation. What this module adds is
+The context engine stays the thing that assembles -- it holds the history
+strategy's per-session state and each segment builder's provider binding, and
+the builders were sized against this generation's context window, so a
+generation's window *is* its engine and replacing it is a new generation.
+What this module adds is
 the seat: the loop asks the Memory role rather than reaching past it, and the
 turn-side decisions that were never the shell's live here with it.
 

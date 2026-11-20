@@ -7,7 +7,7 @@ system prompt:
 - **Identity / Bootstrap / ActiveSkills** — the host's own sections.
 - **Memory** — ``backend.recall(user_id=...)`` (segment 4, ``# Memory``).
 - **History** — the strategy ``context.history.strategy`` names (see
-  :mod:`raven.context_engine.history`): ``compacting`` or the Curator.
+  :mod:`raven.context_engine.history`): ``compacting``.
   Owns ``*history``.
 
 With ``context.cache.turn_scratch`` on (the default), ``# Memory``, the section
@@ -43,11 +43,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
-from loguru import logger
-
 from raven.agent import workdir
 from raven.agent.context import ContextBuilder
-from raven.config.live import LiveConfig, curator_pin, project_skills_enabled, skill_hub_enabled
+from raven.config.live import LiveConfig, project_skills_enabled, skill_hub_enabled
 from raven.context_engine import history as history_strategies
 from raven.context_engine.assembler import ContextAssembler
 from raven.context_engine.scent import ScentMenu
@@ -60,7 +58,6 @@ from raven.context_engine.segments import (
 from raven.contracts.context import ContextEngine
 from raven.contracts.llm_provider import LLMProvider
 from raven.home import is_subagent_process
-from raven.providers.pool import live_pin_resolver
 
 if TYPE_CHECKING:
     from raven.agent.subagent.backends import AgentMeta
@@ -72,7 +69,6 @@ if TYPE_CHECKING:
     )
     from raven.contracts.memory import MemoryBackend
     from raven.memory_engine import SkillForgeRouter
-    from raven.providers.pool import ProviderPool
     from raven.skill_hub import SkillHubClient
 
 
@@ -94,15 +90,10 @@ def build_context_engine(
     skill_forge_router_config: "SkillForgeRouterConfig | None" = None,
     skill_forge_config: "SkillForgeConfig | None" = None,
     skill_hub_client: "SkillHubClient | None" = None,
-    provider_pool: "ProviderPool | None" = None,
     blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
     task_board: bool = False,
 ) -> ContextEngine:
     """Build the one :class:`ContextAssembler` from a flat SegmentBuilder list.
-
-    ``provider_pool``, when supplied, is what turns a subsystem's pinned model
-    into a pinned model *and its own credential*. Without it a pin has no
-    credential of its own and the subsystem follows the conversation's model.
 
     ``builder`` is read only for the shared ``MemoryStore`` and
     ``LocalSkillCatalog`` it holds. The one configured name read here is the
@@ -121,8 +112,8 @@ def build_context_engine(
     if skill_forge_router_config is None:
         skill_forge_router_config = _SkillForgeRouterConfig()
 
-    # One reader for the curator pin and the Hub switch: the file is re-parsed
-    # only when its bytes change, so the subsystems asking per call cost one
+    # One reader for the live switches the router answers per call: the file is
+    # re-parsed only when its bytes change, so the subsystems asking cost one
     # read between them.
     live = LiveConfig()
 
@@ -164,12 +155,6 @@ def build_context_engine(
     strategy = history_strategies.resolve(config.history.strategy)
     builders.append(
         strategy.build(
-            pin_resolver=live_pin_resolver(
-                provider_pool,
-                lambda: curator_pin(live),
-                key="context.curator_model",
-                follower="the curator",
-            ),
             workspace=workspace,
             config=config,
             provider=provider,
@@ -197,24 +182,12 @@ def build_context_engine(
             ),
         )
     dropped = frozenset(getattr(config, "drop_segments", None) or ())
-    # The history slot's builder is named for its strategy now; ``curator`` is
-    # what a config written before the registry calls it, so either name drops
-    # it. Without it nothing mints refs, and the engine must not say otherwise.
     history_builder = builders[-1].name
-    history_dropped = bool(dropped & {history_builder, "curator"})
+    history_dropped = history_builder in dropped
     if history_dropped:
         dropped |= {history_builder}
     if dropped:
         builders = [b for b in builders if b.name not in dropped]
-    if strategy.name != "curator" and (
-        getattr(config, "curator_model", None) or getattr(config, "curator_provider", None)
-    ):
-        logger.warning(
-            "context.curatorModel / curatorProvider are set but context.history.strategy is {!r}: they apply "
-            "to the curator strategy only; this strategy summarises on the turn's model unless "
-            "context.history.compacting.summary.model names one",
-            strategy.name,
-        )
     engine = ContextAssembler(
         builders,
         get_tool_definitions,

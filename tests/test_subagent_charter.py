@@ -628,8 +628,7 @@ def test_the_judge_cache_does_not_grow_without_a_ceiling() -> None:
 
 
 def test_a_registry_nobody_handed_a_role_still_refuses_what_the_charter_refuses() -> None:
-    """Most registries this tree builds take no Action role, and one of them --
-    the curator's -- dispatches inside the turn's charter scope. An absent role
+    """Most registries this tree builds take no Action role. An absent role
     is "nobody chose one here", not "this dispatch carries no Charter"."""
     from raven.agent.tools.registry import ToolRegistry
 

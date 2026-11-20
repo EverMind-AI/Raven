@@ -703,11 +703,12 @@ def _costing_agent(
 ) -> AgentLoop:
     """An agent whose every billed call is the loop's own.
 
-    The Curator is dropped because its Slow Path is a bounded agent loop of its
-    own on the same provider, and a scripted provider cannot tell its calls from
-    the turn's. Its calls, like the watch-work judgement's, reach the usage
-    recorder only through the provider seam (``raven.providers.usage_record``),
-    which a test here installs only when the seam is what it pins.
+    The history builder is dropped because a summarising compaction is a model
+    call of its own on the same provider, and a scripted provider cannot tell
+    its calls from the turn's. Its calls, like the watch-work judgement's,
+    reach the usage recorder only through the provider seam
+    (``raven.providers.usage_record``), which a test here installs only when the
+    seam is what it pins.
     """
     return _make_agent(
         workspace,
@@ -715,7 +716,7 @@ def _costing_agent(
         model="stub",
         window=40000,
         strategies=strategies,
-        context_config=ContextConfig(drop_segments=["curator"]),
+        context_config=ContextConfig(drop_segments=["compacting"]),
         hooks=hooks,
     )
 
@@ -1159,7 +1160,7 @@ async def test_a_turn_that_ends_on_an_empty_reply_keeps_that_calls_reading(
         provider=ScriptedProvider("stub", [_ANSWERS_THROUGH_THE_MESSAGE_TOOL, *empty_replies]),
         workspace=workspace,
         model="stub",
-        engine=EngineWiring(context_window_tokens=40000, context_config=ContextConfig(drop_segments=["curator"])),
+        engine=EngineWiring(context_window_tokens=40000, context_config=ContextConfig(drop_segments=["compacting"])),
         policy=TurnPolicy(max_iterations=6, empty_recovery=limits),
         tools=ToolWiring(restrict_to_workspace=True),
     )
@@ -1197,7 +1198,7 @@ async def test_an_answered_turn_that_ends_on_a_provider_error_keeps_that_calls_r
         provider=ScriptedProvider("stub", [_ANSWERS_THROUGH_THE_MESSAGE_TOOL, _fails_to_answer(_measured(7100, 0))]),
         workspace=workspace,
         model="stub",
-        engine=EngineWiring(context_window_tokens=40000, context_config=ContextConfig(drop_segments=["curator"])),
+        engine=EngineWiring(context_window_tokens=40000, context_config=ContextConfig(drop_segments=["compacting"])),
         policy=TurnPolicy(max_iterations=6, empty_recovery=RecoveryLimits(llm_error_retry_delays=())),
         tools=ToolWiring(restrict_to_workspace=True),
     )
@@ -1221,7 +1222,7 @@ def _failing_agent(workspace: Path, limits: RecoveryLimits, script: list[LLMResp
         provider=ScriptedProvider("stub", script),
         workspace=workspace,
         model="stub",
-        engine=EngineWiring(context_window_tokens=40000, context_config=ContextConfig(drop_segments=["curator"])),
+        engine=EngineWiring(context_window_tokens=40000, context_config=ContextConfig(drop_segments=["compacting"])),
         policy=TurnPolicy(max_iterations=6, empty_recovery=limits),
         tools=ToolWiring(restrict_to_workspace=True),
     )

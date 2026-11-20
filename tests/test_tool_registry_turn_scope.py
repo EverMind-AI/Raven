@@ -11,7 +11,7 @@ Only arrivals are masked. The operator's off switch stays live per assembly
 (that reversibility is the point of the withheld axis), a tool unregistered
 mid-turn has no schema to serve anyway, and session-overlay tools enter with
 the turn that carries them. A registry that never enters the scope -- a
-sub-agent's, the curator's -- advertises everything, exactly as before.
+sub-agent's -- advertises everything, exactly as before.
 
 One arrival is let in on purpose: tools the turn's own call produced
 (``admit_to_this_turn``), so a plugin the agent just connected is usable

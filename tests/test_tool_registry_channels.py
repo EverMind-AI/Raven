@@ -51,8 +51,8 @@ def _names(reg: ToolRegistry) -> set[str]:
 
 
 def test_unset_channel_advertises_everything() -> None:
-    """The sub-agent and curator registries never set a channel, and they must
-    keep seeing the full set rather than silently losing tools."""
+    """A sub-agent registry never sets a channel, and it must keep seeing the
+    full set rather than silently losing tools."""
     assert _names(_registry()) == {"everywhere", "web_only"}
 
 

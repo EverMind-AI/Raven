@@ -572,7 +572,7 @@ def test_anthropic_asks_the_shared_owner_for_the_ceiling(monkeypatch) -> None:
 
 
 async def test_a_400_that_named_no_ceiling_teaches_none(monkeypatch) -> None:
-    """A curator-shaped call pins max_tokens=2048; the model answers that its
+    """A summary-shaped call pins max_tokens=2048; the model answers that its
     thinking mode is the other one. That repair leaves the pin in place, and
     remembering the pin as the model's ceiling clamped every later request to
     2048 -- a 31x reduction, silently. Only a ceiling complaint teaches."""

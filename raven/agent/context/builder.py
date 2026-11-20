@@ -61,7 +61,7 @@ class ContextBuilder:
         renderer that :class:`MemoryConsolidator` and
         ``AgentLoop._make_token_budget`` use to *estimate* prompt size —
         it renders identity / bootstrap / host ``# Memory`` / always-
-        skills, with no EverOS recall or Curator working state (those are
+        skills, with no EverOS recall or compacted history (those are
         owned by the assembler's segment builders now). Like the request
         path, it carries no skill directory: the rest of the pool reaches
         the model through the scent menu and the skill tools.

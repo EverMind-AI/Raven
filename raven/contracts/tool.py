@@ -161,7 +161,7 @@ class ToolResult:
     read of a PNG, say. It is strictly *additive*: ``model_text`` must stand on
     its own, because only providers that can carry an image in a tool result
     ever look at ``blocks`` (see ``supports_image_tool_result``). Everything
-    else — the sentinel, subagents, the curator, session export, a provider
+    else — the sentinel, subagents, session export, a provider
     talking Chat Completions — keeps using the text and must still make sense.
     So a tool setting ``blocks`` puts the metadata *and* the file path in
     ``model_text``, never "see the image above".
@@ -222,8 +222,8 @@ class ToolOutput(str):
     the optional display string and multimodal blocks attached.
 
     A ``str`` subclass on purpose. Every caller of the registry boundary --
-    the sentinel action executor, the subagent manager, the context curator,
-    tracing -- puts the return value straight into a message, a preview or an
+    the sentinel action executor, the subagent manager, tracing -- puts the
+    return value straight into a message, a preview or an
     artifact, so the boundary has to return something that *is* a str; handing
     them a :class:`ToolResult` would format its repr into model context and
     user-facing replies. The agent loop reads ``display_text`` off it to render

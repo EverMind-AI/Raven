@@ -325,8 +325,8 @@ def _inspect_config_health(config: Any, *, fix: bool) -> ConfigHealth:
         if real and pinned < real:
             health.findings.append(
                 f"contextWindowTokens is pinned to {pinned:,}, but {model} holds {real:,}. "
-                f"Everything is sized against the pin: the history budget, when the Curator "
-                f"starts paying for a slow path, and when memory consolidation archives."
+                f"Everything is sized against the pin: the history budget, when compaction "
+                f"starts paying for a summary call, and when memory consolidation archives."
             )
             health.fixes.append("remove agents.defaults.contextWindowTokens so the window follows each model")
     elif model and resolve_context_window(model) is None:

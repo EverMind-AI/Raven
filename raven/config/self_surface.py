@@ -625,26 +625,8 @@ SECTIONS: tuple[Section, ...] = (
     ),
     Section(
         "context",
-        "How history is curated into the prompt",
-        (
-            Setting(
-                "context",
-                "Model that curates long history (curator strategy only)",
-                "pin",
-                _E.NEXT_TURN,
-                writer="settings",
-                note='value is {"curatorModel": "<model>", "curatorProvider": "<provider>"}',
-                keys=("curatorModel", "curatorProvider"),
-            ),
-            Setting(
-                "context.protectFirstN",
-                "Leading messages never archived (curator strategy only)",
-                "int",
-                _E.RELOAD,
-                low=0,
-            ),
-            Setting("context.pinnedSkillIds", "Skills kept in context once read", "list", _E.RELOAD),
-        ),
+        "How history is compacted into the prompt",
+        (Setting("context.pinnedSkillIds", "Skills kept in context once read", "list", _E.RELOAD),),
     ),
     Section(
         "proactive",

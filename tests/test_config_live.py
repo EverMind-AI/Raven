@@ -24,7 +24,6 @@ from raven.config import live as live_module
 from raven.config.live import (
     LiveConfig,
     context_window_tokens,
-    curator_pin,
     disabled_playbook_names,
     disabled_tool_names,
     held,
@@ -978,41 +977,14 @@ def test_a_retired_destructive_toggle_is_accepted_ignored_and_flagged():
     assert ExecToolConfig().should_warn_deprecated_allow_destructive is False
 
 
-class TestSubsystemPinsAndTheCap:
-    """The two values that used to be settled when the loop was built.
+class TestTheIterationCap:
+    """A value that used to be settled when the loop was built.
 
-    A pin and an iteration cap are sentences about the next call, not work to
-    redo, so they belong on this side of the line the module docstring draws.
-    Each is written by ``settings.set``, which follows the spelling already in
-    the file -- so each is read under both.
+    An iteration cap is a sentence about the next call, not work to redo, so it
+    belongs on this side of the line the module docstring draws. It is written
+    by ``settings.set``, which follows the spelling already in the file -- so it
+    is read under both.
     """
-
-    def test_the_curator_pin_is_read_from_either_spelling(self, tmp_path: Path) -> None:
-        path = tmp_path / "config.json"
-        _write(path, {"context": {"curatorModel": "m", "curatorProvider": "deepseek"}})
-        assert curator_pin(LiveConfig(path)) == ("m", "deepseek")
-
-        _write(path, {"context": {"curator_model": "m2", "curator_provider": "gemini"}})
-        assert curator_pin(LiveConfig(path)) == ("m2", "gemini")
-
-    def test_an_unset_pin_is_two_nones(self, tmp_path: Path) -> None:
-        """Unset and empty both mean "follow the conversation's model", which
-        is what the resolver turns into None rather than a half pair."""
-        path = tmp_path / "config.json"
-        _write(path, {"context": {"curatorModel": ""}})
-        assert curator_pin(LiveConfig(path)) == (None, None)
-        _write(path, {})
-        assert curator_pin(LiveConfig(path)) == (None, None)
-
-    def test_a_repointed_pin_is_the_next_answer(self, tmp_path: Path) -> None:
-        path = tmp_path / "config.json"
-        _write(path, {"context": {"curatorModel": "before"}})
-        live = LiveConfig(path)
-        assert curator_pin(live)[0] == "before"
-
-        _write(path, {"context": {"curatorModel": "after"}})
-
-        assert curator_pin(live)[0] == "after"
 
     def test_the_cap_is_read_from_either_spelling(self, tmp_path: Path) -> None:
         path = tmp_path / "config.json"
@@ -1148,8 +1120,8 @@ class TestOneTurnOneAnswer:
     A turn asks several times and sometimes minutes apart, so "read at the
     moment of use" and "one answer per turn" are not the same rule. The cap is
     the sharp case: it is first read after context assembly, which can spend
-    minutes in the curator, so an edit made while a turn is running would
-    otherwise change that turn.
+    minutes in a summarising compaction, so an edit made while a turn is running
+    would otherwise change that turn.
     """
 
     def test_a_held_value_is_read_once(self, tmp_path: Path) -> None:

@@ -1173,8 +1173,6 @@ async def test_writing_without_the_plugin_is_a_typed_error(everos_toml):
     [
         ("agents.defaults.maxToolIterations", 120, 0, ("agents", "defaults", "maxToolIterations")),
         ("agents.defaults.contextWindowTokens", 65536, 512, ("agents", "defaults", "contextWindowTokens")),
-        ("context.curatorModel", "deepseek-chat", 7, ("context", "curatorModel")),
-        ("context.curatorProvider", "deepseek", 7, ("context", "curatorProvider")),
         ("sessionTitle.model", "deepseek-chat", 7, ("sessionTitle", "model")),
         ("sessionTitle.provider", "deepseek", 7, ("sessionTitle", "provider")),
         ("sessions.autoArchiveAfterDays", 30, 0, ("sessions", "autoArchiveAfterDays")),
@@ -1196,7 +1194,6 @@ async def test_settings_set_new_scalar_keys_write_and_refuse(cfg, key, good, bad
     [
         "agents.defaults.contextWindowTokens",
         "agents.defaults.reasoningEffort",
-        "context.curatorModel",
         "sessionTitle.provider",
         "sessions.autoArchiveAfterDays",
     ],
@@ -1358,8 +1355,6 @@ async def test_settings_set_memory_backend_refuses_a_non_name(cfg, value):
 @pytest.mark.parametrize(
     "key,value",
     [
-        ("context.curatorModel", "m"),
-        ("context", {"curatorModel": "m", "curatorProvider": "deepseek"}),
         ("agents.defaults.maxToolIterations", 40),
         ("agents.defaults.contextWindowTokens", 4096),
         ("sessionTitle.model", "m"),
@@ -1369,12 +1364,11 @@ async def test_no_settings_write_asks_for_a_reload_any_more(cfg, key, value):
     """Every one of these is read where it is used, so the write is the whole
     change.
 
-    The first four were reload-only because the value was copied onto the
-    objects the loop was built with: the curator's pin is resolved per call
-    now, the cap and the window are read per turn. Telling
-    the operator to restart would be telling them to do nothing, so the whole
-    reload-only set is gone -- ``warning`` now belongs to the one writer that
-    still has something to say (an embedding model change).
+    The first two were reload-only because the value was copied onto the
+    objects the loop was built with: the cap and the window are read per turn
+    now. Telling the operator to restart would be telling them to do nothing,
+    so the whole reload-only set is gone -- ``warning`` now belongs to the one
+    writer that still has something to say (an embedding model change).
     """
     r = await rpc_console.settings_set({"key": key, "value": value})
     assert r["applied"] is True
@@ -1987,7 +1981,7 @@ async def test_settings_set_media_speech_selection_merges(cfg):
 
 @pytest.mark.parametrize(
     "parent,model_field,provider_field",
-    [("context", "curatorModel", "curatorProvider")],
+    [("sessionTitle", "model", "provider")],
 )
 async def test_settings_set_pin_pairs_write_as_one_merged_object(cfg, parent, model_field, provider_field):
     cfg.write_text(json.dumps({parent: {"keep": True}}), encoding="utf-8")

@@ -1,7 +1,7 @@
-"""History trimming — the Curator's contribution to ``*history``.
+"""History trimming — the shared projection from session messages to ``*history``.
 
-Owned by :class:`CuratorAssembler`, which calls these operations to decide
-which session messages reach the model:
+Called by the history strategy that needs it -- the compacting strategy calls
+these operations to decide which session messages reach the model:
 
 - **adjacency closure** (:meth:`canonical_ids`) — if a tool call is
   selected its result messages come along, and vice versa, so the
@@ -16,10 +16,8 @@ which session messages reach the model:
   it fits -- a tool call and its results as one unit (:meth:`tool_group`),
   so what fits is also what the provider accepts.
 
-This is the *only* code path that selects ``*history``. The
-``# Curator Working State`` section is rendered by
-:class:`CuratorSegmentBuilder` from the plan's working-state text — it is
-not this module's concern.
+This is the *only* code path that selects ``*history``. Any segment 6 text is
+the strategy builder's own concern, not this module's.
 """
 
 from __future__ import annotations
@@ -110,10 +108,6 @@ class TrimOutcome:
     @property
     def ok(self) -> bool:
         return self.estimated_tokens <= self.max_prompt_tokens
-
-    @property
-    def over_by(self) -> int:
-        return max(0, self.estimated_tokens - self.max_prompt_tokens)
 
 
 class HistoryTrimmer:
@@ -272,8 +266,8 @@ class HistoryTrimmer:
         Ranked by the group a candidate would remove, not by the candidate:
         a group with any protected member is a protected group, so a
         protection boundary that falls inside a parallel-call exchange
-        (``protect_first_n`` counting the call but not its results) cannot be
-        used to take the protected call out through an unprotected result.
+        cannot be used to take the protected call out through an unprotected
+        result.
         Unprotected groups go first, in selection order,
         skipping one whose removal would re-anchor a protected id out of the
         history; protected groups go only after that, under the same rule;

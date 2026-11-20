@@ -141,9 +141,9 @@ class MemoryModule(Protocol):
     does not satisfy this protocol -- the default implementation wraps one
     and adds those two.
 
-    The engine still holds the Curator's working state and each segment
-    builder's provider binding, so a generation's Memory *is* its context
-    engine -- swapping it is a new generation, not a per-turn choice.
+    The engine still holds the history strategy's per-session state and each
+    segment builder's provider binding, so a generation's Memory *is* its
+    context engine -- swapping it is a new generation, not a per-turn choice.
     """
 
     @property

@@ -476,7 +476,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 skill_forge_router_config=skill_forge_router_config,
                 skill_forge_config=skill_forge_config,
                 skill_hub_client=self._skill_hub_client,
-                provider_pool=provider_pool,
                 # The same reader the catalog gets: the pool drop and the
                 # scent menu screen against the list on disk now, so a skill
                 # switched off -- or back on -- reaches the next turn.

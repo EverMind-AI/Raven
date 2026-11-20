@@ -418,7 +418,7 @@ def hoarded_code_note(result: str, *, threshold: int = 6000) -> str:
     Measured 2026-09-01 on the autoresearch run: the main agent, campaign
     already dispatched, sent sub-agents to fetch train.py and the tooling
     "for strategy design" -- whole files, several times, re-fetching what the
-    context curator had just evicted. Thirty context rebuilds in ninety
+    context compaction had just evicted. Thirty context rebuilds in ninety
     minutes, no experiment progress. The code detail it was hoarding belongs
     in the workspace of the node that edits it; what the main context needed
     was conclusions.

@@ -465,6 +465,39 @@ class TestLegacyLeavesMigration:
 
 
 # ---------------------------------------------------------------------------
+# Version floor 20 -- the curator history strategy is retired
+# ---------------------------------------------------------------------------
+
+
+class TestRetiredCuratorMigration:
+    def test_a_curator_config_loads_as_compacting_and_is_told_once(self, tmp_path: Path) -> None:
+        from raven.config.loader import drain_migration_notices
+
+        path = _write_config(
+            tmp_path,
+            {
+                "context": {
+                    "history": {"strategy": "curator"},
+                    "curatorModel": "m",
+                    "curator_provider": "p",
+                    "protectFirstN": 5,
+                    "fastPathThreshold": 0.4,
+                    "dropSegments": ["curator", "memory"],
+                }
+            },
+        )
+        drain_migration_notices()
+        cfg = load_raven_config(path)
+        assert cfg.context.history.strategy == "compacting"
+        assert cfg.context.drop_segments == ["compacting", "memory"]
+        assert not hasattr(cfg.context, "curator_model")
+        notices = drain_migration_notices()
+        assert any('from "curator" to "compacting"' in n for n in notices)
+        assert any("curator history strategy" in n and "retired" in n for n in notices)
+        assert any("dropSegments" in n and "compacting" in n for n in notices)
+
+
+# ---------------------------------------------------------------------------
 # Frozen behavior of _Base + extra='forbid'
 # ---------------------------------------------------------------------------
 

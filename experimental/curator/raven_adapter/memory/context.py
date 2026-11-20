@@ -96,7 +96,6 @@ class MemoryContext(ContextEngine):
             skill_forge_config=config.skill_forge,
             skill_forge_router_config=config.skill_forge.router,
             skill_hub_client=loop._skill_hub_client,
-            provider_pool=loop._provider_pool,
             blocklist_reader=loop._skill_blocklist_reader,
         )
 
