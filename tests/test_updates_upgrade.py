@@ -964,8 +964,13 @@ def test_the_upgrade_helper_fetches_the_resources_it_just_installed(
     from the environment uv just wrote -- its own -I interpreter is the base
     Python, which has no raven in it."""
     tool = tmp_path / "tool"
-    (tool / "raven" / "bin").mkdir(parents=True)
-    py = tool / "raven" / "bin" / "python"
+    # The layout the helper builds for the platform it runs on: it resolves
+    # Scripts\python.exe on Windows and bin/python everywhere else, so a
+    # POSIX-shaped fixture fails the existence check there and the fetch is
+    # skipped.
+    layout = ("Scripts", "python.exe") if sys.platform == "win32" else ("bin", "python")
+    (tool / "raven" / layout[0]).mkdir(parents=True)
+    py = tool.joinpath("raven", *layout)
     py.write_text("#!/bin/sh\n", encoding="utf-8")
     monkeypatch.setenv("UV_TOOL_DIR", str(tool))
     fetched: list[list[str]] = []
@@ -996,8 +1001,9 @@ def test_a_resource_download_the_upgrade_cannot_finish_leaves_the_upgrade_done(
     helper holds the same line: a host that cannot be reached costs the models,
     not the upgrade."""
     tool = tmp_path / "tool"
-    (tool / "raven" / "bin").mkdir(parents=True)
-    py = tool / "raven" / "bin" / "python"
+    layout = ("Scripts", "python.exe") if sys.platform == "win32" else ("bin", "python")
+    (tool / "raven" / layout[0]).mkdir(parents=True)
+    py = tool.joinpath("raven", *layout)
     py.write_text("#!/bin/sh\n", encoding="utf-8")
     monkeypatch.setenv("UV_TOOL_DIR", str(tool))
 
