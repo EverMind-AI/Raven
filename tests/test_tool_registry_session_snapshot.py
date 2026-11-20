@@ -216,3 +216,25 @@ def test_a_charter_narrows_the_array_before_it_is_served() -> None:
         with charter_scope(Charter(tools=("grep",))):
             assert _defs(reg) == ["grep"]
         assert _defs(reg) == ["exec", "grep"]
+
+
+def test_the_array_survives_more_sessions_than_the_old_cache_limit() -> None:
+    """A live session's snapshot must not be evicted to make room for another
+    session: a gateway can serve more than 64 conversations, and an eviction
+    silently recaptures the array on that session's next ordinary turn."""
+    reg = _registry("base")
+    reg.bind_session_revision("s0", "log")
+
+    with reg.session_scope_for("s0"):
+        assert _defs(reg) == ["base"]
+
+    for i in range(64):
+        key = f"s{i + 1}"
+        reg.bind_session_revision(key, "log")
+        with reg.session_scope_for(key):
+            _defs(reg)
+
+    reg.register(_Stub("late"))
+
+    with reg.session_scope_for("s0"):
+        assert _defs(reg) == ["base"]
