@@ -40,7 +40,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 from loguru import logger
-from pydantic.alias_generators import to_camel
 
 if TYPE_CHECKING:
     from raven.config.schema import SubagentRuntimeConfig
@@ -651,28 +650,6 @@ def web_providers(live: LiveConfig) -> tuple[str | None, str | None]:
         one("tools.web.search.provider"),
         one("tools.web.fetch.provider"),
     )
-
-
-def _block_pin(live: LiveConfig, blocks: tuple[str, ...], model_field: str, provider_field: str):
-    """One block's ``(model, provider)`` pin, under either spelling of both.
-
-    Both spellings because ``settings.set`` writes whichever one the file
-    already uses (see ``console._as_written``) and a hand-written config may
-    hold either; the config models accept both by alias, so a reader that knew
-    only one would answer None for half the configs on disk.
-    """
-    node: dict[str, Any] = {}
-    for name in blocks:
-        candidate = live.raw().get(name)
-        if isinstance(candidate, dict):
-            node = candidate
-            break
-
-    def field(name: str) -> str | None:
-        value = node.get(to_camel(name), node.get(name))
-        return value if isinstance(value, str) and value else None
-
-    return field(model_field), field(provider_field)
 
 
 def disabled_tool_names(live: LiveConfig) -> frozenset[str]:

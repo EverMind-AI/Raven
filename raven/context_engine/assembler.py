@@ -118,9 +118,12 @@ class ContextAssembler(ContextEngine):
         mints_source_refs: bool = False,
         turn_scratch: bool = True,
     ) -> None:
-        # The two are the history strategy's, declared in its registry entry;
-        # the defaults are the compacting strategy's, which is what an
-        # assembler built without a registry entry (a test, an embedder) means.
+        # The two are the history strategy's, declared in its registry entry.
+        # These are the fallbacks for an assembler built without one (a test, an
+        # embedder): "owns compaction" is what the one registered strategy
+        # declares, while "mints no refs" is the safe answer -- a builder that
+        # never registered cannot promise the text behind a ref, and the
+        # factory overwrites both from the resolved entry on every real build.
         self._owns_compaction = owns_compaction
         self._mints_source_refs = mints_source_refs
         self._scent = scent

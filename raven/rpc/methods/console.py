@@ -951,7 +951,6 @@ _MERGED_KEYS = frozenset(
         "tools.media.speech",
         "tools.media.video",
         "sessionTitle",
-        "context",
         "translate",
         "knowledge",
     }

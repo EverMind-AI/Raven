@@ -109,10 +109,6 @@ class TrimOutcome:
     def ok(self) -> bool:
         return self.estimated_tokens <= self.max_prompt_tokens
 
-    @property
-    def over_by(self) -> int:
-        return max(0, self.estimated_tokens - self.max_prompt_tokens)
-
 
 class HistoryTrimmer:
     """Shapes and budget-trims the session history into ``*history``."""
