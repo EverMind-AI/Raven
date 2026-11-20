@@ -63,8 +63,12 @@ from raven.contracts.tool import ToolOutput, ToolResult
 from raven.sandbox.direct_executor import DirectExecutor
 from raven.sandbox.interfaces import ExecResult
 
-DEFAULT_TIMEOUT = 60
-DEFAULT_MAX_TIMEOUT = 1200
+DEFAULT_TIMEOUT = 120
+DEFAULT_MAX_TIMEOUT = 600
+#: Seconds a command must leave inside the turn's clock for the turn to finish.
+#: The loop checks the deadline between iterations, so this is the room the last
+#: call and the wrap-up need after the command returns.
+DEADLINE_RESERVE_SECONDS = 20
 MAX_OUTPUT = 30_000
 #: Where an oversized output is saved whole, under Agent home.
 SPILL_SUBDIR = "exec-output"
@@ -138,6 +142,18 @@ class CodeExecResult(ExecResult):
         return result[:half] + marker + result[-half:]
 
 
+async def _pump(stream: asyncio.StreamReader | None, handle: Any) -> None:
+    """Copy a live pipe into an adopted task's log, to the end."""
+    if stream is None:
+        return
+    while True:
+        chunk = await stream.read(65536)
+        if not chunk:
+            return
+        handle.write(chunk)
+        handle.flush()
+
+
 async def _drain(stream: asyncio.StreamReader | None, into: bytearray) -> None:
     if stream is None:
         return
@@ -194,6 +210,60 @@ class CodeExecutor(DirectExecutor):
         env.update(extra or {})
         return env
 
+    async def _adopt(
+        self,
+        process: asyncio.subprocess.Process,
+        pgid: int,
+        command: str,
+        effective: int,
+        out: bytearray,
+        err: bytearray,
+        drains: list[asyncio.Task[None]],
+    ) -> CodeExecResult | None:
+        """Hand a command that outlived its limit to the background lane.
+
+        The pipes stay ours, so the adopter has to keep reading them: the
+        output already captured opens the log, and the two further readers
+        append the rest. ``None`` when the process is already gone or the
+        harness has no clock left to give it -- the caller then kills.
+        """
+        from raven.agent import turn_clock
+        from raven.agent.tools import background_exec
+
+        if process.returncode is not None:
+            return None
+        left = turn_clock.remaining()
+        if left is not None and left <= 0:
+            return None
+        task = background_exec.adopt(
+            command, pgid, session_key=turn_clock.session_key() or None
+        )
+        handle = open(task.log_path, "ab", buffering=0)
+        handle.write(bytes(out) + bytes(err))
+        for drain in drains:
+            drain.cancel()
+        pumps = [
+            asyncio.create_task(_pump(process.stdout, handle)),
+            asyncio.create_task(_pump(process.stderr, handle)),
+        ]
+
+        async def _close_when_done() -> None:
+            await asyncio.gather(*pumps, return_exceptions=True)
+            handle.close()
+
+        asyncio.create_task(_close_when_done())
+        message = (
+            f"Timed out after {effective}s; the command is still running in the background "
+            f"as {task.task_id}. Output continues in {task.log_path}."
+        )
+        return CodeExecResult(
+            stdout=bytes(out).decode("utf-8", errors="replace"),
+            stderr=(bytes(err).decode("utf-8", errors="replace").rstrip("\n") + "\n" if err else "") + message,
+            exit_code=-1,
+            timed_out=True,
+            spill_dir=self._spill_dir,
+        )
+
     async def exec(
         self,
         command: str,
@@ -222,11 +292,15 @@ class CodeExecutor(DirectExecutor):
             await asyncio.wait_for(process.wait(), timeout=effective)
         except asyncio.TimeoutError:
             timed_out = True
-            self._kill_process_group(process, pgid)
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                pass
+            adopted = await self._adopt(process, pgid, command, effective, out, err, drains)
+            if adopted is None:
+                self._kill_process_group(process, pgid)
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    pass
+            else:
+                return adopted
         except asyncio.CancelledError:
             self._kill_process_group(process, pgid)
             for task in drains:
@@ -383,6 +457,21 @@ class CodeExecTool(ExecTool):
         )
         return schema
 
+    def _bounded_timeout(self, timeout: int | None) -> int:
+        """The seconds this command may run: the request, the ceiling, and the turn's clock.
+
+        The loop reads its deadline between iterations, never mid-call, so a
+        command allowed to run past it spends the overrun after the turn was
+        supposed to stop. The reserve is what the turn still needs to answer.
+        """
+        from raven.agent import turn_clock
+
+        effective = min(DEFAULT_TIMEOUT if timeout is None else timeout, self._MAX_TIMEOUT)
+        left = turn_clock.remaining()
+        if left is None:
+            return effective
+        return max(5, min(effective, int(left - DEADLINE_RESERVE_SECONDS)))
+
     async def execute(
         self,
         command: str,
@@ -402,6 +491,15 @@ class CodeExecTool(ExecTool):
                 "work use run_in_background: true]\n"
             )
             timeout = self._MAX_TIMEOUT
+        if not machine and not run_in_background:
+            base = min(DEFAULT_TIMEOUT if timeout is None else timeout, self._MAX_TIMEOUT)
+            requested = self._bounded_timeout(timeout)
+            if requested < base:
+                note += (
+                    f"[note: timeout {requested}s, cut to what is left of this turn's deadline; "
+                    "longer work belongs in run_in_background: true]\n"
+                )
+            timeout = requested
         out = await super().execute(
             command,
             working_dir=working_dir,

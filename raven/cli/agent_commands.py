@@ -45,6 +45,9 @@ _ONE_SHOT_EXIT = {"code": 0}
 # run" from "the model ran without the mutations it asked for".
 EXIT_ACTIONS_REFUSED = 3
 
+#: How long a quiet moment has to last before the launcher calls the work done.
+_BACKGROUND_SETTLE_S = 2.0
+
 
 def _report_refusals(refusals: list) -> None:
     """Say which calls the gate turned down, once, after the reply.
@@ -106,23 +109,33 @@ def _report_unanswered(questions: list) -> None:
 
 
 async def _wait_for_background_work(agent_loop, scheduler, conversation: str) -> None:
-    """Wait for running sub-agents and their already-submitted follow-up turns.
+    """Wait for running sub-agents, this session's background commands, and the turns they start.
 
     A sub-agent completion submits a ``SUBAGENT`` turn after its running count
     drops, so the short second check closes that hand-off gap. A held
     unprompted report still inside its debounce window is not counted here.
+
+    Background commands are counted on their own: a command adopted past its
+    limit outlives the call that started it, and returning before it ends
+    would leave the reader with a task id and no output.
     """
+    from raven.agent.tools import background_exec
+
     subagents = getattr(agent_loop, "subagents", None)
-    if subagents is None:
-        return
     lanes = {conversation, "cli:direct"}
 
     def busy() -> bool:
+        if background_exec.running(session_key=conversation):
+            return True
+        if subagents is None:
+            return any(scheduler.has_inflight(lane) for lane in lanes)
         return subagents.get_running_count() > 0 or any(scheduler.has_inflight(lane) for lane in lanes)
 
+    if subagents is None and not background_exec.running(session_key=conversation):
+        return
     while True:
         if not busy():
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(_BACKGROUND_SETTLE_S)
             if not busy():
                 return
         await asyncio.sleep(1.0)

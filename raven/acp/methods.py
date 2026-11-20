@@ -121,6 +121,9 @@ ACP_META_OBSERVER = "acp_meta"
 #: without the key, so a client that reads ``end_turn`` as "finished" (a DAG
 #: judging its node) is not told so while the agent is still on the job.
 HOLD_TURN_META = "raven.holdTurn"
+
+#: How often a held prompt asks whether its background work is gone.
+BACKGROUND_POLL_S = 2.0
 #: How often a held prompt says it is alive, as a ``tool_call_update`` on the
 #: one call that stands for the wait. Well inside the ten minutes raven's own
 #: client gives a running node before it reports a stall.
@@ -887,12 +890,72 @@ class AcpMethods:
             },
         )
         beat = asyncio.get_running_loop().create_task(self._heartbeat(session, call_id))
+        # A hold for background work has to end by itself: nothing else will
+        # run a turn on this session when the command finishes. The watcher
+        # starts that closing turn, which is what answers this prompt.
+        watcher = (
+            asyncio.get_running_loop().create_task(self._resume_after_background(session, hold))
+            if hold.get("background")
+            else None
+        )
         try:
-            return await future
+            stop = await future
+            if watcher is not None and stop == "cancelled":
+                self._reap_background(session)
+            return stop
         finally:
             beat.cancel()
+            if watcher is not None:
+                watcher.cancel()
             self._translator.end_turn(session.session_id)
             self._update(session, {"sessionUpdate": "tool_call_update", "toolCallId": call_id, "status": "completed"})
+
+    def _reap_background(self, session: AcpSession) -> None:
+        from raven.agent.tools import background_exec
+
+        for task in background_exec.running(session_key=session.session_key):
+            background_exec.reap(str(task.get("task_id") or ""))
+
+    async def _resume_after_background(self, session: AcpSession, hold: dict[str, Any]) -> None:
+        """Run the closing turn once this session's background commands are gone.
+
+        Polled rather than event-driven because the registry is process-wide and
+        holds no subscribers; two seconds is the same order as the heartbeat the
+        client clocks liveness by. At the deadline the rest are killed and the
+        closing turn runs anyway, so a prompt is never left open forever.
+        """
+        from raven.agent.tools import background_exec
+
+        until = hold.get("untilMs")
+        deadline = (float(until) / 1000.0) if isinstance(until, (int, float)) and until > 0 else None
+        done = background_exec.running(session_key=session.session_key)
+        while done:
+            if deadline is not None and time.time() >= deadline:
+                self._reap_background(session)
+                break
+            await asyncio.sleep(BACKGROUND_POLL_S)
+            seen = background_exec.running(session_key=session.session_key)
+            if not seen:
+                break
+            done = seen
+        lines = [f"- {t.get('task_id')}: {t.get('command')} (log: {t.get('log_path')})" for t in done]
+        content = (
+            "[system] The background commands this session started have finished. "
+            "Read their logs and continue the task; report what they changed.\n" + "\n".join(lines)
+        )
+        try:
+            await self._call(
+                "turn.send",
+                {
+                    "session_key": session.session_key,
+                    "channel": self._channel,
+                    "chat_id": _chat_id_of(session.session_key),
+                    "content": content,
+                    "media": [],
+                },
+            )
+        except Exception:
+            logger.exception("acp: could not run the closing turn after background work on {}", session.session_key)
 
     async def _heartbeat(self, session: AcpSession, call_id: str) -> None:
         started = time.monotonic()
