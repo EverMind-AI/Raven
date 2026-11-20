@@ -96,8 +96,9 @@ class RavenSession:
         restrict_to_workspace: bool,
     ) -> None:
         from raven.agent.loop import AgentLoop
-        from raven.cli._helpers import make_provider as _make_provider
+        from raven.agent.loop.bundles import EngineWiring, HostWiring, ToolWiring, TurnPolicy
         from raven.config.loader import load_config, set_config_path
+        from raven.providers.factory import make_provider as _make_provider
         from raven.providers.rates import effective_context_window
         from raven.session.manager import SessionManager
 
@@ -136,22 +137,22 @@ class RavenSession:
             provider=self.provider,
             workspace=workspace,
             model=self.model,
-            max_iterations=max_iterations,
-            context_window_tokens=self.context_window,
-            brave_api_key=self.config.tools.web.search.api_key or None,
-            jina_api_key=self.config.tools.web.jina_api_key or None,
-            web_proxy=self.config.tools.web.proxy or None,
-            exec_config=self.config.tools.exec,
-            restrict_to_workspace=restrict_to_workspace,
             session_manager=session_manager,
             mcp_servers={},
             sandbox_config=self.config.tools.sandbox,
-            channels_config=self.config.channels,
-            everos_config=self.config.agents.defaults.everos,
-            # Benchmarks are non-interactive batch runs — opt out of the
+            tools=ToolWiring(
+                search_api_key=self.config.tools.web.search.api_key or None,
+                jina_api_key=self.config.tools.web.jina_api_key or None,
+                web_proxy=self.config.tools.web.proxy or None,
+                exec_config=self.config.tools.exec,
+                restrict_to_workspace=restrict_to_workspace,
+            ),
+            engine=EngineWiring(context_window_tokens=self.context_window),
+            # Benchmarks are non-interactive batch runs -- opt out of the
             # per-turn shadow-git checkpoint (no recovery channel to inject
             # into, and we don't want ``.raven/shadow.git`` in task workspaces).
-            interactive=False,
+            policy=TurnPolicy(max_iterations=max_iterations, interactive=False),
+            host=HostWiring(channels_config=self.config.channels),
         )
 
     @staticmethod
