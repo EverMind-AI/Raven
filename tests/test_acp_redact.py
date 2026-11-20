@@ -25,6 +25,14 @@ import pytest
 import raven.security.redact as redact_module
 from raven.security.redact import MAX_SCAN_CHARS, REPLACEMENT, pattern_names, redact, redact_value
 
+# A real fine-grained PAT is ``github_pat_`` plus 82 characters: 22, an
+# underscore, then 59. Fabricated, and split here so the shape the pattern has
+# to match is visible. The 29-character fixture this replaced pinned only the
+# floor above 29; a value class that lost the underscore still passed it.
+GITHUB_PAT_FIRST = "11ABCDEFG0abcdefghijkl"
+GITHUB_PAT_REST = "B0b3Dd5Ff7Hh9Jj1Kk3Ll5Mm7Nn9Pp1Qq3Rr5Ss7Tt9Uu1Vv3Ww5Xx7Yy9Z"
+GITHUB_PAT = f"github_pat_{GITHUB_PAT_FIRST}_{GITHUB_PAT_REST}"
+
 
 class TestWhatItCatches:
     @pytest.mark.parametrize(
@@ -33,7 +41,7 @@ class TestWhatItCatches:
             ('curl -H "Authorization: Bearer sk-ant-api03-AAAABBBBCCCCDDDD" https://x', "sk-ant-api03"),
             ("export OPENAI_API_KEY=sk-proj-abcdefghijklmnop", "sk-proj-abcdefghijklmnop"),
             ("gh auth login --with-token ghp_ABCDEFGHIJKLMNOPQRSTUV", "ghp_ABCDEFGHIJKLMNOPQRSTUV"),
-            ("git clone https://github_pat_11AAAAAAAAAAAAAAAAAAAAAA_BBBB@github.com/a/b", "github_pat_11AAAA"),
+            (f"git clone https://{GITHUB_PAT}@github.com/a/b", GITHUB_PAT),
             ("glab auth login --token glpat-abcdefghijklmnopqrst", "glpat-abcdefghijklmnopqrst"),
             ('api_key: "AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI"', "AIzaSy"),
             ("aws sts get-caller-identity  # AKIAIOSFODNN7EXAMPLE", "AKIAIOSFODNN7EXAMPLE"),
@@ -54,6 +62,21 @@ class TestWhatItCatches:
         # was about to run.
         prefix = text[: text.index(secret)]
         assert prefix in result, "redacting the label as well leaves a row nobody can act on"
+
+    def test_a_fine_grained_pat_leaves_nothing_of_its_value(self):
+        """A real-shaped token, because a 13-character prefix proves only that
+        the prefix went. The value class still has to cross the underscore at
+        position 22 and the 59 characters behind it, and each part is asserted
+        on its own so a partial redaction cannot pass as a whole one."""
+        text = f"git clone https://{GITHUB_PAT}@github.com/a/b"
+
+        result = redact(text)
+
+        assert len(GITHUB_PAT) == 93
+        assert GITHUB_PAT not in result
+        assert GITHUB_PAT[len("github_pat_") :] not in result
+        assert GITHUB_PAT[33:] not in result
+        assert result == "git clone https://[redacted]@github.com/a/b"
 
     def test_a_private_key_body_goes_but_the_armour_stays(self):
         # Assembled rather than written out, and not for taste: a literal armour
@@ -172,6 +195,14 @@ class TestTheLimits:
     def test_a_known_cut_removes_short_credential_tails(self, text):
         assert REPLACEMENT in redact(text, truncated=True)
         assert redact(text) == text
+
+    def test_the_fine_grained_pat_floor_is_twenty_two_characters(self):
+        """``github_pat_`` plus 21 characters is not a token yet; 22 is. Pinned
+        as a pair so a smaller quantifier and a larger one both show up."""
+        short = "github_pat_" + "A" * 21
+
+        assert redact(short) == short
+        assert redact("github_pat_" + "A" * 22) == REPLACEMENT
 
     def test_a_known_cut_keeps_ordinary_unlabelled_text(self):
         text = "ordinary diagnostic " + "x" * 1000
