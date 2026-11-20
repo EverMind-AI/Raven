@@ -13,10 +13,9 @@
    whole hit area. */
 .workspace-file-acts { display: flex; align-items: center; flex: none; }
 
-/* The window, reading-mode and compact-mode buttons draw on the same 14px
-   stroke grid as the folder and the new-tab button they sit beside. */
+/* The new-tab and compact-mode buttons draw on the same 14px stroke grid as
+   the folder and the new-tab button they sit beside. */
 .workspace-window.ghost-ic svg,
-.workspace-reader.ghost-ic svg,
 .workspace-mode.ghost-ic svg { width: 14px; height: 14px; }
 
 /* A file's folder and a change's counts, as the muted line after the name in
@@ -185,18 +184,32 @@
 .workspace-md-body .cblk .cblang { font-family: inherit; text-transform: uppercase; }
 .workspace-md-body .cblk .cbcp { color: var(--muted); }
 
-/* The fold-away outline, mounted into the bar. */
+/* The fold-away outline, mounted into the bar. Its height is the pane's own
+   tab pair beside it (2px padding around a 24px button), so the two controls
+   make one row rather than a tall pill and a short one.
+
+   The box is pinned to the button's height because Chromium grows an open
+   <details> by 8px even when everything inside it is out of flow. The header
+   centres its items, so that growth lifted the button 4px on every open; the
+   menu is positioned against this slot and needs no taller box. */
+.workspace-md-menu { height: 28px; }
 .workspace-md-menu summary {
-  display: flex; min-height: 32px; align-items: center; gap: 5px; padding: 0 7px;
-  border-radius: 7px; background: var(--raised); color: var(--muted);
+  display: flex; height: 28px; align-items: center; gap: 5px; padding: 0 8px;
+  border-radius: 8px; background: var(--raised); color: var(--muted);
   font-size: 12px; cursor: pointer; list-style: none;
 }
 .workspace-md-menu summary::-webkit-details-marker { display: none; }
 .workspace-md-menu[data-tight] summary span { display: none; }
+/* The menu's width is its own, not the button's: this element's containing
+   block is the inline-flex slot around that button (about 90px), so a
+   percentage width here answers a question nobody asked and squeezed the
+   outline into a column of one character per line. Left-aligned, a menu wider
+   than the controls to its right still lands inside the header at every pane
+   width. */
 .workspace-md-pop {
   position: absolute; z-index: 2;
-  inset-block-start: calc(100% + 6px); inset-inline-end: 0;
-  min-width: min(200px, calc(100% - 28px)); max-width: calc(100% - 28px);
+  inset-block-start: calc(100% + 6px); inset-inline-start: 0;
+  width: 216px; max-width: calc(100vw - 24px);
   max-height: min(58dvh, 460px); overflow: auto; padding: 10px;
   border: 1px solid var(--line); border-radius: 12px;
   background: var(--paper);
@@ -263,15 +276,13 @@
   margin-bottom: 13px; font-size: 26px;
 }
 
-/* Reading mode: the pane, and nothing else, over the whole window. */
-[data-reader] {
-  position: fixed; inset: 0; z-index: 65; width: 100%;
-  background: var(--paper);
-}
-[data-reader] > .fpane { flex: 1; }
-/* Full screen is the reader filling the window: the document drops its
-   reading-width cap and its own edge, so nothing is left blank beside it. */
-[data-reader] .workspace-mddoc { width: 100%; margin-inline: 0; padding-top: 14px; }
+/* The 1152px control is a reading column's cap, and a column is what a pane
+   has when something stands beside it. A pane that owns the whole window
+   (the desk's solo flag), and the page opened on a tab of its own, have none:
+   the document takes the width its own padding leaves, so no blank band is
+   left at either side. */
+[data-solo="true"] .workspace-mddoc { width: 100%; margin-inline: 0; }
+html[data-preview] .workspace-mddoc { width: 100%; margin-inline: 0; }
 
 
 /* ── a file on a page of its own ──────────────────────────────────────
@@ -296,12 +307,20 @@ html[data-preview] #onb { display: none !important; }
   color: var(--text); font-size: 14px; font-weight: 600;
 }
 .workspace-preview-kind { flex: none; color: var(--faint); font-size: 11.5px; }
-.workspace-preview-seg { display: flex; flex: none; gap: 1px; }
-.workspace-preview-seg button {
-  padding: 3px 9px; border: .5px solid var(--line); border-radius: 6px;
-  background: transparent; color: var(--muted); cursor: pointer; font-size: 12px;
+/* The same pair the pane header draws, so the outline button beside it can
+   match one height in both places. */
+.workspace-preview-seg {
+  display: inline-flex; flex: none; gap: 2px; padding: 2px; border-radius: 8px;
+  background: var(--surface);
 }
-.workspace-preview-seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); }
+.workspace-preview-seg button {
+  height: 24px; padding: 0 9px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--muted); cursor: pointer;
+  font-size: 12px; line-height: 24px;
+}
+.workspace-preview-seg button[aria-pressed="true"] {
+  background: var(--raised); color: var(--text); box-shadow: 0 1px 2px var(--ring);
+}
 .workspace-preview-body { flex: 1; min-height: 0; overflow: auto; }
 .workspace-preview-body > .fview { min-height: 100%; }
 .workspace-preview-body > .fview .workspace-md-body { max-width: 100%; }
