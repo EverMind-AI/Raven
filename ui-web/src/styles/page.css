@@ -6463,8 +6463,20 @@ body:has(#onb:not([hidden])) .mpick { z-index: calc(var(--z-onboarding) + 1); }
   z-index: var(--z-desk-full); }
 .desk-ready .ws:has(.desk-grid[data-solo="true"])::before { display: none; }
 .desk-ready .split:has(.desk-grid[data-solo="true"]) #wsGrip { display: none; }
-.desk-ready .chat #wsGrip::after { display: none; }
-.desk-ready .chat #wsGrip { right: -3px; width: 6px; }
+/* The desk's workspace column has one free corner, its lower left. The seam's
+   full-height target is replaced there by the same small handle the palette
+   wears -- an 18px square with the diagonal grip at its corner -- so the
+   column is sized from a button at its foot rather than from anywhere along
+   its left edge. */
+.desk-ready .chat #wsGrip {
+  top: auto; bottom: var(--dock-gutter); right: -18px;
+  width: 18px; height: 18px; cursor: nesw-resize; touch-action: none;
+}
+.desk-ready .chat #wsGrip::after {
+  display: block; top: auto; left: 4px; bottom: 4px; width: 9px; height: 9px;
+  opacity: .55;
+  background: linear-gradient(45deg, transparent 48%, var(--faint) 50%, var(--faint) 57%, transparent 59%, transparent 70%, var(--faint) 72%, var(--faint) 79%, transparent 81%);
+}
 /* The capsule's chip is the desk's way in, so the panel toggle leaves the row. */
 .desk-ready #wsBtn { display: none; }
 
