@@ -28,7 +28,7 @@ from typing import Any, Callable
 from raven.context_engine.runtime_context import replayed_content
 from raven.contracts.llm_provider import LLMProvider
 from raven.providers.binding import ModelBinding, active_window, resolve
-from raven.providers.capabilities import supports_image_tool_result, supports_vision
+from raven.providers.capabilities import replay_gates
 from raven.utils.tokens import estimate_prompt_tokens_chain, reuse_prompt_tokenization
 
 # Provider-safe message keys. Anything else on a session message
@@ -366,8 +366,7 @@ class HistoryTrimmer:
         :class:`TrimOutcome`.
         """
         canon = self.canonical_ids(session_messages, ids)
-        can_see_images = supports_vision(self.model)
-        tool_images_ok = supports_image_tool_result(self.provider, self.model)
+        can_see_images, tool_images_ok = replay_gates(self.provider, self.model)
         history = self.history_from_ids(
             session_messages,
             canon,

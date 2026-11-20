@@ -753,8 +753,7 @@ def test_trim_honours_the_target_capability_gates(tmp_path: Path, monkeypatch) -
     class _Provider:
         api_key = "test"
 
-    monkeypatch.setattr(trimmer_module, "supports_vision", lambda model, *args, **kwargs: False)
-    monkeypatch.setattr(trimmer_module, "supports_image_tool_result", lambda provider, model, *args, **kwargs: True)
+    monkeypatch.setattr(trimmer_module, "replay_gates", lambda provider, model: (False, True))
     uri = _data_uri(_png_header())
     session = Session(key="cli:u")
     AgentLoop._save_turn(
