@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
 import dataclasses
 import json
@@ -17,11 +18,11 @@ from raven.agent.task_board import service as board_service
 from raven.agent.task_board.board import Board, ProgressStep, TaskGroup, TaskLink
 from raven.agent.task_board.store import BOARD_FILENAME, load_board, save_board
 from raven.config.schema import TaskBoardConfig
-from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
+from raven.contracts.llm_provider import ErrorClassification, LLMResponse, ToolCallRequest
 from raven.contracts.tool import Tool
 from raven.observability import purpose
 from raven.providers.base import LLMProvider
-from raven.spine.message import ChatType, Source
+from raven.spine.message import ChatType, Media, Source
 from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
 from raven.token_wise import usage_context
 
@@ -508,12 +509,25 @@ def _both_moved() -> LLMResponse:
     )
 
 
-def _scope(instruction: str) -> str:
+def _paragraph(instruction: str) -> str:
     return instruction[instruction.index("[END DISPATCHES]") : instruction.index("How to write the update:")]
 
 
-async def test_a_delegated_result_keeps_its_turns_board_to_the_group_that_placed_the_run(tmp_path):
-    provider = Recording([LLMResponse(content="The subagent found the empty token."), _both_moved()])
+def _moved(group: str, quote: str) -> dict:
+    return {"group": group, "moved": True, "evidence": quote}
+
+
+def _stepped(*groups: str) -> list[dict]:
+    return [{"group": g, "title": f"Moved {g}", "summary": "Moved.", "status": "idle"} for g in groups]
+
+
+async def test_a_delegated_result_lists_its_group_first_and_writes_what_it_moved(tmp_path):
+    reply = "The subagent found the empty token; the g_b notes are drafted too."
+    board_reply = _update(
+        steps=_stepped("g_a", "g_b"),
+        matters=[_moved("g_a", "found the empty token"), _moved("g_b", "the g_b notes are drafted")],
+    )
+    provider = Recording([LLMResponse(content=reply), board_reply])
     agent = _agent(tmp_path, provider)
     _placed_and_another(agent)
     result = TurnRequest(
@@ -526,12 +540,15 @@ async def test_a_delegated_result_keeps_its_turns_board_to_the_group_that_placed
     await agent._process_message(result, session_key=KEY, origin=Origin.SUBAGENT)
     await _drain(agent)
 
-    assert "g_a" in _scope(_text(provider.requests[1]["messages"][-1]))
-    assert [len(g.steps) for g in load_board(agent.sessions.session_dir(KEY)).groups] == [2, 1]
+    paragraph = _paragraph(_text(provider.requests[1]["messages"][-1]))
+    assert "This turn opened on g_a:" in paragraph
+    assert "This turn touched these groups: g_a, g_b." in paragraph
+    assert [len(g.steps) for g in load_board(agent.sessions.session_dir(KEY)).groups] == [2, 2]
 
 
-async def test_a_move_on_keeps_its_turns_board_to_the_group_it_named(tmp_path):
-    provider = Recording([LLMResponse(content=ANSWER), _both_moved()])
+async def test_a_move_on_lists_the_picked_group_first(tmp_path):
+    board_reply = _update(steps=_stepped("g_b"), matters=[_moved("g_b", "Draft them for Friday")])
+    provider = Recording([LLMResponse(content=ANSWER), board_reply])
     agent = _agent(tmp_path, provider)
     _placed_and_another(agent)
     await agent.task_board.move_on(KEY, "g_b")
@@ -539,27 +556,53 @@ async def test_a_move_on_keeps_its_turns_board_to_the_group_it_named(tmp_path):
     await agent._process_message(_turn("Draft them for Friday."), session_key=KEY)
     await _drain(agent)
 
-    assert "g_b" in _scope(_text(provider.requests[1]["messages"][-1]))
+    assert "This turn opened on g_b:" in _paragraph(_text(provider.requests[1]["messages"][-1]))
     assert [len(g.steps) for g in load_board(agent.sessions.session_dir(KEY)).groups] == [1, 2]
 
 
-async def test_a_mid_turn_message_frees_a_move_ons_turn_to_write_what_it_moved(tmp_path):
-    """A message the user sent while the turn ran may be about any matter, and only the model
-    can tell which: the update is no longer kept to the group the Move on named."""
-    provider = Recording([LLMResponse(content=ANSWER), _both_moved()])
+async def test_a_mid_turn_message_is_searched_for_candidates(tmp_path):
+    board_reply = _update(
+        steps=_stepped("g_a", "g_b"),
+        matters=[_moved("g_b", "Draft them for Friday"), _moved("g_a", "where does g_a stand")],
+    )
+    provider = Recording([LLMResponse(content=ANSWER), board_reply])
     agent = _agent(tmp_path, provider)
     _placed_and_another(agent)
     await agent.task_board.move_on(KEY, "g_b")
-    waiting = [_turn("And where does the fix stand?")]
+    waiting = [_turn("And where does g_a stand?")]
 
     await agent._process_message(
         _turn("Draft them for Friday."), session_key=KEY, drain=lambda: [waiting.pop()] if waiting else []
     )
     await _drain(agent)
 
-    scope = _scope(_text(provider.requests[1]["messages"][-1]))
-    assert "g_b -- and to the matter of each message the user sent while it was already running." in scope
+    assert "This turn touched these groups: g_b, g_a." in _paragraph(_text(provider.requests[1]["messages"][-1]))
     assert [len(g.steps) for g in load_board(agent.sessions.session_dir(KEY)).groups] == [2, 2]
+
+
+async def test_the_post_turn_call_carries_only_this_turn(tmp_path):
+    provider = Recording(
+        [
+            LLMResponse(content=ANSWER),
+            BOARD_REPLY,
+            LLMResponse(content="The notes are drafted."),
+            _update(steps=[]),
+        ]
+    )
+    agent = _agent(tmp_path, provider)
+
+    await agent._process_message(_turn(), session_key=KEY)
+    await _drain(agent)
+    await agent._process_message(_turn("And the release notes?"), session_key=KEY)
+    await _drain(agent)
+
+    main, extra = provider.requests[2]["messages"], provider.requests[3]["messages"]
+    texts = [_text(m) for m in extra]
+    assert any("Why is the page blank" in _text(m) for m in main), "the turn itself still sees its history"
+    assert not any("Why is the page blank" in t or ANSWER in t for t in texts)
+    assert extra[0]["role"] == "system" and "And the release notes?" in texts[1]
+    assert any("The notes are drafted." in t for t in texts[2:-1])
+    assert "task board" in texts[-1]
 
 
 async def test_a_turn_the_user_started_with_nothing_picked_keeps_every_group_it_moved(tmp_path):
@@ -570,8 +613,63 @@ async def test_a_turn_the_user_started_with_nothing_picked_keeps_every_group_it_
     await agent._process_message(_turn("Where do the fix and the notes stand?"), session_key=KEY)
     await _drain(agent)
 
-    assert _scope(_text(provider.requests[1]["messages"][-1])) == "[END DISPATCHES]\n\n"
+    assert _paragraph(_text(provider.requests[1]["messages"][-1])) == "[END DISPATCHES]\n\n"
     assert [len(g.steps) for g in load_board(agent.sessions.session_dir(KEY)).groups] == [2, 2]
+
+
+_PIXEL = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+def _carries_a_picture(messages) -> bool:
+    return any(
+        isinstance(part, dict) and part.get("type") == "image_url"
+        for m in messages
+        if isinstance(m.get("content"), list)
+        for part in m["content"]
+    )
+
+
+class RefusesPictures(Recording):
+    """A text-only endpoint: any request carrying a picture is refused the way such a model refuses it."""
+
+    def __init__(self, replies: list[LLMResponse]):
+        super().__init__(replies)
+        self.refused: list[str | None] = []
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        if _carries_a_picture(messages):
+            self.refused.append(purpose.current())
+            return LLMResponse(
+                content="This model does not accept images.",
+                finish_reason="error",
+                error_classification=ErrorClassification("images_unsupported", strip_images=True),
+            )
+        return await super().chat(messages, tools, model, max_tokens, temperature, reasoning_effort, tool_choice)
+
+
+async def test_a_picture_the_endpoint_refused_stays_out_of_the_board_call(tmp_path):
+    picture = tmp_path / "pixel.png"
+    picture.write_bytes(_PIXEL)
+    provider = RefusesPictures([LLMResponse(content=ANSWER), BOARD_REPLY])
+    agent = _agent(tmp_path, provider)
+    turn = dataclasses.replace(_turn("What is in this picture?"), media=(Media(str(picture), "image/png", "image"),))
+
+    await agent._process_message(turn, session_key=KEY)
+    await _drain(agent)
+
+    assert provider.refused == ["main"], "the turn met the refusal once, and the board call never did"
+    assert [g.title for g in load_board(agent.sessions.session_dir(KEY)).groups] == ["Fix bug A"]
 
 
 async def _consolidated(_session) -> bool:

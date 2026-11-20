@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -69,6 +70,19 @@ def is_symlink_loop(error: OSError) -> bool:
     return error.errno == errno.ELOOP or getattr(error, "winerror", 0) == _WINERROR_CANT_RESOLVE_FILENAME
 
 
+def _resolved(path: Path) -> Path:
+    """``path`` with its symlinks resolved, without requiring the path to exist.
+
+    ``strict=True`` raises for a symlink loop, which ``Path.resolve`` does only up to
+    CPython 3.12; a path that is simply not there yet still has a resolvable parent chain,
+    so its ``ENOENT`` falls back to the non-strict form.
+    """
+    try:
+        return Path(os.path.realpath(path, strict=True))
+    except FileNotFoundError:
+        return Path(os.path.realpath(path))
+
+
 def is_contained(root: Path, candidate: Path) -> bool:
     """True when *candidate* resolves inside *root*.
 
@@ -77,9 +91,10 @@ def is_contained(root: Path, candidate: Path) -> bool:
     comparison on the unresolved name (spec §4.1).
     """
     try:
-        candidate.resolve().relative_to(Path(root).resolve())
-    # Python 3.12 turns ELOOP into RuntimeError, not OSError; a self-referential
-    # link is a containment failure, never a crash for the whole process.
+        _resolved(candidate).relative_to(_resolved(root))
+    # A self-referential link is a containment failure, never a crash for the whole
+    # process: 3.12 reported it as RuntimeError, and the platform's own loop signal
+    # arrives as OSError.
     except (ValueError, OSError, RuntimeError):
         return False
     return True

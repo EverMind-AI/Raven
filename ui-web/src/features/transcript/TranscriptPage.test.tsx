@@ -23,6 +23,7 @@ import * as store from './store'
 import * as tail from './tail';
 
 import type { ProseTarget } from '../../lib/prose'
+import type { SubagentRow } from '../../rpc/generated'
 import type { WorkspaceSource } from '../workspace/types'
 import type { HistoryMessage, SpawnListRow, TranscriptSource } from './types'
 
@@ -40,7 +41,11 @@ let lang = 'en'
 const seen = vi.hoisted(() => ({ md: 0 }))
 vi.mock('../../lib/prose', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../lib/prose')>()
-  return { ...real, md: (src: string) => { seen.md += 1; return real.md(src) } }
+  return {
+    ...real,
+    md: (src: string) => { seen.md += 1; return real.md(src) },
+    mdBlocks: (src: string) => { seen.md += 1; return real.mdBlocks(src) },
+  }
 })
 
 function wire(over: Partial<TranscriptSource> = {}): void {
@@ -2512,6 +2517,41 @@ describe('a delegated result, drawn as the message it is', () => {
     expect(marks).toEqual(['assets/agents/raven-code.svg', 'assets/agents/claudecode-color.svg'])
   })
 
+  /* A report an instance made on its own schedule answers no call, so neither
+     the conversation nor its task list can say who sent it: the mark names the
+     agent, and the row wears that agent's mark on a reload and live alike. */
+  it('names and marks the agent an unprompted report came from', async () => {
+    const rows = [{ name: 'Coder', builtin: false, vendored: false, preset: 'claude_code' }] satisfies
+      Pick<SubagentRow, 'name' | 'builtin' | 'vendored' | 'preset'>[]
+    const roster = { subagents: { roster: async () => rows } as never }
+    const report = { kind: 'unprompted', label: 'Coder/h1', status: 'report', agent: 'Coder' } as const
+    const drawn = (): [string | null | undefined, string | null | undefined] => [
+      $('.sdlv .transcript-dlv-from')?.textContent,
+      $('.sdlv .transcript-dlv-from .agent-mark img')?.getAttribute('src'),
+    ]
+
+    wireDelivery()
+    setSources(roster)
+    act(() => {
+      mount.history([{ role: 'user', text: fenced('merged'), timestamp: iso(Date.now() - 9000), delegated: report }])
+    })
+    await act(async () => { await Promise.resolve() })
+    const replay = drawn()
+
+    store._resetForTests()
+    wireDelivery()
+    setSources(roster)
+    act(() => {
+      mount.delivered({
+        label: report.label, isDag: false, status: report.status, agent: report.agent, body: fenced('merged'), open: () => {},
+      })
+    })
+    await act(async () => { await Promise.resolve() })
+
+    expect(replay).toEqual(['en:gui.deleg.from {"who":"Coder"}', 'assets/agents/claudecode-color.svg'])
+    expect(drawn()).toEqual(replay)
+  })
+
   /* The receipt's node lines are a table someone scans for the one that did not
      finish, so they are drawn as one: a row per node, its status, and where its
      output went or why it has none. The counts line is not repeated in the
@@ -3622,6 +3662,44 @@ describe('transcript island, streaming', () => {
        stub returning the raw source did not. */
     expect($('.say')?.textContent).toContain('word99')
     expect($('.ask')).toBe(askEl)
+  })
+
+  it('leaves the blocks a streamed reply already finished alone as it grows', () => {
+    const rafQ: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { rafQ.push(cb); return rafQ.length })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+    const flush = (): void => act(() => { rafQ.splice(0).forEach((cb) => cb(0)) })
+    let st!: ReturnType<typeof mount.step>
+    act(() => {
+      mount.ask('question')
+      st = mount.step()
+      st.sayDelta('first paragraph\n\nsecond')
+    })
+    flush()
+    const first = $('.say > p')
+    expect(first?.textContent).toBe('first paragraph')
+    act(() => { st.sayDelta(' paragraph, longer\n\n- and a list') })
+    flush()
+    expect($('.say > p')).toBe(first)
+    expect([...$('.say')!.children].map((c) => c.tagName)).toEqual(['P', 'P', 'UL'])
+  })
+
+  it('leaves the blocks a typed answer already finished alone as it types', () => {
+    let typed!: ReturnType<typeof mount.answerTyped>
+    act(() => {
+      mount.ask('question')
+      typed = mount.answerTyped('first paragraph\n\nsecond paragraph')
+      typed.progress(17)
+    })
+    const first = $('.answer .prose > p')
+    expect(first?.textContent).toBe('first paragraph')
+    act(() => { typed.progress(25) })
+    expect($('.answer .prose > p')).toBe(first)
+    expect($('.answer .prose .caret')).not.toBeNull()
+    act(() => { typed.done() })
+    expect($('.answer .prose > p')).toBe(first)
+    expect($('.answer .prose .caret')).toBeNull()
+    expect($('.answer .prose')?.textContent).toBe('first paragraphsecond paragraph')
   })
 
   it('promotes the streamed prose into the answer block when the turn lands', () => {

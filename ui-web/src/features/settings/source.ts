@@ -44,6 +44,10 @@ let RAW: Record<string, unknown> = {}
 
 let configPathLive = '~/.raven/config.json'
 let skillHub = { on: false }
+/* The deck engine's picture search as the runtime would resolve it, answered by
+   settings.get rather than inferred from the raw config: the vendor's env var
+   and the deck lane's own .env are effective credentials the file cannot show. */
+let pictureSearch: ResultOf<'settings.get'>['picture_search'] = { vendor: '', ready: false, fallback: false }
 let everosLive: ResultOf<'settings.everos'> | null = null
 let everosCloudLive: ResultOf<'settings.everosCloud'> | null = null
 let cloudProbe: Promise<ResultOf<'settings.everosCloud'> | null> = Promise.resolve(null)
@@ -141,6 +145,9 @@ export async function loadSettings(): Promise<void> {
   RAW = (r.settings || {}) as Record<string, unknown>
   configPathLive = r.config_path || configPathLive
   skillHub = { on: r.skill_hub_on === true }
+  /* A gateway that predates the field sends none, and an absent answer must
+     not read as "deck generation cannot run". */
+  pictureSearch = r.picture_search ? { ...r.picture_search } : { vendor: '', ready: true, fallback: false }
   drawBanner()
   const agents = RAW.agents as { defaults?: { model?: string; provider?: string } } | undefined
   const defaults = (agents && agents.defaults) || {}
@@ -170,7 +177,7 @@ export async function loadSettingsWithProviders(): Promise<void> {
 }
 
 export const settingsSnapshot = (): SettingsSnapshot => ({
-  raw: RAW, configPath: configPathLive, skillHub, everos: everosLive, everosCloud: everosCloudLive,
+  raw: RAW, configPath: configPathLive, skillHub, pictureSearch, everos: everosLive, everosCloud: everosCloudLive,
   // Both default-scoped on purpose: the settings page describes what new
   // conversations start on, so pairing the default model with the visible
   // session's provider badged the wrong row whenever the two scopes differ.
@@ -187,7 +194,7 @@ const hubText = (v: unknown): string =>
 
 /* `plughub.detail` declares its entry as a free JSON object, so the shape read
    out of it is this page's own. Only the MCP contribution's credential fields
-   are read, which is all the plugins page asks for. */
+   are read, which is all the MCP page asks for. */
 interface AuthContribution {
   kind: string
   auth?: { fields?: AuthField[] }
@@ -357,6 +364,9 @@ export const settingsSource: SettingsSource = {
     if (url) openUrl(url)
     return afterExt()
   })),
+  agentPlugins: () => gateway().call('agent_plugins.list', {}),
+  setPackageMcp: (name, on) => run(gateway().call('agent_plugins.set_mcp', { name, enabled: on })
+    .then(() => gateway().call('agent_plugins.list', {}))),
   version: () => chrome.version(),
   checkUpdate: (btn) => chrome.checkUpdate(btn),
   newerVersion: () => chrome.newerVersion(),
@@ -413,6 +423,10 @@ export const WEB_VENDOR_URL: Record<string, string> = {
 }
 /* Jina and Keenable read without a key; every other reader needs one. */
 export const FETCH_KEYLESS = new Set(['jina', 'keenable'])
+/* The search vendors whose pictures a deck can place (the server's
+   PPT_IMAGE_SEARCH_VENDORS): with one of these selected and no picture tool,
+   what is missing is a key, not a vendor that fits. */
+export const PPT_IMAGE_VENDORS = ['serper', 'serpapi', 'brave', 'firecrawl', 'serply']
 /* Keenable searches without a key; every other search vendor needs one. */
 export const SEARCH_KEYLESS = new Set(['keenable'])
 
@@ -539,7 +553,7 @@ export function webStepDone(): boolean {
   return webKeyOnFile('web_search', RAW) || webKeyOnFile('web_fetch', RAW)
 }
 
-/* The manager's word on a server, pushed as it changes; the plugins page
+/* The manager's word on a server, pushed as it changes; the MCP page
    redraws its chips from it. Returns the unsubscribe. */
 export const watchMcp = (onStatus: () => void): (() => void) => gateway().on('mcp.status', onStatus)
 
@@ -549,6 +563,7 @@ export function _resetForTests(): void {
   RAW = {}
   configPathLive = '~/.raven/config.json'
   skillHub = { on: false }
+  pictureSearch = { vendor: '', ready: false, fallback: false }
   everosLive = null
   everosCloudLive = null
   cloudProbe = Promise.resolve(null)

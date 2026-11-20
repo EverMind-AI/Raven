@@ -18,15 +18,26 @@ import pytest
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.agent.window import compaction, shrink
-from raven.config.raven import CheckpointConfig, RuntimeConfig
+from raven.config.raven import CheckpointConfig, ContextConfig, RuntimeConfig
 from raven.context_engine import headroom
+from raven.context_engine.history.compacting.runtime import CompactingHistoryBuilder
 from raven.context_engine.history.markers import HISTORY_CHECKPOINT_KEY, HISTORY_PINNED_KEY
+from raven.context_engine.runtime_context import (
+    MCP_NOTICE_HEADER,
+    RUNTIME_CONTEXT_KEY,
+    mcp_notice,
+    retell_notices,
+    with_runtime_context,
+)
+from raven.context_engine.segments.render import RUNTIME_CONTEXT_TAG
 from raven.contracts.context import OverflowOutcome
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.utils.tokens import estimate_prompt_tokens
 
 _WINDOW = 16_000
 _CEILING = 8_192
+_FILLER = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod " * 20
+_BUILDER_WINDOW = 32_768
 
 
 class _Recording(LLMProvider):
@@ -366,3 +377,129 @@ async def test_a_reclaim_that_drops_the_turns_question_is_refused(workspace, mon
     retry = provider.calls[-1]["messages"]
     assert any(m.get("content") == "the turn's question" for m in retry)
     assert shrink.ELIDED_TOOL_OUTPUT in [m.get("content") for m in retry]
+
+
+@pytest.mark.asyncio
+async def test_a_reclaim_that_swaps_the_question_for_another_is_refused(workspace, monkeypatch):
+    """Only the lines are left out of the comparison, so a reclaim that carries
+    different words is still the wrong turn's question."""
+    provider = _Recording(
+        [
+            *[
+                LLMResponse(content="", tool_calls=[ToolCallRequest(id=f"c{i}", name="no_such_tool", arguments={})])
+                for i in range(4)
+            ],
+            _overflow(),
+            LLMResponse(content="answered", finish_reason="stop"),
+        ]
+    )
+    agent = _agent(workspace, provider, monkeypatch, iterations=8)
+
+    async def swaps(key, messages, *, attempt, window):
+        return OverflowOutcome(
+            messages=[messages[0], {"role": "user", "content": "another question"}], reclaimed_tokens=50
+        )
+
+    monkeypatch.setattr(agent.context_engine, "on_context_overflow", swaps)
+    initial = [{"role": "system", "content": "sys"}, {"role": "user", "content": "the turn's question"}]
+
+    final, _, _, _ = await agent._run_agent_loop(initial, session_key="s1")
+
+    assert final == "answered"
+    retry = provider.calls[-1]["messages"]
+    assert any(m.get("content") == "the turn's question" for m in retry)
+    assert shrink.ELIDED_TOOL_OUTPUT in [m.get("content") for m in retry]
+
+
+@pytest.mark.asyncio
+async def test_a_reclaim_that_retells_the_question_is_still_kept(workspace, monkeypatch):
+    """Retelling a note into the question's block changes its content but not the
+    words it opened with, so the retry still carries the turn's own question."""
+    note = mcp_notice("github", "installed, awaiting authorization.")
+    lines = f"{RUNTIME_CONTEXT_TAG}\nChat ID: x"
+    older = {
+        "role": "user",
+        "content": with_runtime_context(f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{note}", "q0"),
+    }
+    question = {"role": "user", "content": with_runtime_context(lines, "and now?"), RUNTIME_CONTEXT_KEY: lines}
+    provider = _Recording([_overflow(), LLMResponse(content="answered", finish_reason="stop")])
+    agent = _agent(workspace, provider, monkeypatch)
+
+    async def reclaim(key, messages, *, attempt, window):
+        return OverflowOutcome(messages=retell_notices(messages, [messages[0], messages[-1]]), reclaimed_tokens=100)
+
+    monkeypatch.setattr(agent.context_engine, "on_context_overflow", reclaim)
+    initial = [{"role": "system", "content": "sys"}, older, {"role": "assistant", "content": "a0"}, question]
+
+    final, _, _, _ = await agent._run_agent_loop(initial, session_key="s1")
+
+    assert final == "answered"
+    retry_question = provider.calls[-1]["messages"][-1]
+    assert note in retry_question["content"].split("\n\n", 1)[0]
+
+
+@pytest.mark.asyncio
+async def test_a_reclaim_that_retells_a_question_behind_a_recovery_notice_is_retried(workspace, monkeypatch):
+    """Recovery puts its notice in front of a block-list question after assembly,
+    so the block the note is retold into is no longer the first one; the loop has
+    to recognize the question in that shape too."""
+    note = mcp_notice("github", "installed, awaiting authorization.")
+    lines = f"{RUNTIME_CONTEXT_TAG}\nChat ID: x"
+    older = {
+        "role": "user",
+        "content": with_runtime_context(f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{note}", "q0"),
+    }
+    recovery = {"type": "text", "text": "[Recovery - the previous turn was interrupted before finishing]"}
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+    question = {
+        "role": "user",
+        "content": [recovery, *with_runtime_context(lines, [image, {"type": "text", "text": "and now?"}])],
+        RUNTIME_CONTEXT_KEY: lines,
+    }
+    provider = _Recording([_overflow(), LLMResponse(content="answered", finish_reason="stop")])
+    agent = _agent(workspace, provider, monkeypatch)
+
+    async def reclaim(key, messages, *, attempt, window):
+        return OverflowOutcome(messages=retell_notices(messages, [messages[0], messages[-1]]), reclaimed_tokens=100)
+
+    monkeypatch.setattr(agent.context_engine, "on_context_overflow", reclaim)
+    initial = [{"role": "system", "content": "sys"}, older, {"role": "assistant", "content": "a0"}, question]
+
+    final, _, _, _ = await agent._run_agent_loop(initial, session_key="s1")
+
+    assert final == "answered"
+    retry_question = provider.calls[-1]["messages"][-1]
+    parts = [part.get("text", "") for part in retry_question["content"] if part.get("type") == "text"]
+    assert any(part.startswith(RUNTIME_CONTEXT_TAG) and note in part for part in parts)
+
+
+@pytest.mark.asyncio
+async def test_a_real_reclaim_that_retells_the_question_is_retried(workspace, monkeypatch):
+    """The compacting builder's own reclaim retells a note into the question; the
+    loop has to recognize the question and retry instead of ending on the refusal."""
+    note = mcp_notice("github", "installed, awaiting authorization.")
+    history: list[dict[str, Any]] = []
+    for index in range(60):
+        history.append({"role": "user", "content": f"question {index} {_FILLER}"})
+        history.append({"role": "assistant", "content": f"answer {index} {_FILLER}"})
+    history[20] = {
+        "role": "user",
+        "content": with_runtime_context(f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{note}", history[20]["content"]),
+    }
+    lines = f"{RUNTIME_CONTEXT_TAG}\nChat ID: x"
+    question = {"role": "user", "content": with_runtime_context(lines, "and now?"), RUNTIME_CONTEXT_KEY: lines}
+    provider = _Recording([_overflow(), LLMResponse(content="answered", finish_reason="stop")])
+    agent = _agent(workspace, provider, monkeypatch, window=_BUILDER_WINDOW)
+    builder = CompactingHistoryBuilder(
+        workspace, ContextConfig(), provider, "stub", _BUILDER_WINDOW, agent.tools.get_definitions
+    )
+    monkeypatch.setattr(agent.context_engine, "on_context_overflow", builder.on_context_overflow)
+
+    final, _, _, _ = await agent._run_agent_loop(
+        [{"role": "system", "content": "system prompt"}, *history, question], session_key="s1"
+    )
+
+    assert final == "answered"
+    assert len(provider.calls) == 2, "the retry is the point: one refusal, then the answer"
+    retry_question = provider.calls[-1]["messages"][-1]
+    assert note in retry_question["content"].split("\n\n", 1)[0]

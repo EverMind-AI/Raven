@@ -54,6 +54,7 @@ export const GLYPH = {
   chart: <svg viewBox="0 0 24 24"><path d="M4.5 19.5h15M7.5 16v-4M12 16V8M16.5 16v-6" /></svg>,
   offline: <svg viewBox="0 0 24 24"><path d="M9.5 14.5 7.8 16.2a3 3 0 0 1-4.2-4.2l2.6-2.6M14.5 9.5l1.7-1.7a3 3 0 0 1 4.2 4.2l-2.6 2.6M4.5 4.5l15 15" /></svg>,
   plug: <svg viewBox="0 0 24 24"><path d="M9 3.5v4M15 3.5v4M6.5 7.5h11v3a5.5 5.5 0 0 1-11 0zM12 16v4.5" /></svg>,
+  puzzle: <svg viewBox="0 0 24 24"><path d="M5 8.5h3.5a2 2 0 1 1 4 0H16V12a2 2 0 1 1 0 4v3.5H5z" /></svg>,
 }
 
 /* A labelled block with no card around it, which is the prototype's own shape

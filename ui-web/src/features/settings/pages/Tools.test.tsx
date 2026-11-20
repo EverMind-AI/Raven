@@ -191,6 +191,65 @@ describe('tools page', () => {
     expect(calls).toEqual([['set', { key: 'tools.web.search.apiKey', value: '' }]])
   })
 
+  it('the search panel says deck generation has no picture tool without one', async () => {
+    const data = snap()
+    data.pictureSearch = { vendor: '', ready: false, fallback: false }
+    ;(data.raw.tools as Record<string, unknown>).web = { search: { provider: 'tavily' }, providers: { tavily: { apiKey: 'tv' } } }
+    install(data)
+    await mount('tools')
+    await act(async () => { fireEvent.click(screen.getByText('web_search')) })
+    expect(screen.getByText('gui.settings.tools.ppt_image_missing')).toBeTruthy()
+  })
+
+  it('a deck vendor with no usable key is told to set its key, not that its pictures do not fit', async () => {
+    const data = snap()
+    data.pictureSearch = { vendor: '', ready: false, fallback: false }
+    ;(data.raw.tools as Record<string, unknown>).web = { search: { provider: 'brave' } }
+    install(data)
+    await mount('tools')
+    await act(async () => { fireEvent.click(screen.getByText('web_search')) })
+    expect(screen.getByText('gui.settings.tools.ppt_image_no_key_or_serper {"name":"Brave Search"}')).toBeTruthy()
+    expect(screen.queryByText('gui.settings.tools.ppt_image_missing')).toBeNull()
+  })
+
+  it('Serper with no key names Serper alone', async () => {
+    const data = snap()
+    data.pictureSearch = { vendor: '', ready: false, fallback: false }
+    ;(data.raw.tools as Record<string, unknown>).web = { search: { provider: 'serper' } }
+    install(data)
+    await mount('tools')
+    await act(async () => { fireEvent.click(screen.getByText('web_search')) })
+    expect(screen.getByText('gui.settings.tools.ppt_image_no_key {"name":"Serper"}')).toBeTruthy()
+    expect(screen.queryByText('gui.settings.tools.ppt_image_missing')).toBeNull()
+  })
+
+  it('the search panel says when deck generation will fall back to Serper', async () => {
+    const data = snap()
+    data.pictureSearch = { vendor: 'serper', ready: true, fallback: true }
+    ;(data.raw.tools as Record<string, unknown>).web = {
+      search: { provider: 'tavily' },
+      providers: { tavily: { apiKey: 'tv' }, serper: { apiKey: 'sp' } },
+    }
+    install(data)
+    await mount('tools')
+    await act(async () => { fireEvent.click(screen.getByText('web_search')) })
+    expect(screen.getByText('gui.settings.tools.ppt_image_fallback {"name":"Serper"}')).toBeTruthy()
+  })
+
+  it('draws no picture note when the selected vendor is the one that answers', async () => {
+    const data = snap()
+    data.pictureSearch = { vendor: 'serpapi', ready: true, fallback: false }
+    ;(data.raw.tools as Record<string, unknown>).web = {
+      search: { provider: 'serpapi' },
+      providers: { serpapi: { apiKey: 'sp' } },
+    }
+    install(data)
+    await mount('tools')
+    await act(async () => { fireEvent.click(screen.getByText('web_search')) })
+    expect(screen.queryByText('gui.settings.tools.ppt_image_missing')).toBeNull()
+    expect(screen.queryByText(/ppt_image_fallback/)).toBeNull()
+  })
+
   it('a vendor that needs no key blocks neither web tool, and its panel still takes an optional key', async () => {
     const data = snap()
     ;(data.raw.tools as Record<string, unknown>).web = { search: { provider: 'keenable' }, fetch: { provider: 'keenable' } }

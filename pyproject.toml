@@ -1,6 +1,6 @@
 [project]
 name = "raven"
-version = "0.2.7"
+version = "0.2.8"
 description = "Raven — AI-native command line agent with memory, proactivity, context control, and skill evolution"
 requires-python = ">=3.12"
 license =  "Apache-2.0"
@@ -146,7 +146,7 @@ channel-matrix = [
     "nh3>=0.2.17,<1.0.0",
 ]
 channel-feishu = ["lark-oapi>=1.5.0,<2.0.0"]
-channel-wecom = ["wecom-aibot-sdk-python>=0.1.5"]
+channel-wecom = ["wecom-aibot-sdk-python>=0.1.7"]
 channel-mochat = [
     "python-socketio>=5.16.3,<6.0.0",
     "msgpack>=1.2.1,<2.0.0",
@@ -177,7 +177,7 @@ tools = [
 ]
 sandbox = [
     "anyio>=4.0",
-    "boxlite==0.9.5 ; sys_platform != 'win32'",
+    "openshell>=0.1.8,<0.2 ; sys_platform != 'win32'",
 ]
 # Driving a real browser is an opt-in extra: playwright pulls a browser binary
 # of its own, which no other capability needs. raven.browser imports it lazily

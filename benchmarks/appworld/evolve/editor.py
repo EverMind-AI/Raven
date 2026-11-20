@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from benchmarks.appworld.evolve.eval import Candidate
-from benchmarks.appworld.evolve.sandbox import Sandbox
+from benchmarks.appworld.evolve.sandbox import Sandbox, SubjectCheckoutWriteError
 from evolver.orchestrator.config import Budget
 from evolver.tree.node import HarnessNode
 
@@ -484,7 +484,19 @@ def bash_edit_candidate(
             rendered = render_failed(str(obj.get("task_id", ""))) if render_failed else "(unavailable)"
             fb = f"Trajectory:\n{rendered}\n\nContinue (bash) or done."
         elif act == "bash":
-            fb = f"$ output:\n{sandbox.bash(str(obj.get('command', '')))}\n\nContinue (bash) or done."
+            try:
+                out = sandbox.bash(str(obj.get("command", "")))
+            except SubjectCheckoutWriteError as exc:
+                if exc.unrestored:
+                    # The checkout is still contaminated, so what the round
+                    # measures from here on cannot be trusted: the round stops.
+                    raise
+                # The guard put the checkout back the way it was, so only
+                # this candidate is lost — the round's other candidates are
+                # untouched and still worth evaluating.
+                print(f"[guard] {exc} — the candidate is discarded", flush=True)
+                return None, [], f"candidate discarded: {exc}"[:300]
+            fb = f"$ output:\n{out}\n\nContinue (bash) or done."
         elif act == "write_file":
             fb = (
                 sandbox.write_text(str(obj.get("path", "")), str(obj.get("content", "")))

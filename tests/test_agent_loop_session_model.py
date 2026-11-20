@@ -29,7 +29,6 @@ from raven.agent.loop.bundles import EngineWiring, TurnPolicy
 from raven.agent.loop.main import AgentLoop
 from raven.config.raven import ContextConfig, SkillForgeConfig
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
-from raven.context_engine.segments.skills import SkillsSegmentBuilder
 from raven.providers.base import LLMResponse
 from raven.providers.binding import ModelBinding, active_binding
 from raven.spine.message import ChatType, Source
@@ -79,12 +78,9 @@ def _loop(tmp_path) -> AgentLoop:
         provider=_Provider("boot"),
         workspace=tmp_path,
         model="boot/model",
-        # Push discovery, because that is what builds the skills segment and the
-        # gate these tests reach for. Upstream had no such switch and got the
-        # segment unconditionally; here the default is pull, which drops it.
         engine=EngineWiring(
             context_config=ContextConfig(history={"strategy": "curator"}),
-            skill_forge_config=SkillForgeConfig(discovery="push"),
+            skill_forge_config=SkillForgeConfig(),
         ),
     )
 
@@ -351,26 +347,21 @@ async def test_a_spawned_subagent_keeps_its_conversations_model(tmp_path) -> Non
 
 @pytest.mark.asyncio
 async def test_an_unconfigured_subsystem_follows_the_conversation(tmp_path) -> None:
-    """The gate and the curator are unpinned here (no credentials for the
-    default ``curator_model``), so both read the turn's model.
+    """The curator is unpinned here (no credentials for the default
+    ``curator_model``), so it reads the turn's model.
     """
     loop = _loop(tmp_path)
     loop.set_session_binding("tui:a", _binding("prov-a", "vendor-a/model"))
-    skills = next(b for b in loop.context_engine._builders if isinstance(b, SkillsSegmentBuilder))
     curator = next(b for b in loop.context_engine._builders if isinstance(b, CuratorSegmentBuilder))
 
     seen: dict[str, object] = {}
 
     async def _body(*args, **kwargs):
-        seen["gate"] = skills._gate._binding()[1]
         seen["curator"] = curator.curator_model
-        seen["rewriter"] = skills._rewriter._call_provider().name
         return "done"
 
     await _run(loop, "tui:a", _body)
-    assert seen["gate"] == "vendor-a/model"
     assert seen["curator"] == "vendor-a/model"
-    assert seen["rewriter"] == "prov-a"
 
 
 @pytest.mark.asyncio
@@ -380,37 +371,19 @@ async def test_a_configured_subsystem_uses_its_own_pair(tmp_path) -> None:
     """
     loop = _loop(tmp_path)
     loop.set_session_binding("tui:a", _binding("prov-a", "vendor-a/model"))
-    skills = next(b for b in loop.context_engine._builders if isinstance(b, SkillsSegmentBuilder))
     curator = next(b for b in loop.context_engine._builders if isinstance(b, CuratorSegmentBuilder))
 
     pin = _binding("prov-pin", "vendor-pin/small")
-    skills._gate._pin_resolver = lambda: pin
     curator._pin_resolver = lambda: pin
 
     seen: dict[str, object] = {}
 
     async def _body(*args, **kwargs):
-        seen["gate"] = skills._gate._binding()[1]
         seen["curator"] = curator.curator_model
         return "done"
 
     await _run(loop, "tui:a", _body)
-    assert seen["gate"] == "vendor-pin/small"
     assert seen["curator"] == "vendor-pin/small"
-
-
-def test_the_gate_sends_no_model_outside_a_turn(tmp_path) -> None:
-    """An unpaired pin must never go out on the fallback provider's key. With
-    no turn bound there is nothing to follow, so the gate asks the provider for
-    its own default rather than posting a model id it has no credential for.
-    """
-    loop = _loop(tmp_path)
-    skills = next(b for b in loop.context_engine._builders if isinstance(b, SkillsSegmentBuilder))
-    # A configured id the pool could not pair: what the resolver answers for it.
-    skills._gate._pin_resolver = lambda: None
-
-    assert active_binding() is None
-    assert skills._gate._binding()[1] is None
 
 
 @pytest.mark.asyncio
@@ -501,36 +474,6 @@ def test_the_factory_hands_the_pool_the_pin_the_user_configured(tmp_path) -> Non
 
     assert curator._pin_resolver() is not None
     assert curator._pin_resolver().provider.api_key == "sk-or", "the configured provider serves the pin"
-
-
-def test_the_factory_hands_the_pool_the_gate_pin_the_user_configured(tmp_path) -> None:
-    """Same wiring, the other pin."""
-    from raven.config.schema import Config
-    from raven.context_engine.segments.skills import SkillsSegmentBuilder
-    from raven.providers.pool import ProviderPool
-
-    cfg = Config()
-    cfg.agents.defaults.model = "claude-opus-4-5"
-    cfg.agents.defaults.provider = "auto"
-    cfg.providers.anthropic.api_key = "sk-ant"
-    cfg.providers.openrouter.api_key = "sk-or"
-
-    _configure_pins(skillForge={"llmGateModel": "claude-haiku-4-5", "llmGateProvider": "openrouter"})
-    loop = AgentLoop(
-        provider=_Provider("boot"),
-        workspace=tmp_path,
-        model="boot/model",
-        provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(
-            context_config=ContextConfig(history={"strategy": "curator"}),
-            skill_forge_config=SkillForgeConfig(discovery="push"),
-        ),
-    )
-    skills = next(b for b in loop.context_engine._builders if isinstance(b, SkillsSegmentBuilder))
-
-    assert skills._gate is not None
-    assert skills._gate._pin_resolver() is not None
-    assert skills._gate._pin_resolver().provider.api_key == "sk-or"
 
 
 def test_a_stored_model_is_restored_onto_a_resumed_session(tmp_path) -> None:
@@ -700,41 +643,6 @@ def test_has_session_binding_distinguishes_chosen_from_inherited(tmp_path) -> No
     assert not loop.has_session_binding("tui:b")
 
 
-def test_a_configured_gate_pin_survives_a_real_factory_build(tmp_path) -> None:
-    """The gate's pin is built in the same factory as the curator's but was
-    uncovered -- and a gate failure is swallowed by its top-N fallback, so
-    losing the pin degrades silently by design.
-    """
-    from raven.config.schema import Config
-    from raven.providers.pool import ProviderPool
-
-    cfg = Config()
-    cfg.agents.defaults.model = "claude-opus-4-5"
-    cfg.agents.defaults.provider = "auto"
-    cfg.providers.anthropic.api_key = "sk-ant"
-    cfg.providers.openai.api_key = "sk-openai"
-
-    _configure_pins(skillForge={"llmGateModel": "openai/gpt-5-mini"})
-    loop = AgentLoop(
-        provider=_Provider("boot"),
-        workspace=tmp_path,
-        model="boot/model",
-        provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(
-            context_config=ContextConfig(history={"strategy": "curator"}),
-            skill_forge_config=SkillForgeConfig(discovery="push"),
-        ),
-    )
-    skills = next(b for b in loop.context_engine._builders if isinstance(b, SkillsSegmentBuilder))
-
-    assert skills._gate is not None
-    assert skills._gate._pin_resolver() is not None, "a credentialed llm_gate_model must become a pair"
-    assert skills._gate._binding()[1] == "openai/gpt-5-mini"
-
-    loop.set_session_binding("tui:a", _binding("prov-a", "vendor-a/model"))
-    assert skills._gate._binding()[1] == "openai/gpt-5-mini", "a configured subsystem does not follow the turn"
-
-
 @pytest.mark.asyncio
 async def test_a_spawn_holds_its_binding_through_the_gate_and_the_sandbox_boot(tmp_path) -> None:
     """The binding is taken in ``spawn``, not where the task starts running: a
@@ -892,7 +800,7 @@ def _pooled_loop(tmp_path) -> tuple[AgentLoop, _Pool]:
         provider_pool=pool,
         engine=EngineWiring(
             context_config=ContextConfig(history={"strategy": "curator"}),
-            skill_forge_config=SkillForgeConfig(discovery="push"),
+            skill_forge_config=SkillForgeConfig(),
         ),
     )
     pool.bindings["boot/model"] = loop.default_binding
@@ -996,7 +904,7 @@ def test_a_provider_that_cannot_name_its_vendor_is_never_re_paired(tmp_path) -> 
         provider_pool=pool,
         engine=EngineWiring(
             context_config=ContextConfig(history={"strategy": "curator"}),
-            skill_forge_config=SkillForgeConfig(discovery="push"),
+            skill_forge_config=SkillForgeConfig(),
         ),
     )
 

@@ -23,10 +23,9 @@ Prompt 文件、Skill、会话记录和记忆后端都是输入来源。它们�
 | Bootstrap | agent home 下原生启动内容文件 | 原生路径、文件内容及对应 segment 是否启用 |
 | Memory | 本地记忆内容与后端 recall 结果 | 后端实际绑定、身份、召回成功及返回内容 |
 | Active skills | 可用的 always Skill | 依赖、所需工具、注入形式和数量上限 |
-| Routed skills | 仅在 push 模式构造，提供选择与正文供给 | discovery 设置、路由、过滤和读取结果 |
 | Context Curator | 工作状态与经过预算处理的历史 | 上下文配置、可用模型及本轮实际输出 |
 
-当前 discovery 的原生默认值为 pull，此时工厂不构造 Routed skills 的 SkillsSegmentBuilder，而使用发现菜单和工具读取等路径；push 模式才增加对应的自动选择与正文供给。其他内容段仍受各自配置和可用性约束。
+检索到的 Skill 不占 segment：发现菜单（scent menu）随本轮用户消息给出少量名称与描述，模型再用 `find_skill` 搜索、用 `read_skill` 读取正文。其他内容段仍受各自配置和可用性约束。
 
 builder 失败可以导致对应 segment 被省略，并在装配 metadata 中记录降级；配置也可以移除 segment。默认工厂中，Context Curator 是提供历史的 builder。当前装配器从空 history 开始，只有成功返回的 Phase B segment 提供 history 才会替换它：移除 Curator 或该 builder 构建失败时，不会自动透传原始会话。`owns_compaction` 此时仍为 True，也不会自动改走其他历史路径。
 

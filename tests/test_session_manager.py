@@ -3,6 +3,7 @@
 import gc
 import json
 import multiprocessing
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -2159,3 +2160,253 @@ def test_undoing_the_cut_turn_forgets_its_markers_and_keeps_an_earlier_ones():
         earlier.metadata[key] = 0
     earlier.undo_last_turn()
     assert [earlier.metadata[key] for key in _TURN_MARKERS] == [0, 0], "the turn it marks is still there"
+
+
+def test_list_sessions_scans_an_unchanged_transcript_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A poll that finds the same transcript does not read it again.
+
+    The picker asks for the same files on every request; re-reading all of them
+    each time is the cost this cache exists to remove.
+    """
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("cli:one")
+    session.add_message("user", "hello")
+    manager.save(session)
+
+    scans: list[Path] = []
+    real = SessionManager._scan_file  # a staticmethod: it takes the path only
+    monkeypatch.setattr(manager, "_scan_file", lambda path: scans.append(path) or real(path))
+
+    first = manager.list_sessions()
+    second = manager.list_sessions()
+
+    assert first == second
+    assert len(scans) == 1
+
+
+def test_list_sessions_rescans_a_transcript_that_grew(tmp_path: Path):
+    """A transcript that changed is read again, so the listing is not stale."""
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("cli:one")
+    session.add_message("user", "first")
+    manager.save(session)
+    assert manager.list_sessions()[0]["message_count"] == 1
+
+    grown = manager.get_or_create("cli:one")
+    grown.add_message("assistant", "second")
+    manager.save(grown)
+
+    assert manager.list_sessions()[0]["message_count"] == 2
+
+
+def test_list_sessions_skips_a_transcript_it_cannot_stat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A path that vanished between glob and stat is left out, not raised."""
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("cli:one")
+    session.add_message("user", "hello")
+    manager.save(session)
+    [path] = list((tmp_path / "sessions").rglob("*.jsonl"))
+
+    real_stat = Path.stat
+
+    def failing_stat(self: Path, *args, **kwargs):
+        if self == path:
+            raise OSError("gone between glob and stat")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", failing_stat)
+
+    assert manager.list_sessions() == []
+
+
+def test_the_scan_cache_evicts_the_least_recently_used_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The cache is bounded; past the limit the entry scanned longest ago goes.
+
+    The limit is lowered so the test walks the same eviction branch without
+    writing a couple thousand transcripts.
+    """
+    monkeypatch.setattr(manager_mod, "_SCAN_CACHE_LIMIT", 2)
+    manager = SessionManager(tmp_path)
+    paths = []
+    for name in ("one", "two", "three"):
+        session = manager.get_or_create(f"cli:{name}")
+        session.add_message("user", name)
+        manager.save(session)
+        paths.append(manager.session_path(f"cli:{name}"))
+
+    for path in paths:
+        assert manager._scan_listed(path)[0] is not None
+
+    assert list(manager._scan_cache) == paths[1:]
+    assert {entry["key"] for entry in manager.list_sessions()} == {"cli:one", "cli:two", "cli:three"}
+
+
+def test_list_sessions_rescans_an_equal_size_rewrite_with_a_newer_mtime(tmp_path: Path):
+    """The stamp carries mtime as well as size, so a same-size rewrite is seen."""
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("cli:one")
+    session.add_message("user", "hello")
+    manager.save(session)
+    [path] = list((tmp_path / "sessions").rglob("*.jsonl"))
+    assert manager.list_sessions()[0]["last_message_preview"] == "hello"
+
+    raw = path.read_bytes()
+    rewritten = raw.replace(b"hello", b"world")
+    assert len(rewritten) == len(raw), "the rewrite must not change the byte count"
+    path.write_bytes(rewritten)
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+
+    listed = manager.list_sessions()
+    assert listed[0]["last_message_preview"] == "world"
+    assert listed[0]["message_count"] == 1
+
+
+def test_list_sessions_rescans_after_an_undecodable_transcript_becomes_readable(tmp_path: Path):
+    """A cached decode failure is retried when the file changes, not kept forever."""
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("cli:bad")
+    session.add_message("user", "hello")
+    manager.save(session)
+    [path] = list((tmp_path / "sessions").rglob("*.jsonl"))
+    readable = path.read_bytes()
+
+    path.write_bytes(b"\xff\xfe\x00\x01")
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+    assert manager.list_sessions() == []
+
+    path.write_bytes(readable)
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+
+    assert [entry["key"] for entry in manager.list_sessions()] == ["cli:bad"]
+
+
+def test_save_invalidates_the_scan_cache_when_the_stamp_would_not_change(tmp_path: Path):
+    """A save that rewrites a transcript is listed fresh, not from the cache.
+
+    The cache is keyed on ``(st_mtime_ns, st_size)``, and a same-size rewrite
+    can land in the same mtime tick. The rewrite is made through ``save`` here:
+    the turn is cut and retold with a message of the same length, and the mtime
+    is put back on the cached value, so only the explicit drop can tell the
+    listing that the file changed.
+    """
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("cli:one")
+    session.add_message("user", "hello")
+    manager.save(session)
+    # A rewrite save first, so the file the cache records and the rewrite the
+    # test makes below share a line-ending convention on every platform.
+    session.undo_last_turn()
+    session.add_message("user", "world")
+    manager.save(session)
+    path = manager.session_path("cli:one")
+    before = path.stat()
+    assert manager.list_sessions()[0]["last_message_preview"] == "world"
+    assert path in manager._scan_cache
+
+    session.undo_last_turn()
+    session.add_message("user", "again")
+    manager.save(session)
+    after = path.stat()
+    assert after.st_size == before.st_size, "the regression needs the stamp to stay put"
+    os.utime(path, ns=(after.st_atime_ns, before.st_mtime_ns))
+
+    listed = manager.list_sessions()
+    assert listed[0]["last_message_preview"] == "again"
+    assert listed[0]["message_count"] == 1
+
+
+def test_append_metadata_patch_invalidates_the_scan_cache(tmp_path: Path):
+    """A patch is visible to the very next listing, even on a colliding stamp.
+
+    An append always changes the size, so the stamp alone would usually notice
+    it; the explicit drop covers a clock that hands the same mtime back. The
+    cache entry is seeded with the stamp the append will leave, which is the
+    case the drop exists for.
+    """
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("cli:one")
+    session.add_message("user", "hello")
+    manager.save(session)
+    path = manager.session_path("cli:one")
+    manager.list_sessions()
+    cached = manager._scan_cache[path]
+
+    patch = {"archived": True}
+    last = manager._scan_file(path)[0]
+    merged = {**(last.get("metadata") or {}), **patch}
+    line = json.dumps({**last, "metadata": merged}, ensure_ascii=False)
+    appended_size = path.stat().st_size + len((line + "\n").encode("utf-8"))
+    appended_mtime = cached[0] + 1_000_000_000
+    manager._scan_cache[path] = (appended_mtime, appended_size, cached[2])
+
+    assert manager.append_metadata_patch("cli:one", patch) is True
+    stat = path.stat()
+    assert stat.st_size == appended_size
+    os.utime(path, ns=(stat.st_atime_ns, appended_mtime))
+
+    [listed] = manager.list_sessions()
+    assert listed["metadata"].get("archived") is True
+
+
+def test_a_session_recreated_after_delete_is_scanned_fresh(tmp_path: Path):
+    """A new transcript at a deleted session's path never reads the old entry.
+
+    ``delete`` drops the cached scan itself because the stamp alone can match:
+    a same-key session rewritten to the same size can share the removed file's
+    mtime. The replacement is written by another manager, as a second client
+    would, and its stamp is put back on the old one.
+    """
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("cli:one")
+    session.add_message("user", "old!")
+    manager.save(session)
+    path = manager.session_path("cli:one")
+    before = path.stat()
+    assert manager.list_sessions()[0]["last_message_preview"] == "old!"
+
+    assert manager.delete("cli:one") is True
+
+    other = SessionManager(tmp_path)
+    recreated = other.get_or_create("cli:one")
+    recreated.add_message("user", "new!")
+    other.save(recreated)
+    after = path.stat()
+    assert after.st_size == before.st_size, "the regression needs the stamp to stay put"
+    os.utime(path, ns=(after.st_atime_ns, before.st_mtime_ns))
+
+    assert manager.list_sessions()[0]["last_message_preview"] == "new!"
+
+
+def test_list_sessions_metadata_is_a_top_level_copy(tmp_path: Path):
+    """A caller editing the returned record must not edit the cached parse.
+
+    Only the top level is copied: a nested dict or list is still shared with
+    the cache, which is the accepted trade-off for not deep-copying every
+    listing.
+    """
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("cli:one")
+    session.add_message("user", "hello")
+    session.metadata["note"] = "kept"
+    manager.save(session)
+
+    first = manager.list_sessions()[0]
+    assert first["metadata"]["note"] == "kept"
+    first["metadata"]["note"] = "changed"
+
+    assert manager.list_sessions()[0]["metadata"]["note"] == "kept"
+
+
+def test_list_sessions_reports_empty_metadata_for_a_legacy_record(tmp_path: Path):
+    """A metadata record from before the field existed lists as ``{}``, not None."""
+    path = tmp_path / "sessions" / "tui" / "legacy01.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({"_type": "metadata", "key": "tui:legacy01", "created_at": "2026-01-01T00:00:00+00:00"}) + "\n",
+        encoding="utf-8",
+    )
+
+    assert SessionManager(tmp_path).list_sessions()[0]["metadata"] == {}

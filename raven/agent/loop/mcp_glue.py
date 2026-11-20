@@ -441,6 +441,16 @@ class McpGlueMixin:
 
         return self._with_package_servers(mcp_server_configs(self._live_config))
 
+    @property
+    def package_mcp_server_names(self) -> frozenset[str]:
+        """The package servers this loop was assembled with.
+
+        Fixed for the loop's generation: ``agentPlugins.mcpPackages`` is read
+        when the runtime is built, so a package allowed or withheld since then
+        differs from this set until the next start.
+        """
+        return frozenset(getattr(self, "_package_mcp_servers", None) or ())
+
     def _with_package_servers(self, servers: dict | None) -> dict | None:
         """The host's servers with the packages' servers added.
 

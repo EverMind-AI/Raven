@@ -1,0 +1,9 @@
+div#findVeil.veil[data-open=false]
+  div.chrome-find-card
+    div.chrome-find-field
+      span.chrome-find-ic
+        svg
+          path
+          path
+      input#sfind
+      button#sclr.chrome-find-clr

@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import httpx
 import pytest
+from loguru import logger
 
 from raven.config.schema import Config
 from raven.providers.anthropic_messages_provider import AnthropicMessagesProvider, convert_messages
@@ -813,8 +814,12 @@ def test_context_window_exceeded_stop_reason_reads_length() -> None:
     )
 
     assert response.finish_reason == "length"
+    assert response.truncation_reason == "context_window"
     _, truncated = flag_truncation(
-        finish_reason=response.finish_reason, usage=response.usage, tool_calls=response.tool_calls
+        finish_reason=response.finish_reason,
+        usage=response.usage,
+        tool_calls=response.tool_calls,
+        truncation_reason=response.truncation_reason,
     )
     assert truncated is True
 
@@ -839,12 +844,18 @@ def test_a_cut_tool_call_reads_length(stop_reason: str) -> None:
     )
 
     assert response.finish_reason == "length"
+    expected_reason = "context_window" if stop_reason == "model_context_window_exceeded" else None
+    assert response.truncation_reason == expected_reason
     _, truncated = flag_truncation(
-        finish_reason=response.finish_reason, usage=response.usage, tool_calls=response.tool_calls
+        finish_reason=response.finish_reason,
+        usage=response.usage,
+        tool_calls=response.tool_calls,
+        truncation_reason=response.truncation_reason,
     )
     assert truncated is True
     assert response.tool_calls[-1].run_meta is not None
     assert response.tool_calls[-1].run_meta.truncation is not None
+    assert response.tool_calls[-1].run_meta.truncation.reason == expected_reason
 
 
 def test_a_completed_tool_call_still_reads_tool_calls() -> None:
@@ -883,6 +894,7 @@ async def test_context_window_exceeded_reads_length_from_a_stream() -> None:
     deltas = [d async for d in consume_message_stream(httpx.Response(200, content=body), timeout=5.0)]
 
     assert deltas[-1].finish_reason == "length"
+    assert deltas[-1].truncation_reason == "context_window"
 
 
 def test_context_window_exceeded_keeps_its_raw_reason_in_the_log() -> None:
@@ -1109,6 +1121,244 @@ async def _replayed_deepseek_call(monkeypatch, provider_name: str) -> dict:
     )
     [call] = [item for item in sent[0]["input"] if item.get("type") == "function_call"]
     return call
+
+
+def _capture_responses_requests(monkeypatch) -> list[dict]:
+    """Record the JSON body of every Responses call made in the test."""
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, content=_anthropic_sse({"type": "response.completed", "response": {}}))
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
+    return sent
+
+
+async def test_responses_model_overrides_unwrap_extra_body(monkeypatch) -> None:
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, content=_anthropic_sse({"type": "response.completed", "response": {}}))
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
+    provider = OpenAIResponsesProvider(
+        api_key="test",
+        api_base="https://api.example/v1",
+        default_model="deepseek/deepseek-v4.1-flash-1017",
+        model_overrides={
+            "deepseek-v4.1": {
+                "temperature": 0.2,
+                "provider": {"order": ["DirectInfra"]},
+                "extra_body": {
+                    "provider": {"order": ["DeepInfra"]},
+                    "reasoning": {"effort": "high"},
+                },
+            }
+        },
+    )
+
+    await provider.chat(messages=[{"role": "user", "content": "hello"}], model=provider.default_model)
+
+    assert sent[0]["temperature"] == 0.2
+    assert sent[0]["provider"] == {"order": ["DirectInfra"]}
+    assert sent[0]["reasoning"] == {"effort": "high"}
+    assert "extra_body" not in sent[0]
+
+    provider.model_overrides = {"deepseek-v4.1": {"max_output_tokens": 123}}
+    await provider.chat(messages=[{"role": "user", "content": "hello again"}], model=provider.default_model)
+
+    assert sent[1]["max_output_tokens"] == 123
+    assert "extra_body" not in sent[1]
+
+
+@pytest.mark.parametrize("extra_body", ["legacy-string", None, ["provider"]], ids=["string", "null", "list"])
+async def test_responses_model_overrides_warn_when_extra_body_is_not_a_dict(monkeypatch, extra_body) -> None:
+    sent = _capture_responses_requests(monkeypatch)
+    warnings: list[str] = []
+    sink_id = logger.add(lambda message: warnings.append(message.record["message"]), level="WARNING")
+    try:
+        provider = OpenAIResponsesProvider(
+            api_key="test",
+            api_base="https://api.example/v1",
+            default_model="deepseek/deepseek-v4.1-flash-1017",
+            model_overrides={"deepseek-v4.1": {"temperature": 0.2, "extra_body": extra_body}},
+        )
+        await provider.chat(messages=[{"role": "user", "content": "hello"}], model=provider.default_model)
+    finally:
+        logger.remove(sink_id)
+
+    assert sent[0]["extra_body"] == extra_body
+    assert sent[0]["temperature"] == 0.2
+    extra_body_warnings = [message for message in warnings if "extra_body" in message]
+    assert len(extra_body_warnings) == 1
+    assert "not a dict" in extra_body_warnings[0]
+    assert "literal field" in extra_body_warnings[0]
+
+
+async def test_responses_model_overrides_accept_an_empty_extra_body_without_a_warning(monkeypatch) -> None:
+    sent = _capture_responses_requests(monkeypatch)
+    warnings: list[str] = []
+    sink_id = logger.add(lambda message: warnings.append(message.record["message"]), level="WARNING")
+    try:
+        provider = OpenAIResponsesProvider(
+            api_key="test",
+            api_base="https://api.example/v1",
+            default_model="deepseek/deepseek-v4.1-flash-1017",
+            model_overrides={"deepseek-v4.1": {"temperature": 0.2, "extra_body": {}}},
+        )
+        await provider.chat(messages=[{"role": "user", "content": "hello"}], model=provider.default_model)
+    finally:
+        logger.remove(sink_id)
+
+    assert sent[0]["temperature"] == 0.2
+    assert "extra_body" not in sent[0]
+    assert warnings == []
+
+
+async def test_responses_adapter_fields_written_after_overrides_win(monkeypatch) -> None:
+    """The adapter's late writes replace overrides for the same four fields."""
+    sent = _capture_responses_requests(monkeypatch)
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "noop", "description": "nothing", "parameters": {"type": "object", "properties": {}}},
+        }
+    ]
+    provider = OpenAIResponsesProvider(
+        api_key="test",
+        api_base="https://api.example/v1",
+        default_model="deepseek/deepseek-v4.1-flash-1017",
+        model_overrides={
+            "deepseek-v4.1": {
+                "prompt_cache_key": "from-override",
+                "parallel_tool_calls": False,
+                "extra_body": {
+                    "prompt_cache_key": "from-extra-body",
+                    "tools": [],
+                    "tool_choice": "none",
+                    "parallel_tool_calls": False,
+                    "reasoning": {"effort": "high"},
+                },
+            }
+        },
+    )
+
+    await provider.chat(
+        messages=[{"role": "system", "content": "rules"}, {"role": "user", "content": "hello"}],
+        tools=tools,
+        model=provider.default_model,
+    )
+
+    body = sent[0]
+    assert body["prompt_cache_key"] not in {"from-override", "from-extra-body"}
+    assert body["tools"] == [
+        {
+            "type": "function",
+            "name": "noop",
+            "description": "nothing",
+            "parameters": {"type": "object", "properties": {}},
+        }
+    ]
+    assert body["tool_choice"] == "auto"
+    assert body["parallel_tool_calls"] is True
+    assert body["reasoning"] == {"effort": "high"}
+    assert "extra_body" not in body
+
+
+def _anthropic_merged_body(provider: AnthropicMessagesProvider, model: str = "claude-haiku-4-5") -> dict:
+    return provider._body(
+        messages=[{"role": "user", "content": "hello"}],
+        tools=None,
+        model=model,
+        max_tokens=None,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+        stream=False,
+    )
+
+
+def test_anthropic_model_overrides_unwrap_extra_body() -> None:
+    provider = AnthropicMessagesProvider(
+        api_key="k",
+        api_base="https://api.anthropic.com/v1",
+        default_model="claude-haiku-4-5",
+        model_overrides={
+            "claude-haiku-4-5": {
+                "max_tokens": 222,
+                "extra_body": {"max_tokens": 111, "metadata": {"user_id": "u"}},
+            }
+        },
+    )
+
+    body = _anthropic_merged_body(provider)
+
+    assert body["max_tokens"] == 222
+    assert body["metadata"] == {"user_id": "u"}
+    assert "extra_body" not in body
+
+
+@pytest.mark.parametrize("extra_body", ["legacy-string", None, ["provider"]], ids=["string", "null", "list"])
+def test_anthropic_model_overrides_warn_when_extra_body_is_not_a_dict(extra_body) -> None:
+    provider = AnthropicMessagesProvider(
+        api_key="k",
+        api_base="https://api.anthropic.com/v1",
+        default_model="claude-haiku-4-5",
+        model_overrides={"claude-haiku-4-5": {"max_tokens": 222, "extra_body": extra_body}},
+    )
+    warnings: list[str] = []
+    sink_id = logger.add(lambda message: warnings.append(message.record["message"]), level="WARNING")
+    try:
+        body = _anthropic_merged_body(provider)
+    finally:
+        logger.remove(sink_id)
+
+    assert body["extra_body"] == extra_body
+    assert body["max_tokens"] == 222
+    extra_body_warnings = [message for message in warnings if "extra_body" in message]
+    assert len(extra_body_warnings) == 1
+    assert "not a dict" in extra_body_warnings[0]
+    assert "literal field" in extra_body_warnings[0]
+
+
+def test_anthropic_model_overrides_accept_an_empty_extra_body_without_a_warning() -> None:
+    provider = AnthropicMessagesProvider(
+        api_key="k",
+        api_base="https://api.anthropic.com/v1",
+        default_model="claude-haiku-4-5",
+        model_overrides={"claude-haiku-4-5": {"max_tokens": 222, "extra_body": {}}},
+    )
+    warnings: list[str] = []
+    sink_id = logger.add(lambda message: warnings.append(message.record["message"]), level="WARNING")
+    try:
+        body = _anthropic_merged_body(provider)
+    finally:
+        logger.remove(sink_id)
+
+    assert body["max_tokens"] == 222
+    assert "extra_body" not in body
+    assert warnings == []
+
+
+def test_anthropic_learned_ceiling_clamps_an_extra_body_max_tokens() -> None:
+    """The one late repair that replaces a merged value is the learned ceiling."""
+    provider = AnthropicMessagesProvider(
+        api_key="k",
+        api_base="https://api.anthropic.com/v1",
+        default_model="claude-haiku-4-5",
+        model_overrides={"claude-haiku-4-5": {"extra_body": {"max_tokens": 500, "metadata": {"user_id": "u"}}}},
+    )
+    provider._ceilings[provider.wire_model_id("claude-haiku-4-5")] = 100
+
+    body = _anthropic_merged_body(provider)
+
+    assert body["max_tokens"] == 100
+    assert body["metadata"] == {"user_id": "u"}
+    assert "extra_body" not in body
 
 
 async def test_openai_responses_replays_another_vendors_call_under_an_id_it_accepts(monkeypatch) -> None:

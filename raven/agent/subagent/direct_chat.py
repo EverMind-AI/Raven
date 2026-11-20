@@ -372,7 +372,22 @@ class DirectChatHandoff:
                     # the main agent paths to files that don't exist.
                     lines.append(f"    {turn.call_id} (record unavailable)")
                     continue
-                files = "{prompt.md,out.md}" if turn.ended_at_ms is not None else "prompt.md"
+                if turn.ended_at_ms is None:
+                    # Still running: finish has not written an outcome yet.
+                    files = "prompt.md"
+                else:
+                    # Name only the files finish wrote. out.md exists when the
+                    # turn produced text; a failure writes error.md instead, and
+                    # a cancellation writes neither. Naming a missing out.md
+                    # sends the main agent into FileNotFoundError and leaves the
+                    # reason in error.md unread.
+                    present = [
+                        name for name in ("prompt.md", "out.md", "error.md") if (turn.directory / name).is_file()
+                    ]
+                    if not present:
+                        lines.append(f"    {turn.call_id} (record unavailable)")
+                        continue
+                    files = present[0] if len(present) == 1 else "{" + ",".join(present) + "}"
                 lines.append(f"    {turn.call_id}/{files}")
         return "\n".join(lines)
 

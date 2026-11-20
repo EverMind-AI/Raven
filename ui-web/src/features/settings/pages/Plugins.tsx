@@ -1,219 +1,158 @@
-/* Plugins: the MCP servers, each with its switch (plug.toggle), a chip for
-   what the connection manager reports, and a panel for its credential. */
-import { useEffect, useState } from 'react'
+/* Plugins: the Agent Plugin packages (Agent Plugins 1.0, a directory with a
+   plugin.json) this host can see -- what each holds, whether its skills were
+   imported, and the one switch the page owns: whether its MCP servers may
+   start. Importing and removing stay with `raven agent-plugins`, because both
+   take a path on the host's disk and this page may be open on another
+   machine. */
+import { useEffect } from 'react'
 
-import { KeyInput } from '../../../components/KeyInput'
 import { t } from '../../../i18n/t'
-import { Card, Chip, Empty, GLYPH, Grow, KeyLink, Row, Rov, Spin, Switch, Xrow } from '../Fields'
-import { KeyFieldsWait } from '../Skeletons'
+import { Card, Chip, Empty, GLYPH, Grow, Row, Rov, Switch, Xrow } from '../Fields'
+import { PluginsWait } from '../Skeletons'
 import * as store from '../store'
 
-import type { McpSnapshot } from '../../../rpc/generated'
-import type { AuthField, McpDetail } from '../types'
+import type { AgentPluginRow } from '../types'
 import type { JSX, ReactNode } from 'react'
 
-type PlugChip = 'none' | 'connected' | 'connecting' | 'setup' | 'failed'
+type PkgChip = 'none' | 'restart' | 'problem' | 'unimported'
 
-/* What the chip says. Off shows nothing; a toggle or retry in flight is
-   connecting; a credential the server still lacks is "needs setup" whatever
-   the manager says, because nothing will connect until it is saved. */
-export function plugChip(m: McpSnapshot, busy: boolean): PlugChip {
-  if (!m.enabled) return 'none'
-  if (busy || m.state === 'connecting') return 'connecting'
-  if (m.auth && m.auth !== 'none' && !m.credentialed) return 'setup'
-  if (m.state === 'connected') return 'connected'
-  if (m.state === 'error' || m.state === 'auth_required') return 'failed'
+const busyKey = (name: string): string => `pkg:${name}`
+
+/* The command the reader copies onto the host's shell, so a source with a
+   space in it is quoted rather than split into two arguments. */
+export const importCommand = (source: string): string =>
+  `raven agent-plugins import ${/\s/.test(source) ? `"${source}"` : source}`
+
+/* One chip per row, the most pressing first. A switch flipped since the start
+   leaves the running engine on the old answer, and that is the thing a reader
+   would otherwise get wrong; a problem comes next; skills that were never
+   imported are not in use, which a row that lists them does not say. */
+export function pkgChip(p: AgentPluginRow): PkgChip {
+  if (p.mcp.allowed !== p.mcp.live) return 'restart'
+  if (p.problems.length || p.mcp.problems.length) return 'problem'
+  if (p.skills.length && !p.skills_imported) return 'unimported'
   return 'none'
 }
 
-const busyKey = (name: string): string => `plug:${name}`
-
-function ChipFor({ m }: { m: McpSnapshot }): JSX.Element | null {
-  const kind = plugChip(m, store.isBusy(busyKey(m.name)))
-  if (kind === 'none') return null
-  if (kind === 'connected') return <Chip state="on">{t('gui.settings.plugins.connected')}</Chip>
-  if (kind === 'connecting') return <Spin>{t('gui.settings.plugins.connecting')}</Spin>
-  if (kind === 'setup') return <Chip state="warn">{t('gui.settings.plugins.setup')}</Chip>
-  /* A status, not a control. "Failed · retry" made the chip a button, so the
-     one place that says what state the server is in was also a place a stray
-     click reconnected it, beside a switch that already means on and off. The
-     retry is in the drawer, beside the reason it failed. */
-  return <Chip state="warn">{t('gui.settings.plugins.failed')}</Chip>
+function ChipFor({ p }: { p: AgentPluginRow }): JSX.Element | null {
+  const kind = pkgChip(p)
+  if (kind === 'restart') return <Chip state="warn">{t('gui.plug.needs_restart')}</Chip>
+  if (kind === 'problem') return <Chip state="warn">{t('gui.settings.plugins.problem')}</Chip>
+  if (kind === 'unimported') return <Chip state="off">{t('gui.settings.plugins.unimported')}</Chip>
+  return null
 }
 
-/* What went wrong and the one thing to try, together and first: for a server
-   that will not connect, that is what the reader opened the row for. The
-   reason is the manager's own words; a failure that came back without any
-   still gets the button. */
-function Failure({ m }: { m: McpSnapshot }): JSX.Element | null {
-  const busy = store.isBusy(busyKey(m.name))
-  if (plugChip(m, busy) !== 'failed' && !(busy && m.error)) return null
-  return (
-    <div className="settings-pfail">
-      {m.error ? <span className="settings-pbad">{m.error}</span> : <span />}
-      <button type="button" className="mini" disabled={busy}
-        onClick={() => void store.run(busyKey(m.name), () => store.source().retryServer(m.name))}>
-        {t(busy ? 'gui.settings.plugins.connecting' : 'gui.settings.plugins.retry')}
-      </button>
-    </div>
-  )
+const SERVER_WORD: Record<string, string> = {
+  off: 'gui.settings.plugins.server_off',
+  disconnected: 'gui.settings.plugins.server_idle',
+  connecting: 'gui.settings.mcp.connecting',
+  connected: 'gui.settings.mcp.connected',
+  auth_required: 'gui.settings.mcp.failed',
+  error: 'gui.settings.mcp.failed',
 }
 
-/* A sentence rather than a labelled value: an empty label cell is what tells
-   the sheet to let the line start at the left, where prose is read. */
+/* `.settings-pnote` is clay unless told otherwise (it is a verdict's colour on
+   the provider page), so a note that reports nothing wrong says so. */
 function Note({ children, bad }: { children: ReactNode; bad?: boolean }): JSX.Element {
-  return <Row><span className={bad ? 'settings-pnote settings-pbad' : 'settings-pnote'}>{children}</span></Row>
+  return bad
+    ? <Row><span className="settings-pnote settings-pbad">{children}</span></Row>
+    : <Row><span className="settings-pnote" data-tone="muted">{children}</span></Row>
 }
 
-function OauthRow({ m }: { m: McpSnapshot }): JSX.Element {
-  const auth = (): void => { void store.run(busyKey(m.name), () => store.source().authServer(m.name)) }
-  const revoke = (): void => { void store.run(busyKey(m.name), () => store.source().revokeServer(m.name)) }
-  /* No label: every control here names the thing it does, and an "Authorization"
-     label opposite them only bought a panel's width of empty space between the
-     word and the button that acts on it. */
-  return (
-    <Row>
-      <span className="settings-taglist">
-        {m.credentialed ? (
-          <>
-            <Rov>{t('gui.settings.plugins.authorized')}</Rov>
-            <button type="button" className="mini ghost" onClick={auth}>{t('gui.settings.plugins.reauth')}</button>
-            <button type="button" className="mini ghost" onClick={revoke}>{t('gui.settings.plugins.revoke')}</button>
-          </>
-        ) : (
-          <button type="button" className="mini" onClick={auth}>{t('gui.settings.plugins.auth_browser')}</button>
-        )}
-      </span>
-    </Row>
-  )
-}
-
-/* What the credential part of a drawer says, which depends on two sources that
-   can disagree. The runtime row knows WHETHER this server authenticates; the
-   catalogue knows WHICH fields it takes. An empty field list used to print
-   "takes no credential" whatever the row said, so a server the catalogue has
-   no entry for -- anything added by hand, and github, whose entry was filed
-   under another id -- was told it needed nothing while its connection failed
-   on an expired token. */
-function Credential({ m, detail }: { m: McpSnapshot; detail: McpDetail }): JSX.Element {
-  if (m.auth === 'oauth') return <OauthRow m={m} />
-  if (m.auth === 'none') return <Note>{t('gui.settings.plugins.no_credential')}</Note>
-  if (detail.fields.length) {
-    return <>{detail.fields.map((f) => <KeyField key={f.key} m={m} field={f} />)}</>
+function Panel({ p }: { p: AgentPluginRow }): JSX.Element {
+  const busy = store.isBusy(busyKey(p.name))
+  const flip = (on: boolean): void => {
+    void store.run(busyKey(p.name), async () => {
+      store.set({ pkgs: await store.source().setPackageMcp(p.name, on) })
+    }, { remount: false })
   }
-  return <Note>{t(detail.known ? 'gui.settings.plugins.no_credential' : 'gui.settings.plugins.no_fields')}</Note>
-}
-
-/* The drawer, in the order a reader needs it: what to do about it, then what
-   it is, then what went wrong. Everything here is a fact one of the two
-   sources already carried and the panel used to drop -- the address it
-   connects to, the tools it brings, and the manager's own error text, which
-   only ever reached the reader as the word "failed" on a chip. */
-function Panel({ m }: { m: McpSnapshot }): JSX.Element {
-  const [detail, setDetail] = useState<McpDetail | null>(null)
-  useEffect(() => {
-    let live = true
-    store.source().serverDetail(m.name)
-      .then((d) => { if (live) setDetail(d) })
-      .catch(() => { if (live) setDetail({ known: false, fields: [], tools: [] }) })
-    return () => { live = false }
-  }, [m.name])
-  if (!detail) return <KeyFieldsWait />
+  const switchable = p.mcp.servers.length > 0 || p.mcp.allowed
+  const problems = [...p.notes, ...p.problems, ...p.mcp.problems]
   return (
     <>
-      <Failure m={m} />
-      <Credential m={m} detail={detail} />
-      {/* Facts, not controls, so they read as a definition list rather than
-          through the row grid: a label column the width of its longest word
-          and the value right beside it. Sent through the grid they sat at
-          opposite edges of the panel, a two-character label a thousand pixels
-          from the URL it names, with nothing in between to pair them. */}
+      {p.description && <Note>{p.description}</Note>}
+      {problems.map((text) => <Note key={text} bad>{text}</Note>)}
+      {switchable && (
+        <Row label={t('gui.settings.plugins.mcp_switch')} sub={t('gui.settings.plugins.mcp_switch_sub')}>
+          <Switch on={p.mcp.allowed} disabled={busy} label={t('gui.settings.plugins.mcp_switch')} onChange={flip} />
+        </Row>
+      )}
+      {/* Facts, read as a definition list beside their labels, the way the
+          MCP page's drawer reads its address and tools. */}
       <dl className="settings-pfacts">
-        {detail.address && (
-          <>
-            <dt>{t('gui.settings.plugins.address')}</dt>
-            <dd className="settings-pmono" title={detail.address}>{detail.address}</dd>
-          </>
-        )}
-        <dt>{t('gui.settings.plugins.tools')}</dt>
+        <dt>{t('gui.settings.plugins.source')}</dt>
+        <dd className="settings-pmono" title={p.source}>{p.source}</dd>
+        <dt>{t('gui.settings.plugins.skills')}</dt>
         <dd>
-          {t('gui.settings.plugins.tools_n', { n: m.tool_count })}
-          {detail.tools.length > 0 && <span className="settings-ptnames">{detail.tools.join('  ')}</span>}
+          {t(p.skills_imported ? 'gui.settings.plugins.skills_in' : 'gui.settings.plugins.skills_out', { n: p.skills.length })}
+          {p.skills.length > 0 && <span className="settings-ptnames">{p.skills.join('  ')}</span>}
         </dd>
+        {p.mcp.servers.map((srv) => (
+          <ServerFact key={srv.name} name={srv.name} state={srv.state} error={srv.error} />
+        ))}
       </dl>
+      {p.skills.length > 0 && !p.skills_imported && (
+        <Note>
+          {t('gui.settings.plugins.import_hint')}
+          <span className="settings-ptnames">{importCommand(p.source)}</span>
+        </Note>
+      )}
     </>
   )
 }
 
-function KeyField({ m, field }: { m: McpSnapshot; field: AuthField }): JSX.Element {
-  const [value, setValue] = useState('')
-  const save = (): void => {
-    const v = value.trim()
-    if (!v) { store.refuse(t('gui.settings.plugins.key_first')); return }
-    void store.run(busyKey(m.name), () => store.source().configureServer(m.name, { [field.key]: v })).then((ok) => { if (ok) setValue('') })
-  }
-  const clear = (): void => { void store.run(busyKey(m.name), () => store.source().configureServer(m.name, { [field.key]: '' })) }
+function ServerFact({ name, state, error }: { name: string; state: string; error?: string | null }): JSX.Element {
   return (
-    <Row stack label={<>{field.label || t('gui.settings.plugins.api_key')}<KeyLink url={field.help_url} /></>}>
-      <span className="settings-taglist">
-        <KeyInput className="settings-tbox" value={value} aria-label={field.label || t('gui.settings.plugins.api_key')}
-          placeholder={m.credentialed ? t('gui.settings.key_set_ph') : t('gui.settings.key_ph')}
-          onChange={(e) => setValue(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
-        <button type="button" className="mini" onClick={save}>{m.credentialed ? t('gui.settings.update') : t('gui.save')}</button>
-        {m.credentialed && <button type="button" className="mini ghost" onClick={clear}>{t('gui.settings.clear')}</button>}
-      </span>
-    </Row>
+    <>
+      <dt>{t('gui.settings.plugins.server')}</dt>
+      <dd>
+        <span className="settings-pmono">{name}</span>
+        <span className="settings-ptnames">{t(SERVER_WORD[state] || 'gui.settings.plugins.server_idle')}</span>
+        {error && <span className="settings-pbad">{` ${error}`}</span>}
+      </dd>
+    </>
   )
 }
 
 export function Plugins(): JSX.Element {
   const s = store.get()
-  const rows = s.snap.mcp
-  const connected = rows.filter((m) => plugChip(m, store.isBusy(busyKey(m.name))) === 'connected').length
-  const flip = (m: McpSnapshot, on: boolean): void => {
-    /* A server turned on that still needs its credential is written as
-       enabled and opened, and nothing tries to connect until the key lands. */
-    if (on && m.auth && m.auth !== 'none' && !m.credentialed) store.set({ plugOpen: m.name })
-    void store.run(busyKey(m.name), () => store.source().toggleServer(m.name, on), { remount: false })
-  }
-  /* Connecting a server is not this page's either: the plugin tool finds it in
-     the PlugHub catalogue and connects it in the chat, and the key or the
-     OAuth is then asked for in the drawer here. The button leads there with
-     the request half written; a server the catalogue lacks is written into
-     the config file by hand, and the line under the button says where. */
-  const add = (): void => store.addInChat(t('gui.settings.plugins.add_prompt'))
+  useEffect(() => {
+    if (s.pkgs === null) void store.pkgsLoad()
+  }, [s.pkgs])
+  if (!s.pkgs) return <PluginsWait />
+  const { packages, problems } = s.pkgs
   return (
     <>
-      {/* "0 of 0 connected" is a number about nothing: the empty card below
-          already says there is no server, so the count only runs with rows. */}
       <div className="settings-crumb">
-        {rows.length > 0 && <Rov>{t('gui.settings.plugins.counter', { on: connected, total: rows.length })}</Rov>}
+        {packages.length > 0 && <Rov>{t('gui.settings.plugins.counter', { n: packages.length })}</Rov>}
         <Grow />
-        <button type="button" className="mini" onClick={add}>{t('gui.settings.plugins.add')}</button>
         <span className="settings-addhint">{t('gui.settings.plugins.add_hint', { path: s.snap.configPath })}</span>
       </div>
       <Card>
-        {!rows.length && (
-          <Empty icon={GLYPH.plug} title={t('gui.settings.plugins.none')} action={{ label: t('gui.settings.plugins.add'), onClick: add }}>
+        {!packages.length && (
+          <Empty icon={GLYPH.puzzle} title={t('gui.settings.plugins.none')}>
             {t('gui.settings.plugins.none_sub')}
           </Empty>
         )}
-        {rows.map((m) => {
-          const panel = <Panel m={m} />
-          return (
-            <Xrow
-              key={m.name}
-              name={<span className="mono">{m.name}</span>}
-              status={<ChipFor m={m} />}
-              ctl={<Switch on={m.enabled} label={m.name} onChange={(v) => flip(m, v)} />}
-              panel={panel}
-              open={s.plugOpen === m.name}
-              dim={!m.enabled}
-              onToggle={() => store.set({ plugOpen: s.plugOpen === m.name ? null : m.name })}
-            />
-          )
-        })}
+        {packages.map((p) => (
+          <Xrow
+            key={p.name}
+            name={<span className="mono">{p.name}</span>}
+            status={<ChipFor p={p} />}
+            ctl={<Rov>{p.version}</Rov>}
+            panel={<Panel p={p} />}
+            open={s.pkgOpen === p.name}
+            onToggle={() => store.set({ pkgOpen: s.pkgOpen === p.name ? null : p.name })}
+          />
+        ))}
       </Card>
+      {problems.length > 0 && (
+        <Card title={t('gui.settings.plugins.path_problems')}>
+          {problems.map((item) => (
+            <Note key={item.path} bad>{`${item.path}: ${item.reason}`}</Note>
+          ))}
+        </Card>
+      )}
     </>
   )
 }

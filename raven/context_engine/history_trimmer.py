@@ -47,6 +47,14 @@ _ALLOWED_KEYS = {
     "thinking_blocks",
 }
 
+STORED_MID_TURN_KEY = "mid_turn"
+"""The mark the session write leaves on an arrival the reader typed mid-turn.
+
+Spelled here rather than imported because a history strategy must not load the
+loop (``raven.agent.loop._shared`` owns the private spelling); the merge test
+pins the two against each other.
+"""
+
 
 def _tool_parents(messages: list[dict[str, Any]]) -> dict[int, int]:
     """Each tool result's index mapped to the index of the call it answers.
@@ -169,6 +177,9 @@ class HistoryTrimmer:
         with (:mod:`raven.context_engine.runtime_context`): the session keeps the
         user's words and the lines apart, and the request has to carry them
         joined as they were sent for the provider's cached prefix to match.
+
+        An arrival the reader typed mid-turn keeps its mark, so the call seam
+        folds the run into the one message the turn was sent with.
         """
         history: list[dict[str, Any]] = []
         for mid in ids:
@@ -176,6 +187,8 @@ class HistoryTrimmer:
             if clean.get("role"):
                 if "content" in clean:
                     clean["content"] = replayed_content(messages[mid])
+                if messages[mid].get(STORED_MID_TURN_KEY):
+                    clean[STORED_MID_TURN_KEY] = True
                 history.append(clean)
         return history
 

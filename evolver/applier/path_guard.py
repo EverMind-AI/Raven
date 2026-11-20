@@ -6,10 +6,17 @@ through normal workflow; only auto-evolver patches are blocked.
 
 Two pattern types are supported in ``IMMUTABLE_PATTERNS``:
 
-- **Exact file** — e.g. ``"raven/agent/loop/main.py"``. Matches
-  exactly this repo-relative path.
+- **Exact file** — e.g. ``"raven/agent/loop/main.py"``. Matches this
+  repo-relative path regardless of case.
 - **Directory subtree** — trailing-slash, e.g. ``"evolver/"``.
   Matches the directory itself and any descendant path.
+
+Matching folds case on both sides: a case-insensitive filesystem (Windows,
+macOS by default) resolves ``EVOLVER/x.py`` and ``evolver/x.py`` to the
+same file, so a patch spelled in another case must not slip past the
+guard. On a case-sensitive filesystem this can refuse a path that only
+differs by case; that is the conservative direction, and the guard
+already prefers refusing over guessing.
 
 ``MUTABLE_OVERRIDES`` takes precedence: a path matching an override is
 mutable even if it also matches an immutable pattern. Use this to carve
@@ -18,8 +25,9 @@ out mutable sub-trees from a broader immutable directory.
 Why repo-relative-string matching instead of full glob:
 This module's job is fast, predictable, easy-to-audit gating. Glob
 patterns (``**``, ``*.py``) invite surprises (case-sensitivity, slash
-behaviour). Exact paths + directory subtrees cover everything in
-§22.2 without ambiguity.
+behaviour); here the two pattern shapes and the case fold are explicit.
+Exact paths + directory subtrees cover everything in §22.2 without
+ambiguity.
 
 Reference layers (spec §22.1, §22.2):
     L1 — Self-reference (evolver/**)
@@ -101,6 +109,13 @@ IMMUTABLE_PATTERNS: tuple[str, ...] = (
 # §22.2 layout. Add an entry like ``"raven/sandbox/policies.yaml"``
 # here if a specific file inside an immutable directory needs to evolve.
 MUTABLE_OVERRIDES: tuple[str, ...] = ()
+
+
+# Case-folded mirrors of the two tuples above, computed once at import:
+# the predicate would otherwise re-fold the same fixed patterns on every
+# call. Reassigning the public tuples after import would not update these.
+_FOLDED_IMMUTABLE_PATTERNS: tuple[str, ...] = tuple(p.casefold() for p in IMMUTABLE_PATTERNS)
+_FOLDED_MUTABLE_OVERRIDES: tuple[str, ...] = tuple(p.casefold() for p in MUTABLE_OVERRIDES)
 
 
 # ---------------------------------------------------------------------------
@@ -229,19 +244,22 @@ def _normalise(path: str) -> str:
     return p
 
 
-def _match(path: str, pattern: str) -> bool:
-    """Match a normalised path against one pattern.
+def _match(folded_path: str, folded_pattern: str) -> bool:
+    """Match a case-folded path against one case-folded pattern.
 
     Two pattern shapes:
 
     - Trailing slash → directory subtree match (the directory itself
       and any descendant).
-    - Otherwise → exact-string match.
+    - Otherwise → whole-path match.
+
+    The caller case-folds once: ``is_immutable`` folds the path per call,
+    and the constant pattern tuples are folded at import.
     """
-    if pattern.endswith("/"):
-        prefix = pattern.rstrip("/")
-        return path == prefix or path.startswith(pattern)
-    return path == pattern
+    if folded_pattern.endswith("/"):
+        prefix = folded_pattern.rstrip("/")
+        return folded_path == prefix or folded_path.startswith(folded_pattern)
+    return folded_path == folded_pattern
 
 
 # ---------------------------------------------------------------------------
@@ -254,17 +272,18 @@ def is_immutable(path: str) -> bool:
 
     Algorithm:
 
-    1. Normalise the path (handle Windows paths + leading ``./``).
+    1. Normalise the path (Windows separators, leading ``./``) and
+       case-fold it.
     2. If any pattern in ``MUTABLE_OVERRIDES`` matches → return False
        (override wins).
     3. If any pattern in ``IMMUTABLE_PATTERNS`` matches → return True.
     4. Otherwise → return False (path is mutable by default).
     """
-    norm = _normalise(path)
-    for pat in MUTABLE_OVERRIDES:
+    norm = _normalise(path).casefold()
+    for pat in _FOLDED_MUTABLE_OVERRIDES:
         if _match(norm, pat):
             return False
-    for pat in IMMUTABLE_PATTERNS:
+    for pat in _FOLDED_IMMUTABLE_PATTERNS:
         if _match(norm, pat):
             return True
     return False

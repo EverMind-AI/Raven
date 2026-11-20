@@ -49,7 +49,7 @@ function wire(): void {
     workspace: source,
     subagents: {
       list: async () => [],
-      instances: async (key: string) => { asked.push(key); return agentRows },
+      instances: async (key: string) => { asked.push(key); return { rows: agentRows, pendingHandoff: 0 } },
     },
   })
   localStorage.clear()

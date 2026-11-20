@@ -6,17 +6,18 @@ system prompt:
 
 - **Identity / Bootstrap / ActiveSkills** — the host's own sections.
 - **Memory** — ``backend.recall(user_id=...)`` (segment 4, ``# Memory``).
-- **Skills** — a :class:`SkillForgeRouter` over 1-3 sources (segment 5,
-  ``# Skills``), built only under pull discovery.
 - **History** — the strategy ``context.history.strategy`` names (see
   :mod:`raven.context_engine.history`): ``compacting`` or the Curator.
   Owns ``*history``.
 
-With ``context.cache.turn_scratch`` on (the default), the two sections that
-move with the query -- ``# Memory`` and ``# Skills`` -- are appended to the
-turn's user message instead of the system prompt.
+With ``context.cache.turn_scratch`` on (the default), ``# Memory``, the section
+that moves with the query, is appended to the turn's user message instead of
+the system prompt.
 
-The SkillForgeRouter is assembled from up to three sources:
+Retrieved skills never enter a segment. A :class:`SkillForgeRouter` over 1-4
+sources feeds the :class:`ScentMenu`, a few name and description lines in the
+turn's user envelope, and the ``find_skill`` tool; the model reads a body with
+``read_skill``. The router is assembled from up to four sources:
 
 - :class:`LocalSkillSource` — always; wraps the builder's existing
   ``LocalPool`` + ``SkillRegistry`` (no second disk scan).
@@ -25,10 +26,15 @@ The SkillForgeRouter is assembled from up to three sources:
   ``memory.backend`` name.
 - :class:`HubSkillSource` — always mounted: the shared Skill Hub marketplace
   (or the URL the config names), gated per search on the live switch.
+- :class:`ProjectSkillSource` — mounted in the host process only: the project's
+  ``.agents/skills``, resolved from the turn's working directory per search
+  and gated per search on the live switch. A process launched as a sub-agent
+  mounts no project source.
 
 With no ``backend`` the engine still constructs: the recall lane yields
-``[]`` and the router runs Local-only, so the agent boots even when no
-memory plugin is installed.
+``[]`` and the router runs the sources mounted outside a sub-agent process
+(Local, Hub and Project), so the agent boots even when no memory plugin is
+installed.
 """
 
 from __future__ import annotations
@@ -39,8 +45,9 @@ from typing import TYPE_CHECKING, Callable
 
 from loguru import logger
 
+from raven.agent import workdir
 from raven.agent.context import ContextBuilder
-from raven.config.live import LiveConfig, curator_pin, skill_gate_pin, skill_hub_enabled
+from raven.config.live import LiveConfig, curator_pin, project_skills_enabled, skill_hub_enabled
 from raven.context_engine import history as history_strategies
 from raven.context_engine.assembler import ContextAssembler
 from raven.context_engine.scent import ScentMenu
@@ -49,10 +56,10 @@ from raven.context_engine.segments import (
     BootstrapSegmentBuilder,
     IdentitySegmentBuilder,
     MemorySegmentBuilder,
-    SkillsSegmentBuilder,
 )
 from raven.contracts.context import ContextEngine
 from raven.contracts.llm_provider import LLMProvider
+from raven.home import is_subagent_process
 from raven.providers.pool import live_pin_resolver
 
 if TYPE_CHECKING:
@@ -64,12 +71,7 @@ if TYPE_CHECKING:
         SkillForgeRouterConfig,
     )
     from raven.contracts.memory import MemoryBackend
-    from raven.memory_engine import (
-        LLMGateFilter,
-        QueryRewriter,
-        SkillForgeRouter,
-    )
-    from raven.providers.binding import ModelBinding
+    from raven.memory_engine import SkillForgeRouter
     from raven.providers.pool import ProviderPool
     from raven.skill_hub import SkillHubClient
 
@@ -119,36 +121,28 @@ def build_context_engine(
     if skill_forge_router_config is None:
         skill_forge_router_config = _SkillForgeRouterConfig()
 
-    # One reader for the pins and the Hub switch: the file is re-parsed only
-    # when its bytes change, so the subsystems asking per call cost one read
-    # between them.
+    # One reader for the curator pin and the Hub switch: the file is re-parsed
+    # only when its bytes change, so the subsystems asking per call cost one
+    # read between them.
     live = LiveConfig()
 
-    router = _build_router(
-        builder=builder,
-        backend=backend,
-        memory_config=memory_config,
-        skill_forge_router_config=skill_forge_router_config,
-        skill_hub_client=skill_hub_client,
-        hub_enabled_reader=lambda: skill_hub_enabled(live),
-    )
-
-    discovery = str(getattr(skill_forge_config, "discovery", "pull") or "pull")
-    if discovery == "push":
-        rewriter, gate = _build_rewriter_and_gate(
-            provider=provider,
-            provider_pool=provider_pool,
-            skill_forge_config=skill_forge_config,
+    # The master switch is read once, where the router is built: a deployment
+    # that throws it off restarts into a host that mounts no source at all, so
+    # no reader downstream has to ask. ``None`` is the state every consumer
+    # already reads as "no retrieval here" -- ``FindSkillTool`` says so, the
+    # tools' held hits come back empty, and the memory-backend rebind skips a
+    # missing router rather than mounting a source into one.
+    router = None
+    if skill_forge_router_config.enabled:
+        router = _build_router(
+            builder=builder,
+            backend=backend,
+            memory_config=memory_config,
             skill_forge_router_config=skill_forge_router_config,
-            pin_resolver=live_pin_resolver(
-                provider_pool,
-                lambda: skill_gate_pin(live),
-                key="skill_forge.llm_gate_model",
-                follower="the gate",
-            ),
+            skill_hub_client=skill_hub_client,
+            hub_enabled_reader=lambda: skill_hub_enabled(live),
+            project_enabled_reader=lambda: project_skills_enabled(live),
         )
-    else:
-        rewriter, gate = None, None
 
     builders = [
         IdentitySegmentBuilder(
@@ -167,28 +161,6 @@ def build_context_engine(
         ),
         ActiveSkillsSegmentBuilder(builder.skills, get_tool_definitions=get_tool_definitions),
     ]
-    if discovery == "push":
-        builders.append(
-            SkillsSegmentBuilder(
-                router,
-                skill_top_k=skill_forge_router_config.top_k,
-                rewriter=rewriter,
-                gate=gate,
-                gate_pool_size=(
-                    int(getattr(skill_forge_config, "llm_gate_pool_size", 10)) if skill_forge_config is not None else 10
-                ),
-                hub_client=skill_hub_client,
-                get_tool_definitions=get_tool_definitions,
-                list_subagents=list_subagents,
-                min_safety=skill_forge_router_config.hub.min_safety,
-                blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
-                blocklist_reader=blocklist_reader,
-                auto_install=str(getattr(skill_forge_config, "auto_install", "auto") or "auto"),
-                install_audit_path=(
-                    workspace / "skills" / "hub" / "installs.jsonl" if skill_hub_client is not None else None
-                ),
-            )
-        )
     strategy = history_strategies.resolve(config.history.strategy)
     builders.append(
         strategy.build(
@@ -207,13 +179,15 @@ def build_context_engine(
             now_fn=now_fn,
         )
     )
-    scent = None
-    if discovery != "push":
-        from raven.skill_hub.policy import SkillPolicy
+    from raven.skill_hub.policy import SkillPolicy
 
-        # Pull mode has no SkillsSegmentBuilder, whose pool drop was the
-        # blocklist / min_safety backstop for the everos + hub sources —
-        # the menu enforces the same policy at advertising time.
+    # The menu is where the everos and hub sources first meet the policy: it
+    # enforces the blocklist and the safety bar at advertising time, and
+    # read_skill / use_skill enforce them again on the detail metadata. With
+    # the router off there is nothing to advertise, so the engine carries no
+    # menu either.
+    scent = None
+    if router is not None:
         scent = ScentMenu(
             router,
             policy=SkillPolicy.create(
@@ -252,8 +226,8 @@ def build_context_engine(
         mints_source_refs=strategy.mints_source_refs and not history_dropped,
         turn_scratch=getattr(getattr(config, "cache", None), "turn_scratch", True),
     )
-    # The find_skill tool searches through the same router the engine
-    # retrieves with, whichever discovery mode is active.
+    # The find_skill tool searches through the same router the scent menu
+    # reads; a master switch that is off leaves the engine with neither.
     engine.skills_router = router
     return engine
 
@@ -266,12 +240,15 @@ def _build_router(
     skill_forge_router_config: "SkillForgeRouterConfig",
     skill_hub_client: "SkillHubClient | None" = None,
     hub_enabled_reader: "Callable[[], bool] | None" = None,
+    project_enabled_reader: "Callable[[], bool] | None" = None,
 ) -> "SkillForgeRouter":
-    """Assemble the 1-to-3 source SkillForgeRouter for segment 5."""
+    """Assemble the 1-to-4 source SkillForgeRouter the scent menu and find_skill share."""
     from raven.memory_engine import (
         BackendSkillSource,
         HubSkillSource,
         LocalSkillSource,
+        ProjectSkills,
+        ProjectSkillSource,
         SkillForgeRouter,
     )
 
@@ -331,54 +308,26 @@ def _build_router(
             )
         )
 
+    # ── Source 4: Project (host process only) ───────────────────────
+    # The source resolves the turn's working directory per search, so every
+    # session of this gateway sees its own project and the live switch needs
+    # no rebuild in either direction. A process the host launched as a
+    # sub-agent mounts no project source: only the leader agent reads a
+    # repository's own skills.
+    if not is_subagent_process():
+        project_source = ProjectSkillSource(
+            ProjectSkills(
+                agent_home=builder.workspace,
+                workdir_reader=workdir.current,
+                enabled_reader=project_enabled_reader,
+            )
+        )
+        project_source.weight = float(weights.get("project", 0.96))
+        sources.append(project_source)
+
     return SkillForgeRouter(
         sources=sources,
         over_fetch_factor=skill_forge_router_config.over_fetch_factor,
         dedup_by=skill_forge_router_config.dedup_by,
         rrf_k=skill_forge_router_config.rrf_k,
     )
-
-
-def _build_rewriter_and_gate(
-    *,
-    provider: LLMProvider,
-    skill_forge_config: "SkillForgeConfig | None",
-    skill_forge_router_config: "SkillForgeRouterConfig",
-    provider_pool: "ProviderPool | None" = None,
-    pin_resolver: "Callable[[], ModelBinding | None] | None" = None,
-) -> "tuple[QueryRewriter | None, LLMGateFilter | None]":
-    """Construct the optional rewriter + gate from the parent SkillForge
-    config. Both fall to ``None`` when their respective flag is off or
-    no provider is wired — :class:`SkillsSegmentBuilder` then skips that
-    stage.
-
-    Per-stage isolation matters: gate-off + rewriter-on is a valid
-    deployment (cheap retrieval, no LLM selector); rewriter-off + gate-on
-    is also valid (always retrieve, then filter)."""
-    if skill_forge_config is None or provider is None:
-        return None, None
-
-    from raven.memory_engine import LLMGateFilter, QueryRewriter
-
-    rewriter: "QueryRewriter | None" = None
-    if bool(getattr(skill_forge_config, "rewrite_enabled", False)):
-        rewriter = QueryRewriter(
-            provider,
-            max_tokens=int(getattr(skill_forge_config, "rewrite_max_tokens", 8192) or 8192),
-        )
-
-    gate: "LLMGateFilter | None" = None
-    if bool(getattr(skill_forge_config, "llm_gate_enabled", False)):
-        # ``legacy_top_k`` is the gate's failure-fallback size — must match
-        # what the no-gate path renders (i.e. ``skill_top_k``) so a gate
-        # outage doesn't change injection volume vs. having gate disabled.
-        gate = LLMGateFilter(
-            provider,
-            max_select=int(getattr(skill_forge_config, "llm_gate_max_select", 2) or 2),
-            legacy_top_k=int(skill_forge_router_config.top_k or 5),
-            pin_resolver=pin_resolver,
-            temperature=float(getattr(skill_forge_config, "llm_gate_temperature", 0.0)),
-            max_tokens=int(getattr(skill_forge_config, "llm_gate_max_tokens", 8192) or 8192),
-        )
-
-    return rewriter, gate

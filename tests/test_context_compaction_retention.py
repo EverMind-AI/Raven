@@ -135,6 +135,21 @@ class TestLedger:
         assert ledger.group_of(1) == frozenset({1, 2})
         assert ledger.group_of(0) == frozenset({0})
 
+    def test_a_hook_note_is_not_a_turn_boundary(self) -> None:
+        """A cut may only land where a turn begins. The note a hook wrote is a
+        ``user`` row but not one: cutting there opens the kept tail with
+        harness text and leaves behind the tool result it comments on."""
+        messages = [
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": "a"},
+            {"role": "user", "content": "check the second table", "_hook_injected": True},
+            {"role": "assistant", "content": "b"},
+            {"role": "user", "content": "q2"},
+        ]
+        ledger = MessageLedger(messages)
+        assert ledger.align_forward(2, "turn") == 4, "the note is skipped, the next question is not"
+        assert ledger.align_backward(3, "turn") == 0
+
 
 # ---------------------------------------------------------------------------
 # Splitting into ranges

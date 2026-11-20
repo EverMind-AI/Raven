@@ -33,10 +33,11 @@ raven skill get --help
 raven skill block --help
 ```
 
-SkillForge uses three sources: local files, skills/cases recalled through the
-configured memory backend, and remote Skill Hub candidates. Availability
-depends on configuration and service connectivity; a catalog result is not
-proof that a bundle is installed or its required tools exist.
+SkillForge uses four sources: local files, skills/cases recalled through the
+configured memory backend, remote Skill Hub candidates, and project skills kept
+in the working directory's repository. Availability depends on configuration
+and service connectivity; a catalog result is not proof that a bundle is
+installed or its required tools exist.
 
 Searching Skill Hub sends text off the machine. The source is on by default and
 uses the shared catalog (`https://skillhub.evermind.ai`); a config may name
@@ -51,19 +52,48 @@ kept, so turning it back on returns to the same catalog. A legacy explicit
 `null` endpoint keeps the source off. Switching applies to the next search
 either way, with no reload.
 
-`skillForge.discovery` defaults to `pull`: the model receives a small
-name/description menu on eligible turns and uses `find_skill` to search and
-`read_skill` to fetch a body. `push` instead runs the selection/injection
-pipeline and places selected bodies in context. Pull avoids the push path's
-per-turn rewriting and gating model calls; it does not mean all retrieval is
-free or every turn receives the same menu.
+Retrieved skills reach the model as a small name/description menu on eligible
+turns; the model uses `find_skill` to search and `read_skill` to fetch a body.
+Only skills marked `always` sit in the system prompt. Choosing skills costs a
+turn no extra model calls, though a lookup can still reach the Skill Hub, and
+not every turn receives a menu.
+
+### Skill directories { #skill-directories }
+
+A skill goes in one of two directories, depending on whether it is for the
+user or for one project:
+
+- **Agent home's `skills/`** — the user-level directory, `skills/` under the
+  agent home: `~/.raven/workspace/skills` by default, moved by `RAVEN_HOME`
+  and by the `--home` option of `raven agent`, `raven gateway` and `raven tui`.
+- **The project's `.agents/skills`** — read from the turn's working directory
+  up to its git root, each directory on the way contributing one; when both
+  hold the same skill name, the nearest directory is the one offered. With no
+  git root above the working directory, only that directory is read. The flat
+  `<name>/SKILL.md` layout is the one recognized, and a symlink counts only
+  when its resolved target stays inside the git root. Neither the user's home
+  nor agent home, nor agent home's ancestors, is ever a project directory.
+
+Project skills appear in the same name/description menu and through
+`find_skill` as `project/<name>`, and `read_skill` / `use_skill` resolve those
+ids per turn against the turn's own working directory, so two sessions in two
+checkouts never see each other's project skills. A project skill is never
+injected into the system prompt, whatever its frontmatter says. Only the leader
+agent reads them; a sub-agent does not. The source is on by default and can be
+switched off with `skillForge.projectSkills.enabled`; either direction applies
+to the next search, with no restart.
+
+An installer that writes the same layout can put a skill in the project:
+
+```bash
+gh skill install <owner>/<repo> skills/<name>/SKILL.md --dir .agents/skills
+```
 
 Bundle downloads have a separate consent setting:
 
 ```json
 {
   "skillForge": {
-    "discovery": "pull",
     "autoInstall": "prompt"
   }
 }
@@ -98,7 +128,7 @@ Keep three mechanisms separate:
    it through that backend's plugin settings. The host does not use
    `skillForge.extraction` to start a local extraction pipeline.
 
-SkillForge retrieves and injects skills and manages downloaded bundles.
+SkillForge retrieves and offers skills and manages downloaded bundles.
 Feedback-driven skill versioning and retirement are not implemented by the host.
 Inspect the memory backend's stored cases, skills, and health to check what
 experience it has retained. The separate Evolver tool evaluates harness changes
@@ -179,7 +209,7 @@ explicit task brief or a source file that the agent can re-read.
 | A skill is listed but unused | Whether its body was fetched, required tools, blocklist, and selected agent |
 | No skill appeared after a task | Actual backend extraction support; `skillForge.extraction` alone does not activate a host pipeline |
 | Long task lost a detail | Archived versus in-window history, compaction, and a retrievable source |
-| Unexpected model cost | Backend extraction, embedding, Curator slow path, and skill rewrite/gating where enabled |
+| Unexpected model cost | Backend extraction, embedding, and the Curator slow path |
 
 Memory views may expose private sessions and inferred preferences.
 Backend-specific deletion and retention controls must be checked separately;
@@ -193,10 +223,13 @@ the server, verify its tool list and authentication, and then test a read-only
 operation before permitting mutations. `raven plugin auth <server>` handles
 configured MCP OAuth; it is not an installer for arbitrary plugins.
 
-In the web UI, the settings dialog's Plugins page switches, retries and
+In the web UI, the settings dialog's MCP page switches, retries and
 authorizes configured servers; its **Add** button leads into the chat, where
 Raven connects a server from the PlugHub catalogue, and a server the catalogue
 does not list is written into `tools.mcpServers` in `config.json` by hand.
+The Plugins page beside it lists [Agent Plugin
+packages](agent-plugin-packages.md), which bring skills and MCP servers of
+their own.
 
 Use a Raven plugin for in-process tools, hooks, services, or memory backends.
 Its declarative `raven-plugin.toml` names contributions; code runs in the host

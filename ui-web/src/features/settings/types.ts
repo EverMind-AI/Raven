@@ -144,6 +144,10 @@ export type EverosCloudInfo = ResultOf<'settings.everosCloud'>
 export type OauthStart = ResultOf<'model.oauth_login'>
 /* What the vendor said about a key before it was stored (`model.check_key`). */
 export type KeyCheck = ResultOf<'model.check_key'>
+/* The plugins page's read: the Agent Plugin packages and the configured paths
+   that hold none (`agent_plugins.list`). */
+export type AgentPluginList = ResultOf<'agent_plugins.list'>
+export type AgentPluginRow = AgentPluginList['packages'][number]
 
 /* Everything the dialog draws from, in one read. `raw` is the config
    settings.get returned, as the file writes it (one level per dot; a
@@ -156,6 +160,10 @@ export interface SettingsSnapshot {
   /* The Skill Hub source as the runtime reads it, answered by settings.get:
      the loader's migrations and boolean rules decide it, not the raw file. */
   skillHub: { on: boolean }
+  /* The deck engine's picture search as the runtime would resolve it,
+     answered by settings.get: the vendor it would use, whether a key
+     resolves, and whether that vendor is a Serper fallback. */
+  pictureSearch: { vendor: string; ready: boolean; fallback: boolean }
   everos: EverosInfo | null
   everosCloud?: EverosCloudInfo | null
   providers: ProviderRow[]
@@ -296,6 +304,11 @@ export interface SettingsSource {
   configureServer(name: string, form: Record<string, string>): Promise<SettingsSnapshot>
   /* Resolves once the browser tab is open; the token lands later. */
   authServer(name: string): Promise<SettingsSnapshot>
+  agentPlugins(): Promise<AgentPluginList>
+  /* Allows or withholds one package's MCP servers. The running engine keeps
+     the set it started with, so the answer is the fresh list, whose `allowed`
+     and `live` disagree until the next start. */
+  setPackageMcp(name: string, on: boolean): Promise<AgentPluginList>
   version(): string | null
   /* The newer version when there is one, so the About row can offer the
      upgrade the way the design asked -- a check that silently starts an

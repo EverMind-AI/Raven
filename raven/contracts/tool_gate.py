@@ -22,9 +22,9 @@ a gate the way it contributes a tool: a manifest entry, a factory taking
   permission grants.
 
 Gates run in lexicographic (name, contributing plugin id) order; the first
-non-None verdict wins. ``session_workdir`` is the turn's bound working
-directory (None outside a bound turn), passed explicitly so a gate never
-fishes it out of params.
+non-None verdict wins. ``session_workdir`` is the turn's bound working directory
+(None outside a bound turn), passed so a gate never fishes it out of params. A gate
+applying its own mode declares ``permission_mode`` (``raven.permissions.runtime``).
 """
 
 from __future__ import annotations

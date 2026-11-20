@@ -671,6 +671,34 @@ describe('the Mirasim family card', () => {
     expect(sheet()).toBeTruthy()
   })
 
+  it('says deck generation cannot run when the route has no picture tool', async () => {
+    const deck = row({
+      name: 'Raven-Design',
+      preset: 'Raven-Design',
+      routes: [{ to: 'Raven-PPT', image_search_ready: false }],
+    })
+    install([deck])
+    await mount()
+    await act(async () => {
+      store.sheetOpen(deck)
+    })
+    expect(sheet()!.textContent).toContain('gui.agent.route_no_picture')
+  })
+
+  it('draws no route warning when the picture search is ready', async () => {
+    const deck = row({
+      name: 'Raven-Design',
+      preset: 'Raven-Design',
+      routes: [{ to: 'Raven-PPT', image_search_ready: true }],
+    })
+    install([deck])
+    await mount()
+    await act(async () => {
+      store.sheetOpen(deck)
+    })
+    expect(sheet()!.textContent).not.toContain('gui.agent.route_no_picture')
+  })
+
   /* The reader's model rides the add, so the row is never connected on the
      agent's default first and moved afterwards. */
   it('sends the model picked for an agent with its connect, in the one write', async () => {

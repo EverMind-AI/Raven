@@ -550,7 +550,10 @@ class CliAgentBackend:
             # An agent started through uvx or npx fetches itself first, and from
             # the mirror when its registry cannot be reached.
             argv = await mirrors.package_launch_async(argv, env, cwd)
-            argv = resolve_program(argv, env)
+            # A program that names a directory is resolved in the directory the
+            # child starts in; CreateProcess would look for it in this process's
+            # own instead, and the launcher would not be found.
+            argv = resolve_program(argv, env, cwd=cwd)
             logger.info("Subagent [{}] CLI agent {!r}: {}", task_id, self.name, argv[:1])
             proc = await asyncio.create_subprocess_exec(
                 *argv,

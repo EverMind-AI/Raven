@@ -25,7 +25,7 @@ function wire(): void {
 
 /* The chip and the popover are the page root's now (src/chrome/PermChip.tsx,
    src/chrome/PermPopover.tsx), so the fixture is the one band they render into --
-   the composer card comes with them, and the popover hangs off the chip inside it. */
+   the composer card comes with them, and the popover hangs off the bar inside it. */
 function markup(): void {
   document.body.innerHTML = '<div class="dock"></div>'
 }
@@ -155,8 +155,11 @@ describe('the permission popover', () => {
       const label = document.getElementById(r.getAttribute('aria-labelledby')!)
       return label?.classList.contains('nm') && label.textContent !== r.querySelector('.sub')!.textContent
     })).toBe(true)
-    expect(pop().querySelector('.hd .lab')!.textContent).toBe('gui.perm.title')
+    expect(pop().querySelector('.hd .chrome-perm-title')!.textContent).toBe('gui.perm.title')
     expect(pop().querySelector('.chrome-perm-note')!.textContent).toBe('gui.perm.note')
+    /* Each row names its tier, so the stylesheet can give the three glyphs
+       the colours that say how much freedom each one allows. */
+    expect(rows().map((r) => r.dataset.tier)).toEqual(['ask', 'smart', 'full'])
   })
 
   it('reads the heading and the note in the language in force', async () => {
@@ -166,7 +169,7 @@ describe('the permission popover', () => {
     resetTranslator()
     act(() => { lang.set('en') })
     perm.open()
-    const heading = pop().querySelector('.hd .lab')!
+    const heading = pop().querySelector('.hd .chrome-perm-title')!
     const note = pop().querySelector('.chrome-perm-note')!
     const en = [heading.textContent, note.textContent]
     act(() => { lang.set('zh') })
@@ -176,10 +179,10 @@ describe('the permission popover', () => {
     expect(document.getElementById('perm-pop-title')!.textContent).toBe(t('gui.perm.title'))
   })
 
-  it('hangs off the chip inside the card, and measures nothing', async () => {
+  it('stands beside the chip inside the card, and measures nothing', async () => {
     const perm = await load()
     /* The popover shares an anchor with the chip: the stylesheet hangs it off the
-       chip's top edge, so nothing here places it and nothing moves it out of
+       session segment's top edge, so nothing here places it and nothing moves it out of
        the card the way the fixed-coordinate popovers before it were moved. */
     expect(pop().parentElement!.className).toBe('chrome-anch')
     expect(pop().previousElementSibling).toBe(chip())

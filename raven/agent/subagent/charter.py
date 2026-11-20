@@ -31,6 +31,7 @@ from typing import Any
 
 from loguru import logger
 
+from raven.contracts.llm_provider import ToolCallRequest
 from raven.contracts.participant import AgentParticipant, StepView
 
 MAX_PROMPT_CHARS = 4000
@@ -133,14 +134,21 @@ def parse(payload: Any) -> Charter | None:
     """
     if not isinstance(payload, dict):
         return None
-    legacy_prompt = payload.get("prompt")
-    raw_brief = payload.get("brief") if "brief" in payload else legacy_prompt
-    prompt = str(raw_brief or "")[:MAX_PROMPT_CHARS]
     instruction_addendum = (
         str(payload.get("instructionAddendum") or "")[:MAX_PROMPT_CHARS]
         if _parameter_enabled("memory", "systemPrompt")
         else ""
     )
+    if "brief" in payload:
+        prompt = str(payload.get("brief") or "")[:MAX_PROMPT_CHARS]
+    else:
+        prompt = str(payload.get("prompt") or "")[:MAX_PROMPT_CHARS]
+        # A host that knows the addendum field writes it into the legacy prompt
+        # as well when there is no brief beside it, so a host that knows only
+        # the prompt still receives it. Read as the brief too, that same text
+        # would be injected a second time on top of the addendum.
+        if prompt == instruction_addendum:
+            prompt = ""
     stop_when = (
         str(payload.get("stopWhen") or payload.get("stop_when") or "")[:MAX_PROMPT_CHARS]
         if _parameter_enabled("memory", "stopWhen")
@@ -322,10 +330,47 @@ def _pure_data(value: Any) -> Any:
         return {str(key): _pure_data(item) for key, item in value.items()}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [_pure_data(item) for item in value]
+    if isinstance(value, ToolCallRequest):
+        # The normalized shape, three keys and no more: a generated function
+        # reads id, name and arguments, and the provider-private fields the
+        # dataclass carries beside them are not its business.
+        return {
+            "id": value.id,
+            "name": value.name,
+            "arguments": _pure_data(value.arguments),
+        }
     return str(value)
 
 
+def _transcript_says(transcript: Any, note: str) -> bool:
+    """Whether the transcript already carries this note.
+
+    A note is written either as a row of its own or after a blank line on the
+    row the model was about to read, so the match is made on those boundaries
+    rather than on a bare substring: a tool result quoting the same sentence is
+    not delivered guidance.
+    """
+    for row in transcript or ():
+        if not isinstance(row, Mapping) or row.get("role") == "tool":
+            continue
+        content = row.get("content")
+        if isinstance(content, str):
+            texts: tuple[str, ...] = (content,)
+        elif isinstance(content, list):
+            texts = tuple(
+                block["text"] for block in content if isinstance(block, Mapping) and isinstance(block.get("text"), str)
+            )
+        else:
+            continue
+        for text in texts:
+            if text == note or text.endswith("\n\n" + note) or ("\n\n" + note + "\n\n") in text:
+                return True
+    return False
+
+
 def _step_payload(step: Any) -> dict[str, Any]:
+    """The step as the generated functions see it: plain data throughout, with
+    ``response.tool_calls`` projected to ``id``/``name``/``arguments`` mappings."""
     response = getattr(step, "response", None)
     response_data = None
     if response is not None:
@@ -371,7 +416,15 @@ class CharterParticipant(AgentParticipant):
         return _generated_answer("intake", text, _step_payload(step))
 
     async def advise(self, step: StepView) -> Any:
-        return _generated_answer("advise", _step_payload(step))
+        answer = _generated_answer("advise", _step_payload(step))
+        if isinstance(answer, str) and answer and _transcript_says(getattr(step, "transcript", ()), answer):
+            # The function is stateless: asked at every phase, it answers the
+            # same words. They have been delivered once the transcript carries
+            # them, so a second copy is not guidance the model still needs --
+            # and one a rollback popped is absent again, which is why the
+            # transcript, not a counter, is what this reads.
+            return None
+        return answer
 
     async def salvage(self, step: StepView) -> Any:
         return _generated_answer("salvage", _step_payload(step))

@@ -222,7 +222,7 @@ export function history(messages: HistoryMessage[]): void {
 
 export function delivered(p: {
   label: string; isDag: boolean; status?: string; open: () => void; body?: string; output?: string; outputTruncated?: boolean | null
-  at?: number; turnId?: string; runId?: string | null; nodeId?: string | null
+  at?: number; turnId?: string; runId?: string | null; nodeId?: string | null; agent?: string | null
 }): void {
   store.delivered(mainLane(), p)
 }

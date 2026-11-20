@@ -185,7 +185,7 @@ def test_the_render_fence_is_closed_by_default_and_opened_by_the_shipped_slice(m
 
     captured = {}
 
-    def fake_from_tool_config(settings, *, workspace, media_root, runtime_root, restrict_to_workspace):
+    def fake_from_tool_config(settings, *, workspace, media_root, runtime_root, restrict_to_workspace, gateway=None):
         captured[str(workspace)] = restrict_to_workspace
         return SimpleNamespace(config=settings)
 
@@ -194,6 +194,24 @@ def test_the_render_fence_is_closed_by_default_and_opened_by_the_shipped_slice(m
     plugin._Shared.for_context(_fresh(SHIPPED_SLICE)).service_for(tmp_path / "open")
     assert captured[str(tmp_path / "closed")] is True
     assert captured[str(tmp_path / "open")] is False
+
+
+def test_the_render_service_runs_on_the_hosts_sandbox_gateway(tmp_path, monkeypatch):
+    import raven_design.plugin as plugin
+    import raven_design.rendering.service as service_mod
+
+    captured = {}
+
+    def fake_from_tool_config(settings, *, workspace, media_root, runtime_root, restrict_to_workspace, gateway=None):
+        captured[str(workspace)] = gateway
+        return SimpleNamespace(config=settings)
+
+    monkeypatch.setattr(service_mod.RenderService, "from_tool_config", fake_from_tool_config)
+    lent = _fresh(SHIPPED_SLICE)
+    lent.services = SimpleNamespace(workspace=tmp_path / "home-lab", sandbox_gateway="lab")
+    plugin._Shared.for_context(lent).service_for(tmp_path / "lab")
+    plugin._Shared.for_context(_fresh(SHIPPED_SLICE)).service_for(tmp_path / "older-host")
+    assert captured == {str(tmp_path / "lab"): "lab", str(tmp_path / "older-host"): None}
 
 
 def test_a_custom_preview_cap_reaches_the_advertised_schema(monkeypatch):
@@ -501,14 +519,6 @@ def test_the_degraded_catalog_block_says_so():
     block = render_selection_block(degraded)
     assert "selector call failed" in block
     assert "## Alternative Skills" in block
-
-
-def test_the_shipped_config_stays_on_the_pull_lane():
-    """D1 clause 3: the seat assumes pull discovery. The shipped product
-    config must not spell any skillForge discovery choice -- trunk's factory
-    default (pull) is the lane this hook was adjudicated on."""
-    config = json.loads((REPO / "agents" / "raven-design" / "config.json").read_text())
-    assert "skillForge" not in config
 
 
 # --- the task-state seats -------------------------------------------------------
@@ -926,3 +936,21 @@ async def test_a_clean_checkout_still_answers_and_a_plain_directory_passes_untou
     with workdir.bind(plain):
         decision = await hook.after_send(SimpleNamespace(outbound_content="all set"))
     assert decision.modified_content is None
+
+
+def test_a_retired_render_network_key_is_ignored_with_one_warning(caplog, monkeypatch) -> None:
+    """The renderer runs offline; its own network switch left settings so it is not read as a second permission set."""
+    import logging
+
+    import raven_design.plugin.config as config_mod
+
+    # Warned once per process: a slice parsed earlier in the worker must not have spent it.
+    monkeypatch.setattr(config_mod, "_warned_retired", set())
+
+    retired = {"enabled": True, "render": {"allowNetwork": True, "networkAllowlist": ["cdn.example.com"]}}
+    with caplog.at_level(logging.WARNING):
+        first = EngineConfig.from_slice(retired)
+        EngineConfig.from_slice(retired)
+    assert not hasattr(first.render, "allow_network")
+    warned = [record for record in caplog.records if "allowNetwork" in record.getMessage()]
+    assert len(warned) == 1

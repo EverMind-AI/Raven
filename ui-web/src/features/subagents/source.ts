@@ -58,12 +58,14 @@ export const agentsSource: SubagentsSource = {
   /* The stateful handles. Scoped to the open session like everything else here,
    and answering with no rows on an absent surface for the same reason `list`
    does -- a panel that cannot tell "none" from "not supported" makes the
-   reader guess. */
+   reader guess. The count of direct-chat entries still owed to the main agent
+   rides this same answer, so it comes over with the rows instead of being
+   mapped away here. */
   instances: (sessionId: string) => {
-    if (!has('subagents')) return Promise.resolve([])
+    if (!has('subagents')) return Promise.resolve({ rows: [], pendingHandoff: 0 })
     return gateway().call('subagents.instances', { session_key: sessionId })
-      .then((r) => (r && r.instances) || [])
-      .catch((e) => { if (gone('subagents', e)) return []; throw e })
+      .then((r) => ({ rows: (r && r.instances) || [], pendingHandoff: (r && r.pending_handoff_count) || 0 }))
+      .catch((e) => { if (gone('subagents', e)) return { rows: [], pendingHandoff: 0 }; throw e })
   },
   /* Addressed by (agent, handle) inside the open session: a handle is unique
    per agent, not globally, so both halves travel. */

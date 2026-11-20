@@ -232,6 +232,7 @@ def maybe_build_memory_backend(
         workspace=workspace,
         user_id=config.memory.user_id,
         agent_id=config.memory.agent_id,
+        sandbox_gateway=_sandbox_gateway(config),
         notify=notify,
         embedding=config.embedding,
     )
@@ -331,6 +332,13 @@ def _host_config(config: Any) -> Any:
     return getattr(config, "base", None)
 
 
+def _sandbox_gateway(config: Any) -> str | None:
+    """The host's ``tools.sandbox.gateway``, lent to every factory: whichever builds first
+    may build what a plugin's tools share."""
+    tools = getattr(_host_config(config), "tools", None)
+    return getattr(getattr(tools, "sandbox", None), "gateway", None)
+
+
 def build_plugin_tools(
     workspace: Path,
     config: "RavenConfig",
@@ -362,6 +370,7 @@ def build_plugin_tools(
         workspace=workspace,
         user_id=config.memory.user_id,
         agent_id=config.memory.agent_id,
+        sandbox_gateway=_sandbox_gateway(config),
         provider=provider,
         media_config=_media_config_reader(config),
         media_proxy=getattr(getattr(tools_config, "media", None), "proxy", None),
@@ -420,6 +429,7 @@ def build_onboard_steps(
         workspace=workspace,
         user_id=config.memory.user_id,
         agent_id=config.memory.agent_id,
+        sandbox_gateway=_sandbox_gateway(config),
     )
     slices = config.plugins.config
     steps = []
@@ -490,6 +500,7 @@ def build_plugin_hooks(
         workspace=workspace,
         user_id=config.memory.user_id,
         agent_id=config.memory.agent_id,
+        sandbox_gateway=_sandbox_gateway(config),
         provider=provider,
     )
     slices = config.plugins.config
@@ -536,6 +547,7 @@ def build_plugin_services(
         workspace=workspace,
         user_id=config.memory.user_id,
         agent_id=config.memory.agent_id,
+        sandbox_gateway=_sandbox_gateway(config),
         provider=provider,
     )
     slices = config.plugins.config
@@ -587,6 +599,7 @@ def build_plugin_tool_gates(
         workspace=workspace,
         user_id=config.memory.user_id,
         agent_id=config.memory.agent_id,
+        sandbox_gateway=_sandbox_gateway(config),
         provider=provider,
     )
     slices = config.plugins.config
@@ -637,6 +650,7 @@ def build_plugin_session_observers(
         workspace=workspace,
         user_id=config.memory.user_id,
         agent_id=config.memory.agent_id,
+        sandbox_gateway=_sandbox_gateway(config),
         provider=provider,
     )
     slices = config.plugins.config

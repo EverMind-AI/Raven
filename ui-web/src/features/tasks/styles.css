@@ -369,15 +369,6 @@
   padding: 1px 4px;
 }
 
-/* The room between two steps of a group's thread on the Task Board
-   (BoardList.tsx); the rest of a step's own geometry is further down. */
-.tkstep {
-  margin: 10px 0;
-}
-.tkstep + .tkstep {
-  margin-top: 12px;
-}
-
 /* `BoardCard`'s box -- the prototype's own `.pbnode` (proto.css:1485-1490),
    filling the `foreignObject` `DagGraph` sizes to the node's box when this
    domain hands it `renderNode`. Position and size come from that box, not
@@ -889,14 +880,25 @@
    a moss tick when done, a clay "!" when a Task failed, a turning ring while
    one still runs. */
 .tkthread { display: flex; flex-direction: column; margin: 0 12px; padding: 10px 0; border-top: 1px solid var(--line-soft); }
-.tksteps { list-style: none; margin: 0; padding: 0; }
+/* The room between two steps, and above the first and below the last. Between
+   steps it is the step's own padding and not a margin: the rail is a pseudo
+   element of that step, so it can reach the next step's edge only if the step's
+   box itself does. The two outer shares are the list's padding, so no step's
+   rail runs past them. */
+.tksteps { list-style: none; margin: 0; padding: 10px 0; }
 .tkstep { position: relative; padding: 0 0 12px 22px; }
+.tkstep:not(:last-child) { padding-bottom: 24px; }
+/* From the mark's own lower edge (its 2px inset plus its 14px height) to the
+   next mark's upper edge: the step's last pixel is the next step's first, and
+   the 2px the mark is inset by is what the rail has to reach past it. Both
+   offsets are the mark's geometry, not a length the text can change, so the
+   line between two marks stays unbroken at any height the steps take. */
 .tkstep:not(:last-child)::after {
   content: '';
   position: absolute;
   left: 6.25px;
-  top: 19px;
-  bottom: 1px;
+  top: 16px;
+  bottom: -2px;
   width: 1.5px;
   background: var(--line);
 }
@@ -907,8 +909,8 @@
   content: '';
   position: absolute;
   left: 6.25px;
-  top: 19px;
-  bottom: 1px;
+  top: 16px;
+  bottom: -2px;
   width: 1.5px;
   background: var(--amber);
 }
@@ -1285,11 +1287,10 @@
 .tkbfold[aria-expanded="true"] svg { transform: none; }
 @media (prefers-reduced-motion: reduce) { .tkbfold svg { transition: none; } }
 
-/* The page around both views, and its toolbar: the title, the conversation
-   filter, the completed switch at the right, and the Board / List segments. */
+/* The page around both views. Its toolbar is the module pages' title row
+   (components/PageBar.tsx): the title and the conversation filter, then the
+   completed switch and the Board / List segments at the far end. */
 .tkbpage { display: flex; flex-direction: column; gap: 18px; }
-.tkbbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.tkbh { margin: 0; font-size: 18px; font-weight: 600; color: var(--text); }
 .tkbconvsel {
   max-width: 220px;
   padding: 4px 8px;
@@ -1305,7 +1306,6 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  margin-left: auto;
   padding: 0;
   border: 0;
   background: none;

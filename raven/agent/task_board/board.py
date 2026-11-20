@@ -498,27 +498,22 @@ def owning_groups(board: Board, handles: Collection[str], groups: Collection[str
     ]
 
 
-def confine_update(args: Mapping[str, Any], owners: Collection[str]) -> dict[str, Any]:
-    """The update with only what a turn that belongs to ``owners`` may write.
+def _faulty(raw: Mapping[str, Any], known: Set[str]) -> bool:
+    rules = _Rules(allow_long=True)
+    _check_steps(rules, [raw], known)
+    return bool(rules.problems)
 
-    It keeps the steps on those groups, every step that places work, wherever that
-    goes -- a dispatch has to land somewhere, a new group included -- and every step that
-    asks the user something, since a question that went out with the reply has to land
-    somewhere too; and the ``groups`` changes on the groups those steps keep. What it says
-    about any other matter is dropped rather than refused: the turn was not about it.
-    Arguments of the wrong shape pass through whole, for the rules to refuse with their
-    own reason. No owners, no change.
-    """
-    out = dict(args)
-    steps, changes = args.get("steps"), args.get("groups")
-    if not owners or not isinstance(steps, list) or not all(isinstance(raw, Mapping) for raw in steps):
-        return out
-    owned = list(owners)
-    out["steps"] = [raw for raw in steps if raw.get("group") in owned or raw.get("tasks") or raw.get("questions")]
-    if isinstance(changes, list) and all(isinstance(raw, Mapping) for raw in changes):
-        moved = owned + [raw.get("group") for raw in out["steps"]]
-        out["groups"] = [raw for raw in changes if raw.get("group") in moved]
-    return out
+
+def _one_per_group(steps: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    def weight(raw: Mapping[str, Any]) -> tuple[bool, bool]:
+        return bool(_tasks(raw)), bool(raw.get("questions"))
+
+    best: dict[str, Mapping[str, Any]] = {}
+    for raw in steps:
+        group = raw.get("group")
+        if isinstance(group, str) and (group not in best or weight(raw) > weight(best[group])):
+            best[group] = raw
+    return [raw for raw in steps if _tasks(raw) or not isinstance(raw.get("group"), str) or best[raw["group"]] is raw]
 
 
 def salvage(board: Board, args: Mapping[str, Any]) -> dict[str, Any]:
@@ -527,16 +522,24 @@ def salvage(board: Board, args: Mapping[str, Any]) -> dict[str, Any]:
     Each ``groups`` entry keeps only the fields that pass on their own -- a status the
     step on its group already sets goes, the summary written beside it stays -- and a
     group keeps its first such entry. Applied with ``allow_long``, its text past a
-    limit stands as written. Steps are left whole: a fault in one, or in where the work
-    is placed, is still refused, and the work parked.
+    limit stands as written. A step with a fault of its own is dropped when it places no
+    work and another step is left to write, so one bad step does not cost every other
+    matter its step; with none left there is nothing to save. A group stepped twice keeps
+    the step that places work, else the first that asks the user something, else its first.
+    A step that places work stays, and a fault there, or in where the work is placed, is
+    still refused, and the work parked.
     """
     out = dict(args)
+    known = {g.id for g in board.groups}
+    steps = args.get("steps")
+    if isinstance(steps, list) and all(isinstance(raw, Mapping) for raw in steps):
+        sound = [raw for raw in steps if _tasks(raw) or not _faulty(raw, known)]
+        if sound:
+            out["steps"] = steps = _one_per_group(sound)
     changes = args.get("groups")
     if changes is None:
         return out
-    steps = args.get("steps")
     stepped = _stepped([raw for raw in steps if isinstance(raw, Mapping)]) if isinstance(steps, list) else set()
-    known = {g.id for g in board.groups}
     kept: list[dict[str, Any]] = []
     for raw in changes if isinstance(changes, list) else []:
         if not isinstance(raw, Mapping) or any(entry["group"] == raw.get("group") for entry in kept):

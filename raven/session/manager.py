@@ -68,6 +68,13 @@ def _refuse_imported(key: str) -> None:
 # then released unsaved, is lost, as it would be in a fresh process.
 _CACHE_LIMIT = 64
 
+# How many listing scans one manager keeps. A session picker asks for the same
+# transcripts on every poll, and a transcript only changes when a turn is
+# appended, so a rescan while (mtime_ns, size) still matches is wasted work.
+# Past this many distinct transcripts the LRU churns and a file still being
+# polled can be read again; a miss costs the scan, never a stale result.
+_SCAN_CACHE_LIMIT = 2048
+
 
 def _message_text(content: Any, cap: int = 120) -> str:
     """Flatten a message's content to one line of plain text (capped).
@@ -683,6 +690,13 @@ class SessionManager:
         # rather than as a second copy loaded from disk.
         self._held: weakref.WeakValueDictionary[str, Session] = weakref.WeakValueDictionary()
         self._delete_observers: tuple = ()
+        # path -> (st_mtime_ns, st_size, scan result), so a poll that finds an
+        # unchanged transcript does not read it again. See _scan_listed.
+        # Not thread-safe: every caller runs synchronously on the event-loop
+        # thread today, and the get/move_to_end/evict sequence assumes that.
+        self._scan_cache: OrderedDict[Path, tuple[int, int, tuple[dict[str, Any] | None, int, str, str, str]]] = (
+            OrderedDict()
+        )
 
     def set_delete_observers(self, observers: tuple) -> None:
         """Replace the whole deletion-observer tuple. A START-phase verb owned
@@ -987,11 +1001,35 @@ class SessionManager:
 
         Only for such a reader. A save reading it that way would take the file for an empty one and
         append UTF-8 lines no reader can open, so on the way to a write the error still stops it.
+
+        Results are cached per path, keyed on ``(st_mtime_ns, st_size)`` taken
+        before the read, so an unchanged transcript is parsed once and a hit
+        returns the tuple the filling scan produced. Writes made through this
+        manager drop the entry explicitly (``save``, ``delete``, and
+        ``append_metadata_patch``); a write from another process is noticed by
+        the stamp. Above ``_SCAN_CACHE_LIMIT`` distinct transcripts the LRU
+        starts evicting entries that are still being polled, so an unchanged
+        file can be scanned again -- that costs a read, never a stale result.
         """
         try:
-            return self._scan_file(path)
-        except UnicodeDecodeError:
+            stat = path.stat()
+        except OSError:
             return None, 0, "", "", ""
+        cached = self._scan_cache.get(path)
+        if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+            self._scan_cache.move_to_end(path)
+            return cached[2]
+        try:
+            result = self._scan_file(path)
+        except UnicodeDecodeError:
+            result = (None, 0, "", "", "")
+        # Stamped before the read: a turn appended during it makes the next
+        # poll see a newer mtime and scan again, which is the safe direction.
+        self._scan_cache[path] = (stat.st_mtime_ns, stat.st_size, result)
+        self._scan_cache.move_to_end(path)
+        if len(self._scan_cache) > _SCAN_CACHE_LIMIT:
+            self._scan_cache.popitem(last=False)
+        return result
 
     def get_or_create(self, key: str) -> Session:
         """
@@ -1068,6 +1106,10 @@ class SessionManager:
             return False
         merged = {**(last.get("metadata") or {}), **patch}
         locked_append(path, [json.dumps({**last, "metadata": merged}, ensure_ascii=False)])
+        # The cached scan describes the file before this record. Drop it here
+        # rather than trust the stamp, which can miss a same-size write on a
+        # coarse clock.
+        self._scan_cache.pop(path, None)
         cached = self._live(key)
         if cached is not None:
             # Blind to the patched keys: a caller often sets them on its own copy
@@ -1197,6 +1239,11 @@ class SessionManager:
             session._persisted_metadata = dict(session.metadata)
             session._persisted_revision = (session.log_id, session.log_generation)
 
+        # This process just wrote the transcript, so the listing cache is stale
+        # by construction. The stamp alone is not enough: a same-size rewrite
+        # can land in the same mtime tick (observed on NTFS), and serving the
+        # previous listing is the unsafe direction.
+        self._scan_cache.pop(path, None)
         session._persisted_count = len(session.messages)
         session._persisted_truncations = session.truncations
         session._clean_fingerprint = _fingerprint(session)
@@ -1271,6 +1318,10 @@ class SessionManager:
         # asked once it was gone would be told this process's own group instead.
         directory = self.session_dir(key)
         self.invalidate(key)
+        # A removed file is never hit (its stat fails), but a later session
+        # written at the same path must start from a miss rather than from a
+        # stale entry that happened to share its stamp.
+        self._scan_cache.pop(path, None)
         removed = False
         if path.exists():
             try:
@@ -1437,6 +1488,10 @@ class SessionManager:
                 continue
             if selected_channels is not None and key_channel not in selected_channels:
                 continue
+            # The scan cache returns the same parsed record on every hit, so the
+            # caller gets its own copy of the one mutable field rather than a
+            # handle into the cache.
+            metadata = data.get("metadata", {})
             sessions.append(
                 {
                     "key": key,
@@ -1448,7 +1503,7 @@ class SessionManager:
                     "last_message_at": last_ts,
                     "path": str(path),
                     "message_count": message_count,
-                    "metadata": data.get("metadata", {}),
+                    "metadata": dict(metadata) if isinstance(metadata, dict) else metadata,
                     "first_user_message": first_user,
                     "last_message_preview": latest_preview,
                 }

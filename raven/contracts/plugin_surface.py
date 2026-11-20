@@ -72,6 +72,7 @@ class ServiceLocator:
 
     web_config: "Callable[[], Any] | None" = None
     """The host's ``tools.web``: the default a plugin's web-facing tool falls back to."""
+    sandbox_gateway: str | None = None  # the host's tools.sandbox.gateway; None: the CLI's active one
     embedding: Any = None
     """The host's ``embedding`` block: an OpenAI-compatible endpoint as
     ``model`` / ``base_url`` / ``api_key`` / ``dimensions``.

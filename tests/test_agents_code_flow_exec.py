@@ -777,7 +777,7 @@ def test_the_factory_serves_the_replacement_only_on_the_host_backend(tmp_path):
     assert isinstance(served, CodeExecTool)
     assert served._MAX_TIMEOUT == 900 and served.timeout == 120
     assert isinstance(served._executor, CodeExecutor) and served._executor.is_sandboxed is False
-    for backend in ("boxlite", "auto", "docker"):
+    for backend in ("openshell", "boxlite", "auto", "docker"):
         assert factories.make_exec(_ctx(tmp_path, {"exec": {"sandboxBackend": backend}})) is None, backend
 
 

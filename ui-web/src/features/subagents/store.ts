@@ -37,6 +37,12 @@ export interface AgentsState {
      detail opened from the conversation's own graph card takes its header from
      them -- they are just no longer a second group on this list. */
   instances: InstanceRow[]
+  /* How many direct-chat entries this session still owes its main agent, from
+     the same answer as `instances`: turns and instances the user created that
+     the runtime will prepend to the next message to the main agent. Display
+     only, and session-wide rather than per instance -- the count the runtime
+     keeps, not a tally the page could do from the rows. */
+  pendingHandoff: number
   /* Why the last direct turn could not be sent, for the composer to say so, and
      which instance refused it. Null while nothing has failed.
 
@@ -65,8 +71,8 @@ export interface DirectChatState {
 }
 
 const initial: AgentsState = {
-  roster: [], starting: null, startFail: null, rows: [], instances: [], sendFail: null, direct: {}, open: null, who: null,
-  epoch: 0, tick: 0,
+  roster: [], starting: null, startFail: null, rows: [], instances: [], pendingHandoff: 0, sendFail: null, direct: {},
+  open: null, who: null, epoch: 0, tick: 0,
 }
 
 let state: AgentsState = { ...initial }
@@ -258,6 +264,9 @@ export function refreshRoster(force = false): void {
 
 export const instances = (): InstanceRow[] => state.instances
 
+/* The count the composer's hint draws, beside the rows it arrived with. */
+export const pendingHandoff = (): number => state.pendingHandoff
+
 let instFlight: Promise<void> | null = null
 let instAt = 0
 let instDrawn = ''
@@ -271,13 +280,16 @@ export function refreshInstances(force = false): Promise<void> {
   if (instFlight) return instFlight
   if (!force && Date.now() - instAt < 2500) return Promise.resolve()
   instFlight = src.instances(asked)
-    .then((rows) => {
+    .then((answer) => {
       if (asked !== sessionKey()) return
-      const next = rows || []
-      const print = `${asked}|${JSON.stringify(next)}`
+      const next = answer.rows || []
+      /* The count is in the fingerprint: rows that never move while the
+         runtime clears or grows the handoff still have to repaint the hint,
+         or the line under the composer says "0" over a list that is not. */
+      const print = `${asked}|${answer.pendingHandoff}|${JSON.stringify(next)}`
       if (print !== instDrawn) {
         instDrawn = print
-        set({ instances: next })
+        set({ instances: next, pendingHandoff: answer.pendingHandoff })
       }
       /* A node opened before its row was known lands on the node view; promote
          it now that the row is here, so the same work is not showing under two

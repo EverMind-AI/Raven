@@ -46,6 +46,8 @@ interface Fake {
   wrote: Array<[string, KbSettings]>
   removed: string[]
   fail?: string
+  /** What a create answers with instead of a row, when it is set. */
+  createFails?: string
 }
 
 let docs: KbDoc[] = []
@@ -202,7 +204,10 @@ function install(rows: KbBase[]): Fake {
     upload: async (_baseId, name) => arrived(name),
     addUrl: async (_baseId, url) => arrived(url),
     addNote: async (_baseId, title) => arrived(title),
-    create: async (name, description) => base({ id: name, name, description }),
+    create: async (name, description) => {
+      if (fake.createFails) throw new Error(fake.createFails)
+      return base({ id: name, name, description })
+    },
     settings: async (id, settings) => {
       fake.wrote.push([id, settings])
       const found = fake.rows.find((row) => row.id === id)!
@@ -537,6 +542,53 @@ describe('the knowledge store', () => {
     await store.create('   ', '')
 
     expect(store.get().bases).toEqual([])
+  })
+
+  it('keeps why a create failed where the open sheet can read it', async () => {
+    const fake = install([])
+    await store.load()
+    store.openCreate()
+    fake.createFails = 'a knowledge base called "11" already exists'
+
+    await store.create('11', '')
+
+    /* The sheet stays open on a failure, so the reason has to live somewhere
+       it can draw: a notice that lapses in under three seconds is the whole
+       of what a reader gets otherwise, and it reads as a button that did
+       nothing. */
+    expect(store.get().sheet).toEqual({ kind: 'create' })
+    expect(store.get().sheetError).toBe('a knowledge base called "11" already exists')
+    expect(store.get().bases).toEqual([])
+  })
+
+  it('drops the last failure when the create is tried again', async () => {
+    const fake = install([])
+    await store.load()
+    store.openCreate()
+    fake.createFails = 'nope'
+    await store.create('handbook', '')
+    expect(store.get().sheetError).toBe('nope')
+
+    fake.createFails = undefined
+    await store.create('handbook', '')
+
+    expect(store.get().sheetError).toBeNull()
+    expect(store.get().sheet).toBeNull()
+  })
+
+  it('opens a fresh sheet without the last failure still on it', async () => {
+    const fake = install([])
+    await store.load()
+    store.openCreate()
+    fake.createFails = 'nope'
+    await store.create('handbook', '')
+    expect(store.get().sheetError).toBe('nope')
+
+    /* The sheet is still up with the old reason on it; asking for a create
+       again is a new ask and starts blank. */
+    store.openCreate()
+
+    expect(store.get().sheetError).toBeNull()
   })
   it('shows only the documents the open folder holds', async () => {
     install([base({ id: 'a' })])

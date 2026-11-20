@@ -114,7 +114,8 @@ def withdrawn_image_note(source: dict[str, Any], *, index: int, total: int, reas
     for it again" rather than a bare "elided" it has to guess about. ``reason`` is
     ``budget`` (the turn's pictures outgrew their byte budget and collapsed to the
     newest few), ``superseded`` (a fixed count moved past it), ``refused`` (the
-    endpoint would not take the request's pictures) or ``context`` (an overflow).
+    endpoint would not take the request's pictures), ``context`` (an overflow) or
+    ``summary`` (a head summary took the place of the message that showed it).
     Written once, when the picture leaves; the same inputs always give the same
     text.
     """
@@ -129,6 +130,8 @@ def withdrawn_image_note(source: dict[str, Any], *, index: int, total: int, reas
         why = f"{_REFUSED} this request's pictures as too large."
     elif reason == "context":
         why = f"{_ELIDED} to fit the context window."
+    elif reason == "summary":
+        why = f"{_ELIDED} with the start of this turn, which a summary now stands for."
     elif reason == "budget":
         why = f"{_OUTGREW} outgrew their byte budget, so only the {keep} newest image-bearing result(s) keep theirs."
     elif keep == 0:
@@ -136,3 +139,25 @@ def withdrawn_image_note(source: dict[str, Any], *, index: int, total: int, reas
     else:
         why = f"{_SEEN} when it arrived; only the {keep} newest image-bearing result(s) keep their pictures."
     return f"[image no longer in context: {what}{origin}{when}. {why} To see it again, {again}]"
+
+
+def without_pictures(message: dict[str, Any], *, reason: str = "superseded", keep: int = 0) -> dict[str, Any]:
+    """A copy of ``message`` whose image parts have become notes (:func:`withdrawn_image_note`).
+
+    ``message`` carries its content as a list of parts.
+    """
+    sources = message.get(IMAGE_SOURCES_KEY) or []
+    total = sum(1 for part in message["content"] if is_image_part(part))
+    parts: list[Any] = []
+    seen = 0
+    for part in message["content"]:
+        if not is_image_part(part):
+            parts.append(part)
+            continue
+        source = sources[seen] if seen < len(sources) else {}
+        seen += 1
+        note = withdrawn_image_note(source, index=seen, total=total, reason=reason, keep=keep)
+        parts.append({"type": "text", "text": note})
+    clean = dict(message)
+    clean["content"] = parts
+    return clean

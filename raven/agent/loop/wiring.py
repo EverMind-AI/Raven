@@ -398,11 +398,12 @@ class WiringMixin:
     def _lane_searches_images(self, target: str) -> bool:
         """Whether ``target`` can search for pictures: its vendor's key, its own or the host's.
 
-        The vendor is the target's own where the target holds the host tool out
-        and searches through its own plugin (:func:`product_picture_vendor`), else
-        the one ``image_search`` itself speaks to -- the selected search vendor
-        where that vendor has an image surface, Serper otherwise
-        (:func:`raven.agent.tools.web.image_search_vendor`) -- and the key is
+        The vendor is the one the lane's launcher would render -- its own where
+        it names a choice, the host's where its picture tool follows the host
+        and the launch would carry the host's choice -- derived by the same
+        inheritance function the launcher runs (:func:`picture_search_ready`),
+        or the one ``image_search`` itself speaks to otherwise: the selection
+        where that vendor has an image surface, Serper otherwise. The key is
         resolved the way the lane resolves it: the product folder's own
         ``<PRODUCT>_<VENDOR>_API_KEY`` first, then the host's slot for that vendor
         (which the launcher copies into the lane's config), then the vendor's bare
@@ -412,17 +413,23 @@ class WiringMixin:
         """
         import os
 
-        from raven.agent.subagent.vendored_agents import product_picture_vendor, product_secret
+        from raven.agent.subagent.vendored_agents import picture_search_ready, product_secret
 
         def key_for(vendor: str) -> str:
+            # A vendor this build does not ship has no key to find; the name may
+            # come from a newer raven's manifest.
+            spec = SEARCH_PROVIDERS.get(vendor)
             return (
                 product_secret(target, f"{vendor.upper()}_API_KEY")
                 or self._live_vendor_key(vendor)
-                or os.environ.get(SEARCH_PROVIDERS[vendor].env_var, "")
+                or (os.environ.get(spec.env_var, "") if spec else "")
             )
 
-        vendor = product_picture_vendor(target) or image_search_vendor(self.web_search_provider, key_for)
-        return bool(key_for(vendor))
+        try:
+            return picture_search_ready(target, self.web_search_provider, key_for, host=self._live_config.raw())
+        except Exception:  # noqa: BLE001 - a probe that cannot answer must refuse, not raise
+            logger.warning("Could not answer the picture-search readiness of {!r}; closing the route", target)
+            return False
 
     def _live_vendor_key(self, vendor: str) -> str:
         """One named web vendor's key the file holds now, whatever the host selected.
@@ -1487,10 +1494,10 @@ class WiringMixin:
                 measure_writes(self._command_shadow)
             self.tools.register(tool)
 
-        # Skill retrieval tools (body -> scripts). Both are source-agnostic and
-        # both serve local/everos straight from the registry, so both register
-        # whenever the registry is reachable; a Hub endpoint only adds their
-        # ``hub/`` branch. Gating ``read_skill`` on the client would take the
+        # Skill retrieval tools (body -> scripts). Both are source-agnostic: they
+        # serve local ids straight from the registry and memory-backend ids from
+        # the hits the router returned, so both register whenever the registry is
+        # reachable; a Hub endpoint only adds their ``hub/`` branch. Gating ``read_skill`` on the client would take the
         # body-fetch route away from the skills that ship with Raven, whose
         # ``inject: description`` entry advertises exactly that route.
         skill_registry = getattr(
@@ -1499,9 +1506,27 @@ class WiringMixin:
             None,
         )
         if skill_registry is not None or self._skill_hub_client is not None:
-            from raven.agent.tools.skill_hub import FindSkillTool, ReadSkillTool, UseSkillTool
-            from raven.config.live import skill_hub_enabled
+            from raven.agent.tools.skill_hub import FindSkillTool, ReadSkillTool, UseSkillTool, router_held_hit
+            from raven.config.live import project_skills_enabled, skill_hub_enabled
+            from raven.memory_engine import ProjectSkills
 
+            def skills_router():
+                return getattr(self.context_engine, "skills_router", None)
+
+            # A sub-agent is given no project skills, matching the router source
+            # the leader process alone mounts; the tools answer ``project/`` ids
+            # with "not available to this agent." A host that turned the router
+            # master switch off mounts no source either, so the same answer
+            # covers it.
+            project_skills = (
+                None
+                if is_subagent_process() or not self._skill_router_enabled
+                else ProjectSkills(
+                    agent_home=self.workspace,
+                    workdir_reader=workdir.current,
+                    enabled_reader=lambda: project_skills_enabled(self._live_config),
+                )
+            )
             self.tools.register(
                 ReadSkillTool(
                     client=self._skill_hub_client,
@@ -1510,13 +1535,15 @@ class WiringMixin:
                     blocklist=self._skill_blocklist,
                     blocklist_reader=self._skill_blocklist_reader,
                     enabled_reader=lambda: skill_hub_enabled(self._live_config),
+                    held_hit=router_held_hit(skills_router),
+                    project=project_skills,
                 ),
             )
-            # Pull-mode discovery: search on the model's own terms through the
-            # same router the context engine retrieves with.
+            # Discovery on the model's own terms, through the same router the
+            # scent menu reads.
             self.tools.register(
                 FindSkillTool(
-                    lambda: getattr(self.context_engine, "skills_router", None),
+                    skills_router,
                     hub_wired=self._skill_hub_client is not None,
                     enabled_reader=lambda: skill_hub_enabled(self._live_config),
                     min_safety=self._skill_min_safety,
@@ -1533,6 +1560,8 @@ class WiringMixin:
                     blocklist_reader=self._skill_blocklist_reader,
                     enabled_reader=lambda: skill_hub_enabled(self._live_config),
                     auto_install=self._skill_auto_install,
+                    held_hit=router_held_hit(skills_router),
+                    project=project_skills,
                     install_audit_path=(
                         self.workspace / "skills" / "hub" / "installs.jsonl"
                         if self._skill_hub_client is not None
@@ -1627,7 +1656,7 @@ class WiringMixin:
                 adopt=self.subagents.adopt_background_run,
                 charge=self.subagents.charge_dag_run,
                 # The manager's own sandbox builder, so a graph node's exec
-                # runs in the VM its tools.sandbox configured rather than on
+                # runs in the sandbox its tools.sandbox configured rather than on
                 # the host -- the silent fallback the sandbox docs disown.
                 sandbox_for=self.subagents.sandbox_executor_for,
                 ask=self._confirm_graph,
@@ -2186,7 +2215,7 @@ class WiringMixin:
     def check_workdir_mounted(self, path: Path, session_key: str | None = None) -> None:
         """Refuse a working directory a sandboxed run could not see.
 
-        A VM's volumes are fixed when the box is created, so a directory
+        A sandbox's volumes are fixed when it is created, so a directory
         outside the mount cannot be served by adding one later.
         """
         if self._workdir_resolver is None or not self._executor.is_sandboxed:

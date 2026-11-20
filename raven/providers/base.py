@@ -1048,6 +1048,7 @@ class LLMProvider(_LLMProviderPaper):
                     finish_reason=response.finish_reason,
                     usage=response.usage,
                     tool_calls=response.tool_calls,
+                    truncation_reason=response.truncation_reason,
                 )
                 return response
 

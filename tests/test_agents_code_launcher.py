@@ -611,10 +611,8 @@ def test_the_render_loads_through_trunks_own_loader(grounded):
         "projectFiles": ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"],
     }
     # No skillForge block in the product config (fleet parity): the trunk
-    # defaults land. Both knobs act only under push discovery, and this
-    # product runs pull, so neither buys a per-turn LLM call here.
-    assert extensions.skill_forge.rewrite_enabled is True
-    assert extensions.skill_forge.llm_gate_enabled is True
+    # defaults land whole.
+    assert extensions.skill_forge.model_dump() == type(extensions.skill_forge)().model_dump()
 
 
 def test_no_llm_key_anywhere_refuses_before_serving(grounded, monkeypatch):
@@ -1148,6 +1146,34 @@ def test_the_acp_render_pins_the_ask_tier(grounded):
 
 
 @pytest.mark.parametrize(
+    ("hosting", "host_permissions", "expected"),
+    [
+        ("acp", {"mode": "full"}, "ask"),
+        ("acp", {"mode": "smart", "tools": {"exec": {"git *": "allow"}}}, "ask"),
+        ("one-shot", {"mode": "ask"}, "full"),
+        ("one-shot", {"tools": {"exec": {"git *": "allow"}}}, "full"),
+    ],
+)
+def test_the_hosting_mode_holds_under_a_host_permission_set(grounded, tmp_path, hosting, host_permissions, expected):
+    """The product runs under the host's tool and network rules, but the mode its
+    hosting pins is the launcher's: the one-shot turn has nobody to ask, and the
+    editor user sees each write before it lands, whatever mode the host runs at."""
+    from raven.config.loader import load_config
+
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(json.dumps({"permissions": host_permissions}), encoding="utf-8")
+    if hosting == "acp":
+        rendered = _render(grounded)
+    else:
+        rendered = grounded.render_config(RUN_PY.parent / "config.json", tmp_path / "cli", unattended=True)
+    permissions = load_config(rendered).permissions
+    assert permissions.mode == expected
+    if "tools" in host_permissions:
+        assert permissions.tools["exec"] == {"git *": "allow"}, "the host's tool rules still reach the product"
+
+
+@pytest.mark.parametrize(
     ("host_rule", "source"),
     [
         ({"permissions": {"tools": {"exec": {"curl *": "deny"}}}}, "user_deny"),
@@ -1492,6 +1518,23 @@ def test_rerendered_exec_settings_follow_the_host_and_preserve_its_sandbox(groun
     assert section["tools"]["exec"]["timeout"] == 23
     assert section["tools"]["exec"]["pathAppend"] == "/test/tools"
     assert section["tools"]["exec"]["maxTimeout"] == 1200
+
+
+@pytest.mark.parametrize(("platform", "expected"), [("linux", "openshell"), ("win32", "none")])
+def test_the_shell_slice_names_the_sandbox_the_rendered_config_runs_in(
+    grounded, tmp_path, monkeypatch, platform, expected
+):
+    """The rendered config takes the host's OpenShell sandbox where the platform runs
+    one; the shell slice must say the same, or code-flow serves a host shell beside it."""
+    import sys
+
+    monkeypatch.setattr(sys, "platform", platform)
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(json.dumps({"tools": {"sandbox": {"backend": "auto"}}}))
+    rendered = json.loads(grounded.render_config(RUN_PY.parent / "config.json", tmp_path / "part").read_text())
+    assert rendered["tools"]["sandbox"].get("backend", "none") == expected
+    assert rendered["plugins"]["config"]["code-flow"]["tools"]["exec"]["sandboxBackend"] == expected
 
 
 def test_a_pristine_legacy_tool_guide_is_migrated_in_existing_partitions(grounded, tmp_path):

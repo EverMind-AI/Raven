@@ -14,6 +14,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { fakeGateway, loadPart } from '../../../scripts/module-harness.mjs'
+import { resetCapabilities } from '../../rpc/capabilities'
 
 import type { Sources } from '../../state/sources'
 
@@ -70,6 +71,39 @@ describe('the sub-agent heartbeat', () => {
     await vi.advanceTimersByTimeAsync(2000)
 
     expect(beat).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the instances answer', () => {
+  it('hands over the rows and the handoff count the same response carries', async () => {
+    /* The count used to be mapped away here, so the page could not draw the
+       hint the runtime keeps it for. Both halves come from one call. */
+    const { sources } = await harness()
+    await fakeGateway(async () => ({
+      instances: [{ sessionKey: 's1', agent: 'hermes', handle: 'one', kind: 'cli' }],
+      pending_handoff_count: 3,
+    }))
+    expect(await sources.subagents!.instances!('s1')).toEqual({
+      rows: [{ sessionKey: 's1', agent: 'hermes', handle: 'one', kind: 'cli' }],
+      pendingHandoff: 3,
+    })
+  })
+
+  it('answers a gateway error by rethrowing it, keeping the last list drawn', async () => {
+    const { sources } = await harness()
+    await fakeGateway(async () => { throw new Error('socket dropped') })
+    await expect(sources.subagents!.instances!('s1')).rejects.toThrow('socket dropped')
+  })
+
+  it('answers an absent surface with no rows and no count', async () => {
+    /* A server without the surface refuses the call forever. The panel reads
+       that as an empty list rather than as an error -- and the hint has
+       nothing to count, so the count comes back zero with it. */
+    resetCapabilities()
+    const { sources } = await harness()
+    await fakeGateway(async () => { throw Object.assign(new Error('no such method'), { code: -32601 }) })
+    expect(await sources.subagents!.instances!('s1')).toEqual({ rows: [], pendingHandoff: 0 })
+    resetCapabilities()
   })
 })
 

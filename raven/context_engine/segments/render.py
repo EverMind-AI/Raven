@@ -27,6 +27,7 @@ from raven.agent import workdir
 from raven.config.agent_names import GENERIC_AGENT
 from raven.i18n import zh_lexicon
 from raven.security.trust import wrap_untrusted
+from raven.spine.message import SOURCE_NAME_RE
 from raven.utils.images import ImagePart, detect_image_mime, image_block
 
 # Ceilings on what one message may carry. ``prepare_image`` caps each image on
@@ -877,60 +878,6 @@ def render_recalled_memory(memories: "list[Memory] | None") -> str:
     return wrap_untrusted("\n".join(lines), source="recalled memory")
 
 
-# One host-owned line appended to the ``# Skills`` block when this turn's tool
-# surface includes ``deliver_files``. It is not a second copy of the tool's own
-# rule (that lives in ``deliver.py``'s description): it names the convention
-# competing with it. A hub skill body is written for another product, where
-# saving a file and printing its path IS the delivery, and an injected body of
-# that shape outweighs one sentence in a tool description. So the note appears
-# only on a turn that injected a skill body, and it addresses the competing
-# convention rather than restating the rule.
-SKILL_DELIVERY_NOTE = (
-    "Note: a skill body above may come from another product, where saving a file and "
-    "printing its path is how it reaches the user. That is not true on this channel -- "
-    "a path in the reply is not a delivery. Whatever a skill's own final step says, hand "
-    "a finished file over with `deliver_files`."
-)
-
-
-def render_router_skills(hits: list[Any]) -> str:
-    """Render SkillForgeRouter hits into the ``# Skills`` body (segment 5).
-
-    The ``# Skills`` heading is added by the builder; this returns only
-    the body. The header format matches
-    ``LocalSkillCatalog.load_skills_for_context``, which renders the sibling
-    ``# Active Skills`` block, so the agent sees one uniform skill layout --
-    including the ``Relative refs ... use the absolute form for read_file /
-    exec`` hint sentence that tells the agent how to consume bundled files.
-    The inline ``[qualified_id]`` after the name is this block's own: it lets
-    the after-turn feedback dispatcher correlate shown vs used skills. Empty
-    hits → ``""``.
-    """
-    if not hits:
-        return ""
-    parts: list[str] = []
-    for h in hits:
-        meta = getattr(h, "meta", {}) or {}
-        name = h.name
-        qid = h.qualified_id
-        skill_dir = meta.get("skill_dir")
-        if skill_dir:
-            header = (
-                f"### Skill: {name}  [{qid}]\n"
-                f"**Skill directory**: `{skill_dir}`\n"
-                "Relative refs (e.g. `references/x.md`, `./scripts/y.sh`) "
-                "resolve under this directory — use the absolute form for "
-                "read_file / exec.\n"
-            )
-        else:
-            header = f"### Skill: {name}  [{qid}]\n"
-        parts.append(header)
-        content = (getattr(h, "content", "") or "").strip()
-        if content:
-            parts.append(content)
-    return "\n\n".join(parts)
-
-
 # What a declared surface means for the person reading the reply. Glossed rather
 # than reported as a bare word because the name alone does not tell the model
 # what it may suggest: a served page and a terminal share the ``tui`` channel, so
@@ -944,29 +891,31 @@ _SURFACE_GLOSS: dict[str, str] = {
 
 CONVERSATION_HEADING = "# This Conversation"
 
-# What the conversation block may write into the system prompt: a name, never
-# prose. Every path that sets a channel or a surface reaches the block, not only
-# the RPC that refuses such a value, so the block checks again.
-_CONVERSATION_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
-
 
 def build_conversation_context(channel: str | None, surface: str | None) -> str:
     """Where this conversation is held, for the end of the system prompt; ``""`` when nothing is known.
 
-    Both hold for the whole conversation, so they ride the system prompt rather
-    than every user message. That prompt is shared by every conversation on the
-    same channel and surface, which is why the chat id stays in the runtime block.
+    Both usually hold for the whole conversation, so they ride the system prompt
+    rather than every user message. Some conversations move: the heartbeat session
+    picks its channel per run, a linked chat runs as its own channel inside a page
+    session, and two surfaces can share one session; the prompt changes with them,
+    and an earlier chat id in the history no longer says which channel it was on.
+    That prompt is shared by every conversation on the same channel and surface,
+    which is why the chat id stays in the runtime block.
 
     ``surface`` names the front end the connection declared at handshake. It is
     reported alongside the channel rather than instead of it: the channel is
     where a reply is delivered, the surface is what the reader is looking at,
     and the served page shares the ``tui`` channel with the terminal, so the
     channel alone has the agent telling a browser reader to press Ctrl+C.
+
+    Only a name is written (``SOURCE_NAME_RE``): every path that sets a channel or
+    a surface reaches this block, not only the RPC that refuses another value.
     """
     lines = []
-    if channel and _CONVERSATION_TOKEN.fullmatch(channel):
+    if channel and SOURCE_NAME_RE.fullmatch(channel):
         lines.append(f"Channel: {channel}")
-    if surface and _CONVERSATION_TOKEN.fullmatch(surface):
+    if surface and SOURCE_NAME_RE.fullmatch(surface):
         gloss = _SURFACE_GLOSS.get(surface)
         lines.append(f"Surface: {surface}" + (f" -- {gloss}" if gloss else ""))
     return "\n".join([CONVERSATION_HEADING, *lines]) if lines else ""

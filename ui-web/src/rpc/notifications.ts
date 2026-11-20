@@ -63,7 +63,7 @@ export interface ApprovalRequestParams {
   command: string
   description: string
   suggested_pattern: string
-  /** The layout the sheet draws: shell.exec, file.write, mcp.call or unknown. */
+  /** The layout the sheet draws: shell.exec, file.write, mcp.call, config.change, sandbox.network or unknown. */
   kind: string
   /** The shell command family that words the prompt, or empty. */
   family: string

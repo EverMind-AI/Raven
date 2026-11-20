@@ -3,9 +3,10 @@
 import asyncio
 import os
 import sys
+import time
 from collections.abc import Container
 from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 import httpx2
@@ -13,7 +14,7 @@ from loguru import logger
 
 from raven.agent.tools import media
 from raven.agent.tools.registry import ToolRegistry
-from raven.contracts.tool import Tool, ToolResult
+from raven.contracts.tool import Continuation, Tool, ToolResult
 from raven.mcp.naming import MCPToolRef, tool_name
 from raven.mcp.paging import walk_tools
 from raven.sandbox import SandboxInitError
@@ -21,6 +22,11 @@ from raven.utils import mirrors
 
 if TYPE_CHECKING:
     from raven.sandbox import SandboxExecutor
+
+_NOT_NARROWED = (
+    "Error: the MCP tool was not run: its sandbox has not loaded a network change that allows less than before. "
+    "It is retried before the next call; if this repeats, tell the user."
+)
 
 
 class MCPToolWrapper(Tool):
@@ -35,8 +41,13 @@ class MCPToolWrapper(Tool):
         tool_def,
         tool_timeout: int = 30,
         taken: Container[str] = frozenset(),
+        executor: Any = None,
     ):
         self._session = session
+        # The sandbox the server runs in, when it runs in one: what it was
+        # refused during a call is read from there, since no command result
+        # carries a long-lived server's refusals.
+        self._executor = executor
         self._server_name = server_name
         self._original_name = tool_def.name
         self._name = tool_name(server_name, tool_def.name, taken=taken)
@@ -70,6 +81,41 @@ class MCPToolWrapper(Tool):
         return self._parameters
 
     async def execute(self, **kwargs: Any) -> str | ToolResult:
+        if self._executor is not None and not await self._executor.ready_network():
+            # The server's process has no command of its own to sync before, so
+            # its calls do: a change that takes something away reaches it first.
+            return ToolResult(model_text=_NOT_NARROWED, ok=False)
+        started = time.time()
+        outcome = await self._call(**kwargs)
+        if self._executor is None:
+            return outcome
+        ok = outcome.ok if isinstance(outcome, ToolResult) else True
+        # Only what was refused while the call ran. The sandbox is shared with
+        # whatever else runs in it, so a refusal in the window may not be the
+        # server's, and the prompt says so rather than pinning it on the tool.
+        denials = await self._executor.denials_since(started, until=time.time(), wait=not ok)
+        if not denials:
+            return outcome
+        from raven.permissions.sandbox_network import handle_denials
+
+        notice = await handle_denials(
+            self._executor,
+            denials,
+            command=f"a process in the sandbox while the MCP tool {self._server_name}.{self._original_name} ran",
+            tool_name=self._name,
+        )
+        if isinstance(outcome, ToolResult):
+            return replace(
+                outcome,
+                model_text=outcome.model_text + notice.text,
+                continuation=Continuation.ABORT_TURN if notice.stop else outcome.continuation,
+            )
+        return ToolResult(
+            model_text=outcome + notice.text,
+            continuation=Continuation.ABORT_TURN if notice.stop else Continuation.CONTINUE,
+        )
+
+    async def _call(self, **kwargs: Any) -> str | ToolResult:
         try:
             result = await asyncio.wait_for(
                 self._session.call_tool(self._original_name, arguments=kwargs),
@@ -397,8 +443,14 @@ async def connect_mcp_server(
     # The live registry, so a name registered a moment ago inside this same
     # loop counts as taken: two tools of one server can collide with each other
     # -- ``a.b`` and ``a/b`` both clean to ``a_b``.
+    # A stdio server the sandbox started runs in it, and its refusals are read there.
+    sandbox = (
+        executor if transport_type == "stdio" and executor is not None and executor.supports_process_spawning else None
+    )
     for tool_def in tools:
-        wrapper = MCPToolWrapper(session, name, tool_def, tool_timeout=cfg.tool_timeout, taken=registry)
+        wrapper = MCPToolWrapper(
+            session, name, tool_def, tool_timeout=cfg.tool_timeout, taken=registry, executor=sandbox
+        )
         registry.register(wrapper, origin=wrapper.ref)
         registered.append(wrapper.name)
         logger.debug("MCP: registered tool '{}' from server '{}'", wrapper.name, name)

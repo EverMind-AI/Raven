@@ -1278,7 +1278,7 @@ def test_risk_banner_fires_on_combo() -> None:
 def test_risk_banner_silent_when_sandboxed_or_restricted() -> None:
     from raven.cli.gateway_commands import _risk_banner
 
-    assert _risk_banner(_config_with(backend="boxlite", telegram_enabled=True, allow_from=["*"])) is None
+    assert _risk_banner(_config_with(backend="openshell", telegram_enabled=True, allow_from=["*"])) is None
     assert _risk_banner(_config_with(backend="none", telegram_enabled=True, allow_from=["u1"])) is None
     assert _risk_banner(_config_with(backend="none", telegram_enabled=False, allow_from=["*"])) is None
 

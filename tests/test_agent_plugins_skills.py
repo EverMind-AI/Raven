@@ -19,7 +19,13 @@ from pathlib import Path
 import pytest
 
 from raven.agent_plugins import skills as skills_module
-from raven.agent_plugins.ledger import LedgerEntry, PackageLedger
+from raven.agent_plugins.ledger import (
+    INSTALL_MARKER_FILENAME,
+    PackageLedger,
+    read_install_marker,
+    workspace_key,
+    write_install_marker,
+)
 from raven.agent_plugins.package import load_package
 from raven.agent_plugins.skills import (
     PackageSkill,
@@ -283,6 +289,44 @@ def test_import_package_copies_a_skill_into_the_workspace(tmp_path: Path) -> Non
     assert report.failed == ()
 
 
+def test_import_package_marks_the_copy_and_records_the_tokens(tmp_path: Path) -> None:
+    """The installed directories carry markers, and the entry records those tokens."""
+    root = _package_root(tmp_path)
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
+    workspace, ledger = _workspace(tmp_path)
+
+    import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    package_root = workspace / "skills" / PACKAGE_NAME
+    entry = ledger.entry(PACKAGE_NAME, workspace=workspace)
+    assert entry is not None
+    assert entry.install_token == read_install_marker(package_root)
+    assert entry.skill_tokens == {"alpha": read_install_marker(package_root / "alpha")}
+    assert entry.workspace == workspace_key(workspace)
+    assert ledger.claim(package_root, workspace=workspace).owned
+    assert ledger.claim(package_root / "alpha", workspace=workspace).owned
+
+
+def test_an_update_mints_a_new_skill_token_and_keeps_the_root_token(tmp_path: Path) -> None:
+    root = _package_root(tmp_path)
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
+    workspace, ledger = _workspace(tmp_path)
+    package = load_package(root)
+
+    import_package(package, workspace=workspace, ledger=ledger)
+    first = ledger.entry(PACKAGE_NAME, workspace=workspace)
+    assert first is not None
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha", "A newer demo skill."))
+
+    import_package(package, workspace=workspace, ledger=ledger)
+
+    second = ledger.entry(PACKAGE_NAME, workspace=workspace)
+    assert second is not None
+    assert second.install_token == first.install_token
+    assert second.skill_tokens["alpha"] != first.skill_tokens["alpha"]
+    assert second.skill_tokens["alpha"] == read_install_marker(workspace / "skills" / PACKAGE_NAME / "alpha")
+
+
 def test_import_package_strips_the_always_flag_from_the_copy(tmp_path: Path) -> None:
     root = _package_root(tmp_path)
     source = _write_skill(
@@ -349,45 +393,39 @@ def test_import_package_matches_the_blocklist_case_insensitively(tmp_path: Path)
 def test_import_package_never_overwrites_a_directory_the_ledger_does_not_claim(
     tmp_path: Path,
 ) -> None:
-    """A skill the operator put inside the package directory is left alone."""
+    """A skill the operator put inside the package directory is left alone.
+
+    The ledger claims the first import's skills; the operator's directory
+    carries no marker, and no amount of matching the name claims it.
+    """
     root = _package_root(tmp_path)
-    _write_skill(root / "skills" / "beta", _frontmatter("beta"))
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
     workspace, ledger = _workspace(tmp_path)
-    ledger.record(
-        LedgerEntry(
-            name=PACKAGE_NAME,
-            version="1.0.0",
-            source=str(root),
-            skills=("alpha",),
-        )
-    )
+    import_package(load_package(root), workspace=workspace, ledger=ledger)
+    _write_skill(root / "skills" / "beta", _frontmatter("beta"))
     mine = workspace / "skills" / PACKAGE_NAME / "beta"
     _write_skill(mine, _frontmatter("beta"), body="The operator's own copy.\n")
 
     report = import_package(load_package(root), workspace=workspace, ledger=ledger)
 
-    assert report.installed == ()
+    assert report.installed == ("alpha",)
     skipped = dict(report.skipped)
     assert "beta" in skipped
     assert "ledger" in skipped["beta"]
     assert "The operator's own copy." in (mine / "SKILL.md").read_text(encoding="utf-8")
+    entry = ledger.entry(PACKAGE_NAME, workspace=workspace)
+    assert entry is not None
+    assert "beta" not in entry.skills
 
 
 def test_import_package_replaces_a_skill_the_ledger_claims(tmp_path: Path) -> None:
     """A skill the ledger installed is the ledger's to replace."""
     root = _package_root(tmp_path)
-    _write_skill(root / "skills" / "beta", _frontmatter("beta"), body="The new copy.\n")
+    _write_skill(root / "skills" / "beta", _frontmatter("beta"), body="The first copy.\n")
     workspace, ledger = _workspace(tmp_path)
-    ledger.record(
-        LedgerEntry(
-            name=PACKAGE_NAME,
-            version="1.0.0",
-            source=str(root),
-            skills=("beta",),
-        )
-    )
+    import_package(load_package(root), workspace=workspace, ledger=ledger)
+    _write_skill(root / "skills" / "beta", _frontmatter("beta"), body="The new copy.\n")
     mine = workspace / "skills" / PACKAGE_NAME / "beta"
-    _write_skill(mine, _frontmatter("beta"), body="The old copy.\n")
 
     report = import_package(load_package(root), workspace=workspace, ledger=ledger)
 
@@ -460,7 +498,6 @@ def test_import_package_replaces_a_directory_the_ledger_owns(tmp_path: Path) -> 
 
     first = import_package(package, workspace=workspace, ledger=ledger)
     assert first.installed == ("alpha",)
-    ledger.record(LedgerEntry(name=PACKAGE_NAME, version="1.0.0", skills=("alpha",)))
 
     target = workspace / "skills" / PACKAGE_NAME / "alpha"
     (target / "stale.txt").write_text("old\n", encoding="utf-8")
@@ -609,7 +646,6 @@ def test_import_package_removes_a_skill_the_package_no_longer_ships(tmp_path: Pa
 
     first = import_package(load_package(root), workspace=workspace, ledger=ledger)
     assert first.installed == ("alpha", "beta")
-    ledger.record(LedgerEntry(name=PACKAGE_NAME, version="1.0.0", skills=first.installed))
 
     shutil.rmtree(root / "skills" / "beta")
     second = import_package(load_package(root), workspace=workspace, ledger=ledger)
@@ -675,15 +711,18 @@ def test_import_package_keeps_ownership_when_a_stale_skill_cannot_be_removed(
 
     The ledger is the only record of what this package put in the workspace.
     Rewriting it to the installed set after a deletion that did not happen
-    leaves the directory unowned, so no later ``remove`` can clear it.
+    leaves the directory unowned, so no later ``remove`` can clear it. The
+    retained skill keeps the token of the install still on disk.
     """
     root = _package_root(tmp_path)
     _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
     _write_skill(root / "skills" / "beta", _frontmatter("beta"))
     workspace, ledger = _workspace(tmp_path)
 
-    first = import_package(load_package(root), workspace=workspace, ledger=ledger)
-    ledger.record(LedgerEntry(name=PACKAGE_NAME, version="1.0.0", skills=first.installed))
+    import_package(load_package(root), workspace=workspace, ledger=ledger)
+    first_entry = ledger.entry(PACKAGE_NAME, workspace=workspace)
+    assert first_entry is not None
+    old_beta_token = first_entry.skill_tokens["beta"]
     shutil.rmtree(root / "skills" / "beta")
 
     real_rmtree = shutil.rmtree
@@ -702,6 +741,12 @@ def test_import_package_keeps_ownership_when_a_stale_skill_cannot_be_removed(
     assert second.retained == ("beta",)
     assert "busy" in dict(second.failed)["beta"]
     assert (workspace / "skills" / PACKAGE_NAME / "beta").is_dir()
+    entry = ledger.entry(PACKAGE_NAME, workspace=workspace)
+    assert entry is not None
+    assert entry.skills == ("alpha", "beta")
+    assert entry.skill_tokens["beta"] == old_beta_token
+    assert read_install_marker(workspace / "skills" / PACKAGE_NAME / "beta") == old_beta_token
+    assert ledger.claim(workspace / "skills" / PACKAGE_NAME / "beta", workspace=workspace).owned
 
 
 def test_import_package_treats_a_vanished_stale_skill_as_removed(
@@ -713,8 +758,7 @@ def test_import_package_treats_a_vanished_stale_skill_as_removed(
     _write_skill(root / "skills" / "beta", _frontmatter("beta"))
     workspace, ledger = _workspace(tmp_path)
 
-    first = import_package(load_package(root), workspace=workspace, ledger=ledger)
-    ledger.record(LedgerEntry(name=PACKAGE_NAME, version="1.0.0", skills=first.installed))
+    import_package(load_package(root), workspace=workspace, ledger=ledger)
     shutil.rmtree(root / "skills" / "beta")
 
     real_rmtree = shutil.rmtree
@@ -853,7 +897,7 @@ def test_import_package_keeps_a_directory_the_ledger_never_claimed(tmp_path: Pat
     root = _package_root(tmp_path)
     _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
     workspace, ledger = _workspace(tmp_path)
-    ledger.record(LedgerEntry(name=PACKAGE_NAME, version="1.0.0", skills=("alpha",)))
+    import_package(load_package(root), workspace=workspace, ledger=ledger)
     foreign = workspace / "skills" / PACKAGE_NAME / "notes"
     foreign.mkdir(parents=True)
     (foreign / "KEEP.txt").write_text("not ours\n", encoding="utf-8")
@@ -862,3 +906,216 @@ def test_import_package_keeps_a_directory_the_ledger_never_claimed(tmp_path: Pat
 
     assert report.removed == ()
     assert (foreign / "KEEP.txt").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Ownership identity across imports
+# ---------------------------------------------------------------------------
+
+
+def test_import_package_does_not_touch_another_workspaces_user_directory(tmp_path: Path) -> None:
+    """One home, one ledger, two workspaces: B's directory is not A's claim."""
+    root = _package_root(tmp_path)
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
+    workspace_a = tmp_path / "ws-a"
+    workspace_b = tmp_path / "ws-b"
+    ledger = PackageLedger(tmp_path / "ledger.json")
+
+    import_package(load_package(root), workspace=workspace_a, ledger=ledger)
+
+    mine = workspace_b / "skills" / PACKAGE_NAME / "alpha"
+    _write_skill(mine, _frontmatter("alpha"), body="The operator's own copy in B.\n")
+
+    report = import_package(load_package(root), workspace=workspace_b, ledger=ledger)
+
+    assert report.refusal
+    assert "another workspace" in report.refusal
+    assert "The operator's own copy in B." in (mine / "SKILL.md").read_text(encoding="utf-8")
+    assert ledger.entry(PACKAGE_NAME, workspace=workspace_a) is not None
+    assert ledger.entry(PACKAGE_NAME, workspace=workspace_b) is None
+
+
+def test_import_package_refuses_a_replacement_at_the_install_path(tmp_path: Path) -> None:
+    """The install was moved away; the directory standing there now is not it."""
+    root = _package_root(tmp_path)
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
+    workspace, ledger = _workspace(tmp_path)
+
+    import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    package_root = workspace / "skills" / PACKAGE_NAME
+    shutil.move(str(package_root), str(tmp_path / "moved-away"))
+    mine = workspace / "skills" / PACKAGE_NAME / "alpha"
+    _write_skill(mine, _frontmatter("alpha"), body="The operator's own copy.\n")
+
+    report = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert report.refusal
+    assert "already exists" in report.refusal
+    assert "The operator's own copy." in (mine / "SKILL.md").read_text(encoding="utf-8")
+    entry = ledger.entry(PACKAGE_NAME, workspace=workspace)
+    assert entry is not None
+    assert entry.skills == ("alpha",)
+
+
+def test_import_package_skips_a_replaced_skill_directory(tmp_path: Path) -> None:
+    """The package still ships the skill, but the copy standing there is not ours."""
+    root = _package_root(tmp_path)
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
+    workspace, ledger = _workspace(tmp_path)
+    import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    mine = workspace / "skills" / PACKAGE_NAME / "alpha"
+    shutil.rmtree(mine)
+    _write_skill(mine, _frontmatter("alpha"), body="The operator's replacement.\n")
+
+    report = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert report.installed == ()
+    skipped = dict(report.skipped)
+    assert "alpha" in skipped
+    assert "install marker" in skipped["alpha"]
+    assert "The operator's replacement." in (mine / "SKILL.md").read_text(encoding="utf-8")
+    entry = ledger.entry(PACKAGE_NAME, workspace=workspace)
+    assert entry is not None
+    assert entry.skills == ()
+    assert ledger.claim(mine, workspace=workspace).owned is False
+
+
+def test_the_stale_sweep_releases_a_replaced_skill_it_cannot_verify(tmp_path: Path) -> None:
+    """A skill the package dropped, whose directory the operator replaced."""
+    root = _package_root(tmp_path)
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
+    _write_skill(root / "skills" / "beta", _frontmatter("beta"))
+    workspace, ledger = _workspace(tmp_path)
+    import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    shutil.rmtree(root / "skills" / "beta")
+    mine = workspace / "skills" / PACKAGE_NAME / "beta"
+    shutil.rmtree(mine)
+    _write_skill(mine, _frontmatter("beta"), body="The operator's replacement.\n")
+
+    report = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert report.removed == ()
+    assert report.released == ("beta",)
+    assert "The operator's replacement." in (mine / "SKILL.md").read_text(encoding="utf-8")
+    entry = ledger.entry(PACKAGE_NAME, workspace=workspace)
+    assert entry is not None
+    assert entry.skills == ("alpha",)
+
+
+def test_a_fresh_import_rolls_back_when_the_root_marker_cannot_be_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without the root marker nothing can ever be proven ours; no record is kept."""
+    root = _package_root(tmp_path)
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
+    workspace, ledger = _workspace(tmp_path)
+
+    def _refuse(directory: Path) -> str:
+        if directory == workspace / "skills" / PACKAGE_NAME:
+            raise OSError("the marker cannot be written")
+        return write_install_marker(directory)
+
+    monkeypatch.setattr("raven.agent_plugins.skills.write_install_marker", _refuse)
+
+    report = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert report.installed == ()
+    assert "install identity" in dict(report.failed)[PACKAGE_NAME]
+    assert not (workspace / "skills" / PACKAGE_NAME).exists()
+    assert ledger.entry(PACKAGE_NAME, workspace=workspace) is None
+
+
+def test_a_partially_written_root_marker_is_cleaned_up_and_the_retry_installs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A marker left half-written by the failing write is this run's to remove.
+
+    A residual marker file would keep the rolled-back root directory from
+    emptying, and the next import would refuse the unknown directory forever.
+    """
+    root = _package_root(tmp_path)
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
+    workspace, ledger = _workspace(tmp_path)
+    package_root = workspace / "skills" / PACKAGE_NAME
+
+    def _partial_write(directory: Path) -> str:
+        if directory == package_root:
+            (directory / INSTALL_MARKER_FILENAME).write_text('{"token":', encoding="utf-8")
+            raise OSError("the disk is full")
+        return write_install_marker(directory)
+
+    with monkeypatch.context() as context:
+        context.setattr("raven.agent_plugins.skills.write_install_marker", _partial_write)
+        report = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert report.installed == ()
+    assert "install identity" in dict(report.failed)[PACKAGE_NAME]
+    assert not package_root.exists()
+
+    retry = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert retry.installed == ("alpha",)
+    entry = ledger.entry(PACKAGE_NAME, workspace=workspace)
+    assert entry is not None
+    assert read_install_marker(package_root) == entry.install_token
+
+
+def test_a_failed_skill_marker_fails_that_skill_and_leaves_no_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _package_root(tmp_path)
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
+    workspace, ledger = _workspace(tmp_path)
+
+    def _refuse(directory: Path) -> str:
+        if directory.name == "alpha":
+            raise OSError("the marker cannot be written")
+        return write_install_marker(directory)
+
+    monkeypatch.setattr("raven.agent_plugins.skills.write_install_marker", _refuse)
+
+    report = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert report.installed == ()
+    assert "install identity" in dict(report.failed)["alpha"]
+    assert not (workspace / "skills" / PACKAGE_NAME / "alpha").exists()
+    entry = ledger.entry(PACKAGE_NAME, workspace=workspace)
+    assert entry is not None
+    assert entry.skills == ()
+
+
+def test_a_fresh_import_where_every_copy_fails_leaves_no_empty_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _package_root(tmp_path)
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
+    workspace, ledger = _workspace(tmp_path)
+
+    def _refuse(*args: object, **kwargs: object) -> None:
+        raise OSError("the copy failed")
+
+    monkeypatch.setattr(skills_module.shutil, "copytree", _refuse)
+
+    report = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert report.installed == ()
+    assert "alpha" in dict(report.failed)
+    assert not (workspace / "skills" / PACKAGE_NAME / "alpha").exists()
+    assert not (workspace / "skills" / PACKAGE_NAME).exists()
+
+
+def test_a_package_without_skills_records_an_empty_claim(tmp_path: Path) -> None:
+    root = _package_root(tmp_path)
+    workspace, ledger = _workspace(tmp_path)
+
+    report = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert report.installed == ()
+    assert report.ok
+    assert not (workspace / "skills" / PACKAGE_NAME).exists()
+    entry = ledger.entry(PACKAGE_NAME, workspace=workspace)
+    assert entry is not None
+    assert entry.skills == ()

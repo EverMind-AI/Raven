@@ -66,7 +66,7 @@ class ContextCacheConfig(_Base):
     turn_scratch: bool = True
     """Keep query-conditioned segments out of the system prompt.
 
-    ``# Memory`` and ``# Skills`` are recomputed from the current message every
+    ``# Memory`` is recomputed from the current message every
     turn. Rendered into the system prompt they sit ahead of the conversation in
     every provider's cache prefix, so each turn re-bills the whole history
     behind them; rendered at the end of the turn's user message they leave the
@@ -417,8 +417,7 @@ class ContextConfig(_Base):
 
     drop_segments: list[str] = Field(default_factory=list)
     """Host prompt segments this agent does without, by builder name
-    (``identity``, ``bootstrap``, ``memory``, ``active_skills``, ``skills``,
-    ``curator``). A product with its own identity and contract in its bootstrap
+    (``identity``, ``bootstrap``, ``memory``, ``active_skills``, ``curator``). A product with its own identity and contract in its bootstrap
     files drops ``identity`` so the model is not told it is two things; a
     research agent that keeps no long-term memory drops ``memory``. Unknown
     names are ignored. Empty renders every segment, as before."""
@@ -1195,14 +1194,29 @@ class LocalDirConfig(_Base):
     from always injection (but still retrievable via select)."""
 
 
+class ProjectSkillsConfig(_Base):
+    """Skills the project carries in its own repository.
+
+    ``.agents/skills`` is read from the turn's working directory up to the
+    git root; hits are offered as ``project/<name>``.
+    """
+
+    enabled: bool = True
+    """False -> the project source offers nothing and ``project/<name>``
+    ids no longer resolve. Config key ``skillForge.projectSkills``; read
+    live (``config/live.py``), so turning it off stops the next search
+    without a restart."""
+
+
 class SkillForgeConfig(_Base):
     """SkillForge configuration.
 
-    ``enabled=True`` (the default) activates the SkillForge retrieval/
-    injection pipeline. Set ``enabled=False`` to fall back to the
-    behaviour of handing the full skill directory to the LLM
-    (component stubs that return empty lists also cause ``ContextBuilder``
-    to fall back to the full directory automatically).
+    Retrieved skills reach the model one way: a per-turn scent menu (a few
+    name and description lines from the four-source router: Local, EverOS,
+    Hub and Project) rides the user envelope, and the model reads a body
+    with ``read_skill`` or searches with ``find_skill``. No turn spends a
+    model call choosing skills, and the system prefix carries only the
+    always-on ones.
 
     Evolution is handled by the embedded ``everos``
     extraction pipeline, configured via
@@ -1217,37 +1231,21 @@ class SkillForgeConfig(_Base):
 
     # --- Master switch + location ---
     enabled: bool = True
-    """Master switch (default True). Activates the SkillForge
-    retrieval/injection pipeline."""
-
-    discovery: Literal["pull", "push"] = "pull"
-    """How retrieved skills reach the model.
-
-    ``"pull"`` (default): a per-turn scent menu (a few name+description
-    lines from the same three-source router) rides the user envelope, and
-    the model fetches bodies itself via ``find_skill`` / ``read_skill``.
-    No per-turn rewriter/gate LLM calls; the system prefix carries no
-    retrieved-skill bytes.
-
-    ``"push"``: the pre-existing pipeline (rewriter -> router -> gate ->
-    selected bodies rendered into the system prefix). Kept for
-    deployments whose main model under-uses tools.
-    """
+    """Mounts the extra local skill directories listed in ``local_dirs``."""
 
     blocklist: list[str] = Field(default_factory=list)
     """Skill names refused everywhere (config key ``skillForge.blocklist``):
-    dropped from the injection pool for every source and refused by
+    never offered from any source and refused by ``read_skill`` and
     ``use_skill``. Matched case-insensitively against the skill's name,
     slug, and native id."""
 
     auto_install: Literal["auto", "prompt", "off"] = "auto"
     """Consent policy for Hub bundle downloads (config key
-    ``skillForge.autoInstall``), applied on both install paths (context
-    auto-inject and ``use_skill``). ``auto`` installs silently (current
-    behavior); ``prompt`` asks for confirmation on an interactive
-    terminal and behaves like ``off`` when no TTY is attached; ``off``
-    skips the download with a one-line notice — skill bodies still
-    inject, only the on-disk bundle is withheld."""
+    ``skillForge.autoInstall``), applied by ``use_skill``. ``auto`` installs
+    silently; ``prompt`` asks for confirmation on an interactive terminal and
+    behaves like ``off`` when no TTY is attached; ``off`` skips the download
+    with a one-line notice. The body stays readable with ``read_skill``; only
+    the on-disk bundle is withheld."""
 
     router: "SkillForgeRouterConfig" = Field(
         default_factory=lambda: SkillForgeRouterConfig(),
@@ -1262,6 +1260,10 @@ class SkillForgeConfig(_Base):
     local_dirs: list[LocalDirConfig] = Field(default_factory=list)
     """Local skill directories to mount. List order = priority:
     later entries override earlier on name collision."""
+
+    project_skills: ProjectSkillsConfig = Field(default_factory=ProjectSkillsConfig)
+    """Skills kept inside the project itself (``.agents/skills``) -- config
+    key ``skillForge.projectSkills``. The switch is read live."""
 
     scan_max_depth: int = 5
     """Maximum directory depth when scanning for SKILL.md files.
@@ -1326,34 +1328,14 @@ class SkillForgeConfig(_Base):
     """When reranker is enabled, mass pool fetches this many candidates
     for rescoring, then truncates to ``mass_pool_top_k`` before RRF."""
 
-    # --- Query rewrite knobs ---
-    rewrite_enabled: bool = True
-    """Enable a second retrieval path with LLM-rewritten queries."""
+    # --- Retired with push discovery, still passed by Evolver ---
+    llm_gate_enabled: bool | None = Field(default=None, exclude=True)
+    """Read by nothing. Declared only because Evolver's activation probe,
+    maintained on its own, still builds this model with it; never written
+    back, and the file migration drops it from ``config.json``."""
 
-    rewrite_max_tokens: int = 8192
-    """Output token budget for the rewriter LLM call: 8192 leaves headroom for
-    reasoning traces (~3-4k tokens) on top of the rewrite output; a smaller
-    budget truncates the reply before its JSON is complete."""
-
-    # --- Skill injection mode (full_body vs summary) ---
-    injection_mode: str = "full_body"
-    """How selected skills are surfaced to the agent.
-
-    - ``"full_body"`` (default, OpenSpace style): load_skills_for_context
-      inlines the full SKILL.md body of up to ``inject_max`` LLM-gate-
-      selected candidates into the system prompt. Higher token cost but
-      guarantees content visibility. Pairs with ``llm_gate_enabled=True``
-      below — the gate cuts a 15-skill candidate pool down to ~2 truly
-      relevant ones, so per-turn token cost stays bounded (~2-10K).
-    - ``"summary"``: build_skills_summary renders an XML directory of
-      (name, description, available) tuples. Agent must call ``read_file``
-      on a skill's SKILL.md to access its body — progressive disclosure,
-      cheaper in tokens, but agents often skip the read step entirely, so
-      retrieval quality drops against ``full_body``."""
-
-    inject_max: int = 2
-    """Max skills inlined when ``injection_mode='full_body'``. Each skill body
-    typically adds 1-5K tokens."""
+    rewrite_enabled: bool | None = Field(default=None, exclude=True)
+    """Read by nothing; kept for the same caller as ``llm_gate_enabled``."""
 
     disable_always: bool = False
     """When True, ``get_always_skills()`` returns [] and select() filters
@@ -1363,50 +1345,6 @@ class SkillForgeConfig(_Base):
     """Max always skills injected per turn. Exceeding this truncates
     by local_dirs list order + alphabetical, with a WARN listing dropped
     skill names."""
-
-    # --- LLM gate selector (default-on, mirrors openspace select_skills_with_llm) ---
-    llm_gate_enabled: bool = True
-    """When ``True`` (default), ``select()`` resolves a pool of
-    ``llm_gate_pool_size`` candidates after RRF merge, then asks an LLM to
-    plan + filter down to ``llm_gate_max_select`` skills. Empty result is
-    valid ("inject nothing"). Costs one LLM call per ``select()`` invocation
-    but eliminates the ~30% noise-injection rate of pure-RRF top-K
-    (observed: irrelevant skills polluting the prompt). Disable to skip the
-    extra LLM call (rare; useful when LLM provider is unavailable)."""
-
-    llm_gate_max_select: int = 2
-    """Upper bound on skills the gate may select. Mirrors ``inject_max``."""
-
-    llm_gate_pool_size: int = 10
-    """Candidate pool size handed to the gate (after RRF). Aligned
-    with RRF output size (local_pool_top_k + mass_pool_top_k dedupe)."""
-
-    llm_gate_model: str | None = None
-    """Optional model override for gate calls. ``None`` → use the
-    provider's default chat model (typically the agent's main model).
-
-    Pair it with ``llm_gate_provider``: an id alone does not say which
-    credential serves it."""
-
-    llm_gate_provider: str | None = None
-    """Which configured provider serves ``llm_gate_model``.
-
-    Same rule as ``context.curator_provider``: set it when the id alone is
-    ambiguous (a gateway serving another vendor's model). Unset, a configured
-    gateway takes the pin and only without one is the vendor derived from the
-    id."""
-
-    llm_gate_temperature: float = 0.0
-    """Sampling temperature for gate calls. 0.0 for deterministic
-    filtering. Reasoning models may need 0.6 to engage <think>."""
-
-    llm_gate_max_tokens: int = 8192
-    """Output token budget for the gate LLM call. Defaults to 8192 to
-    leave headroom for Qwen3-style reasoning traces (~3-4k tokens) on top
-    of the gate's JSON answer. The previous 4096 budget caused empty
-    content (finish_reason=length) on the 27B model in ~50% of calls,
-    forcing a legacy top-N fallback that returned 5 skills instead of
-    the configured llm_gate_max_select."""
 
     # --- Producer refresh trigger (optional, zero-config via .refresh_endpoint sentinel) ---
     refresh_url: str | None = None
@@ -1692,8 +1630,8 @@ class HubSourceConfig(_Base):
     """Skills with ``score_safety`` below this are dropped. Catalog hits
     that carry a score are filtered by ``HubSkillSource``; the standard
     catalog payload omits the score, so the authoritative check runs on
-    the detail metadata — ``SkillsSegmentBuilder`` drops low-scored hits
-    after the pre-gate hydrate, and ``use_skill`` refuses the install."""
+    the detail metadata — ``read_skill`` refuses the read and ``use_skill``
+    refuses the install."""
 
     source: str = "raven"
     """Download ``source`` tag for Hub usage stats."""
@@ -1702,8 +1640,8 @@ class HubSourceConfig(_Base):
 class SkillForgeRouterConfig(_Base):
     """Multi-source skill routing policy.
 
-    The sources are Local, EverOS and Hub; this block tunes the weighted
-    RRF and the per-source plumbing.
+    The sources are Local, EverOS, Hub and Project; this block tunes the
+    weighted RRF and the per-source plumbing.
     """
 
     enabled: bool = True
@@ -1715,14 +1653,22 @@ class SkillForgeRouterConfig(_Base):
             "local": 0.96,
             "everos": 0.9,
             "hub": 0.85,
+            "project": 0.96,
         },
     )
     """Per-source RRF weight. Higher = more rank mass when the same skill
-    surfaces from multiple sources. Local highest (hand-curated); Hub
-    (the remote marketplace, replaces the retired Mass source) lowest as
-    imported/unvalidated; Everos in between (task-specific, auto-evolved).
+    surfaces from multiple sources. Local highest (hand-curated), tied with
+    Project (a repository's own skills are as specific to the task as the
+    user's hand-written ones); Hub (the remote marketplace, replaces the
+    retired Mass source) lowest as imported/unvalidated; Everos in between
+    (task-specific, auto-evolved).
 
-    Only the ratios matter -- scaling all three leaves the order unchanged.
+    The default applies per key, not only when the whole dict is absent: a
+    file that spells out ``weights`` without a ``project`` entry predates
+    this source, and its consumer reads ``weights.get("project", 0.96)``
+    rather than the user's file being rewritten.
+
+    Only the ratios matter -- scaling all sources leaves the order unchanged.
     Read them together with ``rrf_k``: the spread has to stay well inside
     the rank ladder that ``rrf_k`` produces, or weight silently overrides
     rank and each source becomes a strict tier."""
@@ -1734,20 +1680,14 @@ class SkillForgeRouterConfig(_Base):
     identity dominate."""
 
     over_fetch_factor: int = 2
-    """Each source is asked for ``top_k * factor`` hits before fusion
-    narrows back to ``top_k``. Larger factors give better cross-source
+    """Each source is asked for ``k * factor`` hits before fusion narrows
+    back to the ``k`` its caller asked for. Larger factors give better cross-source
     coverage at the cost of per-source query work."""
 
     dedup_by: Literal["name", "qualified_id"] = "name"
     """Cross-source dedup key for the RRF fusion. ``"name"`` collapses
     a same-named skill across sources into one slot; ``"qualified_id"``
     keeps them as separate entries (useful for telemetry experiments)."""
-
-    top_k: int = 2
-    """Final top-K returned from ``SkillForgeRouter.select``. Also the no-gate
-    injection size: each hit is rendered in full into the system prefix, so
-    this defaults to match the gate's ``max_select`` rather than widening the
-    prompt whenever the gate happens to be unwired."""
 
     hub: HubSourceConfig = Field(default_factory=HubSourceConfig)
 

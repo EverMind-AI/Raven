@@ -26,7 +26,6 @@ each such file carries a banner saying so.
   raven-tracing.
 - `research-report-quality.md` - how a deep-research report is graded against a
   competitor's, and what `scripts/research_report_audit.py` settles mechanically.
-- `sandbox/` - BoxLite sandbox usage and debugging notes.
 - `specs/` - dated design records (`YYYY-MM-DD-*.md`) plus the self-evolution
   SOP and playbook specs; each describes the tree as of its date.
 - `plans/` - historical implementation plans; an archive, deliberately not

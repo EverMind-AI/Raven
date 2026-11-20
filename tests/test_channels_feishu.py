@@ -15,6 +15,7 @@ from lark_oapi.ws.exception import ClientException
 
 from raven.channels.adapters.feishu import cards, content
 from raven.channels.adapters.feishu.channel import FeishuChannel
+from raven.providers.transcription import TranscriptionResult
 
 
 def _channel(group_policy="open"):
@@ -171,18 +172,18 @@ def test_open_policy_addresses_all():
 def test_transcribe_prefers_native_feishu_stt(monkeypatch):
     ch = _channel()
     ch._lark_stt_sync = lambda _path: "native text"
-    groq = AsyncMock(return_value="groq text")
+    groq = AsyncMock(return_value=TranscriptionResult(text="groq text"))
     monkeypatch.setattr("raven.channels.adapters.feishu.channel.transcribe_audio", groq)
-    assert asyncio.run(ch._transcribe("/tmp/a.opus")) == "native text"
+    assert asyncio.run(ch._transcribe("/tmp/a.opus")) == TranscriptionResult(text="native text")
     groq.assert_not_called()
 
 
 def test_transcribe_falls_back_to_groq(monkeypatch):
     ch = _channel()
     ch._lark_stt_sync = lambda _path: None
-    groq = AsyncMock(return_value="groq text")
+    groq = AsyncMock(return_value=TranscriptionResult(text="groq text"))
     monkeypatch.setattr("raven.channels.adapters.feishu.channel.transcribe_audio", groq)
-    assert asyncio.run(ch._transcribe("/tmp/a.opus")) == "groq text"
+    assert asyncio.run(ch._transcribe("/tmp/a.opus")) == TranscriptionResult(text="groq text")
     groq.assert_awaited_once()
 
 
@@ -193,10 +194,21 @@ def test_transcribe_skips_native_once_disabled(monkeypatch):
     ch._lark_stt_sync = lambda _path: calls.append(1) or "unused"
     monkeypatch.setattr(
         "raven.channels.adapters.feishu.channel.transcribe_audio",
-        AsyncMock(return_value="groq text"),
+        AsyncMock(return_value=TranscriptionResult(text="groq text")),
     )
-    assert asyncio.run(ch._transcribe("/tmp/a.opus")) == "groq text"
+    assert asyncio.run(ch._transcribe("/tmp/a.opus")) == TranscriptionResult(text="groq text")
     assert calls == []  # native STT not attempted when disabled
+
+
+def test_extract_audio_labels_a_transcription_diagnosis(monkeypatch):
+    ch = _channel()
+    ch._download_media = AsyncMock(return_value=("/m/a.opus", "[audio: a.opus]"))
+    ch._transcribe = AsyncMock(return_value=TranscriptionResult(diagnosis="no key"))
+
+    text, media = asyncio.run(ch._extract("audio", SimpleNamespace(content="{}"), "m1"))
+
+    assert text == "[transcription unavailable: no key]"
+    assert media == ["/m/a.opus"]
 
 
 # ── inbound early gate (reject before side effects) ───────────────────

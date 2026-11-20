@@ -171,11 +171,10 @@ export const current = (): string => mode
    Nothing here reads the document, so there is nothing to guard: a page whose
    markup has gone still has a React tree to commit into (measured).
 
-   The chip reads its own state, which is why it carries no hover label: the
-   detail of each tier belongs in the popover the click opens. Nothing to remove
-   for that -- the chip is rendered with no data-tip for the lang store to
-   fill, and the `delete chip.dataset.tip` the draw before this one carried was
-   dead there too. It did not come across. */
+   The bar shows the chip as its glyph alone, so <PermChip/> hands `label` to
+   the hover pill as well: the name is all the pill says, and the detail of
+   each tier still belongs in the popover the click opens. A language repaint
+   reaches the pill through this same draw. */
 export function draw(): void {
   const cur = TIERS.find((p) => p.id === mode) || TIERS[0]!
   set({

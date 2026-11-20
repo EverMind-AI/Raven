@@ -481,6 +481,108 @@ class TestOnTheTable:
 
         assert [row.name for row in registry.rows()] == [GENERIC_AGENT, "RAVEN-A", "RAVEN-B", "RAVEN-C"]
 
+    def test_an_acp_row_with_no_command_reaches_the_roster_with_the_host_default(
+        self, tree: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The documented default for an acp redeclaration is reachable.
+
+        ``_acp_host_override`` fills an empty command with this install's own
+        ``raven acp``, and it runs AFTER this merge -- which had already forced
+        ``enabled=False`` onto the row for naming no launcher. Nothing downstream
+        cleared the flag, so the row the override had just made runnable never
+        reached the roster: an operator relying on the documented default got an
+        agent that silently was not there, with no warning, because the override
+        only warns when the host command cannot be resolved at all.
+
+        The resolver is stubbed, so the assertion is about the value the override
+        writes rather than about whether this machine has a ``raven`` console
+        script; the real one answers "" from a source tree that installed none.
+        """
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/stub/raven acp")
+        redeclared = ThirdPartyAcpSubagentConfig.model_validate({"name": GENERIC_AGENT, "kind": "acp", "command": ""})
+        registry = AgentRegistry()
+
+        registry.apply([redeclared])
+
+        assert GENERIC_AGENT in registry.names()
+        row = registry.get(GENERIC_AGENT)
+        assert row.kind == "acp"
+        assert row.config.command == "/stub/raven acp"
+
+    def test_an_acp_row_the_operator_switched_off_stays_off(self, tree: Path) -> None:
+        """The other direction: this merge leaves the flag alone rather than
+        clearing it, so filling the default in does not quietly re-enable an
+        agent somebody switched off."""
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        switched_off = ThirdPartyAcpSubagentConfig.model_validate(
+            {"name": GENERIC_AGENT, "kind": "acp", "command": "", "enabled": False}
+        )
+        registry = AgentRegistry()
+
+        registry.apply([switched_off])
+
+        assert GENERIC_AGENT not in registry.names()
+        assert GENERIC_AGENT in [row.name for row in registry.rows()]
+
+    def test_a_switch_stub_with_no_folder_still_drops_out(self, tree: Path) -> None:
+        """The rule the exemption must not touch: a stub is a "no" for a folder
+        that is not there.
+
+        It names no launcher and defines nothing -- the folder still defines the
+        agent -- so it leaves the roster rather than standing in as one.
+        """
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        stub = ThirdPartyAcpSubagentConfig.model_validate(
+            {"name": "Raven-Probe", "kind": "acp", "command": "", "switch_only": True, "enabled": False}
+        )
+        registry = AgentRegistry()
+
+        registry.apply([stub])
+
+        assert "Raven-Probe" not in [row.name for row in registry.rows()]
+
+    def test_a_switch_stub_naming_a_built_in_still_drops_out(self, tree: Path) -> None:
+        """The marker is read before the exemption, and it wins.
+
+        A stub says "no" for a folder; a built-in agent is not a folder, so a
+        marked row naming one is a "no" for nothing and drops out -- the seed's
+        own row stands, which is the one that says whether the agent runs.
+        """
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        stub = ThirdPartyAcpSubagentConfig.model_validate(
+            {"name": GENERIC_AGENT, "kind": "acp", "command": "", "switch_only": True, "enabled": False}
+        )
+        registry = AgentRegistry()
+
+        registry.apply([stub])
+
+        rows = [row for row in registry.rows() if row.name == GENERIC_AGENT]
+        assert len(rows) == 1
+        assert rows[0].kind == "builtin"
+
+    def test_an_acp_row_for_another_agent_still_comes_through_disabled(self, tree: Path) -> None:
+        """The exemption is as narrow as it looks: it is for a row the host will
+        give a command to, and nothing else.
+
+        An acp row for a name no seed owns gets no host command, so it still
+        names no launcher and cannot start -- carried through disabled, as it was
+        before.
+        """
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        row = ThirdPartyAcpSubagentConfig.model_validate({"name": "Raven-Probe", "kind": "acp", "command": ""})
+        registry = AgentRegistry()
+
+        registry.apply([row])
+
+        assert "Raven-Probe" in [row.name for row in registry.rows()]
+        assert "Raven-Probe" not in registry.names()
+
 
 def test_the_lending_test_reads_the_file_the_launcher_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Setup reads the same host credentials as the launcher."""

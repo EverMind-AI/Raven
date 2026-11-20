@@ -1,0 +1,29 @@
+/* The subagents island's own rules, under the domain's prefix.
+ *
+ * Every class here carries `subagents-`, which is what
+ * scripts/check-class-namespace.mjs holds the tree to: the roster and the
+ * instance panes drew their rules in styles/page.css for as long as they have
+ * existed (those names are pinned as the debt they are), and a class the
+ * domain introduces from here on is prefixed and lives in this sheet.
+ *
+ * Colour comes from the page's tokens and nowhere else.
+ */
+
+/* The direct-chat hint the instance composer opens with: what is typed there
+   stays out of the main agent's context, and how many entries are still owed
+   to it. One fixed-height line, so the dock's resting height does not move
+   with the sentence -- the transcript's reserves under
+   `.instance-conversation` in styles/page.css are cut to that height, and a
+   row that wrapped would put the transcript's last line behind the card at one
+   pane width and leave a blank band at another. The full sentence rides in the
+   title when the pane is narrow enough to clip it. */
+.subagents-handoff {
+  height: 15px;
+  line-height: 15px;
+  margin: 0 0 6px;
+  font-size: 10.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

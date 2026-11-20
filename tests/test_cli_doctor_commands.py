@@ -84,6 +84,48 @@ def test_doctor_help_lists_all_flags() -> None:
         assert flag in r.stdout, f"missing flag in help: {flag}"
 
 
+def test_doctor_help_states_the_exit_codes() -> None:
+    """The exit codes are the contract a CI script reads, so ``--help`` states them.
+
+    The heading alone is not the contract: the three codes and the states each
+    one covers are what a caller branches on, so those are pinned here.
+    """
+    r = runner.invoke(app, ["doctor", "--help"])
+    assert r.exit_code == 0, r.stdout
+    plain = re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;]*m", "", r.stdout))
+    assert "Exit codes: 0" in plain, plain
+    assert "1 a static check failed" in plain, plain
+    for branch in (
+        "install incomplete",
+        "unparseable",
+        "not a JSON object",
+        "schema invalid",
+        "unresolved routing",
+    ):
+        assert branch in plain, f"exit code 1 does not name {branch}: {plain}"
+    assert "2 the static checks passed" in plain, plain
+    assert "memory backend is missing or reports faults" in plain, plain
+
+
+def test_doctor_module_docstring_states_the_same_exit_codes() -> None:
+    """The module table and ``--help`` both document the contract, so both are pinned.
+
+    Two copies of one table drift; the branches named here are the ones
+    ``Report.exit_code()`` can actually return.
+    """
+    module_doc = re.sub(r"\s+", " ", doctor_commands.__doc__ or "")
+    for branch in (
+        "install incomplete",
+        "config missing",
+        "unparseable",
+        "not a JSON object",
+        "schema invalid",
+        "unresolved routing",
+        "memory backend is missing or reports faults",
+    ):
+        assert branch in module_doc, f"the module table does not name {branch}: {module_doc}"
+
+
 # --------------------------------------------------------------------------- default mode
 
 
@@ -249,7 +291,8 @@ def test_doctor_warns_for_the_default_sandbox_and_not_for_smart_mode(healthy_con
 
 
 def test_doctor_warns_for_full_permission_and_not_for_an_enabled_sandbox(healthy_config: Path) -> None:
-    """``full`` skips the ask tier. ``auto`` is a sandbox, so only the first warns."""
+    """``full`` skips the ask tier. A retired ``auto`` loads as the openshell
+    sandbox, so only the first warns."""
     _save_safety("full", "auto")
     r = runner.invoke(app, ["doctor"])
     plain = re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;]*m", "", r.stdout))
@@ -257,17 +300,17 @@ def test_doctor_warns_for_full_permission_and_not_for_an_enabled_sandbox(healthy
     assert "ask-tier calls run without asking" in plain
     assert "built-in denials and deny rules still hold" in plain
     assert "commands run on this machine with no isolation" not in plain
-    assert "Sandbox: auto" in plain
+    assert "Sandbox: openshell" in plain
 
 
-def test_doctor_is_quiet_when_permission_mode_asks_and_sandbox_is_boxlite(healthy_config: Path) -> None:
-    _save_safety("ask", "boxlite")
+def test_doctor_is_quiet_when_permission_mode_asks_and_sandbox_is_openshell(healthy_config: Path) -> None:
+    _save_safety("ask", "openshell")
     r = runner.invoke(app, ["doctor"])
     assert r.exit_code == 0, r.stdout
     assert "ask-tier calls run without asking" not in r.stdout
     assert "commands run on this machine with no isolation" not in r.stdout
     assert "Permissions: ask" in r.stdout
-    assert "Sandbox:     boxlite" in r.stdout
+    assert "Sandbox:     openshell" in r.stdout
 
 
 def test_the_safety_settings_reach_the_json_output(healthy_config: Path) -> None:

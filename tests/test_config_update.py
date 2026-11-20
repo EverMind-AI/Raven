@@ -14,11 +14,13 @@ import pytest
 
 from raven.config.update import (
     allow_exec_pattern,
+    allow_network_rule,
     enable_skill_hub_if_unset,
     initialize_a2a_server,
     remove_exec_pattern,
     reset_cron_config,
     set_a2a_server_enabled,
+    set_agent_plugin_mcp,
     set_default_model,
     set_memory_backend,
     set_playbook_disabled,
@@ -220,19 +222,19 @@ def test_update_cron_preserves_sibling_sections(cfg_path: Path) -> None:
 
 def test_set_sandbox_backend_writes_and_returns_prev(cfg_path: Path) -> None:
     # sandbox is nested under tools, not at the root.
-    assert set_sandbox_backend("boxlite", config_path=cfg_path) is None
-    assert _read(cfg_path)["tools"]["sandbox"]["backend"] == "boxlite"
+    assert set_sandbox_backend("openshell", config_path=cfg_path) is None
+    assert _read(cfg_path)["tools"]["sandbox"]["backend"] == "openshell"
     prev = set_sandbox_backend("none", config_path=cfg_path)
-    assert prev == "boxlite"
+    assert prev == "openshell"
     assert _read(cfg_path)["tools"]["sandbox"]["backend"] == "none"
 
 
 def test_set_sandbox_backend_preserves_siblings(cfg_path: Path) -> None:
     cfg_path.write_text(json.dumps({"providers": {"openai": {"apiKey": "sk-keep"}}}))
-    set_sandbox_backend("boxlite", config_path=cfg_path)
+    set_sandbox_backend("openshell", config_path=cfg_path)
     data = _read(cfg_path)
     assert data["providers"]["openai"]["apiKey"] == "sk-keep"
-    assert data["tools"]["sandbox"]["backend"] == "boxlite"
+    assert data["tools"]["sandbox"]["backend"] == "openshell"
 
 
 def test_set_sandbox_backend_survives_reload(cfg_path: Path) -> None:
@@ -240,9 +242,19 @@ def test_set_sandbox_backend_survives_reload(cfg_path: Path) -> None:
     # next load. The write must land under tools.sandbox so load_config round-trips.
     from raven.config.loader import load_config
 
-    set_sandbox_backend("boxlite", config_path=cfg_path)
+    set_sandbox_backend("openshell", config_path=cfg_path)
     cfg = load_config(cfg_path)
-    assert cfg.tools.sandbox.backend == "boxlite"
+    assert cfg.tools.sandbox.backend == "openshell"
+
+
+def test_a_retired_sandbox_backend_on_disk_loads_as_openshell(cfg_path: Path) -> None:
+    """A config written for boxlite (backend, debug socket, disk size) still loads."""
+    from raven.config.loader import load_config
+
+    cfg_path.write_text(
+        json.dumps({"tools": {"sandbox": {"backend": "boxlite", "debug": {"enabled": True}, "diskSizeGb": 20}}})
+    )
+    assert load_config(cfg_path).tools.sandbox.backend == "openshell"
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +351,41 @@ def test_playbook_disabled_preserves_sibling_fields(cfg_path: Path) -> None:
     assert data["disabled"] == ["a"]
 
 
+# ---------------------------------------------------------------------------
+# set_agent_plugin_mcp
+# ---------------------------------------------------------------------------
+
+
+def test_agent_plugin_mcp_allow_adds_the_package(cfg_path: Path) -> None:
+    assert set_agent_plugin_mcp("demo-pkg", True, config_path=cfg_path) is True
+    assert _read(cfg_path)["agentPlugins"]["mcpPackages"] == ["demo-pkg"]
+
+
+def test_agent_plugin_mcp_is_idempotent(cfg_path: Path) -> None:
+    set_agent_plugin_mcp("demo-pkg", True, config_path=cfg_path)
+    before = cfg_path.read_text(encoding="utf-8")
+    assert set_agent_plugin_mcp("demo-pkg", True, config_path=cfg_path) is False
+    assert set_agent_plugin_mcp("ghost", False, config_path=cfg_path) is False
+    assert cfg_path.read_text(encoding="utf-8") == before
+
+
+def test_agent_plugin_mcp_withhold_removes_only_that_package(cfg_path: Path) -> None:
+    cfg_path.write_text(
+        json.dumps({"agentPlugins": {"packages": ["/pkgs"], "mcpPackages": ["a", "b"]}}),
+        encoding="utf-8",
+    )
+    assert set_agent_plugin_mcp("a", False, config_path=cfg_path) is True
+    block = _read(cfg_path)["agentPlugins"]
+    assert block == {"packages": ["/pkgs"], "mcpPackages": ["b"]}
+
+
+def test_agent_plugin_mcp_writes_the_spelling_the_file_already_uses(cfg_path: Path) -> None:
+    """A second spelling beside the first leaves the config unloadable."""
+    cfg_path.write_text(json.dumps({"agent_plugins": {"mcp_packages": ["a"]}}), encoding="utf-8")
+    assert set_agent_plugin_mcp("b", True, config_path=cfg_path) is True
+    assert _read(cfg_path) == {"agent_plugins": {"mcp_packages": ["a", "b"]}}
+
+
 def test_allow_exec_pattern_writes_and_is_idempotent(cfg_path: Path) -> None:
     cfg_path.write_text("{}", encoding="utf-8")
     assert allow_exec_pattern("git push *", config_path=cfg_path) is True
@@ -360,6 +407,43 @@ def test_allow_exec_pattern_roundtrips_through_the_loader(cfg_path: Path) -> Non
     cfg_path.write_text("{}", encoding="utf-8")
     allow_exec_pattern("git push *", config_path=cfg_path)
     assert load_config(cfg_path).permissions.tools == {"exec": {"git push *": "allow"}}
+
+
+def test_allow_network_rule_writes_one_rule_and_is_idempotent(cfg_path: Path) -> None:
+    cfg_path.write_text("{}", encoding="utf-8")
+    assert allow_network_rule("pypi.org", 443, "/usr/bin/curl", config_path=cfg_path) is True
+    assert allow_network_rule("pypi.org", 443, "/usr/bin/curl", config_path=cfg_path) is False
+    assert _read(cfg_path)["permissions"]["network"] == {
+        "rules": [{"host": "pypi.org", "ports": [443], "binary": "/usr/bin/curl"}]
+    }
+
+
+def test_allow_network_rule_keeps_the_users_default_and_rules(cfg_path: Path) -> None:
+    mine = {"default": "closed", "rules": [{"host": "a.example.com", "tier": "deny"}]}
+    cfg_path.write_text(json.dumps({"permissions": {"network": mine}}), encoding="utf-8")
+    allow_network_rule("pypi.org", 443, "/usr/bin/curl", config_path=cfg_path)
+    network = _read(cfg_path)["permissions"]["network"]
+    assert network["default"] == "closed"
+    assert [rule["host"] for rule in network["rules"]] == ["a.example.com", "pypi.org"]
+
+
+def test_allow_network_rule_refuses_what_a_rule_cannot_hold(cfg_path: Path) -> None:
+    cfg_path.write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError):
+        allow_network_rule("::1", 443, "/usr/bin/curl", config_path=cfg_path)
+    cfg_path.write_text(json.dumps({"permissions": {"network": {"rules": "none"}}}), encoding="utf-8")
+    with pytest.raises(ValueError, match="rules"):
+        allow_network_rule("pypi.org", 443, "/usr/bin/curl", config_path=cfg_path)
+    assert _read(cfg_path)["permissions"]["network"] == {"rules": "none"}
+
+
+def test_allow_network_rule_roundtrips_through_the_loader(cfg_path: Path) -> None:
+    from raven.config.loader import load_config
+
+    cfg_path.write_text("{}", encoding="utf-8")
+    allow_network_rule("pypi.org", 443, "/usr/bin/curl", config_path=cfg_path)
+    (rule,) = load_config(cfg_path).permissions.network.rules
+    assert (rule.host, rule.ports, rule.binary, rule.tier) == ("pypi.org", [443], "/usr/bin/curl", "allow")
 
 
 def test_remove_exec_pattern_takes_back_an_allow_rule_and_only_that(cfg_path: Path) -> None:
@@ -842,7 +926,7 @@ def test_skill_hub_switch_ignores_a_legacy_router_the_loader_ignores(cfg_path: P
         json.dumps(
             {
                 "skillRouter": {"hub": {"endpoint": "https://legacy.test"}},
-                "skillForge": {"router": {"topK": 4}},
+                "skillForge": {"router": {"rrfK": 4}},
             }
         ),
         encoding="utf-8",
@@ -853,7 +937,7 @@ def test_skill_hub_switch_ignores_a_legacy_router_the_loader_ignores(cfg_path: P
     assert change is True
     data = _read(cfg_path)
     assert data["skillRouter"] == {"hub": {"endpoint": "https://legacy.test"}}
-    assert data["skillForge"]["router"] == {"topK": 4, "hub": {"enabled": True}}
+    assert data["skillForge"]["router"] == {"rrfK": 4, "hub": {"enabled": True}}
 
 
 def test_skill_hub_switch_previous_counts_a_retired_hub_key_like_the_loader(cfg_path: Path) -> None:

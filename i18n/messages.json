@@ -4337,10 +4337,6 @@
       "en": "Manage",
       "zh": "管理"
     },
-    "gui.rail.no_hits": {
-      "en": "No session matches \"{q}\".",
-      "zh": "没有匹配「{q}」的会话。"
-    },
     "gui.rail.pinned": {
       "en": "Pinned",
       "zh": "已固定"
@@ -4352,10 +4348,6 @@
     "gui.rail.imported": {
       "en": "Imported",
       "zh": "导入"
-    },
-    "gui.rail.search_hits": {
-      "en": "Results - {n}",
-      "zh": "搜索结果 · {n}"
     },
     "gui.reach.auth": {
       "en": "Your account",
@@ -4424,6 +4416,14 @@
     "gui.search_sessions": {
       "en": "Search sessions",
       "zh": "搜索会话"
+    },
+    "gui.find.count": {
+      "en": "{n} matching conversations",
+      "zh": "匹配的会话 · {n}"
+    },
+    "gui.find.empty": {
+      "en": "No conversation matches that.",
+      "zh": "没有匹配的会话。"
     },
     "gui.send": {
       "en": "Send",
@@ -4973,6 +4973,18 @@
       "en": "Carry on with {name}",
       "zh": "继续和 {name} 对话"
     },
+    "gui.ws.instance_handoff_hint": {
+      "en": "What you say here is not added to the main agent's context automatically. With your next message, the main agent is told which direct chats have happened in this session, so it can read them if it needs to.",
+      "zh": "你在这里说的不会自动加入主智能体的上下文。你下次给主智能体发消息时，它会得知本会话里发生过哪些直接对话，需要时它可以自己去读。"
+    },
+    "gui.ws.instance_handoff_count_one": {
+      "en": "With your next message, the main agent is told about 1 direct-chat entry from this session; the text is not added to its context automatically and enters only if the agent reads it.",
+      "zh": "你下次给主智能体发消息时，它会得知本会话有 1 个直接对话条目；对话正文不会自动进入它的上下文，只有它去读才会进入。"
+    },
+    "gui.ws.instance_handoff_count_n": {
+      "en": "With your next message, the main agent is told about {n} direct-chat entries from this session; the text is not added to its context automatically and enters only if the agent reads it.",
+      "zh": "你下次给主智能体发消息时，它会得知本会话有 {n} 个直接对话条目；对话正文不会自动进入它的上下文，只有它去读才会进入。"
+    },
     "gui.ws.instance_resumable": {
       "en": "Can continue",
       "zh": "可继续"
@@ -5101,6 +5113,14 @@
       "en": "Expand to full window",
       "zh": "展开全屏"
     },
+    "gui.ws.expand_reader": {
+      "en": "Read full screen",
+      "zh": "全屏阅读"
+    },
+    "gui.ws.exit_reader": {
+      "en": "Leave full screen",
+      "zh": "退出全屏"
+    },
     "gui.ws.file_big": {
       "en": "Too large to render here.",
       "zh": "太大了，没法在这里渲染。"
@@ -5160,6 +5180,26 @@
     "gui.ws.file_source": {
       "en": "Source",
       "zh": "源码"
+    },
+    "gui.ws.file_window": {
+      "en": "Open in a window",
+      "zh": "在新窗口打开"
+    },
+    "gui.ws.show_rendered": {
+      "en": "Show rendered",
+      "zh": "显示渲染结果"
+    },
+    "gui.ws.show_source": {
+      "en": "Show source",
+      "zh": "显示源码"
+    },
+    "gui.ws.footnotes": {
+      "en": "Footnotes",
+      "zh": "脚注"
+    },
+    "gui.ws.outline": {
+      "en": "Outline",
+      "zh": "大纲"
     },
     "gui.ws.unseen_tab": {
       "en": "{n} new",
@@ -5947,6 +5987,10 @@
       "en": "Model unavailable",
       "zh": "模型不可用"
     },
+    "gui.agent.route_no_picture": {
+      "en": "Deck generation is unavailable: no image search tool is configured. Set a search API with image search, or a Serper key.",
+      "zh": "当前无搜图工具，无法启用 PPT 制作引擎。请配置支持搜图的搜索 API，或设置 Serper key。"
+    },
     "gui.agent.why_billing": {
       "en": "Out of credit",
       "zh": "余额不足"
@@ -6619,6 +6663,14 @@
       "en": "Allow {who} to use {tool}?",
       "zh": "允许 {who} 使用 {tool} 吗？"
     },
+    "gui.confirm.title.sandbox_network": {
+      "en": "Allow {who} to connect to {target}?",
+      "zh": "允许 {who} 连接 {target} 吗？"
+    },
+    "gui.confirm.title.sandbox_network_many": {
+      "en": "Allow {who} to connect to these {count} addresses?",
+      "zh": "允许 {who} 连接这 {count} 个地址吗？"
+    },
     "gui.confirm.title.unknown": {
       "en": "Allow {who} to do this?",
       "zh": "允许 {who} 执行这个操作吗？"
@@ -6662,6 +6714,14 @@
     "gui.confirm.why.mcp_call": {
       "en": "{who} wants to use the external tool {server}; you have not allowed it yet.",
       "zh": "{who} 要用外部工具 {server}，你还没授权过这个工具。"
+    },
+    "gui.confirm.why.sandbox_network": {
+      "en": "The sandbox blocked this connection while {who} was running a command.",
+      "zh": "{who} 运行命令时，沙箱拦下了这个连接。"
+    },
+    "gui.confirm.why.sandbox_network_many": {
+      "en": "The sandbox blocked these connections while {who} was running a command.",
+      "zh": "{who} 运行命令时，沙箱拦下了这些连接。"
     },
     "gui.confirm.why.unknown": {
       "en": "{who} wants to do this; you have not allowed it yet.",
@@ -7170,6 +7230,10 @@
     "gui.confirm.ev.cut": {
       "en": "Shortened to what fits -- the rest is not shown",
       "zh": "内容过长，这里只显示了前一部分"
+    },
+    "gui.confirm.ev.net_shared": {
+      "en": "Every conversation shares this sandbox, so what you allow here stays allowed until Raven restarts.",
+      "zh": "所有会话共用这个沙箱，这里允许的连接会一直有效，直到 Raven 重启。"
     },
     "gui.confirm.land.always": {
       "en": "Won't ask again for: {pattern}, in every working directory",
@@ -8171,6 +8235,10 @@
       "en": "Tools",
       "zh": "工具"
     },
+    "gui.settings.nav.mcp": {
+      "en": "MCP",
+      "zh": "MCP"
+    },
     "gui.settings.nav.plugins": {
       "en": "Plugins",
       "zh": "插件"
@@ -8907,14 +8975,6 @@
       "en": "Distills memories from sessions into EverOS",
       "zh": "从会话中提炼记忆写入 EverOS"
     },
-    "gui.settings.roles.gate": {
-      "en": "Skill gate",
-      "zh": "技能筛选"
-    },
-    "gui.settings.roles.gate_use": {
-      "en": "Picks the few skills to inject each turn",
-      "zh": "每轮从候选技能里挑出要注入的几条"
-    },
     "gui.settings.roles.embedding": {
       "en": "Embedding",
       "zh": "Embedding"
@@ -9155,6 +9215,22 @@
       "en": "Search service",
       "zh": "搜索服务"
     },
+    "gui.settings.tools.ppt_image_missing": {
+      "en": "Deck generation cannot use this search API's pictures and no Serper key is configured, so it cannot run.",
+      "zh": "当前搜索 API 的图片结果无法用于 PPT 制作，且未配置 Serper Key，无法启用 PPT 制作引擎。"
+    },
+    "gui.settings.tools.ppt_image_fallback": {
+      "en": "Deck generation cannot use this search API's pictures. It will use {name} instead.",
+      "zh": "当前搜索 API 的图片结果无法用于 PPT 制作，将改用 {name}。"
+    },
+    "gui.settings.tools.ppt_image_no_key": {
+      "en": "Deck generation has no picture search key it can use. Set the {name} key here to enable it.",
+      "zh": "PPT 制作引擎没有可用的搜图 Key，在此设置 {name} Key 即可启用。"
+    },
+    "gui.settings.tools.ppt_image_no_key_or_serper": {
+      "en": "Deck generation has no picture search key it can use. Set the {name} key here, or a Serper key, to enable it.",
+      "zh": "PPT 制作引擎没有可用的搜图 Key，在此设置 {name} Key 或 Serper Key 即可启用。"
+    },
     "gui.settings.tools.fetch_vendor": {
       "en": "Fetch service",
       "zh": "抓取服务"
@@ -9227,93 +9303,161 @@
       "en": "You can read pages without a key - adding one gets you higher rate limits.",
       "zh": "不填密钥也能抓取网页，填上之后不容易被限流"
     },
-    "gui.settings.plugins.counter": {
+    "gui.settings.mcp.counter": {
       "en": "Connected {on} / {total}",
       "zh": "已连接 {on} / 共 {total}"
     },
-    "gui.settings.plugins.none": {
+    "gui.settings.mcp.none": {
       "en": "No MCP server configured",
       "zh": "还没有配置 MCP 服务"
     },
-    "gui.settings.plugins.none_sub": {
+    "gui.settings.mcp.none_sub": {
       "en": "An MCP server hands Raven tools and data from outside.",
       "zh": "MCP 服务能给 Raven 接上外部的工具和数据。"
     },
-    "gui.settings.plugins.add": {
+    "gui.settings.mcp.add": {
       "en": "Add",
       "zh": "新增"
     },
-    "gui.settings.plugins.add_prompt": {
+    "gui.settings.mcp.add_prompt": {
       "en": "Help me connect an MCP server. My requirements are as follows:",
       "zh": "帮我接入一个 MCP 服务，我的要求如下："
     },
-    "gui.settings.plugins.add_hint": {
+    "gui.settings.mcp.add_hint": {
       "en": "A server the catalogue does not list goes into tools.mcpServers in {path} by hand.",
       "zh": "目录里没有的服务，要手改配置文件 {path} 的 tools.mcpServers。"
     },
-    "gui.settings.plugins.connected": {
+    "gui.settings.mcp.connected": {
       "en": "Connected",
       "zh": "已连接"
     },
-    "gui.settings.plugins.connecting": {
+    "gui.settings.mcp.connecting": {
       "en": "Connecting",
       "zh": "连接中"
     },
-    "gui.settings.plugins.setup": {
+    "gui.settings.mcp.setup": {
       "en": "Needs setup",
       "zh": "待配置"
     },
-    "gui.settings.plugins.failed": {
+    "gui.settings.mcp.failed": {
       "en": "Connection failed",
       "zh": "连接失败"
     },
-    "gui.settings.plugins.retry": {
+    "gui.settings.mcp.retry": {
       "en": "Reconnect",
       "zh": "重新连接"
     },
-    "gui.settings.plugins.auth_browser": {
+    "gui.settings.mcp.auth_browser": {
       "en": "Authorize in browser",
       "zh": "在浏览器中授权"
     },
-    "gui.settings.plugins.authorized": {
+    "gui.settings.mcp.authorized": {
       "en": "Authorized",
       "zh": "已授权"
     },
-    "gui.settings.plugins.reauth": {
+    "gui.settings.mcp.reauth": {
       "en": "Re-authorize",
       "zh": "重新授权"
     },
-    "gui.settings.plugins.revoke": {
+    "gui.settings.mcp.revoke": {
       "en": "Revoke",
       "zh": "撤销"
     },
-    "gui.settings.plugins.api_key": {
+    "gui.settings.mcp.api_key": {
       "en": "API key",
       "zh": "API key"
     },
-    "gui.settings.plugins.key_first": {
+    "gui.settings.mcp.key_first": {
       "en": "Enter the key first",
       "zh": "先填入 Key"
     },
-    "gui.settings.plugins.no_credential": {
+    "gui.settings.mcp.no_credential": {
       "en": "This server takes no credential",
       "zh": "这个服务不需要凭据"
     },
-    "gui.settings.plugins.no_fields": {
+    "gui.settings.mcp.no_fields": {
       "en": "The catalogue names no credential field for this server",
       "zh": "目录里没有登记这个服务要填什么凭据"
     },
-    "gui.settings.plugins.address": {
+    "gui.settings.mcp.address": {
       "en": "Address",
       "zh": "连接"
     },
-    "gui.settings.plugins.tools": {
+    "gui.settings.mcp.tools": {
       "en": "Tools",
       "zh": "工具"
     },
-    "gui.settings.plugins.tools_n": {
+    "gui.settings.mcp.tools_n": {
       "en": "{n}",
       "zh": "{n} 个"
+    },
+    "gui.settings.plugins.counter": {
+      "en": "{n} packages",
+      "zh": "共 {n} 个插件包"
+    },
+    "gui.settings.plugins.add_hint": {
+      "en": "Packages are read from agentPlugins.packages in {path}.",
+      "zh": "插件包从配置文件 {path} 的 agentPlugins.packages 读取。"
+    },
+    "gui.settings.plugins.none": {
+      "en": "No Agent Plugin package found",
+      "zh": "还没有 Agent 插件包"
+    },
+    "gui.settings.plugins.none_sub": {
+      "en": "Packages that follow the Agent Plugins format bring skills and MCP servers. List a package's folder in agentPlugins.packages to see it here.",
+      "zh": "这里列出遵循 Agent Plugins 协议的插件包，它们可以带来技能和 MCP 服务。把包所在的目录写进 agentPlugins.packages，就能在这里看到。"
+    },
+    "gui.settings.plugins.problem": {
+      "en": "Has problems",
+      "zh": "有问题"
+    },
+    "gui.settings.plugins.unimported": {
+      "en": "Skills not imported",
+      "zh": "技能未导入"
+    },
+    "gui.settings.plugins.mcp_switch": {
+      "en": "Start its MCP servers",
+      "zh": "启动它的 MCP 服务"
+    },
+    "gui.settings.plugins.mcp_switch_sub": {
+      "en": "Applies after Raven restarts.",
+      "zh": "重启 Raven 后生效。"
+    },
+    "gui.settings.plugins.source": {
+      "en": "Source",
+      "zh": "来源"
+    },
+    "gui.settings.plugins.skills": {
+      "en": "Skills",
+      "zh": "技能"
+    },
+    "gui.settings.plugins.skills_in": {
+      "en": "{n}, imported",
+      "zh": "{n} 个，已导入"
+    },
+    "gui.settings.plugins.skills_out": {
+      "en": "{n}, not imported",
+      "zh": "{n} 个，未导入"
+    },
+    "gui.settings.plugins.server": {
+      "en": "MCP server",
+      "zh": "MCP 服务"
+    },
+    "gui.settings.plugins.server_off": {
+      "en": "not started",
+      "zh": "未启动"
+    },
+    "gui.settings.plugins.server_idle": {
+      "en": "not connected yet",
+      "zh": "尚未连接"
+    },
+    "gui.settings.plugins.import_hint": {
+      "en": "To use its skills, run this on the Raven host:",
+      "zh": "想用它的技能，在 Raven 所在的机器上运行："
+    },
+    "gui.settings.plugins.path_problems": {
+      "en": "Paths that hold no usable package",
+      "zh": "这些路径里没有可用的插件包"
     },
     "gui.model.pick_search": {
       "en": "Search or type a model ID",
@@ -10832,8 +10976,8 @@
       "en": "Uses a sandbox when one is available"
     },
     "gui.set.prm.sb_box_w": {
-      "zh": "在轻量沙箱内运行命令",
-      "en": "Runs commands inside the boxlite sandbox"
+      "zh": "在 OpenShell 沙箱内运行命令",
+      "en": "Runs commands inside an OpenShell sandbox"
     },
     "gui.set.prm.sb_none": {
       "zh": "不隔离",
@@ -11754,6 +11898,10 @@
     "gui.knowledge.create": {
       "en": "New knowledge base",
       "zh": "新建知识库"
+    },
+    "gui.knowledge.creating": {
+      "en": "Creating...",
+      "zh": "正在创建…"
     },
     "gui.knowledge.no_embedding": {
       "en": "Store the documents without indexing them yet",

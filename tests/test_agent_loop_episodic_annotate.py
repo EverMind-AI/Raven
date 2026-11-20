@@ -17,7 +17,7 @@ import pytest
 from loguru import logger
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
+from raven.agent.loop.bundles import EngineWiring, HostWiring, ToolWiring, TurnPolicy
 from raven.config.raven import MemoryConfig
 from raven.contracts.llm_provider import LLMResponse
 from raven.spine.message import ChatType, Source
@@ -89,12 +89,15 @@ class _FakeBackend:
     async def store(self, session_id: Any, messages: Any, *, metadata: Any = None) -> None: ...
 
 
-def _make_loop(workspace: Path, *, provider: Any | None = None, every: int = 3, backend: Any = None) -> AgentLoop:
+def _make_loop(
+    workspace: Path, *, provider: Any | None = None, every: int = 3, backend: Any = None, hooks: Any = None
+) -> AgentLoop:
     loop = AgentLoop(
         provider=provider or _StubProvider(),
         workspace=workspace,
         model="stub",
         policy=TurnPolicy(max_iterations=2),
+        host=HostWiring(hooks=hooks),
         tools=ToolWiring(restrict_to_workspace=True),
         engine=EngineWiring(backend=backend, memory_config=MemoryConfig(annotate_every_turns=every)),
     )
@@ -546,6 +549,37 @@ class TestMachineTurnsInsideTheTail:
         assert "reminder handled, nudged the user" not in contents, "the reply is the half that reaches the file"
         assert "nudge sent" not in contents
         assert contents == ["q0", "a0", "q1", "a1"]
+
+    async def test_a_hook_note_inside_a_machine_turn_does_not_reopen_it(self, tmp_path: Path) -> None:
+        """The note a hook leaves after a tool round is a ``user`` row the loop
+        wrote, not a person speaking. Read as one, it reopens the Sentinel turn
+        it landed in -- which the slice had already dropped whole -- and the
+        runtime's own work reaches ``episodes.md`` as the reader's."""
+        from raven.agent.loop._shared import append_hook_note
+
+        loop = _make_loop(tmp_path, every=2)
+        fake = _FakeConsolidator()
+        loop.memory_consolidator = fake
+        session = _session_with(loop, "cli:mixed", turns=0)
+        session.metadata["annotated_through"] = 0
+        session.messages.extend(_turn(0))
+        machine = [
+            {"role": "user", "content": "SENTINEL NOTICE", "origin": "sentinel"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "t1"}]},
+            {"role": "tool", "tool_call_id": "t1", "content": "nudge sent"},
+        ]
+        # The row the loop writes when the note lands after a tool round.
+        assert append_hook_note(machine, "check the second table") is True
+        session.messages.extend(machine)
+        session.messages.extend(_turn(1))
+        loop.sessions.save(session)
+
+        loop._maybe_annotate_tail(session, prev_len=len(session.messages) - 2)
+        await _settle(loop)
+
+        assert len(fake.tails) == 1
+        contents = [m.get("content") for m in fake.tails[0]]
+        assert "check the second table" not in contents, "the note is the harness, not the turn's opener"
 
     async def test_a_persons_turn_keeps_its_unmarked_parts(self, tmp_path: Path) -> None:
         """The same rule must not eat a person's tool calls, which are unmarked too."""

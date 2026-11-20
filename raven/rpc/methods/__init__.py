@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from raven.rpc.methods._stubs import register_stub_methods
+from raven.rpc.methods.agent_plugins import register_agent_plugins_methods
 from raven.rpc.methods.approval import register_approval_methods
 from raven.rpc.methods.browser import register_browser_methods
 from raven.rpc.methods.bugreport import register_bugreport_methods
@@ -268,6 +269,7 @@ def register_aligned_methods_except_system(
     # handler error a caller can show, not as -32601.
     register_skillhub_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_plughub_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    register_agent_plugins_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     # browser.* — the reader's half of the page the agent's browser tools
     # drive. Registered unconditionally: browser.state is what tells a caller
     # the optional extra is missing, so it has to answer even then. The
@@ -300,6 +302,7 @@ __all__ = [
     "register_machines_methods",
     "register_memory_methods",
     "register_playbooks_methods",
+    "register_agent_plugins_methods",
     "register_plughub_methods",
     "register_session_methods",
     "register_skillhub_methods",

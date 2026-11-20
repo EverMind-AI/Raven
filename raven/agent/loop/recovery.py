@@ -14,6 +14,7 @@ matches wins:
   silence marker       the model chose to say nothing          SILENT
   refusal              the upstream declined                   FALLBACK once, then FAIL
   text                 a reply to deliver                      COMPLETE
+  cut at the window    the context window filled, no text      shrink and CONTINUE, then FAIL
   thinking only        reasoning and no answer                 PREFILL, STEP_DOWN, FALLBACK, FAIL
   cut, nothing in it   stopped at the ceiling, empty           CONTINUE with more room, then FAIL
   empty after a tool   nothing right after tool results        NUDGE once, then as an empty reply
@@ -24,7 +25,10 @@ the model's explanation. A stream that died mid-answer (``STREAM_CUT``) is asked
 go on from what it sent, up to ``MAX_CONTINUATIONS`` times; one that closed cleanly
 without a terminal chunk, and a body that names no finish, are whole answers. A cut
 at the output ceiling is asked again with more room for the answer, and the effort is
-left alone because nothing in it names the reasoning as the cause.
+left alone because nothing in it names the reasoning as the cause. A cut at the context
+window is one whatever it thought: more room for the answer, a re-fed thought or a lower
+effort would each send the same full window back, so the prompt is shrunk and the reply
+continued with no larger ceiling, and a prompt that cannot shrink fails the turn at once.
 
 PREFILL re-feeds the model its own reasoning so it continues into the answer. A
 provider that refuses a trailing assistant message (its
@@ -104,6 +108,7 @@ EMPTY_RETRY_MAX_DELAY_S = 60.0
 # answer: the tool results may be all the task needed.
 POST_TOOL_NUDGE = "You just executed tool calls but returned an empty response. Please process the tool results above and continue with the task, or give your final answer now."
 OUTPUT_LIMIT_CONTINUATION = "[System: Your previous response was cut off by the output length limit before it produced any text or tool call, so nothing from it was kept. Keep this response short: answer briefly, or make the tool call the task needs. If a payload you were writing is too large for one response, send it across several smaller calls.]"
+CONTEXT_WINDOW_CONTINUATION = "[System: Your previous response was cut off at the model's context window before it produced any text or tool call, so nothing from it was kept. Continue concisely now that earlier context has been trimmed.]"
 NETWORK_CUT_CONTINUATION = "[System: The previous response was cut off by a network error mid-stream. Continue exactly where you left off. Do not restart or repeat prior text. Finish the answer directly.]"
 EMPTY_REPLY_FAILURE = "No reply: the model returned empty content after retries and any fallback models. Try `continue`, switch the model, or check the tool output above."
 THINKING_ONLY_FAILURE = "The model produced only internal reasoning and no final answer, despite retries. Its last reasoning, which may contain the answer:"
@@ -116,6 +121,10 @@ TRUNCATED_FAILURE = "Processing stopped: the response remained truncated after {
 TRUNCATED_UNCONTINUED_FAILURE = (
     "Processing stopped: the response was cut off at the output length limit, "
     "and this turn has no continuation attempts left. Try again."
+)
+CONTEXT_WINDOW_FAILURE = (
+    "Processing stopped: the request hit the model's context window and could not fit even after trimming context. "
+    "Start a new session to continue."
 )
 REFUSAL_FAILURE = "The model declined to respond to this request (a safety refusal, not a Raven failure)."
 REFUSAL_EXPLANATION = " The model's explanation: {text}"
@@ -133,7 +142,7 @@ class ReplyKind(Enum):
     REFUSAL = auto()  # the upstream declined; any text is the model's explanation
     NETWORK_CUT = auto()  # a stream that died after sending text
     THINKING_ONLY = auto()  # reasoning and no answer
-    TRUNCATED = auto()  # stopped at the output ceiling with nothing in it
+    TRUNCATED = auto()  # cut before any text: at the output ceiling unthinking, or at the context window
     POST_TOOL_EMPTY = auto()  # nothing, right after the turn ran tools
     EMPTY = auto()  # nothing at all
 
@@ -383,9 +392,11 @@ def reply_kind(
     text is the start of a reply the model may have been going on past, never a whole one, so it is
     not read as a marker. A refusal is named before text because the text is the model's explanation
     of it, and thinking before a cut because a reply that thought and was cut is thinking-only:
-    TRUNCATED is a cut with no reasoning behind it. ``reply_awaited`` is a turn whose caller waits on
-    its text, where a marker is text like any other. ``silence_taught`` says the turn's prompt taught
-    the marker, which with ``origin`` picks the rule a marker is read by (``is_silence``).
+    TRUNCATED is a cut with no reasoning behind it, or one at the context window, which is a cut
+    whatever it thought, since re-feeding the thought or thinking less sends the same full window
+    back. ``reply_awaited`` is a turn whose caller waits on its text, where a marker is text like any
+    other. ``silence_taught`` says the turn's prompt taught the marker, which with ``origin`` picks
+    the rule a marker is read by (``is_silence``).
     """
     has_text = bool(visible and visible.strip())
     # Only a stream that died carries ``STREAM_CUT``. A clean close without a terminal chunk, and a body
@@ -398,6 +409,8 @@ def reply_kind(
         return ReplyKind.REFUSAL
     if has_text:
         return ReplyKind.TEXT
+    if response.truncated and response.truncation_reason == "context_window":
+        return ReplyKind.TRUNCATED
     if has_thinking(response) or (token_count(_usage(response).get("reasoning_tokens")) or 0) > 0:
         return ReplyKind.THINKING_ONLY
     if response.truncated:

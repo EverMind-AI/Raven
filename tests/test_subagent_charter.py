@@ -82,6 +82,57 @@ def test_an_over_long_prompt_is_cut_not_honoured() -> None:
     assert len(charter.prompt) <= 4000
 
 
+def test_an_addendum_a_brief_less_payload_mirrors_is_not_injected_twice() -> None:
+    """A payload with no brief carries the addendum in the legacy prompt as
+    well, so a host that knows only the prompt still receives it. Read as the
+    brief too, the same instructions would reach the turn twice."""
+    charter = parse({"prompt": "hold the line", "instructionAddendum": "hold the line"})
+    assert charter is not None
+    assert charter.prompt == ""
+    assert charter.instruction_addendum == "hold the line"
+    assert charter.task_brief == "hold the line"
+
+
+def test_an_addendum_beside_a_prompt_of_its_own_stays_two_instructions() -> None:
+    """The mirror is only the mirror when the two are the same text: a prompt
+    that says something else is the brief the sender meant it to be."""
+    charter = parse({"prompt": "only look at A", "instructionAddendum": "hold the line"})
+    assert charter is not None
+    assert charter.prompt == "only look at A"
+    assert charter.instruction_addendum == "hold the line"
+    assert charter.task_brief == "only look at A\n\nhold the line"
+
+
+def test_a_named_brief_outranks_the_legacy_prompt() -> None:
+    """A payload that names its brief has said which of the two it means, so
+    the prompt beside it is only the mirror a brief-less host would read."""
+    charter = parse({"brief": "only look at A", "prompt": "an older brief"})
+    assert charter is not None
+    assert charter.prompt == "only look at A"
+
+
+def test_the_real_sender_s_mirror_reads_back_once() -> None:
+    """The drop is exact equality, so it holds only while the producer keeps
+    writing both fields the same way. Drive the pair through the sender the
+    bug travelled on: build the payload the Worker Table builds, then read it
+    the way the worker reads it. The padded addendum pins the producer's own
+    strip as part of the contract -- without it the mirror and the addendum
+    differ by whitespace, the shift is silent, and the duplication returns."""
+    from raven.playbook.agent_generator import build_payload
+    from raven.playbook.agent_spec import SubPlaybook
+
+    spec = SubPlaybook(memory={"systemPrompt": "  hold the line  "})
+    charter = parse(build_payload("", spec))
+    assert charter is not None
+    assert charter.prompt == ""
+    assert charter.instruction_addendum == "hold the line"
+    assert charter.task_brief == "hold the line"
+
+    charter = parse(build_payload("only look at A", spec))
+    assert charter is not None
+    assert charter.task_brief == "only look at A\n\nhold the line"
+
+
 def test_an_empty_tool_list_survives_the_read() -> None:
     """Three-valued: absent is "whatever this worker offers", `[]` is a real
     answer, and folding one into the other reverses its meaning."""
@@ -354,6 +405,172 @@ def test_the_wire_carries_code_and_a_deadline() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# The step a generated function is handed                                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_step_payload_keeps_normalized_tool_calls_structured() -> None:
+    """A generated participant reads the calls the model proposed as data, not
+    as whatever a dataclass happens to print as."""
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.charter import _step_payload
+    from raven.contracts.llm_provider import LLMResponse, RunMeta, ToolCallRequest
+
+    arguments = {"path": "out/report.md", "options": {"dry_run": True}, "items": [1, None]}
+    call = ToolCallRequest(
+        id="call-1",
+        name="write_file",
+        arguments=arguments,
+        provider_specific_fields={"opaque": "provider-private"},
+        function_provider_specific_fields={"also": "provider-private"},
+        run_meta=RunMeta(),
+    )
+    step = SimpleNamespace(response=LLMResponse(content=None, tool_calls=[call]))
+
+    payload = _step_payload(step)
+    [projected] = payload["response"]["tool_calls"]
+
+    assert projected == {"id": "call-1", "name": "write_file", "arguments": arguments}
+    assert projected["arguments"] is not arguments
+    projected["arguments"]["options"]["dry_run"] = False
+    projected["arguments"]["items"].append(2)
+    assert arguments["options"]["dry_run"] is True
+    assert arguments["items"] == [1, None]
+
+
+def test_each_call_keeps_its_own_id_name_and_arguments_in_order() -> None:
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.charter import _step_payload
+    from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
+
+    step = SimpleNamespace(
+        response=LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCallRequest(id="a", name="read_file", arguments={"path": "one.txt"}),
+                ToolCallRequest(id="b", name="write_file", arguments={"path": "two.txt", "content": "x"}),
+            ],
+        )
+    )
+
+    assert _step_payload(step)["response"]["tool_calls"] == [
+        {"id": "a", "name": "read_file", "arguments": {"path": "one.txt"}},
+        {"id": "b", "name": "write_file", "arguments": {"path": "two.txt", "content": "x"}},
+    ]
+
+
+def test_the_projected_calls_are_plain_json_data() -> None:
+    """The projection is what a JSON wire could carry: no ToolCallRequest left
+    anywhere, and bools, numbers and nulls still typed."""
+    import json
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.charter import _step_payload
+    from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
+
+    arguments = {"flag": False, "count": 3, "ratio": 0.5, "missing": None, "nested": [{"deep": True}]}
+    step = SimpleNamespace(
+        response=LLMResponse(
+            content=None, tool_calls=[ToolCallRequest(id="call-1", name="write_file", arguments=arguments)]
+        )
+    )
+
+    calls = _step_payload(step)["response"]["tool_calls"]
+
+    assert json.loads(json.dumps(calls)) == calls
+    [projected] = calls
+    assert projected["arguments"]["flag"] is False
+    assert projected["arguments"]["count"] == 3
+    assert projected["arguments"]["ratio"] == 0.5
+    assert projected["arguments"]["missing"] is None
+    assert projected["arguments"]["nested"] == [{"deep": True}]
+
+
+def test_a_step_without_calls_projects_without_them() -> None:
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.charter import _step_payload
+    from raven.contracts.llm_provider import LLMResponse
+
+    answered = _step_payload(SimpleNamespace(response=LLMResponse(content="done")))
+    assert answered["response"]["content"] == "done"
+    assert answered["response"]["tool_calls"] == []
+    assert _step_payload(SimpleNamespace(response=None))["response"] is None
+
+
+def test_calls_that_arrived_as_plain_dicts_are_untouched() -> None:
+    """A response whose calls are already plain data -- a replay, a fixture --
+    keeps the recursion it always had, and an object the projections know
+    nothing about still falls back to its string."""
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.charter import _pure_data, _step_payload
+
+    wire_shaped = [{"function": {"name": "write_file", "arguments": {"path": "a"}}}]
+    step = SimpleNamespace(response=SimpleNamespace(tool_calls=wire_shaped, content=None))
+
+    assert _step_payload(step)["response"]["tool_calls"] == wire_shaped
+
+    class _Opaque:
+        pass
+
+    opaque = _Opaque()
+    assert _pure_data(opaque) == str(opaque)
+
+
+ADVISE_ON_DRY_RUN = """
+def advise(step):
+    response = step.get("response") or {}
+    calls = response.get("tool_calls") or []
+    if calls and calls[0].get("name") == "write_file":
+        options = calls[0].get("arguments", {}).get("options") or {}
+        if options.get("dry_run"):
+            return "Keep the next action read-only."
+    return None
+"""
+
+
+async def test_a_generated_advise_reads_nested_call_arguments() -> None:
+    """Not just a greener payload test: the function compiles behind the gate,
+    runs through the participant the loop seats, and changes its answer when the
+    nested argument changes -- which it cannot do reading a string."""
+    from raven.agent.subagent.charter import CharterParticipant
+    from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
+    from raven.contracts.participant import StepView
+
+    def _step(dry_run: bool) -> StepView:
+        return StepView(
+            session_key="s1",
+            iteration=1,
+            response=LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call-1",
+                        name="write_file",
+                        arguments={"path": "out/report.md", "options": {"dry_run": dry_run}},
+                    )
+                ],
+            ),
+            transcript=(),
+            history=(),
+            turn_base=0,
+            question="write the report",
+            rollbacks=0,
+            mode=None,
+            mode_overlay=None,
+            phase="after_iteration",
+        )
+
+    participant = CharterParticipant()
+    with charter_scope(Charter(functions=(("advise", ADVISE_ON_DRY_RUN),))):
+        assert await participant.advise(_step(dry_run=True)) == "Keep the next action read-only."
+        assert await participant.advise(_step(dry_run=False)) is None
+
+
+# --------------------------------------------------------------------------- #
 # The deadline: tighter, never looser                                           #
 # --------------------------------------------------------------------------- #
 
@@ -477,6 +694,99 @@ def test_a_refused_generated_function_is_cached_as_silence(monkeypatch) -> None:
         assert charter_mod._COMPILED[("advise", source)] is False
     finally:
         charter_mod._COMPILED.clear()
+
+
+def _advise_step(transcript):
+    """A step whose only interesting field is the transcript the advice is
+    matched against."""
+    from raven.contracts.participant import StepView
+
+    return StepView(
+        session_key="s",
+        iteration=1,
+        response=None,
+        transcript=tuple(transcript),
+        history=(),
+        turn_base=0,
+        question="do it",
+        rollbacks=0,
+        mode=None,
+        mode_overlay=None,
+        phase="iteration",
+    )
+
+
+@pytest.mark.asyncio
+async def test_generated_advice_says_the_same_words_once_per_transcript() -> None:
+    """A generated function is stateless, so asked at every phase it answers
+    the same words. Once the transcript carries them they have been delivered;
+    a rollback that popped the note leaves the transcript without it, so it
+    is delivered again."""
+    from raven.agent.subagent.charter import CharterParticipant
+
+    source = "def advise(step):\n    return 'check the second table'"
+
+    with charter_scope(Charter(functions=(("advise", source),))):
+        participant = CharterParticipant()
+        first = await participant.advise(_advise_step([{"role": "user", "content": "do it"}]))
+        assert first == "check the second table"
+        again = await participant.advise(
+            _advise_step([{"role": "user", "content": "do it"}, {"role": "user", "content": first}])
+        )
+        assert again is None, "the transcript already carries it"
+        blocks = await participant.advise(
+            _advise_step([{"role": "assistant", "content": [{"type": "text", "text": first}]}])
+        )
+        assert blocks is None, "block-shaped content is read the same way"
+        assert await participant.advise(_advise_step([{"role": "user", "content": "do it"}])) == first, (
+            "a rollback popped the note, so the transcript no longer says it"
+        )
+        assert (
+            await participant.advise(
+                _advise_step([{"role": "assistant", "content": None}, {"role": "tool", "content": [{"type": "image"}]}])
+            )
+            == first
+        ), "rows and blocks with no text are skipped"
+
+
+@pytest.mark.asyncio
+async def test_a_tool_result_quoting_the_advice_is_not_where_it_was_delivered() -> None:
+    """A tool result is fenced as untrusted input, so a file that happens to
+    repeat the sentence is not Raven's guidance reaching the model. Reading it
+    as delivered would silently drop the advice for the rest of the run."""
+    from raven.agent.subagent.charter import CharterParticipant
+
+    source = "def advise(step):\n    return 'check the second table'"
+
+    with charter_scope(Charter(functions=(("advise", source),))):
+        participant = CharterParticipant()
+        quoted = _advise_step(
+            [
+                {"role": "user", "content": "do it"},
+                {"role": "tool", "content": "log line\n\ncheck the second table\n\nmore"},
+            ]
+        )
+        assert await participant.advise(quoted) == "check the second table", "a quoted sentence is not delivery"
+        exact = _advise_step(
+            [{"role": "user", "content": "do it"}, {"role": "tool", "content": "check the second table"}]
+        )
+        assert await participant.advise(exact) == "check the second table", "nor is one that is the whole result"
+
+
+@pytest.mark.asyncio
+async def test_a_transcript_row_that_is_not_a_message_does_not_silence_the_advice() -> None:
+    """The loop passes its own list of dicts, but the transcript is a sequence
+    the caller chooses: a row that is not a mapping, or one with nothing to
+    read, must be skipped. Raising here would be read as the participant
+    answering nothing, and the advice would vanish with it."""
+    from raven.agent.subagent.charter import CharterParticipant
+
+    source = "def advise(step):\n    return 'check the second table'"
+
+    with charter_scope(Charter(functions=(("advise", source),))):
+        participant = CharterParticipant()
+        ragged = _advise_step(["not a row", None, {"role": "user", "content": 42}, {"content": "do it"}])
+        assert await participant.advise(ragged) == "check the second table"
 
 
 def test_a_plugins_own_rules_speak_before_the_dispatchs() -> None:

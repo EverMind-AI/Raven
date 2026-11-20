@@ -44,8 +44,9 @@ in its content, so a later turn counts what the request actually carried.
 
 # The segment names the assembler records, by the part they answer for. A
 # skill is skill bytes wherever it rides: the always-on digest sits in the
-# system prompt, a routed segment in the turn scratch, and the pull-mode menu
-# in the user envelope. Each is cut out of its default bucket and counted here.
+# system prompt and the scent menu in the user envelope. ``skills`` is the
+# routed segment older builds rode in the turn scratch; a message recorded then
+# still carries it. Each is cut out of its default bucket and counted here.
 SEGMENTS = {
     MEMORY: ("memory",),
     SKILLS: ("active_skills", "scent", "skills"),
@@ -83,8 +84,10 @@ def measure_parts(
     ``context.cache.turn_scratch`` is off.
 
     The attachment notes come out only where the assembler recorded them
-    (:data:`ATTACHMENT_NOTES_KEY`): a note-shaped line the user typed stays
-    conversation.
+    (:data:`ATTACHMENT_NOTES_KEY`), on the message that carries the record
+    alone: a note-shaped line the user typed, or the same text quoted in a
+    later message, stays conversation. The memory and the skills differ: they
+    are the request's, so their text is cut wherever it rides.
 
     A part that is not there is zero rather than missing: an empty prompt has
     no tools, and a reader asking what is filling the window is answered the
@@ -94,8 +97,11 @@ def measure_parts(
     memory_texts = _texts(scoped, MEMORY)
     skill_texts = _texts(scoped, SKILLS)
     marks = [t for t in (_mark(m) for m in messages) if t]
-    cut = (*memory_texts, *skill_texts, *marks)
-    kept = [_cut(m, cut) for m in messages]
+    shared_cut = (*memory_texts, *skill_texts)
+    kept = []
+    for message in messages:
+        own = _mark(message)
+        kept.append(_cut(message, (*shared_cut, own) if own else shared_cut))
     system_messages = [m for m in kept if m.get("role") == "system"]
     rest = [_without_images(m) for m in kept if m.get("role") != "system"]
     skill_results = [m for m in rest if _is_skill_result(m)]

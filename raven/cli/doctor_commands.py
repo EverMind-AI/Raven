@@ -5,8 +5,12 @@ chat exchange via :func:`raven.core.provider_stack.send_probe`.
 
 Exit codes:
   0  — all green (and probe ok if requested)
-  1  — static check failed (config missing / schema invalid / unresolved routing)
-  2  — static checks ok but ``--probe`` failed (lets CI distinguish from 1)
+  1  — static check failed (install incomplete / config missing, empty,
+       unparseable, or not a JSON object / schema invalid / unresolved routing)
+  2  — static checks ok but ``--probe`` failed, or the memory backend is
+       missing or reports faults (lets CI distinguish from 1)
+
+``raven doctor --help`` states the same three codes for the user.
 """
 
 from __future__ import annotations
@@ -856,7 +860,7 @@ def _render_permission_and_sandbox(features: FeaturesInfo) -> None:
     """Say how the ask tier is read, and whether commands run on this machine.
 
     ``full`` skips the ask tier only: built-in denials and user deny rules
-    still hold. ``none`` runs commands here; ``auto`` and ``boxlite`` do not,
+    still hold. ``none`` runs commands here; ``openshell`` does not,
     and the remedy is the one the startup log already gives.
     """
     if features.permission_mode == "full":
@@ -871,7 +875,7 @@ def _render_permission_and_sandbox(features: FeaturesInfo) -> None:
         console.print(
             f"  Sandbox:     {features.sandbox_backend}  "
             "[yellow]⚠ commands run on this machine with no isolation[/yellow]  "
-            "[dim]set tools.sandbox.backend to auto or boxlite[/dim]"
+            "[dim]set tools.sandbox.backend to openshell[/dim]"
         )
     elif features.sandbox_backend:
         console.print(f"  Sandbox:     {features.sandbox_backend}")
@@ -1104,6 +1108,12 @@ def register(app: typer.Typer) -> None:
         ),
     ) -> None:
         """Health-check Raven config, routing, and (optionally) the LLM.
+
+        Exit codes: 0 all green (and the probe ok if requested); 1 a static
+        check failed (install incomplete / config missing, empty, unparseable,
+        or not a JSON object / schema invalid / unresolved routing); 2 the
+        static checks passed but the probe failed, or the memory backend is
+        missing or reports faults.
 
         ``--fix`` is consent, not a mode: without it the config findings are
         reported and nothing is written, because each one is a value somebody

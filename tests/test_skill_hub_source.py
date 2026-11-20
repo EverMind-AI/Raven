@@ -2,9 +2,8 @@
 
 Hermetic: a httpx MockTransport stands in for the Skill Hub, so no
 network. Covers envelope unwrapping, RouterHit mapping, safety-score
-filtering, and graceful empties. Body-hydrate moved to
-SkillsSegmentBuilder (see test_skill_segment_builder.py); this layer
-returns metadata-only RouterHits.
+filtering, and graceful empties. This layer returns metadata-only
+RouterHits; a body is fetched when the model reads the skill.
 """
 
 from __future__ import annotations
@@ -221,10 +220,9 @@ class TestHubSource:
         assert [h.name for h in hits] == ["Good"]
 
     async def test_all_hits_metadata_only(self) -> None:
-        """HubSkillSource is Tier 0 / discovery — body hydrate now happens
-        in SkillsSegmentBuilder's pre-gate stage instead. Verifies the
-        retired ``prefetch_bodies`` knob isn't silently re-introducing body
-        fetches at the source layer."""
+        """HubSkillSource is Tier 0 / discovery — a body is fetched by
+        ``read_skill`` instead. Verifies the retired ``prefetch_bodies`` knob
+        isn't silently re-introducing body fetches at the source layer."""
 
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(

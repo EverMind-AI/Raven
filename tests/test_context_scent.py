@@ -255,20 +255,32 @@ async def test_find_skill_handles_missing_query_router_and_errors():
 
 
 def test_find_skill_description_matches_what_is_wired():
-    with_hub = FindSkillTool(lambda: None, hub_wired=True)
+    router = _Router([])
+    with_hub = FindSkillTool(lambda: router, hub_wired=True)
     assert "16 categories" in with_hub.description
     assert "failed twice" in with_hub.description
-    local_only = FindSkillTool(lambda: None)
+    local_only = FindSkillTool(lambda: router)
     assert "110k" not in local_only.description
     assert "16 categories" not in local_only.description
     assert "locally installed" in local_only.description
+
+
+def test_find_skill_description_follows_the_router_master_switch():
+    """With the switch off no search runs at all, so the schema must advertise
+    neither the Hub library nor a local pool, and must say why."""
+    off = FindSkillTool(lambda: None, hub_wired=True)
+
+    assert "110k" not in off.description
+    assert "16 categories" not in off.description
+    assert "locally installed" not in off.description
+    assert "disabled in this deployment" in off.to_schema()["function"]["description"]
 
 
 def test_find_skill_description_follows_the_hub_switch():
     """The client is built while the switch is off, so being wired is not
     being searched: the library sentence follows the switch, per render."""
     state = {"on": False}
-    tool = FindSkillTool(lambda: None, hub_wired=True, enabled_reader=lambda: state["on"])
+    tool = FindSkillTool(lambda: _Router([]), hub_wired=True, enabled_reader=lambda: state["on"])
 
     assert "110k" not in tool.to_schema()["function"]["description"]
     assert "locally installed" in tool.description

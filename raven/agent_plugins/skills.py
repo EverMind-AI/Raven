@@ -7,8 +7,10 @@ and reported, and the package's other skills still load.
 
 The import copies a package's skills into the workspace skill tree, one
 directory per package, so that the pool mints one source label per package
-rather than one per skill. The copy is what Raven owns, and it is what the
-ledger claims.
+rather than one per skill. The copy is what Raven owns: every directory the
+copy creates carries an install marker, and the ledger entry the import
+records holds the tokens of exactly those markers -- so what the report says
+happened and what a later run can prove it owns are built in one place.
 """
 
 from __future__ import annotations
@@ -19,12 +21,19 @@ import re
 import shutil
 import stat
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
 import yaml
 
-from raven.agent_plugins.ledger import LedgerEntry, PackageLedger
+from raven.agent_plugins.ledger import (
+    LedgerEntry,
+    PackageLedger,
+    install_marker_path,
+    workspace_key,
+    write_install_marker,
+)
 from raven.agent_plugins.package import AgentPluginPackage, is_contained
 from raven.skill_hub.policy import is_blocked, lint_external_paths, normalize_blocklist
 from raven.utils.skill_meta import nested_metadata, resolve_always
@@ -92,6 +101,10 @@ class ImportReport:
     The ledger keeps claiming these: the directory still exists, and dropping
     the claim would leave it unowned and impossible to remove later.
     """
+    released: tuple[str, ...] = ()
+    """Skills an earlier import claimed whose directories can no longer be
+    verified as the imported copy. The claim is dropped and the replacement
+    directory -- the operator's, most likely -- is left alone."""
     skipped: tuple[tuple[str, str], ...] = ()
     failed: tuple[tuple[str, str], ...] = ()
     problems: tuple[SkillProblem, ...] = ()
@@ -189,9 +202,14 @@ def import_package(
 
     The copy lands in ``<workspace>/skills/<package name>/<skill name>/``,
     which is what gives every package its own source label in the pool.
+    Each directory the copy creates is marked with a random install
+    identity, and the ledger entry recorded here is what those markers are
+    checked against later -- an install that reports success and a record
+    that can prove ownership are the same act.
     """
     off = normalize_blocklist(blocklist)
-    target_root = Path(workspace) / "skills" / package.name
+    workspace = Path(workspace)
+    target_root = workspace / "skills" / package.name
     if package.name in RESERVED_SOURCE_LABELS:
         # The first directory level under the workspace is the pool's source
         # label; a package there would answer as the layer itself.
@@ -203,22 +221,26 @@ def import_package(
         )
     skills, problems = discover_skills(package)
 
-    if target_root.exists() and not ledger.owns_directory(target_root, workspace=workspace):
+    root_claim = ledger.claim(target_root, workspace=workspace) if target_root.exists() else None
+    if root_claim is not None and not root_claim.owned:
         # The package directory would land on top of a directory the ledger
-        # does not claim -- the operator's own skill, most likely. Merging a
-        # package into it is never what anyone meant.
+        # cannot prove it installed: the operator's own skill, a replacement
+        # standing where the install used to be, or another workspace's
+        # import. Merging a package into it is never what anyone meant.
         return ImportReport(
             package=package.name,
             version=package.version,
             target=str(target_root),
             problems=tuple(problems),
             refusal=(
-                f"{target_root} already exists and is not owned by the package ledger; "
+                f"{target_root} already exists and {root_claim.reason}; "
                 "move or remove that directory, then import again"
             ),
         )
 
+    previous = ledger.entry(package.name, workspace=workspace)
     installed: list[str] = []
+    tokens: dict[str, str] = {}
     skipped: list[tuple[str, str]] = []
     failed: list[tuple[str, str]] = []
     claimed: set[str] = set()
@@ -250,8 +272,9 @@ def import_package(
 
         target = target_root / skill.name
         if target.exists():
-            if not ledger.owns_directory(target, workspace=workspace):
-                skipped.append((skill.name, f"{target} already exists and is not owned by the package ledger"))
+            skill_claim = ledger.claim(target, workspace=workspace)
+            if not skill_claim.owned:
+                skipped.append((skill.name, f"{target} exists and {skill_claim.reason}"))
                 continue
 
         try:
@@ -260,6 +283,9 @@ def import_package(
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(skill.directory, target)
         except OSError as exc:
+            # Anything standing at *target* here is a copy this run wrote:
+            # a pre-existing directory was either skipped above or removed
+            # just before the copy began.
             if target.exists():
                 try:
                     remove_tree(target)
@@ -277,16 +303,91 @@ def import_package(
                 pass
             failed.append((skill.name, f"the always flag could not be removed: {exc}"))
             continue
+
+        try:
+            tokens[skill.name] = write_install_marker(target)
+        except OSError as exc:
+            try:
+                remove_tree(target)
+            except OSError:
+                pass
+            failed.append((skill.name, f"the install identity could not be written: {exc}"))
+            continue
         installed.append(skill.name)
 
-    removed, retained, stale_failed = _remove_stale_skills(
+    removed, retained, released, stale_failed = _remove_stale_skills(
         target_root,
-        previous=ledger.entry(package.name),
+        previous=previous,
         installed=installed,
         workspace=workspace,
         ledger=ledger,
     )
     failed.extend(stale_failed)
+
+    root_token = previous.install_token if root_claim is not None else ""
+    if installed and root_claim is None:
+        # A fresh install: the root marker is what lets a later import or
+        # remove recognize this directory as the installed copy.
+        try:
+            root_token = write_install_marker(target_root)
+        except OSError as exc:
+            # Without the root marker nothing under here can ever be proven
+            # ours, so the fresh copies are taken back rather than left as
+            # unowned directories no command may touch -- including a marker
+            # the failed write may already have put partially in place.
+            for name in installed:
+                try:
+                    remove_tree(target_root / name)
+                except OSError:
+                    pass
+            try:
+                install_marker_path(target_root).unlink()
+            except OSError:
+                pass
+            if target_root.is_dir() and not any(target_root.iterdir()):
+                try:
+                    target_root.rmdir()
+                except OSError:
+                    pass
+            failed.append((package.name, f"the install identity could not be written: {exc}"))
+            return ImportReport(
+                package=package.name,
+                version=package.version,
+                target=str(target_root),
+                removed=tuple(removed),
+                retained=tuple(retained),
+                released=tuple(released),
+                skipped=tuple(skipped),
+                failed=tuple(failed),
+                problems=tuple(problems),
+            )
+    if root_claim is None and not installed and target_root.is_dir() and not any(target_root.iterdir()):
+        # Nothing was installed into a directory this run created; leaving
+        # an empty unmarked directory behind would only block the next run.
+        try:
+            target_root.rmdir()
+        except OSError:
+            pass
+
+    for name in retained:
+        if previous is not None and name in previous.skill_tokens:
+            tokens[name] = previous.skill_tokens[name]
+
+    ledger.record(
+        LedgerEntry(
+            name=package.name,
+            version=package.version,
+            # Resolved: `check` may run from any directory, and "." must
+            # not mean the directory it happens to be run in.
+            source=str(package.root.resolve()),
+            imported_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            skills=tuple(installed + retained),
+            fingerprint=package.fingerprint(),
+            workspace=workspace_key(workspace),
+            install_token=root_token,
+            skill_tokens=tokens,
+        )
+    )
 
     return ImportReport(
         package=package.name,
@@ -295,6 +396,7 @@ def import_package(
         installed=tuple(installed),
         removed=tuple(removed),
         retained=tuple(retained),
+        released=tuple(released),
         skipped=tuple(skipped),
         failed=tuple(failed),
         problems=tuple(problems),
@@ -308,7 +410,7 @@ def _remove_stale_skills(
     installed: list[str],
     workspace: Path,
     ledger: PackageLedger,
-) -> tuple[list[str], list[str], list[tuple[str, str]]]:
+) -> tuple[list[str], list[str], list[str], list[tuple[str, str]]]:
     """Delete what an earlier import installed and this one no longer ships.
 
     The ledger is the record of what this package put in the workspace. A
@@ -319,17 +421,25 @@ def _remove_stale_skills(
     makes a re-import mean "the workspace matches the package".
 
     Returns the removed names, the names still on disk after a failed
-    deletion, and the failures. A retained name stays in the ledger's claim:
-    reporting it as removed would strand a directory nothing owns.
+    deletion, the names whose directory can no longer be verified as the
+    imported copy, and the failures. A retained name stays in the ledger's
+    claim: reporting it as removed would strand a directory nothing owns. A
+    released name leaves the claim instead: the directory standing there is
+    not provably ours, so deleting it is not ours to do.
     """
     if previous is None:
-        return [], [], []
+        return [], [], [], []
     removed: list[str] = []
     retained: list[str] = []
+    released: list[str] = []
     failed: list[tuple[str, str]] = []
     for name in sorted(set(previous.skills) - set(installed)):
         stale = target_root / name
-        if not (stale.is_dir() and ledger.owns_directory(stale, workspace=workspace)):
+        if not stale.exists():
+            continue
+        claim = ledger.claim(stale, workspace=workspace)
+        if not claim.owned:
+            released.append(name)
             continue
         try:
             remove_tree(stale)
@@ -346,7 +456,7 @@ def _remove_stale_skills(
             failed.append((name, "still present after removal"))
             continue
         removed.append(name)
-    return removed, retained, failed
+    return removed, retained, released, failed
 
 
 def _escaped_entry(root: Path, directory: Path) -> str | None:

@@ -842,6 +842,96 @@ class TestTheCommand:
         assert started == [] and supervised == [] and opened == []
 
 
+class TestThePrintUrlMode:
+    """`raven web --print-url` is how a native window gets its sign-in link.
+
+    The URL is the whole of stdout -- the caller reads stdout as the answer --
+    and the command opens nothing and signals nothing on its own. Killing a
+    gateway it did not start is exactly what the desktop launcher used to do
+    when an empty probe meant "still booting".
+    """
+
+    def test_it_prints_the_attached_url_and_opens_nothing(
+        self, home: Path, a_built_page, opened: list[str], monkeypatch, capsys
+    ) -> None:
+        monkeypatch.setattr(serve_commands, "_attached_url", lambda: "http://127.0.0.1:31337/auth#abc")
+
+        serve_commands._web(port=18999, print_url=True)
+
+        assert capsys.readouterr().out == "http://127.0.0.1:31337/auth#abc\n"
+        assert opened == []
+
+    def test_it_waits_for_the_gateway_it_started(
+        self,
+        home: Path,
+        a_built_page,
+        opened: list[str],
+        supervised: list[int],
+        monkeypatch,
+        capsys,
+    ) -> None:
+        seen: dict[str, object] = {}
+
+        def attach(*_args, **kwargs):
+            seen.update(kwargs)
+            return "http://127.0.0.1:18999/auth#z"
+
+        monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
+        monkeypatch.setattr(serve_commands, "_await_attach", attach)
+
+        serve_commands._web(port=18999, print_url=True)
+
+        assert supervised == [18999]
+        assert seen == {"err": True}, "the slow notice could land in the URL slot"
+        assert capsys.readouterr().out == "http://127.0.0.1:18999/auth#z\n"
+        assert opened == []
+
+    def test_a_failure_leaves_stdout_empty(
+        self, home: Path, a_built_page, supervised: list[int], monkeypatch, capsys
+    ) -> None:
+        monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
+        monkeypatch.setattr(serve_commands, "_await_attach", lambda *_a, **_k: None)
+
+        with pytest.raises(typer.Exit) as exit_info:
+            serve_commands._web(port=18999, print_url=True)
+
+        assert exit_info.value.exit_code == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "did not come up" in captured.err
+
+    @pytest.mark.parametrize("other", [{"stop": True}, {"foreground": True}, {"supervise": True}])
+    def test_it_refuses_to_be_another_mode(self, home: Path, a_built_page, monkeypatch, other: dict[str, bool]) -> None:
+        touched: list[str] = []
+        monkeypatch.setattr(serve_commands, "_stop_resident", lambda: touched.append("stop"))
+        monkeypatch.setattr(serve_commands, "_run_foreground", lambda _port: touched.append("foreground"))
+
+        with pytest.raises(typer.Exit) as exit_info:
+            serve_commands._web(port=18999, print_url=True, **other)
+
+        assert exit_info.value.exit_code == 2
+        assert touched == [], "a refused combination still ran one of its modes"
+
+    def test_the_option_reaches_the_orchestrator(self, monkeypatch) -> None:
+        from typer.testing import CliRunner
+
+        seen: dict[str, object] = {}
+        monkeypatch.setattr(serve_commands, "_web", lambda port, **kwargs: seen.update(port=port, **kwargs))
+        app = typer.Typer()
+        serve_commands.register(app)
+
+        result = CliRunner().invoke(app, ["web", "--print-url"])
+
+        assert result.exit_code == 0
+        assert seen == {
+            "port": 18792,
+            "foreground": False,
+            "stop": False,
+            "supervise": False,
+            "print_url": True,
+        }
+
+
 class TestTheSignInLink:
     """The one URL that signs a browser in has to reach the person, whatever the
     browser launch did with it."""
@@ -2783,6 +2873,41 @@ def _wait_for(path: Path, timeout_s: float = 20.0) -> None:
         time.sleep(0.02)
 
 
+def _wait_for_json(path: Path, timeout_s: float = 20.0) -> dict:
+    """The parsed content of a state file, once it holds a whole document.
+
+    The fakes above write these files with `open(..., "w")`, which creates and
+    truncates the file before the first byte lands, so `path.exists()` goes true
+    while the file is still empty. A wait built on existence returned that empty
+    file and the read that followed raised `JSONDecodeError`; the same shape on
+    the pid file raised `ValueError: invalid literal for int() with base 10: ''`
+    on a loaded CI runner. Waiting for the payload rather than for the path is
+    the honest wait, and it hands back what the caller was about to parse.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            return json.loads(path.read_text())
+        except (OSError, ValueError):
+            assert time.monotonic() < deadline, f"{path.name} never held a json document"
+        time.sleep(0.02)
+
+
+def _wait_for_pid(path: Path, timeout_s: float = 20.0) -> int:
+    """The pid a child wrote, once it wrote a whole one. See `_wait_for_json`."""
+    import time
+
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            return int(path.read_text())
+        except (OSError, ValueError):
+            assert time.monotonic() < deadline, f"{path.name} never held a pid"
+        time.sleep(0.02)
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="process groups and SIGKILL are POSIX")
 class TestStoppingARealTree:
     """The fakes above say what is signalled; these say it actually ends.
@@ -2831,10 +2956,8 @@ class TestStoppingARealTree:
             f"subprocess.Popen([sys.executable, '-c', {supervisor!r}, sys.argv[1]], start_new_session=True)\n"
         )
         subprocess.run([sys.executable, "-c", launcher, str(home)], check=True, timeout=30)
-        _wait_for(home / "web.json")
-        _wait_for(home / "serve.json")
-        sup = json.loads((home / "web.json").read_text())["pid"]
-        gw = json.loads((home / "serve.json").read_text())["pid"]
+        sup = _wait_for_json(home / "web.json")["pid"]
+        gw = _wait_for_json(home / "serve.json")["pid"]
         monkeypatch.setattr(serve_commands, "_STOP_WAIT_S", 0.5)
         try:
             assert serve_commands._stop_resident() is True
@@ -2867,8 +2990,7 @@ class TestStoppingARealTree:
         )
         proc = subprocess.Popen([sys.executable, "-c", script], env={**os.environ, "RAVEN_HOME": str(home)})
         try:
-            _wait_for(home / "serve.json")
-            gw = json.loads((home / "serve.json").read_text())["pid"]
+            gw = _wait_for_json(home / "serve.json")["pid"]
             _wait_for(home / "web.json")
             proc.send_signal(signal.SIGTERM)
             _wait_for(home / "gw-sigterm")  # the supervisor is now inside its cleanup
@@ -2902,8 +3024,7 @@ class TestStoppingARealTree:
             # Signalled as soon as the gateway is up, so usually while the
             # supervisor still polls serve.json for the port it bound; the unit
             # test above pins that window, this one that the tree really ends.
-            _wait_for(home / "serve.json")
-            gw = json.loads((home / "serve.json").read_text())["pid"]
+            gw = _wait_for_json(home / "serve.json")["pid"]
             _wait_for(home / "web.json")
             proc.send_signal(signal.SIGTERM)
             assert proc.wait(timeout=20) == 0
@@ -2939,8 +3060,7 @@ class TestStoppingARealTree:
         env = {**os.environ, "RAVEN_HOME": str(home)}
         proc = subprocess.Popen([sys.executable, "-c", script], env=env)
         try:
-            _wait_for(home / "gc-pid")
-            gc = int((home / "gc-pid").read_text())
+            gc = _wait_for_pid(home / "gc-pid")
             _wait_for(home / "web.json")
             proc.send_signal(signal.SIGTERM)
             assert proc.wait(timeout=20) == 0
@@ -2996,6 +3116,66 @@ def _settled(proc) -> None:
         proc.kill()
     with suppress(Exception):
         proc.wait(timeout=5)
+
+
+class TestWaitingForAStateFile:
+    """The wait the real-process tests above lean on: it stops at the payload,
+    not at the path.
+
+    A child opens these files with `open(..., "w")`, which creates and truncates
+    them before the first byte lands, so the path exists while the file is still
+    empty. A wait built on existence handed that empty file back, and the read
+    that followed it raised `ValueError: invalid literal for int() with base 10:
+    ''` on a loaded CI runner, in `test_the_gateways_own_children_are_killed_
+    before_web_json_goes` -- a flake in the test rather than in the code under
+    it. Both helpers are pinned here so the race cannot come back through a wait
+    nobody wrote down."""
+
+    def test_an_empty_pid_file_is_not_an_answer(self, tmp_path: Path) -> None:
+        """The pid file exists from the moment it is created, so existence cannot
+        be what the wait is for."""
+        import subprocess
+
+        path = tmp_path / "gc-pid"
+        writer = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                f"import time, pathlib; p = pathlib.Path({str(path)!r})\n"
+                "p.write_text('')\n"
+                "time.sleep(0.2)\n"
+                "p.write_text('4242')\n",
+            ]
+        )
+        try:
+            assert _wait_for_pid(path) == 4242
+            assert writer.wait(timeout=20) == 0
+        finally:
+            with suppress(OSError):
+                writer.kill()
+
+    def test_a_half_written_json_file_is_not_an_answer(self, tmp_path: Path) -> None:
+        """The same for the state jsons: a document cut in the middle parses as
+        neither a dict nor a failure worth reporting."""
+        import subprocess
+
+        path = tmp_path / "serve.json"
+        writer = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                f"import time, pathlib; p = pathlib.Path({str(path)!r})\n"
+                "p.write_text('{\"port\": 18')\n"
+                "time.sleep(0.2)\n"
+                "p.write_text('{\"pid\": 4242}')\n",
+            ]
+        )
+        try:
+            assert _wait_for_json(path) == {"pid": 4242}
+            assert writer.wait(timeout=20) == 0
+        finally:
+            with suppress(OSError):
+                writer.kill()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="process groups and SIGKILL are POSIX")
@@ -3305,7 +3485,7 @@ def test_the_web_command_hands_its_options_on(monkeypatch) -> None:
     seen: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(serve_commands, "_web", lambda *a, **kw: seen.append((a, kw)))
     assert CliRunner().invoke(app, ["web"]).exit_code == 0
-    assert seen == [((18792,), {"foreground": False, "stop": False, "supervise": False})]
+    assert seen == [((18792,), {"foreground": False, "stop": False, "supervise": False, "print_url": False})]
 
 
 def test_the_serve_command_hands_its_options_on(monkeypatch) -> None:
@@ -3327,7 +3507,7 @@ class TestTheSupervisorStartsWithoutTheCommandTable:
     imported for it; any other argv is still parsed by the table."""
 
     ARGV = ["web", "--supervise", "--port", "18999"]
-    CALL = ((18999,), {"foreground": False, "stop": False, "supervise": True})
+    CALL = ((18999,), {"foreground": False, "stop": False, "supervise": True, "print_url": False})
 
     @pytest.fixture
     def web_calls(self, monkeypatch) -> list[tuple[tuple, dict]]:

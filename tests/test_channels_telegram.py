@@ -16,6 +16,7 @@ from raven.channels.adapters.telegram.channel import (
     _markdown_to_html,
     _outbound_kind,
 )
+from raven.providers.transcription import TranscriptionResult
 
 
 def _channel(**cfg):
@@ -271,6 +272,40 @@ def test_on_message_disallowed_sender_skips_download_and_typing():
     ch._download.assert_not_awaited()  # no media download for a denied sender
     ch._start_typing.assert_not_called()
     ch.intake.publish.assert_not_awaited()
+
+
+def test_on_message_labels_a_transcription_diagnosis_as_unavailable(monkeypatch):
+    ch = _channel()
+    ch._remember_thread = MagicMock()
+    ch._addressed_to_bot = AsyncMock(return_value=True)
+    ch._download = AsyncMock(return_value="/m/a.ogg")
+    ch._start_typing = MagicMock()
+    ch.intake.publish = AsyncMock()
+    ch._app = SimpleNamespace()
+    message = SimpleNamespace(
+        text=None,
+        caption=None,
+        photo=None,
+        voice=SimpleNamespace(file_id="f"),
+        audio=None,
+        document=None,
+        media_group_id=None,
+        message_id=1,
+        message_thread_id=None,
+        chat_id=42,
+        chat=SimpleNamespace(type="private"),
+    )
+    user = SimpleNamespace(id=5, username="bob", first_name="Bob")
+    monkeypatch.setattr(
+        "raven.channels.adapters.telegram.channel.transcribe_audio",
+        AsyncMock(return_value=TranscriptionResult(diagnosis="no key")),
+    )
+
+    asyncio.run(ch._on_message(SimpleNamespace(message=message, effective_user=user), None))
+
+    published = ch.intake.publish.await_args.kwargs
+    assert published["content"] == "[transcription unavailable: no key]"
+    assert published["media"] == ["/m/a.ogg"]
 
 
 # ── album group buffering (straggler race) ────────────────────────────

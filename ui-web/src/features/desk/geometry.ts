@@ -2,11 +2,19 @@
 
 import type { DeskGeometry, DeskPane } from './types'
 
-/* Bumped whenever the default placement or size changes. A stored geometry is
-   written on the first render, so every reader who has opened the desk once
-   already has the old numbers under the old key -- keeping the key would leave
-   the new default reaching nobody but a fresh browser. */
-export const DESK_GEOMETRY_KEY = 'raven.gui.desk.geometry.v7'
+/* Bumped whenever the default placement or size changes, and whenever a stored
+   geometry would keep a defect alive. A stored geometry is written on the first
+   render, so every reader who has opened the desk once already has the old
+   numbers under the old key -- keeping the key would leave the new default
+   reaching nobody but a fresh browser.
+
+   v8 is the second kind. Before DeskPalette's resize learned the difference, a
+   width-only corner gesture wrote the clamped height back and cleared `fill`:
+   a desk filling to the stop above a composer card stopped following the card,
+   and stayed short once the reserve slid the input away from under it. Nothing
+   in those stored numbers tells that height from one the reader chose, so the
+   key moves rather than the entry being migrated. */
+export const DESK_GEOMETRY_KEY = 'raven.gui.desk.geometry.v8'
 export const DESK_ANCHOR_GAP = 12
 export const DESK_SNAP_DISTANCE = 34
 /* How far the pointer travels before a press on the handle becomes a drag.

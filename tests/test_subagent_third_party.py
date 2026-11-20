@@ -551,6 +551,41 @@ async def test_cli_backend_on_windows_starts_a_bare_program_from_the_childs_path
     assert started == [(str(fresh_bin / "fresh-agent.exe"), "-p", "task")]
 
 
+async def test_cli_backend_on_windows_starts_a_relative_launcher_from_the_row_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CreateProcess resolves a directory-named program in the gateway's own directory, never the child's.
+
+    A row that sets a ``cwd`` and names its launcher relatively would have it
+    looked for beside raven itself and not start; the launch resolves it in the
+    directory the child starts in.
+    """
+    row = tmp_path / "row"
+    row.mkdir()
+    (row / "agent-acp.exe").write_text("", encoding="utf-8")
+    (row / "agent-acp.exe").chmod(0o755)
+    monkeypatch.setattr(env_mod, "_on_windows", lambda: True)
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV", {"PATH": "/nowhere"})
+    started: list[tuple[str, ...]] = []
+
+    async def refuse(*argv: str, **_: Any) -> NoReturn:
+        started.append(argv)
+        raise FileNotFoundError(2, "not started in a test")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", refuse)
+    be = CliAgentBackend(
+        name="rowagent",
+        command="./agent-acp -p {prompt}",
+        cwd=str(row),
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+    )
+
+    with pytest.raises(FileNotFoundError):
+        await be.run("task", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert started == [(str(row / "agent-acp.exe"), "-p", "task")]
+
+
 @pytest.mark.parametrize("legacy", [True, False])
 async def test_cli_backend_preserves_stored_windows_path_quotes(tmp_path, monkeypatch, legacy):
     from types import SimpleNamespace

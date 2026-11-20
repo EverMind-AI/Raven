@@ -1,0 +1,4 @@
+# Swift module cache and build output. The cache stores absolute paths from
+# the machine that compiled, so it must never be committed.
+.modulecache/
+build/

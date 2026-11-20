@@ -36,7 +36,7 @@ from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.snapshot import take as take_snapshot
 from raven.agent.tools.web import ImageSearchTool, WebFetchTool, WebSearchTool, image_search_vendor, resolve_vendor_key
 from raven.config.held_secrets import scrub_tool_output
-from raven.config.live import LiveConfig, exec_extra_deny_patterns, live_vendor_key
+from raven.config.live import LiveConfig, exec_extra_deny_patterns, live_vendor_key, skill_blocklist
 from raven.config.schema import LLM_ERROR_RETRY_DELAYS_DEFAULT, ExecToolConfig
 from raven.contracts.llm_provider import LLMProvider
 from raven.contracts.participant import StepView
@@ -50,6 +50,7 @@ from raven.spine.message import Media
 from raven.utils.messages import build_assistant_message
 
 if TYPE_CHECKING:
+    from raven.memory_engine import LocalSkillCatalog
     from raven.providers.binding import ModelBinding
 
 _LIVE_CONFIG = LiveConfig()
@@ -70,8 +71,22 @@ def _live_exec_extra_deny() -> list[str] | None:
 
 
 def _append_participant_note(messages: list[dict[str, Any]], note: str) -> None:
-    """Append generated advice without importing the main loop back into this backend."""
+    """One round's generated advice, written where a tool result is not.
+
+    A tool result is fenced as untrusted input, so guidance appended into one
+    reaches the model as something a tool told it: a note that lands after a
+    tool round is a message of its own. Everything else is written exactly as
+    before.
+
+    Nothing is deduplicated here. Whether the words have already been said is a
+    question about the transcript, and the participant answers it by reading
+    that transcript (``CharterParticipant.advise``) -- which is what makes a
+    note a rollback popped deliver again instead of being counted as spent.
+    """
     if not messages or not note:
+        return
+    if messages[-1].get("role") == "tool":
+        messages.append({"role": "user", "content": note})
         return
     body = messages[-1].get("content")
     if isinstance(body, str):
@@ -130,6 +145,8 @@ def build_subagent_prompt(
     work_dir: Path,
     tool_names: Collection[str] = (),
     skills_allow: Collection[str] | None = None,
+    *,
+    catalog: "LocalSkillCatalog | None" = None,
 ) -> str:
     """Build a focused system prompt for an in-process raven subagent.
 
@@ -156,7 +173,16 @@ def build_subagent_prompt(
     ``None`` keeps the current full-catalog behaviour, ``[]`` hides the menu
     entirely, and a list shows only the named skills. It stacks with the tool
     filter rather than replacing it, so a whitelisted skill whose required
-    tools this sub-agent lacks is still withheld.
+    tools this sub-agent lacks is still withheld. The run's ``read_skill``
+    takes the same list, so the tool and the menu name the same skills.
+
+    The menu names ``read_skill`` as the way in whenever the registry holds it:
+    a builtin skill's SKILL.md sits inside the installed package, which a run
+    confined to its directories cannot open with ``read_file``, while
+    ``read_skill`` reads the body out of the registry. ``catalog`` is the one
+    the run's ``read_skill`` reads, so the menu and the tool agree on what
+    exists, the operator blocklist included; without it the menu builds its
+    own.
     """
     from raven.agent.context import ContextBuilder
     from raven.memory_engine import LocalSkillCatalog
@@ -177,14 +203,19 @@ Stay focused on the assigned task. Your final response will be reported back to 
 - Agent home: {agent_home} — the agent's memory and skills."""
     ]
 
-    catalog = LocalSkillCatalog(agent_home, start_watcher=False)
+    if catalog is None:
+        catalog = LocalSkillCatalog(agent_home, start_watcher=False)
     visible = filter_by_required_tools(catalog.registry.list_all(), tool_names)
     if skills_allow is not None:
         allowed = set(skills_allow)
         visible = [s for s in visible if s.name in allowed]
     skills_summary = catalog.build_skills_summary(only=visible) if visible else ""
     if skills_summary:
-        parts.append(f"## Skills\n\nRead SKILL.md with read_file to use a skill.\n\n{skills_summary}")
+        if "read_skill" in tool_names:
+            route = 'Read a skill\'s instructions with read_skill("local/<name>"), using the name shown below.'
+        else:
+            route = "Read SKILL.md with read_file to use a skill."
+        parts.append(f"## Skills\n\n{route}\n\n{skills_summary}")
 
     return "\n\n".join(parts)
 
@@ -431,6 +462,26 @@ class RavenLoopBackend:
             tools.register(EditFileTool(workspace=workspace, allowed_dirs=allowed_dirs, follow_binding=False))
         if allowed("list_dir"):
             tools.register(ListDirTool(workspace=workspace, allowed_dirs=allowed_dirs, follow_binding=False))
+        # The skills agent home holds, read the way the main agent reads them:
+        # out of the registry, so a builtin skill's body reaches a run whose
+        # file tools are fenced to its own directories. The tool takes the
+        # same effective skill list the menu does, so it reads nothing the
+        # row or the node left out.
+        from raven.memory_engine import LocalSkillCatalog
+
+        skill_catalog = LocalSkillCatalog(
+            self.agent_home, start_watcher=False, blocklist_reader=lambda: skill_blocklist(_LIVE_CONFIG)
+        )
+        if allowed("read_skill"):
+            from raven.agent.tools.skill_hub import ReadSkillTool
+
+            tools.register(
+                ReadSkillTool(
+                    registry=skill_catalog.registry,
+                    blocklist_reader=lambda: skill_blocklist(_LIVE_CONFIG),
+                    allow=self.skills_allow,
+                )
+            )
         if allowed("exec"):
             tools.register(
                 ExecTool(
@@ -506,7 +557,9 @@ class RavenLoopBackend:
             else [
                 {
                     "role": "system",
-                    "content": build_subagent_prompt(self.agent_home, workspace, tools.tool_names, self.skills_allow),
+                    "content": build_subagent_prompt(
+                        self.agent_home, workspace, tools.tool_names, self.skills_allow, catalog=skill_catalog
+                    ),
                 }
             ]
         )

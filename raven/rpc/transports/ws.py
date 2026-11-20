@@ -878,6 +878,10 @@ def build_app(
             # to heuristic freshness, and a rebuilt page is served from cache
             # without revalidating -- which looks exactly like a server that did
             # not pick up the change, and is indistinguishable from one.
+            # A FileResponse also sends the `index.html.gz` ui-web/build.py
+            # leaves beside the page to a client that accepts gzip, with its own
+            # ETag and `Vary: Accept-Encoding`: the page is a few megabytes of
+            # inlined script, about a quarter of that packed.
             return web.FileResponse(static_dir / "index.html", headers={"Cache-Control": "no-cache"})
 
         app.router.add_get("/", index)

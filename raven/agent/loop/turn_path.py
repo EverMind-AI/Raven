@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from raven.agent.context.silence import is_silence, reads_loose_silence, teaches_silence
 from raven.agent.loop._shared import (
     _ABORTED_ACTION_REPLY,
+    _CONTEXT_PARTS_KEY,
     _CONTEXT_USED_KEY,
     _DELEGATED_KEY,
     _HOOK_INJECTED_KEY,
@@ -91,6 +92,8 @@ from raven.agent.loop.dead_end import NO_RESPONSE_FALLBACK, dead_reasons
 from raven.agent.loop.failure_text import attach_full_detail, full_failure_text, response_failure_text
 from raven.agent.loop.first_call import FirstCallGuard
 from raven.agent.loop.recovery import (
+    CONTEXT_WINDOW_CONTINUATION,
+    CONTEXT_WINDOW_FAILURE,
     EMPTY_REPLY_FAILURE,
     MAX_CONTINUATIONS,
     NETWORK_CUT_CONTINUATION,
@@ -125,7 +128,7 @@ from raven.agent.tools.removals import RemovalWatch
 from raven.agent.window import shrink
 from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, filed_image_note, image_sources
 from raven.agent.window.parts import ATTACHMENT_NOTES_KEY, measure_parts
-from raven.agent.window.turn_log import TURN_LOG_KEY, TurnLog
+from raven.agent.window.turn_log import OPENING_KEY, TURN_LOG_KEY, TurnLog
 from raven.contracts.harness import (
     ActionRequest,
     CapabilityRequest,
@@ -220,9 +223,14 @@ def _recovery_failure_text(kind: ReplyKind, response: LLMResponse, visible: str 
         # it the sentence would end on a colon that leads nowhere.
         text = f"{head}\n\n{excerpt}" if excerpt else head.partition(" Its last reasoning")[0]
     elif kind is ReplyKind.TRUNCATED:
-        text = (
-            TRUNCATED_FAILURE.format(n=asked, s="" if asked == 1 else "s") if asked else TRUNCATED_UNCONTINUED_FAILURE
-        )
+        if response.truncation_reason == "context_window":
+            text = CONTEXT_WINDOW_FAILURE
+        else:
+            text = (
+                TRUNCATED_FAILURE.format(n=asked, s="" if asked == 1 else "s")
+                if asked
+                else TRUNCATED_UNCONTINUED_FAILURE
+            )
     elif kind is ReplyKind.REFUSAL:
         explanation = visible or reasoning_excerpt(response)
         text = REFUSAL_FAILURE + (
@@ -305,12 +313,14 @@ def _turns_a_person_opened(messages: list[dict[str, Any]]) -> list[dict[str, Any
     So the turn decides. A ``role == "user"`` entry opens one and its mark
     rules until the next opens; anything before the first user entry is the
     tail of a turn this slice does not contain, and is kept, because the slice
-    starts where the last annotation stopped.
+    starts where the last annotation stopped. A row the harness put there is
+    not a person speaking -- a hook's note or re-prompt -- so it opens nothing
+    and leaves the turn in progress with whatever verdict it already had.
     """
     out: list[dict[str, Any]] = []
     keep = True
     for m in messages:
-        if m.get("role") == "user":
+        if m.get("role") == "user" and not m.get(_HOOK_INJECTED_KEY):
             keep = not m.get("origin")
         if keep:
             out.append(m)
@@ -363,7 +373,11 @@ _SAID_LOG_MAX_CHARS = 2000
 _TURN_TRANSIENT_KEYS = ("_recovery_synthetic", ATTACHED_IMAGE_KEY)
 
 
-def _stamp_context_used_on_kept(messages: list[dict[str, Any]], response: Any) -> None:
+def _stamp_context_used_on_kept(
+    messages: list[dict[str, Any]],
+    response: Any,
+    parts: dict[str, int] | None = None,
+) -> None:
     """Put the reading of a call whose reply is not filed on the newest row that is.
 
     An empty reply never becomes a row of its own in the session: recovery
@@ -374,7 +388,7 @@ def _stamp_context_used_on_kept(messages: list[dict[str, Any]], response: Any) -
     is the turn's question it is already on disk and the stamp never reaches
     it: the turn either files a row of its own later, which takes a newer
     reading, or ends on the marker ``_save_broken_turn`` files, which carries
-    it.
+    it. ``parts`` rides with the reading, for the reason ``_shared`` states.
     """
     used = _call_window(response)
     if used <= 0:
@@ -382,6 +396,8 @@ def _stamp_context_used_on_kept(messages: list[dict[str, Any]], response: Any) -
     for message in reversed(messages):
         if not any(message.get(key) for key in _TURN_TRANSIENT_KEYS):
             message[_CONTEXT_USED_KEY] = used
+            if parts:
+                message[_CONTEXT_PARTS_KEY] = dict(parts)
             return
 
 
@@ -997,7 +1013,7 @@ class TurnPathMixin:
         turn_log: TurnLog | None = None,
         rungs_used: set[str] | None = None,
         reply_awaited: bool = False,
-        window_reading: dict[str, int] | None = None,
+        window_reading: dict[str, Any] | None = None,
         silence_taught: bool = False,
         turn_start_idx: int = 0,
         session_effort: str | None = None,
@@ -1312,8 +1328,10 @@ class TurnPathMixin:
 
         def _land_hook_note(decision) -> None:
             """Honor a hook's ``append_note``: the note joins the last message
-            the model is about to read. A body shape the loop does not know
-            drops the note with a warning rather than guessing it into place."""
+            the model is about to read, except after a tool round, where the
+            last message is a fenced tool result and the note becomes a message
+            of its own. A body shape the loop does not know drops the note with
+            a warning rather than guessing it into place."""
             if decision.append_note and not append_hook_note(messages, decision.append_note):
                 logger.warning("Hook note dropped: no transcript message to land it on")
 
@@ -1349,6 +1367,7 @@ class TurnPathMixin:
                 # A hook may hand back a copy of a message this turn already
                 # wrote; it is a new message, not a rewrite of that one.
                 entry.pop(TURN_LOG_KEY, None)
+                entry.pop(OPENING_KEY, None)
                 entry.setdefault("timestamp", self._now_fn().isoformat())
                 entry[_HOOK_INJECTED_KEY] = True
                 messages.append(entry)
@@ -1406,9 +1425,14 @@ class TurnPathMixin:
             messages = self.context.add_assistant_message(messages, final)
             if silent:
                 messages[-1][_SILENT_KEY] = True
-            _stamp_context_used(messages, last)
+            _stamp_context_used(messages, last, measured_parts)
             return final
 
+        # The breakdown measured for the response in hand, carried to every
+        # stamp of it. Declared before the loop because the partial-reply path
+        # closes over it: a continuation that raises ends the turn on the cut
+        # answer from the iteration before, whose measurement this still holds.
+        measured_parts: dict[str, int] | None = None
         while iteration < iteration_cap:
             # Checked here and not mid-generation: cancelling a call in flight
             # discards a finished generation and leaves no answer, and a deadline
@@ -1592,7 +1616,7 @@ class TurnPathMixin:
             # Last, and on the payload only: the strategies above decide against
             # the shape the messages arrived in, and the prompt-cache prefix
             # stays stable because the same arrivals always fold the same way.
-            call_messages = merge_mid_turn(call_messages)
+            call_messages = merge_mid_turn(call_messages, replay=True)
             # Sized to the prompt it goes out beside, which is the room the
             # history strategy's trigger holds back: near that line the model's
             # whole ceiling no longer fits, and a provider that checks
@@ -1759,10 +1783,18 @@ class TurnPathMixin:
                 # the prompt was billed as (see ``_window_reading``), and a
                 # call can give none (see ``_call_window``).
                 context_used = _call_window(response)
+                # The window divided, measured on the request this reading came
+                # from: the stored reply carries it so a resume can draw the
+                # card's parts without a live report.
+                measured_parts = (
+                    measure_parts(call_messages, call_tools, self._last_window_parts) if context_used > 0 else None
+                )
                 if context_used > 0:
                     window.last_context_used = context_used
                     if window_reading is not None:
                         window_reading["context_used"] = context_used
+                        if measured_parts is not None:
+                            window_reading["context_parts"] = measured_parts
             if usage_sink is not None and response.usage and context_used <= 0 and usage_sink.get("context_used"):
                 # No reading -- a block of zeros, or an account ``_call_window``
                 # does not take as one -- so the gauge stays on the call before
@@ -1806,7 +1838,11 @@ class TurnPathMixin:
                 # The window divided, so a reader can be told what is filling it
                 # and not only how full it is. Measured on the request that was
                 # sent, which is the one the count above belongs to.
-                usage_sink["context_parts"] = measure_parts(call_messages, call_tools, self._last_window_parts)
+                usage_sink["context_parts"] = (
+                    measured_parts
+                    if measured_parts is not None
+                    else measure_parts(call_messages, call_tools, self._last_window_parts)
+                )
 
             # Recoveries that retry this iteration. The classifier on the response
             # says what kind of refusal this was; the Memory role says whether it
@@ -1867,7 +1903,7 @@ class TurnPathMixin:
                         # leaves dangling calls that strict providers reject.
                         final_content = str(decision.short_circuit_result)
                         messages = self.context.add_assistant_message(messages, final_content)
-                        _stamp_context_used(messages, response)
+                        _stamp_context_used(messages, response, measured_parts)
                         break
                 # Blocking a call is handled where the call is: the
                 # branch below refuses it and cancels the siblings the
@@ -1908,7 +1944,7 @@ class TurnPathMixin:
                     thinking_blocks=response.thinking_blocks,
                 )
                 _stamp_reasoning_ms(messages, response)
-                _stamp_context_used(messages, response)
+                _stamp_context_used(messages, response, measured_parts)
 
                 for tool_call_index, tool_call in enumerate(response.tool_calls):
                     tools_used.append(tool_call.name)
@@ -2108,20 +2144,13 @@ class TurnPathMixin:
                             },
                         )
                     # The result belongs to the tool that produced it: through
-                    # tool_call the model names a target, and both the window
-                    # and the skill panel read this name to tell a skill's bytes
-                    # from the talk that read them.
+                    # tool_call the model names a target, and the window reads
+                    # this name to tell a skill's bytes from the talk that read
+                    # them.
                     arguments = tool_call.arguments if isinstance(tool_call.arguments, dict) else {}
                     producing = self.tools.get(tool_call.name)
                     owner = producing.metadata_owner(arguments) if producing is not None else None
                     result_name = owner.name if owner is not None else tool_call.name
-                    forward = getattr(producing, "forwarded_params", None)
-                    forwarded_args = forward(arguments) if forward is not None else arguments
-                    # A skill the model loaded itself never passes through
-                    # SkillForge injection, so report it here or the skill panel
-                    # misses the whole class (builtin guides in particular).
-                    if result_name in ("read_skill", "use_skill") and not model_text.startswith("Error"):
-                        await self._report_skill_read(session_key or "", result_name, forwarded_args)
                     result_blocks = _scrubbed_blocks(
                         tool_call.arguments, getattr(result, "blocks", None), agent_output=agent_output
                     )
@@ -2398,7 +2427,7 @@ class TurnPathMixin:
                     status = "error"
                     error_detail = _llm_failure_detail(clean, verdict)
                     error_full = response_failure_text(clean, response.call_record)
-                    _stamp_context_used_on_kept(messages, response)
+                    _stamp_context_used_on_kept(messages, response, measured_parts)
                     break
 
                 if recovery.parts:
@@ -2415,7 +2444,7 @@ class TurnPathMixin:
                         carried_gate = None
 
                 if not (clean or "").strip():
-                    _stamp_context_used_on_kept(messages, response)
+                    _stamp_context_used_on_kept(messages, response, measured_parts)
 
                 # Empty-response recovery. A reply with no tool call is read for
                 # what it is (``reply_kind``) and ``decide`` names the move; an
@@ -2608,6 +2637,34 @@ class TurnPathMixin:
                     merge_episode = True
                     continue
                 if action is RecoveryAction.CONTINUE and kind is ReplyKind.TRUNCATED:
+                    if response.truncation_reason == "context_window":
+                        shrunk = await _shrink(WindowPressure.OVERFLOW, active_model)
+                        messages = shrunk.messages
+                        if shrunk.changed:
+                            recovery.continuations += 1
+                            logger.warning(
+                                "empty-recovery: reply cut at the context window with nothing in it; "
+                                "shrank context and continuing ({}/{})",
+                                recovery.continuations,
+                                MAX_CONTINUATIONS,
+                            )
+                            messages = self.context.add_assistant_message(messages, "(empty)")
+                            messages[-1]["_recovery_synthetic"] = True
+                            messages.append(
+                                {"role": "user", "content": CONTEXT_WINDOW_CONTINUATION, "_recovery_synthetic": True}
+                            )
+                            prev_had_tool_calls = False
+                            continue
+                        logger.error(
+                            "empty-recovery: reply cut at the context window and context could not be shrunk; "
+                            "ending the turn as an error"
+                        )
+                        error_full = _recovery_failure_text(kind, response, clean, recovery)
+                        error_detail = bound_failure_text(error_full)
+                        no_output = False
+                        final_content = error_detail
+                        status = "error"
+                        break
                     # Cut at the ceiling with nothing in it: the model is told so
                     # and given more room. Effort is left alone -- there was no
                     # reasoning to blame. The ceiling doubles per continuation from
@@ -2717,7 +2774,7 @@ class TurnPathMixin:
                     if decision.short_circuit_result is not None:
                         final_content = str(decision.short_circuit_result)
                         messages = self.context.add_assistant_message(messages, final_content)
-                        _stamp_context_used(messages, response)
+                        _stamp_context_used(messages, response, measured_parts)
                         break
                 else:
                     await _settle_silence(silence_gate, silent=ends_silent, dropped_marker=dropped_marker)
@@ -2741,7 +2798,7 @@ class TurnPathMixin:
                     thinking_blocks=response.thinking_blocks,
                 )
                 _stamp_reasoning_ms(messages, response)
-                _stamp_context_used(messages, response)
+                _stamp_context_used(messages, response, measured_parts)
                 # Kept in the history, as the row it is, and filed as a marker so a
                 # reload does not read it as an answer.
                 silent = ends_silent
@@ -3235,10 +3292,8 @@ class TurnPathMixin:
                 pb_tool.set_turn_message(content)
 
         context_messages = self._context_messages_for_session(session)
-        # SkillForge: Selector picks top-K. See note in the system-message
-        # branch above — empty return falls back to the full directory.
-        # Routed via ``_select_skills_for_turn`` so the engine can
-        # short-circuit selection here.
+        # No host-side selection: the engine's scent menu offers skills, so
+        # ``_select_skills_for_turn`` answers None (see its docstring).
         selected_skills = await self._select_skills_for_turn(
             content,
             context_messages,
@@ -3292,9 +3347,6 @@ class TurnPathMixin:
             PlanningRequest(task=content, session_key=key, messages=initial_messages)
         )
         initial_messages = planning.messages
-        # Surface the skills SkillForge injected this turn to the web UI's skill
-        # panel (populated into _last_injected_skill_ids by the assemble above).
-        await self._emit_injected_skills(key)
         degraded = getattr(self, "_last_degraded_segments", [])
         if degraded and on_notice is not None:
             # The answer was produced without an optional organ; saying so is
@@ -3393,7 +3445,7 @@ class TurnPathMixin:
         # A turn that fails or is stopped after calls that each came back empty
         # or as an error has filed no row of its own, and the question it would
         # otherwise end on is already on disk, so its marker carries the reading.
-        reading: dict[str, int] = {}
+        reading: dict[str, Any] = {}
 
         async def _attempt(seed: list[dict], attempt: int):
             pending.update(rerun=False, reasons=[])
@@ -3597,6 +3649,7 @@ class TurnPathMixin:
                 streamed,
                 status="cancelled",
                 context_used=reading.get("context_used"),
+                context_parts=reading.get("context_parts"),
             )
             self._park_task_board(key, live["log"].added(), turn_received_at, req.turn_id)
             raise
@@ -3614,6 +3667,7 @@ class TurnPathMixin:
                 reason=str(exc),
                 full_detail=attach_full_detail(exc),
                 context_used=reading.get("context_used"),
+                context_parts=reading.get("context_parts"),
             )
             self._park_task_board(key, live["log"].added(), turn_received_at, req.turn_id)
             raise
@@ -3631,6 +3685,7 @@ class TurnPathMixin:
                 reason=describe_failure(exc),
                 full_detail=attach_full_detail(exc),
                 context_used=reading.get("context_used"),
+                context_parts=reading.get("context_parts"),
             )
             self._park_task_board(key, live["log"].added(), turn_received_at, req.turn_id)
             raise
@@ -3745,7 +3800,7 @@ class TurnPathMixin:
             shown = await self.task_board.ack_turn_notes(key)
             self._schedule_task_board(
                 key,
-                turn_window,
+                live["log"].cut_to_turn(turn_window),
                 outcome,
                 live["log"].added(),
                 turn_received_at,
@@ -3756,6 +3811,7 @@ class TurnPathMixin:
                 # The turn's own verdict rather than the marker: a turn a tool answered is not a
                 # Silent Turn whatever it ended on, and a hook's reply has cleared ``silent``.
                 silent=silent and not answered_by_tool,
+                opening=req.text,
             )
 
         if origin is Origin.USER:
@@ -3838,19 +3894,23 @@ class TurnPathMixin:
         delegated: dict[str, Any] | None,
         moved_on: list[str],
         silent: bool,
+        opening: str,
     ) -> None:
         """Start the host's post-turn task board call for the turn that just ended.
 
         It sends the tools array, model, effort and tool choice the turn's last call
         carried, through the same strategies, so it runs at the main model's settings
-        and shares that call's cached prefix up to the reply; only the instruction
-        after it is new. Nothing forces the tool: a forced choice voids Anthropic's
-        cached messages and several providers refuse one outright. The dispatches
-        come from what the turn added -- a spawn still in the history belongs to the
-        turn that made it. ``delegated`` (the request's mark of the result that
-        opened the turn) and ``moved_on`` (the groups the notes it was shown named)
-        say what the turn is about, when anything does; a message the user sent while
-        it ran, among what it added, says it is about more than they name.
+        and reads the tools and the system message from that call's cached prefix.
+        ``window`` is the turn's own (``TurnLog.cut_to_turn``): with the whole
+        conversation in it, the model took earlier turns' events for this one's.
+        Nothing forces the tool: a forced choice voids Anthropic's cached messages
+        and several providers refuse one outright. The dispatches come from what the
+        turn added -- a spawn still in the history belongs to the turn that made it.
+        ``delegated`` (the request's mark of the result that opened the turn) and
+        ``moved_on`` (the groups the notes it was shown named) say what the turn is
+        about, when anything does; ``opening`` (the user's words, or the result's) and
+        the messages the user sent while it ran are searched, with its reply, for
+        the other groups it may have moved.
         """
         from raven.agent.task_board.dispatches import delegated_handle, turn_dispatches
         from raven.agent.task_board.runner import run_post_turn, should_run
@@ -3882,7 +3942,7 @@ class TurnPathMixin:
             with _llm_purpose("task_board"), usage_context.bind(key):
                 call_messages, call_tools, call_model = await self.strategies.before_llm_call(rows, tools, model)
                 return await self.provider.chat_with_retry(
-                    messages=merge_mid_turn(call_messages),
+                    messages=merge_mid_turn(call_messages, replay=True),
                     tools=call_tools,
                     model=call_model,
                     fallback_models=fallback_models,
@@ -3906,7 +3966,8 @@ class TurnPathMixin:
                 reply_rows=turn_added,
                 delegated=[handle] if (handle := delegated_handle(delegated)) else [],
                 moved_on=moved_on,
-                mid_turn=any(m.get(_MID_TURN_USER_KEY) for m in turn_added),
+                opening=opening,
+                mid_turn_messages=[m for m in turn_added if m.get(_MID_TURN_USER_KEY)],
                 answered_message_calls=answered,
             )
         )
@@ -3926,6 +3987,7 @@ class TurnPathMixin:
         full_detail: str | None = None,
         inbound_original: str | None = None,
         context_used: int | None = None,
+        context_parts: dict[str, int] | None = None,
     ) -> None:
         """Persist what a cancelled or failed turn got as far as producing.
 
@@ -3949,6 +4011,8 @@ class TurnPathMixin:
           ``context_used`` is the newest window the turn measured, filed on the
           marker because it is the newest row: a resume reads the window from
           there, and a turn whose calls left no row of their own has no other.
+          ``context_parts`` rides beside it, measured on the same request, so
+          the card's breakdown survives the same resume.
 
         ``received_at`` and ``inbound_original`` describe the turn's question,
         which ``_process_message`` files before the attempt starts and hands
@@ -4015,6 +4079,8 @@ class TurnPathMixin:
             }
             if context_used:
                 marker[_CONTEXT_USED_KEY] = context_used
+                if context_parts:
+                    marker[_CONTEXT_PARTS_KEY] = dict(context_parts)
             tail.append(marker)
             self._save_turn(session, tail, 0, received_at=received_at, inbound_original=inbound_original)
             self.sessions.save(session)
@@ -4208,6 +4274,7 @@ class TurnPathMixin:
                     entry["trace_id"] = trace_id
                 first_user_pending = False
             entry.pop(TURN_LOG_KEY, None)
+            entry.pop(OPENING_KEY, None)
             runtime_lines = entry.pop(RUNTIME_CONTEXT_KEY, None)
             if (scratch := entry.pop(TURN_SCRATCH_KEY, None)) and role == "user":
                 # The turn scratch (recalled memory, routed skills) is rebuilt
@@ -4291,6 +4358,7 @@ class TurnPathMixin:
                 (_REASONING_MS_KEY, "reasoning_ms"),
                 (_TOOL_DURATION_MS_KEY, "duration_ms"),
                 (_CONTEXT_USED_KEY, "context_used"),
+                (_CONTEXT_PARTS_KEY, "context_parts"),
             ):
                 # Renamed for the same reason as the diff above. A duration or a
                 # window reading is a property of the part it measures, so it is

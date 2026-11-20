@@ -2095,6 +2095,128 @@ async def test_session_resume_reports_the_window_the_last_call_measured(
     assert usage["context_estimated"] is False
 
 
+async def test_session_resume_carries_the_breakdown_stored_with_the_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The divided window survives with the reading it belongs to.
+
+    A page that resumes a conversation has no live report to draw the card's
+    parts from. The reply that carries the reading carries the breakdown too,
+    so the pair the live card showed is the pair the reload draws -- and it is
+    read off the same row: an older breakdown describes a prompt the newer
+    reading did not measure.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    cfg.agents.defaults.context_window_tokens = 200_000
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_parts01"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "first")
+    session.add_message(
+        "assistant",
+        "first answer",
+        context_used=1_234,
+        context_parts={"system": 1, "tools": 2, "conversation": 3, "files": 4, "memory": 5, "skills": 6},
+    )
+    session.add_message("user", "and then?")
+    session.add_message(
+        "assistant",
+        "second answer",
+        context_used=50_000,
+        context_parts={"system": 10, "tools": 20, "conversation": 30, "files": 40, "memory": 50, "skills": 60},
+    )
+    mgr.save(session)
+
+    result = await session_resume({"session_id": session_key})
+    usage = result["info"]["usage"]
+
+    assert usage["context_used"] == 50_000
+    assert usage["context_parts"] == {
+        "system": 10,
+        "tools": 20,
+        "conversation": 30,
+        "files": 40,
+        "memory": 50,
+        "skills": 60,
+    }
+
+
+async def test_session_resume_does_not_pair_a_reading_with_an_older_breakdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The breakdown describes the call the reading belongs to.
+
+    A newer reading without one leaves the card's parts absent rather than
+    drawing an older prompt's composition under the newer fill.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    cfg.agents.defaults.context_window_tokens = 200_000
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_parts02"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "first")
+    session.add_message(
+        "assistant",
+        "first answer",
+        context_used=1_234,
+        context_parts={"system": 1, "tools": 2, "conversation": 3, "files": 4, "memory": 5, "skills": 6},
+    )
+    session.add_message("user", "and then?")
+    session.add_message("assistant", "second answer", context_used=50_000)
+    mgr.save(session)
+
+    result = await session_resume({"session_id": session_key})
+    usage = result["info"]["usage"]
+
+    assert usage["context_used"] == 50_000
+    assert "context_parts" not in usage
+
+
+@pytest.mark.parametrize(
+    ("stored", "kept"),
+    [
+        (
+            {"system": -1, "tools": True, "conversation": "10", "files": 1.5, "memory": 3, "skills": 10**12},
+            {"memory": 3},
+        ),
+        ({"system": -1, "tools": True}, None),
+        ("not a mapping", None),
+    ],
+    ids=["only_the_counts_survive", "nothing_valid_left", "not_a_mapping"],
+)
+async def test_session_resume_reads_only_token_counts_from_a_stored_breakdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stored: object, kept: dict[str, int] | None
+) -> None:
+    """A stored breakdown is data a reader draws, so only counts a window can
+    hold are taken -- the same rule the stored reading follows."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    cfg.agents.defaults.context_window_tokens = 200_000
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_parts03"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "hello")
+    session.add_message("assistant", "answer", context_used=50_000, context_parts=stored)
+    mgr.save(session)
+
+    result = await session_resume({"session_id": session_key})
+    usage = result["info"]["usage"]
+
+    assert usage["context_used"] == 50_000
+    if kept is None:
+        assert "context_parts" not in usage
+    else:
+        assert usage["context_parts"] == kept
+
+
 @pytest.mark.parametrize(
     "junk",
     [0, -5, True, "50000", 1.5, 10**12, 10**400],

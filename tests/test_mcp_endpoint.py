@@ -363,7 +363,7 @@ async def test_close_leaves_no_relay_task_behind():
 class _FakeBox:
     """An executor that runs the server elsewhere and hands back its streams.
 
-    The shape ``BoxliteExecutor.start_process`` has: the process lives in the
+    The shape ``OpenShellExecutor.start_process`` has: the process lives in the
     microVM and the host talks to it over anyio memory streams, which is why the
     sub-agent's socket -- touched only by this process -- is unaffected by where
     the server ends up.

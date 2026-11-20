@@ -192,6 +192,119 @@ def _preflight(**over: Any):
 
 
 @pytest.mark.asyncio
+async def test_the_playbooks_sandbox_runs_under_the_permission_set_and_the_conversations_grants(monkeypatch):
+    import json
+
+    import raven.sandbox
+    from raven.config.loader import get_config_path
+    from raven.permissions import network_grants
+    from raven.permissions.turn import start_permission_turn
+    from raven.sandbox.network_policy import NetworkGrant, grant_rules
+
+    get_config_path().write_text(
+        json.dumps({"permissions": {"network": {"default": "closed", "rules": [{"host": "pypi.org"}]}}})
+    )
+    registry = network_grants.GrantRegistry()
+    monkeypatch.setattr(network_grants, "GRANTS", registry)
+    sources: list = []
+
+    def fake_build(cfg, workspace, extra_volumes=(), *, network_source=None):
+        sources.append(network_source)
+        return raven.sandbox.DirectExecutor()
+
+    monkeypatch.setattr(raven.sandbox, "build_executor", fake_build)
+    start_permission_turn(None, conversation_id="conv-playbook", turn_id="t")
+    grant = NetworkGrant("/usr/bin/curl", "example.com", 443)
+    registry.grant("conv-playbook", grant)
+    registry.grant("conv-other", NetworkGrant("/usr/bin/git", "github.com", 22))
+    with patch(_CONNECT, new=_noop_connect):
+        async with _preflight():
+            pass
+    (source,) = sources
+    names = sorted(source())
+    assert [name for name in names if name.startswith("raven_grant_")] == list(grant_rules([grant]))
+    assert any(name.startswith("raven_rule_") for name in names) and "allow_open" not in names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("initial", "changed"),
+    [
+        ({"default": "open"}, {"default": "closed"}),
+        (
+            {"default": "closed", "rules": [{"host": "pypi.org"}]},
+            {"default": "closed", "rules": [{"host": "pypi.org", "tier": "deny"}]},
+        ),
+    ],
+    ids=["close-default", "revoke-host"],
+)
+async def test_a_running_playbooks_sandbox_reads_narrowed_network_permissions(monkeypatch, initial, changed):
+    import json
+
+    import raven.sandbox
+    from raven.config.loader import get_config_path
+    from raven.permissions import network_grants
+
+    path = get_config_path()
+    path.write_text(json.dumps({"permissions": {"network": initial}}))
+    monkeypatch.setattr(network_grants, "GRANTS", network_grants.GrantRegistry())
+    sources: list = []
+
+    def fake_build(cfg, workspace, extra_volumes=(), *, network_source=None):
+        sources.append(network_source)
+        return raven.sandbox.DirectExecutor()
+
+    monkeypatch.setattr(raven.sandbox, "build_executor", fake_build)
+    async with _preflight():
+        (source,) = sources
+        assert source()
+        path.write_text(json.dumps({"permissions": {"network": changed}}))
+        still_open = bool(source())
+        assert still_open is False
+        path.write_text(json.dumps({"permissions": {"network": initial}}))
+        assert source()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unreadable",
+    ['{"permissions": {"netw', '{"permissions": {"network": {"default": "ajar"}}}'],
+    ids=["torn", "invalid"],
+)
+@pytest.mark.parametrize("read_valid_first", [False, True], ids=["first-read", "last-valid"])
+async def test_a_playbooks_sandbox_keeps_the_last_valid_network_permissions(monkeypatch, unreadable, read_valid_first):
+    """The other sandboxes' rule: a read that fails keeps the last valid set, and closes the
+    network only when no set has validated yet, so one bad read costs no policy change."""
+    import json
+
+    import raven.sandbox
+    from raven.config.loader import get_config_path
+    from raven.permissions import network_grants
+
+    valid = json.dumps({"permissions": {"network": {"default": "closed", "rules": [{"host": "pypi.org"}]}}})
+    path = get_config_path()
+    path.write_text(valid if read_valid_first else unreadable)
+    monkeypatch.setattr(network_grants, "GRANTS", network_grants.GrantRegistry())
+    sources: list = []
+
+    def fake_build(cfg, workspace, extra_volumes=(), *, network_source=None):
+        sources.append(network_source)
+        return raven.sandbox.DirectExecutor()
+
+    monkeypatch.setattr(raven.sandbox, "build_executor", fake_build)
+    async with _preflight():
+        (source,) = sources
+        if read_valid_first:
+            kept = source()
+            path.write_text(unreadable)
+            assert kept and source() == kept
+        else:
+            assert source() == {}
+        path.write_text(valid)
+        assert [name for name in source() if name.startswith("raven_rule_")]
+
+
+@pytest.mark.asyncio
 async def test_the_playbook_definition_wins_over_a_host_server_of_the_same_name():
     """Precedence lives at the config seam: one merged mapping is what the
     manager dials and what the grant resolver reads, so the two cannot drift."""

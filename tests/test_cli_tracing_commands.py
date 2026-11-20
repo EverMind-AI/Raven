@@ -20,9 +20,12 @@ import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from io import StringIO
 from pathlib import Path
 
 import pytest
+import typer
+from rich.console import Console
 from typer.testing import CliRunner
 
 from raven.cli import tracing_commands as tc
@@ -185,6 +188,117 @@ def test_tracing_stop_never_kills_unverified_pid(tmp_path, monkeypatch):
     assert not pidfile.exists()
 
 
+def test_tracing_stop_drops_an_unreadable_pidfile(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text("{not json", encoding="utf-8")
+
+    r = runner.invoke(app, ["tracing", "stop"])
+
+    assert r.exit_code == 0
+    # The record was unreadable, so the viewer may still be running: the
+    # message must not claim there is none.
+    assert "may still be running" in r.output.lower()
+    assert not pidfile.exists()
+
+
+def test_tracing_stop_says_when_the_record_could_not_be_read(tmp_path, monkeypatch):
+    """A record that survives the read is not called unusable.
+
+    A Windows sharing violation leaves the file on disk, so telling the user
+    to stop the viewer by hand skips the retry that would have worked.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 4242, "port": 4318}), encoding="utf-8")
+    real_read_text = Path.read_text
+
+    def read_fails(self, *args, **kwargs):
+        if self.name == "viewer.pid":
+            raise PermissionError(13, "sharing violation", str(self))
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_fails)
+
+    r = runner.invoke(app, ["tracing", "stop"])
+
+    assert r.exit_code == 0, r.output
+    out = r.output.lower()
+    assert "could not be read" in out, out
+    assert "stop it by hand" not in out, out
+    assert pidfile.exists()
+
+
+def test_tracing_stop_reports_a_lock_it_cannot_take(tmp_path, monkeypatch):
+    """The recovery command still answers when the state dir cannot hold a lock."""
+    from raven.utils import atomic_io
+
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text("{not json", encoding="utf-8")
+
+    def no_lock(*args, **kwargs):
+        raise PermissionError(13, "cannot create the lock", str(tmp_path / ".lock"))
+
+    monkeypatch.setattr(atomic_io, "file_lock", no_lock)
+
+    r = runner.invoke(app, ["tracing", "stop"])
+
+    assert r.exit_code == 0, r.output
+    assert "could not be read" in r.output.lower(), r.output
+    assert pidfile.exists()
+
+
+def test_tracing_stop_reports_an_out_of_range_pid_as_unusable(tmp_path, monkeypatch):
+    """The command a user runs to recover from a bad record must not crash on it."""
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 10**100, "port": 4318}), encoding="utf-8")
+
+    r = runner.invoke(app, ["tracing", "stop"])
+
+    assert r.exit_code == 0, r.output
+    assert "may still be running" in r.output.lower()
+    assert not pidfile.exists()
+
+
+def test_tracing_stop_keeps_a_record_another_launcher_rewrote(tmp_path, monkeypatch):
+    """Clearing the record the stop handled must not delete a newer one.
+
+    `_stop_viewer` reads pid A, decides it is stale, and clears; a launcher can
+    replace the record with pid B in between, and that record is not the
+    stop's to remove.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 31337, "port": 4318}), encoding="utf-8")
+
+    tc._clear_pid_file(4242)
+
+    assert pidfile.exists()
+    assert json.loads(pidfile.read_text(encoding="utf-8")) == {"pid": 31337, "port": 4318}
+
+
+def test_tracing_clears_a_record_for_a_pid_that_is_not_the_viewer(tmp_path, monkeypatch):
+    """A record whose pid is dead or recycled is cleared before the launcher goes on."""
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 4242, "port": 5555}), encoding="utf-8")
+    monkeypatch.setattr(tc, "_pid_is_viewer", lambda pid: False)
+    monkeypatch.setattr(tc, "_port_live", lambda port: True)
+    monkeypatch.setattr(tc, "_viewer_health", lambda port: True)
+    opened = []
+    monkeypatch.setattr(tc.webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setattr(tc.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("must adopt the live viewer"))
+    buf = StringIO()
+    monkeypatch.setattr(tc, "console", Console(file=buf, width=200))
+
+    tc._open_dashboard(4318)
+
+    assert not pidfile.exists()
+    assert opened == ["http://127.0.0.1:4318/"]
+
+
 def test_tracing_reuses_live_instance_from_pidfile(tmp_path, monkeypatch):
     monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
     (tmp_path / "viewer.pid").write_text(json.dumps({"pid": 4242, "port": 5555}), encoding="utf-8")
@@ -197,10 +311,368 @@ def test_tracing_reuses_live_instance_from_pidfile(tmp_path, monkeypatch):
         raise AssertionError("must reuse the live viewer, not spawn a new one")
 
     monkeypatch.setattr(tc.subprocess, "Popen", no_spawn)
+    buf = StringIO()
+    monkeypatch.setattr(tc, "console", Console(file=buf, width=200))
 
     tc._open_dashboard(4318)
 
     assert opened == ["http://127.0.0.1:5555/"]
+    assert "already running" in buf.getvalue()
+    assert "no usable pid record" not in buf.getvalue()
+
+
+def test_tracing_keeps_a_live_viewer_record_when_its_health_probe_fails(tmp_path, monkeypatch):
+    """A viewer this CLI started but that stopped answering is not replaced.
+
+    `raven tracing stop` only signals pids named in viewer.pid, so dropping the
+    record to start a second viewer would orphan the first one.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    entry = {"pid": 4242, "port": 4318}
+    pidfile.write_text(json.dumps(entry), encoding="utf-8")
+    monkeypatch.setattr(tc, "_pid_is_viewer", lambda pid: pid == 4242)
+    monkeypatch.setattr(tc, "_viewer_health", lambda port: False)
+    monkeypatch.setattr(tc.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("started a second viewer"))
+    buf = StringIO()
+    monkeypatch.setattr(tc, "console", Console(file=buf, width=200))
+
+    with pytest.raises(typer.Exit) as exc:
+        tc._open_dashboard(4318)
+
+    assert exc.value.exit_code == 1
+    assert json.loads(pidfile.read_text(encoding="utf-8")) == entry
+    out = buf.getvalue()
+    assert "not answering" in out
+    assert "raven tracing stop" in out
+
+
+def test_tracing_starts_a_viewer_on_another_port_when_the_recorded_one_is_stuck(tmp_path, monkeypatch):
+    """A stuck viewer on another port does not block the port the user asked for.
+
+    The record names a viewer on 5555 that stopped answering; the user asked
+    for 4318, which that viewer never held. The launcher goes on to 4318 and
+    says the old one is out of reach now, instead of refusing a port the
+    stuck viewer was not on.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 4242, "port": 5555}), encoding="utf-8")
+    monkeypatch.setattr(tc, "_pid_is_viewer", lambda pid: pid == 4242)
+    # The recorded viewer does not answer; the port the user asked for does,
+    # once a viewer is started there.
+    monkeypatch.setattr(tc, "_viewer_health", lambda port: port != 5555)
+    monkeypatch.setattr(tc, "_port_live", lambda port: False)
+    monkeypatch.setattr(tc, "_resolve_node", lambda: "/usr/bin/node")
+    spawned = {}
+
+    class _Proc:
+        pid = 31337
+
+    def fake_popen(*args, **kwargs):
+        spawned["cmd"] = args[0]
+        return _Proc()
+
+    monkeypatch.setattr(tc.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(tc.webbrowser, "open", lambda url: None)
+    buf = StringIO()
+    monkeypatch.setattr(tc, "console", Console(file=buf, width=200))
+
+    tc._open_dashboard(4318)
+
+    assert spawned, "expected a viewer to be started on the port the user asked for"
+    out = buf.getvalue()
+    # The old viewer is named, so the user can stop it by hand.
+    assert "4242" in out, out
+    assert "5555" in out, out
+    assert json.loads(pidfile.read_text(encoding="utf-8")) == {"pid": 31337, "port": 4318}
+
+
+def test_tracing_records_the_viewer_in_a_state_dir_it_creates(tmp_path, monkeypatch):
+    """The record lands even when the state directory does not exist yet."""
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path / "traces"))
+
+    tc._write_pid_file(31337, 4318)
+
+    record = tmp_path / "traces" / "viewer.pid"
+    assert json.loads(record.read_text(encoding="utf-8")) == {"pid": 31337, "port": 4318}
+
+
+def test_tracing_drops_a_record_whose_pid_is_not_a_number(tmp_path, monkeypatch):
+    """A bool is not a pid: `isinstance(True, int)` would let one through."""
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": True, "port": 4318}), encoding="utf-8")
+
+    assert tc._read_pid_file() is None
+    assert not pidfile.exists()
+
+
+@pytest.mark.parametrize("pid", [0, -5, 2**31, 10**100])
+def test_tracing_drops_a_record_whose_pid_is_out_of_range(tmp_path, monkeypatch, pid):
+    """An int the OS cannot hold as a pid is not a pid.
+
+    `pid_alive` asks with `os.kill(pid, 0)`, which raises OverflowError for a
+    value no C long can carry, so the record would crash `stop` and the
+    launcher instead of being read as the unusable record it is.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": pid, "port": 4318}), encoding="utf-8")
+
+    assert tc._read_pid_file() is None
+    assert not pidfile.exists()
+
+
+@pytest.mark.parametrize("port", [True, 0, -1, 65536])
+def test_tracing_drops_a_record_whose_port_is_out_of_range(tmp_path, monkeypatch, port):
+    """A port nothing can listen on is not one a record can name.
+
+    The pid was bounded but the port was only checked to be a JSON int, so a
+    corrupt record stayed "usable" while no adoption could ever reach it. A
+    bool is not a port either: ``isinstance(True, int)`` would make it 1.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 4242, "port": port}), encoding="utf-8")
+
+    assert tc._read_pid_file() is None
+    assert not pidfile.exists()
+
+
+def test_tracing_keeps_the_record_when_the_lock_cannot_be_taken(tmp_path, monkeypatch):
+    """A state directory that cannot hold the lock leaves the record for the next run.
+
+    The re-read that makes the delete safe runs under the writer's lock. A
+    read-only mount or an ACL that denies the lock file must not turn
+    `raven tracing stop` into a traceback.
+    """
+    from raven.utils import atomic_io
+
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text("{not json", encoding="utf-8")
+
+    def no_lock(*args, **kwargs):
+        raise PermissionError(13, "cannot create the lock", str(tmp_path / ".lock"))
+
+    monkeypatch.setattr(atomic_io, "file_lock", no_lock)
+
+    assert tc._read_pid_file() is None
+    assert pidfile.exists()
+    tc._clear_pid_file(4242)
+    assert pidfile.exists()
+
+
+def test_tracing_clear_keeps_the_record_when_it_cannot_be_read(tmp_path, monkeypatch):
+    """A clear that cannot read the record does not delete it blind."""
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 4242, "port": 4318}), encoding="utf-8")
+
+    def read_fails(self, *args, **kwargs):
+        raise PermissionError(13, "sharing violation", str(self))
+
+    monkeypatch.setattr(Path, "read_text", read_fails)
+
+    tc._clear_pid_file(4242)
+
+    assert pidfile.exists()
+
+
+def test_tracing_keeps_a_record_written_while_it_was_reading(tmp_path, monkeypatch):
+    """A launcher that records its viewer mid-read must not lose that record.
+
+    `_read_pid_file` drops a malformed record, and that delete is a
+    read-modify-write of the same file `_write_pid_file` replaces atomically:
+    a record written between the read and the unlink must not be the one
+    deleted.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text("{not json", encoding="utf-8")
+    fresh = {"pid": 31337, "port": 4318}
+    real_read_text = Path.read_text
+    wrote = []
+
+    def read_then_record_a_viewer(self, *args, **kwargs):
+        text = real_read_text(self, *args, **kwargs)
+        if not wrote:
+            wrote.append(True)
+            # Another `raven tracing` finishes its spawn at this instant.
+            tc._write_pid_file(**fresh)
+        return text
+
+    monkeypatch.setattr(Path, "read_text", read_then_record_a_viewer)
+
+    assert tc._read_pid_file() == fresh
+    assert json.loads(pidfile.read_text(encoding="utf-8")) == fresh
+
+
+def test_tracing_keeps_the_record_when_a_read_fails_transiently(tmp_path, monkeypatch):
+    """A transient read failure is not proof of a bad record, so the file stays.
+
+    A Windows sharing violation or a permission blip must not delete the
+    record: the next launch can read it again.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    entry = {"pid": 4242, "port": 4318}
+    pidfile.write_text(json.dumps(entry), encoding="utf-8")
+    real_read_text = Path.read_text
+    failed = []
+
+    def fail_the_first_read(self, *args, **kwargs):
+        if not failed:
+            failed.append(True)
+            raise PermissionError(13, "sharing violation", str(self))
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_the_first_read)
+
+    assert tc._read_pid_file() is None
+    assert pidfile.exists()
+    assert json.loads(pidfile.read_text(encoding="utf-8")) == entry
+
+
+def test_tracing_drops_a_record_that_is_not_valid_utf8(tmp_path, monkeypatch):
+    """A record that cannot even be decoded is corrupt, so it is dropped."""
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_bytes(b"\xff\xfe\x00not a record")
+
+    assert tc._read_pid_file() is None
+    assert not pidfile.exists()
+
+
+def test_tracing_keeps_the_record_when_the_reread_fails(tmp_path, monkeypatch):
+    """If the locked re-read fails, the bad record is left for the next run."""
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text("{not json", encoding="utf-8")
+    real_read_text = Path.read_text
+    reads = []
+
+    def second_read_fails(self, *args, **kwargs):
+        reads.append(1)
+        if len(reads) == 2:
+            raise PermissionError(13, "sharing violation", str(self))
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", second_read_fails)
+
+    assert tc._read_pid_file() is None
+    assert pidfile.exists()
+
+
+def test_tracing_adopts_unrecorded_viewer_and_says_stop_will_not_manage_it(tmp_path, monkeypatch):
+    """A viewer this CLI did not start has no pid record, so stop cannot reach it.
+
+    The launcher adopts it (healthy viewer on the requested port) and has to
+    say so: the alternative is handing out a dashboard that no command in the
+    CLI can shut down.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    monkeypatch.setattr(tc, "_port_live", lambda port: True)
+    monkeypatch.setattr(tc, "_viewer_health", lambda port: True)
+    opened = []
+    monkeypatch.setattr(tc.webbrowser, "open", lambda url: opened.append(url))
+
+    def no_spawn(*args, **kwargs):
+        raise AssertionError("must adopt the live viewer, not spawn a new one")
+
+    monkeypatch.setattr(tc.subprocess, "Popen", no_spawn)
+    buf = StringIO()
+    monkeypatch.setattr(tc, "console", Console(file=buf, width=200))
+
+    tc._open_dashboard(4318)
+
+    out = buf.getvalue()
+    assert opened == ["http://127.0.0.1:4318/"]
+    assert "no usable pid record" in out
+    assert "will not manage" in out
+
+
+def test_tracing_adopting_a_viewer_whose_record_could_not_be_read(tmp_path, monkeypatch):
+    """An unreadable record is not proof the viewer has no record.
+
+    The file is still on disk, so a later `raven tracing stop` may manage this
+    viewer; the adoption message must not promise the opposite.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 4242, "port": 4318}), encoding="utf-8")
+    real_read_text = Path.read_text
+
+    def read_fails(self, *args, **kwargs):
+        if self.name == "viewer.pid":
+            raise PermissionError(13, "sharing violation", str(self))
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_fails)
+    monkeypatch.setattr(tc, "_port_live", lambda port: True)
+    monkeypatch.setattr(tc, "_viewer_health", lambda port: True)
+    opened = []
+    monkeypatch.setattr(tc.webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setattr(tc.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("must adopt the live viewer"))
+    buf = StringIO()
+    monkeypatch.setattr(tc, "console", Console(file=buf, width=200))
+
+    tc._open_dashboard(4318)
+
+    out = buf.getvalue()
+    assert opened == ["http://127.0.0.1:4318/"]
+    assert "could not be read" in out, out
+    assert "no usable pid record" not in out, out
+    assert pidfile.exists()
+
+
+def test_tracing_adopting_an_unrecorded_viewer_still_names_the_stuck_one(tmp_path, monkeypatch):
+    """The stuck viewer the record names is named on the adopt path too.
+
+    The record says 4242/5555 stopped answering, and the requested 4318 holds
+    a healthy viewer with no record. The launcher adopts 4318; it still has to
+    say that 4242 keeps running and is what `raven tracing stop` manages.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 4242, "port": 5555}), encoding="utf-8")
+    monkeypatch.setattr(tc, "_pid_is_viewer", lambda pid: pid == 4242)
+    monkeypatch.setattr(tc, "_viewer_health", lambda port: port != 5555)
+    monkeypatch.setattr(tc, "_port_live", lambda port: True)
+    opened = []
+    monkeypatch.setattr(tc.webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setattr(tc.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("must adopt the live viewer"))
+    buf = StringIO()
+    monkeypatch.setattr(tc, "console", Console(file=buf, width=200))
+
+    tc._open_dashboard(4318)
+
+    out = buf.getvalue()
+    assert opened == ["http://127.0.0.1:4318/"]
+    assert "no usable pid record" in out
+    assert "4242" in out, out
+    assert "5555" in out, out
+
+
+def test_tracing_drops_an_unreadable_pidfile_before_adopting(tmp_path, monkeypatch):
+    """A malformed record cannot be signalled, so it is removed, not left behind."""
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(tc, "_port_live", lambda port: True)
+    monkeypatch.setattr(tc, "_viewer_health", lambda port: True)
+    opened = []
+    monkeypatch.setattr(tc.webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setattr(tc.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("must adopt the live viewer"))
+    buf = StringIO()
+    monkeypatch.setattr(tc, "console", Console(file=buf, width=200))
+
+    tc._open_dashboard(4318)
+
+    assert opened == ["http://127.0.0.1:4318/"]
+    assert not pidfile.exists()
+    assert "no usable pid record" in buf.getvalue()
 
 
 def test_pid_is_viewer_rejects_foreign_process():

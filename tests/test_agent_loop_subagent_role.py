@@ -122,6 +122,27 @@ def test_subagent_mode_withholds_all_of_them(workspace, monkeypatch: pytest.Monk
     assert delegated.tools.has("message"), "message is deliberately not withheld over acp"
 
 
+async def test_a_loop_launched_as_a_sub_agent_reads_no_project_skills(
+    workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The project source reads files the repository carries, and the docs promise
+    it to the leader agent only. A child launched over acp builds its own router
+    and registry, so the source and the tools' ``project/`` route are gated on the
+    same role signal as the orchestration tools.
+    """
+    ordinary = _loop(workspace)
+    assert "project" in [source.name for source in ordinary.context_engine.skills_router._sources], (
+        "baseline: an ordinary loop must mount the project source, or the gate proves nothing"
+    )
+
+    monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+    delegated = _loop(workspace)
+
+    assert "project" not in [source.name for source in delegated.context_engine.skills_router._sources]
+    answer = await delegated.tools.get("read_skill").execute(skill_id="project/x")
+    assert answer == "Error: project skills are not available to this agent."
+
+
 async def test_tool_call_cannot_reach_a_withheld_tool(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
     """Why the gate unregisters rather than hides.
 

@@ -1632,6 +1632,52 @@ def test_a_config_past_the_first_pin_floor_moves_only_the_pins_the_next_floor_re
     assert loader.drain_migration_notices() == []
 
 
+# The stock commands floor 19 retired: what the Claude Code and Codex shims
+# shipped between floor 15 and floor 19. pi-acp did not move.
+_THIRD_RETIRED = (
+    "npx -y @agentclientprotocol/claude-agent-acp@0.94.0",
+    "npx -y @agentclientprotocol/codex-acp@2.2.2",
+)
+
+
+def test_a_config_past_the_second_pin_floor_moves_only_the_pins_the_third_floor_retired(tmp_path: Path) -> None:
+    """The pins moved again for the reasons the table gives -- codex-acp 2.2.2's
+    bundled codex 0.160.1 sits below 0.166.0, where the catalogue starts offering
+    gpt-6.2 -- and a config already past floor 15 keeps an older stock pin its
+    owner put back. A config at the floor keeps even its stock row.
+
+    The floors are literals, for the reason
+    test_the_retired_deep_research_section_goes_and_its_disabled_entry_stays gives.
+    """
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.config import loader
+
+    claude, codex = (THIRD_PARTY_SUBAGENT_PRESETS[key]["command"] for key in ("claude_code", "codex"))
+    put_back = _codex_row(_SECOND_RETIRED[1], name="Codex-put-back")
+    loader._migration_notices.clear()
+    data = {
+        "subagents": {
+            "agents": [
+                _claude_row(_THIRD_RETIRED[0]),
+                _codex_row(_THIRD_RETIRED[1]),
+                json.loads(json.dumps(put_back)),
+            ]
+        }
+    }
+    loader._migrate_config(data, from_version=18)
+
+    assert data["subagents"]["agents"] == [_claude_row(claude), _codex_row(codex), put_back]
+    assert sorted(n.split("]")[0] for n in loader.drain_migration_notices()) == [
+        "Migrated: subagents.agents[Claude Code",
+        "Migrated: subagents.agents[Codex",
+    ]
+
+    at_floor = {"subagents": {"agents": [_codex_row(_THIRD_RETIRED[1])]}}
+    loader._migrate_config(at_floor, from_version=19)
+    assert at_floor == {"subagents": {"agents": [_codex_row(_THIRD_RETIRED[1])]}}
+    assert loader.drain_migration_notices() == []
+
+
 def test_a_pi_row_stays_on_the_adapter_its_pi_can_answer(tmp_path: Path) -> None:
     """pi-acp 0.0.34 asks pi for its model's thinking levels as a session opens, which a
     pi older than 0.81.0 refuses as an unknown command, so no session opens (measured
@@ -1877,6 +1923,30 @@ def test_a_file_past_the_first_pin_floor_has_its_second_floor_pins_carried_in_th
     assert [a.command for a in cfg.subagents.agents] == [codex]
     assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [_codex_row(codex)]
     assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+
+
+def test_a_file_past_the_second_pin_floor_has_its_third_floor_pins_carried_in_the_file(tmp_path: Path) -> None:
+    """The file pass carries the same rows the in-memory pass does, and stamps the
+    floor it passed.
+
+    The stamp is the literal this floor writes, not ``CURRENT_CONFIG_VERSION``: a
+    stamp written from CURRENT cannot see the constant left behind while the floor
+    was added, which leaves every later load re-running the floor -- the lesson
+    ``test_a_stamped_seven_config_keeps_its_transition_row`` records for the input
+    side."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+
+    p = tmp_path / "config.json"
+    _write(p, {"subagents": {"agents": [_codex_row(_THIRD_RETIRED[1])]}})
+    _stamp_path(p).write_text(json.dumps({"version": 18}), encoding="utf-8")
+
+    drain_migration_notices()
+    cfg = load_config(p)
+
+    codex = THIRD_PARTY_SUBAGENT_PRESETS["codex"]["command"]
+    assert [a.command for a in cfg.subagents.agents] == [codex]
+    assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [_codex_row(codex)]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": 19}
 
 
 def test_an_address_the_settings_dialog_only_showed_leaves_the_file_once(tmp_path: Path) -> None:
@@ -2224,6 +2294,49 @@ def test_the_verdict_switch_goes_under_its_snake_spelling_too() -> None:
     assert len(loader.drain_migration_notices()) == 1
 
 
+@pytest.mark.parametrize("retired", ["auto", "boxlite"])
+def test_a_boxlite_sandbox_block_is_rewritten_for_openshell_on_disk(tmp_path: Path, retired: str) -> None:
+    """The raw config has readers of its own (the raven_config tool, onboarding), so
+    the retired backend and its two keys leave the file, not only the loaded model;
+    the neighbours stay, the user is told once, and a second load changes nothing."""
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "tools": {
+                "sandbox": {"backend": retired, "debug": {"enabled": True}, "diskSizeGb": 20, "cpus": 4},
+                "restrictToWorkspace": True,
+            }
+        },
+    )
+    _stamp_path(p).write_text(json.dumps({"version": 15}), encoding="utf-8")
+
+    drain_migration_notices()
+    cfg = load_config(p)
+
+    assert cfg.tools.sandbox.backend == "openshell"
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["tools"] == {"sandbox": {"backend": "openshell", "cpus": 4}, "restrictToWorkspace": True}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    notices = drain_migration_notices()
+    assert len([n for n in notices if "tools.sandbox" in n]) == 3, notices
+
+    before = p.read_bytes()
+    load_config(p)
+    assert p.read_bytes() == before
+    assert drain_migration_notices() == []
+
+
+def test_a_current_sandbox_block_is_left_byte_for_byte() -> None:
+    from raven.config import loader
+
+    for block in ({"tools": {"sandbox": {"backend": "openshell", "gateway": "dev"}}}, {"tools": {}}, {}):
+        before = json.dumps(block)
+        assert loader._migrate_retired_sandbox_backend(block, notify=True) is False
+        assert json.dumps(block) == before
+    assert loader.drain_migration_notices() == []
+
+
 def test_the_verdict_switch_is_dropped_from_the_extension_blocks_in_memory_too(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2267,3 +2380,220 @@ def test_the_verdict_switch_set_again_after_its_floor_still_loads(tmp_path: Path
 
     assert cfg.subagent_dag.verdict_model == "cheap/tier"
     assert [n for n in drain_migration_notices() if "verdictEnabled" in n] == []
+
+
+def _sandbox_network_floor(
+    tmp_path: Path, sandbox: dict, permissions: dict | None = None
+) -> tuple[dict, list[str], object]:
+    p = tmp_path / "config.json"
+    body: dict = {"tools": {"sandbox": {"backend": "openshell", **sandbox}}}
+    if permissions is not None:
+        body["permissions"] = permissions
+    _write(p, body)
+    _stamp_path(p).write_text(json.dumps({"version": 16}), encoding="utf-8")
+    drain_migration_notices()
+    cfg = load_config(p)
+    return json.loads(p.read_text(encoding="utf-8")), drain_migration_notices(), cfg
+
+
+def test_allow_net_true_becomes_the_open_default(tmp_path: Path) -> None:
+    on_disk, notices, cfg = _sandbox_network_floor(tmp_path, {"allowNet": True})
+    assert "allowNet" not in on_disk["tools"]["sandbox"]
+    assert on_disk["permissions"]["network"] == {"default": "open", "rules": []}
+    assert cfg.permissions.network.default == "open"
+    assert len([n for n in notices if "allowNet" in n]) == 1
+
+
+def test_an_allowlist_keeps_its_hosts_and_its_two_ports(tmp_path: Path) -> None:
+    on_disk, _, cfg = _sandbox_network_floor(tmp_path, {"allowNet": ["pypi.org", "files.pythonhosted.org"]})
+    assert on_disk["permissions"]["network"]["default"] == "closed"
+    assert [(r["host"], r["ports"]) for r in on_disk["permissions"]["network"]["rules"]] == [
+        ("pypi.org", [80, 443]),
+        ("files.pythonhosted.org", [80, 443]),
+    ]
+    assert cfg.permissions.network.default == "closed"
+
+
+def test_old_allowlist_entries_no_rule_can_hold_are_left_out_and_named(tmp_path: Path) -> None:
+    """The old field took any string; a host and port becomes a rule for that port,
+    and what is still no host name is left out, which only narrows a closed list."""
+    entries = ["localhost:8080", "10.0.0.0/8", "*.io", "https://example.com", "pypi.org"]
+    on_disk, notices, cfg = _sandbox_network_floor(tmp_path, {"allowNet": entries})
+    assert [(r["host"], r["ports"]) for r in on_disk["permissions"]["network"]["rules"]] == [
+        ("localhost", [8080]),
+        ("pypi.org", [80, 443]),
+    ]
+    assert cfg.permissions.network.default == "closed"
+    (notice,) = [n for n in notices if "allowNet" in n]
+    for left_out in ("10.0.0.0/8", "*.io", "https://example.com"):
+        assert left_out in notice
+
+
+def test_a_star_list_keeps_the_open_default_and_adds_the_rest(tmp_path: Path) -> None:
+    on_disk, _, _ = _sandbox_network_floor(tmp_path, {"allow_net": ["*", "example.com"]})
+    assert on_disk["permissions"]["network"]["default"] == "open"
+    assert [r["host"] for r in on_disk["permissions"]["network"]["rules"]] == ["example.com"]
+    assert "allow_net" not in on_disk["tools"]["sandbox"]
+
+
+def test_an_existing_permissions_network_wins_over_the_old_key(tmp_path: Path) -> None:
+    on_disk, notices, _ = _sandbox_network_floor(
+        tmp_path, {"allowNet": True}, permissions={"network": {"default": "closed"}}
+    )
+    assert on_disk["permissions"]["network"] == {"default": "closed"}
+    assert "allowNet" not in on_disk["tools"]["sandbox"]
+    assert len([n for n in notices if "allowNet" in n]) == 1
+
+
+def test_the_sandbox_network_floor_runs_once_and_is_silent_the_second_time(tmp_path: Path) -> None:
+    _sandbox_network_floor(tmp_path, {"allowNet": False})
+    p = tmp_path / "config.json"
+    before = p.read_bytes()
+    load_config(p)
+    assert p.read_bytes() == before
+    assert drain_migration_notices() == []
+
+
+@pytest.mark.parametrize(
+    ("value", "default"),
+    [("false", "closed"), (0, "closed"), ("true", "open"), (5, "closed"), ({"hosts": []}, "closed"), (None, "closed")],
+)
+def test_an_allow_net_value_is_read_the_way_the_old_field_read_it(tmp_path: Path, value, default) -> None:
+    on_disk, _, cfg = _sandbox_network_floor(tmp_path, {"allowNet": value})
+    assert on_disk["permissions"]["network"]["default"] == default
+    assert cfg.permissions.network.default == default
+
+
+def test_a_returning_allow_net_is_still_read_into_permissions_in_memory(tmp_path: Path) -> None:
+    p = tmp_path / "config.json"
+    _write(p, {"tools": {"sandbox": {"backend": "openshell", "allowNet": False}}})
+    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
+    assert load_config(p).permissions.network.default == "closed"
+
+
+_PUSH_ERA_SKILL_FORGE = {
+    "discovery": "push",
+    "rewriteEnabled": False,
+    "rewriteMaxTokens": 4096,
+    "injectionMode": "summary",
+    "injectMax": 3,
+    "llmGateEnabled": True,
+    "llmGateMaxSelect": 1,
+    "llmGatePoolSize": 12,
+    "llmGateModel": "cheap/tier",
+    "llmGateProvider": "acme",
+    "llmGateTemperature": 0.2,
+    "llmGateMaxTokens": 2048,
+    "blocklist": ["noisy"],
+    "router": {"topK": 4, "rrfK": 20},
+}
+
+
+def test_the_push_discovery_settings_go_and_a_push_config_is_told(tmp_path: Path) -> None:
+    """Skills reach the model one way now, so the settings of the other way are
+    gone from the strict model. A config still carrying them would not load at
+    all; the floor drops every one of them, tells the user once, and leaves the
+    rest of the block alone."""
+    p = tmp_path / "config.json"
+    _write(p, {"skillForge": dict(_PUSH_ERA_SKILL_FORGE, router={"topK": 4, "rrfK": 20})})
+    _stamp_path(p).write_text(json.dumps({"version": 15}), encoding="utf-8")
+
+    drain_migration_notices()
+    load_config(p)
+
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["skillForge"] == {"blocklist": ["noisy"], "router": {"rrfK": 20}}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    notices = [n for n in drain_migration_notices() if "skillForge" in n]
+    assert len(notices) == 1, notices
+    assert "`skillForge.discovery`" in notices[0]
+    assert "read_skill" in notices[0], "a config that chose push hears how skills arrive now"
+
+    load_config(p)
+    assert drain_migration_notices() == []
+
+
+def test_the_push_discovery_settings_go_under_their_snake_spelling_too() -> None:
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    snake = {
+        "skill_forge": {
+            "discovery": "pull",
+            "rewrite_enabled": True,
+            "rewrite_max_tokens": 100,
+            "injection_mode": "full_body",
+            "inject_max": 2,
+            "llm_gate_enabled": False,
+            "llm_gate_max_select": 1,
+            "llm_gate_pool_size": 12,
+            "llm_gate_model": "cheap/tier",
+            "llm_gate_provider": "acme",
+            "llm_gate_temperature": 0.2,
+            "llm_gate_max_tokens": 10,
+            "always_max": 4,
+            "router": {"top_k": 3, "rrf_k": 20},
+        }
+    }
+    assert loader._migrate_retired_push_discovery(snake, notify=True) is True
+    assert snake == {"skill_forge": {"always_max": 4, "router": {"rrf_k": 20}}}
+    notices = loader.drain_migration_notices()
+    assert len(notices) == 1, notices
+    assert "`skill_forge.llm_gate_model`" in notices[0]
+    assert "read_skill" not in notices[0], "a pull config changes nothing the user chose"
+
+
+def test_a_config_without_push_settings_is_left_alone() -> None:
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    untouched = {"skillForge": {"blocklist": [], "router": {"rrfK": 20}}}
+    mangled = {"skillForge": ["not", "a", "table"], "skill_forge": {"router": "nor this"}}
+    assert loader._migrate_retired_push_discovery(untouched, notify=True) is False
+    assert loader._migrate_retired_push_discovery(mangled, notify=True) is False
+    assert untouched == {"skillForge": {"blocklist": [], "router": {"rrfK": 20}}}
+    assert loader.drain_migration_notices() == []
+
+
+def test_the_push_discovery_settings_are_dropped_from_the_extension_block_in_memory_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`load_raven_config` reads the file again for the extension blocks. Its pass
+    has to drop the retired settings itself: the file may still carry them, and
+    `SkillForgeConfig` forbids unknown keys, so a pass that only persisted would
+    raise instead of loading."""
+    from raven.config import loader
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"skillForge": dict(_PUSH_ERA_SKILL_FORGE, router={"topK": 4, "rrfK": 20})})
+    _stamp_path(p).write_text(json.dumps({"version": 15}), encoding="utf-8")
+    monkeypatch.setattr(loader, "_persist_migrations", lambda *args, **kwargs: None)
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.skill_forge.blocklist == ["noisy"]
+    assert cfg.skill_forge.router.rrf_k == 20
+    assert json.loads(p.read_text(encoding="utf-8"))["skillForge"]["discovery"] == "push", (
+        "the disk rewrite was switched off, so a load that succeeded proves the in-memory strip"
+    )
+    assert len([n for n in drain_migration_notices() if "skillForge" in n]) == 1
+
+
+def test_push_discovery_set_again_after_its_floor_still_loads(tmp_path: Path) -> None:
+    """A build from before this floor reads the stamp as current, keeps the keys
+    and accepts them, so a rollback or a second install sharing the home can
+    write them back. The strict model would then refuse the whole config, so
+    the strip holds on every load, without a second notice."""
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"skillForge": {"discovery": "push", "llmGateModel": "cheap/tier", "blocklist": ["noisy"]}})
+    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.skill_forge.blocklist == ["noisy"]
+    assert [n for n in drain_migration_notices() if "skillForge" in n] == []

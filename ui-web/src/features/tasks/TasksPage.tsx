@@ -241,13 +241,41 @@ function List({ only }: { only?: TaskRow[] }): JSX.Element {
   )
 }
 
+/* How long the panel waits before asking again after a refused read: long
+   enough that a gateway still starting is not hammered, short enough that one
+   that has just come back is caught while the reader is still on the tab. */
+const RETRY_MS = 2_000
+
 export function TasksPanel(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   /* The language the page resolved, so a pick repaints this panel: every
      word below is a t(key) read at render time. */
   useSyncExternalStore(lang.subscribe, lang.get)
-  useEffect(() => { if (!s.loaded) void store.refresh() }, [s.loaded])
-  useEffect(() => { if (!s.boardLoaded) void store.refreshBoard() }, [s.boardLoaded])
+  /* What has not landed yet is asked for -- and asked again after a pause if
+     the gateway refused. Reading on the `loaded` edge alone was the gap: a
+     tab opened while Raven was restarting took one refusal and then stayed
+     blank until the reader closed and reopened it. The effect re-runs on every
+     transition of either flag (a session switch resets both), and its cleanup
+     stops a pending retry when the panel goes. */
+  useEffect(() => {
+    if (s.loaded && s.boardLoaded) return
+    let alive = true
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const read = async (): Promise<void> => {
+      /* Read fresh before each attempt: the flags this effect closed over
+         describe the store when it ran, and one of them may have landed
+         since -- the board's especially, across the rows' await. */
+      const rows = store.get().loaded || await store.refresh()
+      const board = store.get().boardLoaded || await store.refreshBoard()
+      if (!alive || (rows && board)) return
+      timer = setTimeout(() => { void read() }, RETRY_MS)
+    }
+    void read()
+    return () => {
+      alive = false
+      if (timer !== null) clearTimeout(timer)
+    }
+  }, [s.loaded, s.boardLoaded])
   return <BoardList flat={(only) => <List only={only} />} openTask={desk.openDeskTask} />
 }
 

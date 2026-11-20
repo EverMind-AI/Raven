@@ -28,7 +28,7 @@ from raven.agent.subagent.charter import (
 from raven.agent.subagent.delegate import dispatch_charter, outbound_charter
 from raven.playbook.agent_generator import build_table
 from raven.playbook.agent_spec import AgentPlaybookSpec
-from raven.providers.base import LLMProvider, LLMResponse
+from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 BRIEF = "Only look at A. Leave B alone."
 JUDGE = """
@@ -694,3 +694,106 @@ async def test_generated_functions_execute_in_the_in_process_worker_loop(workspa
     assert "INTAKE_RUNTIME_OK" in first_prompt
     assert "original task" not in first_prompt
     assert "ADVISE_RUNTIME_OK" in first_prompt
+
+
+ADVISE_ON_CALL = """
+def advise(step):
+    response = step.get("response") or {}
+    calls = response.get("tool_calls") or []
+    if calls:
+        first = calls[0]
+        return "ADVICE " + first["id"] + " " + first["name"] + " " + first["arguments"]["path"]
+    return None
+"""
+
+
+class _TwoRounds(_Stub):
+    """The first call that carries tools proposes one real tool call; the calls
+    after it answer from whatever the loop put in front of them. Keyed on the
+    request rather than the call count because the loop may ask a toolless
+    triage question between its iterations."""
+
+    def __init__(self) -> None:
+        self.rounds: list[list[dict]] = []
+        self.proposed = False
+
+    async def chat(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:
+        self.rounds.append([dict(message) for message in messages])
+        if tools and not self.proposed:
+            self.proposed = True
+            return LLMResponse(
+                content=None,
+                tool_calls=[ToolCallRequest(id="call-1", name="read_file", arguments={"path": "seed.txt"})],
+                finish_reason="tool_calls",
+            )
+        return LLMResponse(content="done", finish_reason="stop")
+
+    async def chat_with_retry(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:
+        return await self.chat(messages, tools=tools, model=model, **kwargs)
+
+
+def _request_after_the_tools(provider: _TwoRounds) -> str:
+    followups = [round for round in provider.rounds if any(message.get("role") == "tool" for message in round)]
+    assert provider.proposed, "the model never proposed the tool call"
+    assert len(followups) == 1, "the run should have asked once after its one tool round"
+    return "\n".join(str(message.get("content") or "") for message in followups[0])
+
+
+@pytest.mark.asyncio
+async def test_generated_advise_reads_the_call_in_the_builtin_worker_loop(workspace) -> None:
+    """The builtin loop asks ``advise`` after the tools have run, and the
+    function's answer rides the next model call -- which it can only do if the
+    call it read arrived as data rather than as a dataclass's string."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    (workspace / "seed.txt").write_text("hello")
+    provider = _TwoRounds()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=workspace)
+
+    with dispatch_charter({"functions": {"advise": ADVISE_ON_CALL}}):
+        result = await backend.run("read the seed", task_id="advise-reads-calls", workspace=workspace, executor=None)
+
+    assert result == "done"
+    assert "ADVICE call-1 read_file seed.txt" in _request_after_the_tools(provider)
+
+
+@pytest.mark.asyncio
+async def test_generated_advise_reads_the_call_in_the_agent_loop(workspace) -> None:
+    """The other assembly: the same charter participant, seated the way the
+    runtime seats it and briefed the way a forked worker's dispatch briefs it --
+    staged for the session, taken by the turn. One projection for both entries,
+    so a call read here is the same shape a builtin worker reads."""
+    from raven.agent.hook import CompositeHook
+    from raven.agent.hook.participant import ParticipantHook
+    from raven.agent.subagent.charter import CharterParticipant
+    from raven.spine.message import ChatType, Source
+    from raven.spine.turn import Origin, TurnRequest
+
+    (workspace / "seed.txt").write_text("hello")
+    provider = _TwoRounds()
+    loop = AgentLoop(
+        provider=provider,
+        workspace=workspace,
+        model="stub",
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+    loop.hooks = CompositeHook([ParticipantHook("generated-charter", CharterParticipant, rolls_back=False)])
+    loop.bind_session_charter("test:c1", {"functions": {"advise": ADVISE_ON_CALL}})
+
+    async def emit(*args, **kwargs):
+        return None
+
+    await loop.run_turn(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="read the seed",
+            conversation="test:c1",
+        ),
+        emit,
+        lambda: [],
+        stream=False,
+    )
+
+    assert "ADVICE call-1 read_file seed.txt" in _request_after_the_tools(provider)

@@ -35,10 +35,21 @@ import uuid
 from collections.abc import Iterable
 from typing import Any
 
+from raven.agent.window import compaction
+from raven.agent.window.images import without_pictures
+from raven.utils.images import is_image_part
+
 TURN_LOG_KEY = "_turn_log_seq"
 """The stamp. Underscored so no provider payload carries it (every transport
 sends an allowlist of keys); the copies :meth:`TurnLog.messages` hands out do
 not carry it."""
+
+OPENING_KEY = "_turn_log_opening"
+"""Set on the turn's opening message (the last of what it opened with). A window pass that
+rewrites the opening -- a withdrawn picture -- copies it with ``dict(m)``, so the copy still
+says it is the opening; a summary that takes its place does not. A constant, not the log's
+token: a rerun's log marks the same question again, and the question must read the same to
+both attempts."""
 
 STAND_IN_KEY = "_window_stand_in"
 """Set by a window pass on a copy that replaces what a message said (an elided
@@ -59,6 +70,11 @@ class TurnLog:
     def __init__(self, base: list[dict[str, Any]], start: int) -> None:
         self._head = list(base[:start])
         self._token = uuid.uuid4().hex
+        # The opening in the form the window last held it: a pass's copy replaces it.
+        self._opening: dict[str, Any] | None = None
+        if self._head and self._head[-1].get("role") != "system":
+            self._head[-1][OPENING_KEY] = True
+            self._opening = self._head[-1]
         self._entries: list[dict[str, Any]] = []
         self._index: dict[str, int] = {}
         self._live: list[dict[str, Any]] = base
@@ -96,6 +112,32 @@ class TurnLog:
         self._sync(self._live)
         return [_unstamped(m) for m in self._entries]
 
+    def cut_to_turn(self, window: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """``window`` without the history before this turn: its system message when it
+        opens with one, then the turn's opening message and every row after it, each as the
+        window last sent it -- a picture a pass withdrew stays withdrawn. When a head summary
+        took the opening's place, the opening comes back in the last form the window held it,
+        without pictures if the window no longer carries any, followed by the summary: it
+        stands for the turn's early rows, a message sent while the turn ran among them. The
+        whole ``window`` when it holds no row of this turn."""
+        self._sync(self._live)
+        mark = f"{self._token}:"
+        first = next(
+            (i for i, m in enumerate(window) if str(m.get(TURN_LOG_KEY, "")).startswith(mark)),
+            None,
+        )
+        if first is None:
+            return list(window)
+        system = [window[0]] if window[0].get("role") == "system" else []
+        opened = next((i for i in range(first - 1, -1, -1) if window[i].get(OPENING_KEY) is True), None)
+        if opened is not None:
+            return [*system, *window[opened:]]
+        opening = [self._opening] if self._opening is not None else []
+        if opening and _pictures(opening[0]) and not any(_pictures(m) for m in window):
+            opening = [without_pictures(opening[0], reason="summary")]
+        summary = next((i for i in range(first - 1, -1, -1) if compaction.is_summary(window[i])), first)
+        return [*system, *opening, *window[summary:]]
+
     def drop(self, removed: Iterable[dict[str, Any]]) -> None:
         """Forget messages the loop took back (a hook rollback), and anything
         recorded after them, so the record matches a turn in which they never
@@ -120,6 +162,8 @@ class TurnLog:
         # or what is appended into the gap would be read as already seen.
         self._mark = min(self._mark, len(messages))
         for i, m in enumerate(messages):
+            if m.get(OPENING_KEY) is True and not m.get(STAND_IN_KEY):
+                self._opening = m
             seq = m.get(TURN_LOG_KEY)
             if isinstance(seq, str) and seq.startswith(self._token):
                 at = self._index.get(seq)
@@ -135,8 +179,13 @@ class TurnLog:
         self._mark = len(messages)
 
 
+def _pictures(message: dict[str, Any]) -> bool:
+    content = message.get("content")
+    return isinstance(content, list) and any(is_image_part(part) for part in content)
+
+
 def _unstamped(message: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in message.items() if k != TURN_LOG_KEY}
 
 
-__all__ = ["STAND_IN_KEY", "TURN_LOG_KEY", "TurnLog"]
+__all__ = ["OPENING_KEY", "STAND_IN_KEY", "TURN_LOG_KEY", "TurnLog"]

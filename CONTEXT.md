@@ -37,8 +37,8 @@ A model id together with the provider whose credential serves it, as one value
 not say which key reaches it, and updating one half is how one vendor's key ends
 up on another vendor's endpoint. A turn resolves its binding once at `run_turn`
 entry and holds it in a context var for the whole turn tree, so everything under
-that turn -- the loop, the context engine's LLM-backed segments, the skill gate
-and rewriter, the consolidator, and any task the turn detaches -- reads the same
+that turn -- the loop, the context engine's LLM-backed segments, the
+consolidator, and any task the turn detaches -- reads the same
 pair. _Avoid_: "the current model" / "the active provider" for this; both name
 one half.
 
@@ -64,7 +64,7 @@ happens only here.
 **Subsystem pin**:
 A model configured for one subsystem rather than for the conversation, as a
 model and the provider serving it (`context.curator_model` +
-`curator_provider`, `skill_forge.llm_gate_model` + `llm_gate_provider`). Both
+`curator_provider`). Both
 halves because an id alone is ambiguous the moment a gateway is configured:
 `openrouter` + `anthropic/claude-haiku-4-5` and `anthropic` +
 `claude-haiku-4-5` are both valid and name different credentials. With the
@@ -212,8 +212,9 @@ The turn-loop extension point: an `AgentHook` ABC with six async phases
 `terminal_answerless`, `after_send`), all fired by the loop. A decision may pass through,
 short-circuit, modify outbound content, or roll the iteration back and re-sample (with
 injected messages and generation overrides for that one call); `before_iteration` may also
-withhold tools for the iteration, the iteration phases may leave the model a harness note on
-the last message (`append_note`), and `before_user_inbound` may rewrite the inbound text
+withhold tools for the iteration, the iteration phases may leave the model a harness note
+(`append_note` -- on the last message, or as a message of its own after a tool round, since
+a tool result is fenced as untrusted input), and `before_user_inbound` may rewrite the inbound text
 (`modified_content`, chained through `inbound_content`). `after_send` also fires on a **Silent
 Turn**, with `outbound_content` None (hook surface version 4). Multiple hooks chain via `CompositeHook`; the EvalEngine
 wires three concrete implementations. It remains the loop's *timing* contract and stays open to
@@ -228,7 +229,9 @@ about one step of a Turn, answered against a read-only `StepView` whose `phase` 
 the six moments is asking, and answered in plain data -- a string, a narrower list of tool
 definitions, a mapping built by `Intake`, `Accept`, `Resample` or `End` -- never a write into the loop's own state and
 never an instance of a host class, so a judgement compiled from a dispatch's own source can
-answer the same verbs a plugin does. Three invariants hold for every participant whatever its
+answer the same verbs a plugin does. The step such a function is handed is the StepView as
+plain data, with a normalized `response.tool_calls` projected to `id`/`name`/`arguments`
+mappings and nothing of the provider's private fields. Three invariants hold for every participant whatever its
 origin: it is shown facts it cannot write, it answers with data the host interprets, and an
 answer that raises or does not parse counts as silence rather than as a refusal. The host builds
 one per Turn from a `ParticipantFactory`, so what a participant has already done this turn is an
@@ -674,11 +677,6 @@ negative, because "no tag" and "the roster does not say" are indistinguishable o
 row of any kind that names a **Machine** renders a fourth tag after them, `on machine <id>`:
 the one conditional tag, since a local row has nothing to say in that position, and the id
 only, never the address.
-Also spliced into the skill gate's prompt under push discovery, where it is the account of
-what can be delegated and so decides which candidate skills are dropped as already covered;
-that copy omits the generic `builtin` row, which claims no capability bias and would read as
-covering everything. Pull discovery builds no skills segment, so it has no gate and drops
-nothing on these grounds.
 A row marked `hidden` (an acp manifest field) is enabled and on the table yet off the roster and
 the `enum`: the model cannot name it, but a task *routed* to it runs there. `routes` on a row
 makes its backend a **Routing entry** (`agent/subagent/backends/routing.py:RoutingBackend`): the
@@ -808,11 +806,11 @@ sub-agent -- those are a Turn, a coroutine, and a prompt.
 
 **Task Board** (`raven/agent/task_board/`, `<session_dir>/task_board.json`):
 one host session's set of Task Groups, kept by the host model in one extra call after each
-completed turn that answered or dispatched work, and read back through the `task_board` tool. A turn
-known to be about a group -- one a delegated result opened, one whose message a Move on or an
-Answer named the group for -- writes only to that group, to wherever it places the work it
-started, and to each matter its reply asked the user about; one that also took in a message the
-user sent while it ran writes wherever that message's matter lies too. Only the Raven host
+completed turn that answered or dispatched work, and read back through the `task_board` tool. That
+call sees the system message, the turn's own rows and the board record, not the conversation
+before the turn. It answers for each of the turn's Candidate Groups in `matters` and writes a
+step on every one the turn moved, whatever opened the turn; nothing it writes is confined to the
+group a delegated result or a Move on says the turn is about. Only the Raven host
 keeps one; a subagent or product agent never does
 (`docs/specs/2026-10-29-task-board-design.md`).
 _Avoid_: "task list" (that is `tasks.list`), "todo" (Raven-Code's Checklist).
@@ -861,6 +859,22 @@ the page with the board on (`render.board_on_page`); other channels and the term
 done otherwise; clicking it scrolls the transcript to that turn's reply.
 _Avoid_: "subtask" (it records progress, it is not a unit of work), "step" alone (the node
 record's steps are another thing).
+
+**Candidate Group** (`raven/agent/task_board/matters.py` `candidates`):
+a Task Group a turn's post-turn update has to answer for, whether or not the turn moved it: first
+the turn's owners -- the group that placed the run whose result opened the turn, or the one a Move
+on or an Answer picked -- then every other group the turn's own words name by its id, by the id
+of a Task its steps link, or by a title anchor (an issue or PR reference, a code span, a path or
+file name, a version, a number of three or more digits). The turn's own words are the user's
+message, each message the user sent while it ran, and the reply; a delegated result's body is
+not searched. A turn with none is asked and checked as before.
+_Avoid_: "scope" and "owning group" for the whole list -- the owners are only its head.
+
+**matters** (the `task_board` update's field; `matters_problems`):
+the update's answer for each Candidate Group, `{group, moved, evidence}`: `moved: false` for a
+group the turn only mentioned, which gets no step; `moved: true` with `evidence` -- the turn's own
+words, quoted -- for one it moved, which gets a step of its own. Every step on an existing group
+needs a moved answer, listed or not. Checked in code and refused like any fault, never stored.
 
 **Instance Title** / **Run Title** (`InstanceRow.title` / `InstanceRow.runTitle`):
 what one instance was asked, and what the graph it belongs to was asked. Computed by
@@ -928,6 +942,64 @@ status rather than the exception text, and the persisted log sink redacts a URL-
 credential (`cli/_log_file.py`), since httpx logs each request at INFO on the success path.
 _Avoid_: a per-vendor tool name — the model is always offered `web_search` and
 `web_fetch`, whichever vendor answers.
+
+**Picture Search** (`rpc/models.py`, `PictureSearchStatus`; `settings.get`):
+The deck engine's picture-search state as the runtime would resolve it now, not
+a reading of the Search service picker: `vendor` is the vendor that would answer
+(`""` when none resolves), `ready` says a key resolves for it, and `reason`
+names why that vendor answers: `ok` when it is the vendor the deck is
+configured to use (its folder's own `tools.web.search.provider` where it names
+one, else the host's selection the Search service picker shows -- or the
+deck's own keyed pin), `fallback_no_key` when that selection has a picture
+surface but no key the deck lane can use, `no_surface` when that selection has
+none, and `not_ready` when no vendor resolves. The reason is judged against
+that selection, not against the lane's rendered one: when the launcher
+declines the host's choice (an env-only host key, a lane key for another
+vendor) the deck searches on a vendor the picker does not show, and that is a
+fallback. `fallback` is derived from it -- true for `fallback_no_key` and
+`no_surface` -- so the page can say deck generation will fall back; a deck
+pinned to its own vendor stays `ok` and is not a fallback. `reason` is optional
+on the wire and defaults to `not_ready`, so an answer from a gateway older than
+the field still reads, and the page reads an absent `picture_search` as no note
+at all. `settings.get` computes the state through
+`picture_search_report` over the same rule the router applies, from the config,
+the product folder's own credentials and the vendors' environment variables --
+credentials the raw config cannot show. The lane's rendered selection is the
+launcher's own inheritance over those inputs, not the raw config's declaration
+alone. The offline settings fixture (`ui-web/src/rpc/fixtures/settings.ts`,
+`PPT_VENDORS` / `pictureSearchOf`) is its explicit mirror, and the Tools page
+keeps the deck vendor set (`PPT_IMAGE_VENDORS` in
+`ui-web/src/features/settings/source.ts`) only to word a missing picture tool:
+a selected deck vendor lacks a key, any other cannot fill a slide. Both lists
+are pinned to `PPT_IMAGE_SEARCH_VENDORS` by
+`tests/test_agent_tools_web_providers.py`.
+_Avoid_: reading `ready` as "the selected vendor has image search" -- Tavily
+answers the host's `image_search` but is not a deck vendor, so this state speaks
+of deck pictures, not search availability.
+
+**Deck Picture Vendor** (`plugins-dist/ppt-engine/raven_ppt/plugin/config.py`, `imageSearch.provider`; `agent/subagent/vendored_agents.py`, `product_picture_vendor`):
+Which vendor the deck engine's pictures come from. `imageSearch.provider:
+"host"` (the shipped value in `agents/raven-ppt/config.json`) is a sentinel, not
+a vendor: the deck follows its rendered `tools.web.search.provider` through
+`ppt_image_vendor` -- the lane's own selection where its folder names one, the
+host's inherited where it does not -- so one of the five vendors with a usable
+picture surface answers on its own key, and a selection on any other vendor, or
+on one of the five with no key, falls back to Serper. Any other accepted value
+pins that vendor, honoured only while its key resolves; without one the host
+rule answers instead, so a pin cannot leave the deck advertising a tool whose
+every call fails. `product_picture_vendor` reads the same declaration for
+routing and returns `"host"` -- the declaration, not the resolved vendor -- so
+`picture_search_status` applies the deck's five-vendor set rather than the
+host's six-vendor one, and the Agent Hub card and the dispatch cannot disagree.
+`product_page_search_vendor` derives that rendered selection for the readiness
+probe by running the launcher's own `inherit_web_vendors` over the folder's
+config, the host's config and the lane's keys -- the folder's declaration
+where it names one, the host's choice where the launch would carry it, and the
+schema default otherwise -- so a route cannot open on a vendor the rendered
+lane does not search with (an env-only host key is not payable there, and a
+deck key for another vendor blocks the host's choice).
+_Avoid_: treating `"host"` as a vendor name -- it names the host's selection,
+and `ppt_image_vendor` is what turns it into a vendor.
 
 **Tool Registry** (`agent/tools/registry.py`):
 The name→`Tool` table the Agent Loop dispatches into: resolves a tool by name and runs
@@ -1038,7 +1110,8 @@ Recovery**'s, and `no_output` its failure; "silent" for a failed turn that happe
 **Empty-Response Recovery** (`agent/loop/recovery.py`):
 The policy for a model reply that carries no tool call. `reply_kind` reads the reply as one
 kind -- text, a Silence Marker, a refusal, a stream cut mid-answer, thinking with no answer, a
-reply cut at the output ceiling with nothing in it, nothing right after tools, or nothing --
+reply cut at the output ceiling with nothing in it, one cut at the context window before any
+text, nothing right after tools, or nothing --
 and `decide` names the move from that kind and what the turn has already spent
 (`RecoveryState`), under `RecoveryLimits`. Text completes; a Silence Marker ends the turn as a
 **Silent Turn**; a refusal (a `refusal` or `content_filter` finish) outranks the text that came
@@ -1089,7 +1162,13 @@ the rungs skipped that the wire cannot tell apart (`LLMProvider.reasoning_wire_k
 cut at the ceiling with nothing in it is CONTINUEd
 with `OUTPUT_LIMIT_CONTINUATION` and a doubling `max_tokens` (held by the loop to the model's own
 ceiling, through `send_max_tokens` pinned for the model it goes to, whatever the provider clamps,
-and near the window to the room its prompt leaves), the effort untouched, then fails. Nothing right
+and near the window to the room its prompt leaves), the effort untouched, then fails. A reply cut
+at the context window before any text (`truncation_reason` `context_window`, which the Anthropic
+Messages provider reports for `model_context_window_exceeded`) is a cut whatever it thought, since
+re-feeding the thought or thinking less sends the same full window back: the prompt is shrunk as a
+refused one is (`WindowPressure.OVERFLOW`) and the reply CONTINUEd with
+`CONTEXT_WINDOW_CONTINUATION` and no larger `max_tokens`, and a prompt that cannot shrink ends the
+turn at once with `CONTEXT_WINDOW_FAILURE`. Nothing right
 after tools is NUDGEd once, then treated as nothing.
 An empty reply is RETRYed: the same request resent unchanged, up to `empty_content_max_retries`
 times, after a jittered backoff. On a streamed turn the first resend of a plain empty reply (not one
@@ -1597,20 +1676,24 @@ written mid-turn for the working transcript and is never filed.
 
 **Runtime Context** (`context_engine/runtime_context.py`, `segments/render.py:build_runtime_context`):
 The block each turn's user message opens with: the current time, the chat id, and
-any tool or session notices. The channel tag and the surface hold for the whole
+any tool or session notices. The channel tag and the surface usually hold for the whole
 conversation, so they close the system prompt instead, under `# This Conversation`
 (`segments/render.py:build_conversation_context`), which writes them only when they are
-names, never prose, and `turn.send` refuses any other channel; that prompt is shared by every
-conversation on the same channel and surface, which is why the chat id stays in the
-block. The assembler records the
-lines on the message, the session write keeps the user's words in `content` and
-files the lines beside them as `runtime_context`, and `HistoryTrimmer.history_from_ids`
-joins them back the way they were sent, so a later turn replays the block byte
-for byte and the provider's cached prefix still matches through it. The scent menu
-rides in the same paragraph when the message is sent but is not filed. Tool notices
-are sent as changes: a plugin's line goes out when it differs from what the replayed
-blocks already say, a plugin no longer noted gets a cleared line, and a compaction
-that takes the blocks out has them told again.
+names (`spine.message.SOURCE_NAME_RE`), and `turn.send` refuses any other channel; that
+prompt is shared by every conversation on the same channel and surface, which is why the
+chat id stays in the block. A conversation that moves (the heartbeat session picks its
+channel per run, a linked chat runs as its own channel inside a page session, two surfaces
+can share a session) gets a new prompt at the move. The assembler records the lines on the
+message, the session write keeps the user's words in `content` and files the lines beside
+them as `runtime_context`, and both history projections, `HistoryTrimmer.history_from_ids`
+and the curator's fast path, join them back through `replayed_content` the way they were
+sent, so a later turn replays the block byte for byte and the provider's cached prefix
+still matches through it. The scent menu rides in the same paragraph when the message is
+sent but is not filed. Tool notices are sent as changes: a plugin's line goes out when it
+differs from what the replayed blocks already say, a plugin no longer noted gets a cleared
+line, and a compaction that takes the blocks out has them told again; an overflow reclaim,
+which trims the history after the question was built, puts what it took back into the
+question's block.
 
 **Source Ref** (`utils/refs.py`, `session/refs.py`):
 A `[[ref store/scope#lo-hi]]` token naming verbatim entries of an append-only
@@ -1631,7 +1714,7 @@ misses instead of naming a different message.
 **Turn Scratch** (`context_engine/scratch.py`):
 The tagged block appended to the end of the turn's user message carrying the
 phase-A segments whose builder declares `stable = False`, which today is
-`# Memory` and `# Skills`. It reaches the model but never `session.messages`:
+`# Memory`. It reaches the model but never `session.messages`:
 the assembler records on the envelope exactly what it appended (`_turn_scratch`),
 and the loop's `_save_turn`, the hooks' turn question, the watched-work judge and
 replay remove that recorded text, never whatever merely contains the tag. It
@@ -1648,10 +1731,10 @@ whatever the builders declared too volatile for the system prompt.
 **Prompt Segments**:
 The ordered blocks `ContextAssembler` renders into the system prompt, one per
 SegmentBuilder: `# Raven` (identity), the Bootstrap Files block, `# Active Skills`
-(always-on), `# Memory` (host `user.md` ⊕ EverOS recall) and `# Skills`
-(SkillForge-routed candidates — see SkillForge), and `# Curator Working State`
-(Segment 6). Under Turn Scratch, `# Memory` and `# Skills` ride in the user
-message instead. `context.dropSegments` names, by builder name, the host segments an agent does
+(always-on), `# Memory` (host `user.md` ⊕ EverOS recall), and `# Curator Working State`
+(Segment 6). Under Turn Scratch, `# Memory` rides in the user message instead.
+Retrieved skills have no segment: they reach the model as the Scent Menu (see
+Skill Discovery). `context.dropSegments` names, by builder name, the host segments an agent does
 without — an agent whose bootstrap files carry its own identity drops `identity`.
 _Avoid_: treating the system prompt as one opaque blob — each segment has an owner and order.
 
@@ -1661,7 +1744,8 @@ How an `always` skill occupies `# Active Skills`, declared per skill as
 (a digest entry: name, description, and the absolute SKILL.md path to read on
 demand). Description mode keeps a skill permanently discoverable at a few dozen
 tokens; it is the only way to surface an `always` skill cheaply, since being
-`always` also excludes it from BM25 routing into `# Skills`.
+`always` also excludes it from BM25 routing, so the scent menu and `find_skill`
+never name it.
 _Avoid_: calling a description-mode entry an "injected skill" — its body never enters the prompt.
 
 **Skill Requirements**:
@@ -1694,20 +1778,28 @@ the Working State injection.
 
 **Context parts**:
 The window divided: one request's prompt by part — the system prompt, the tool
-schemas, the conversation, the memory and the skills
+schemas, the conversation, the files, the memory and the skills
 (`raven/agent/window/parts.py`). An estimate of the request the loop sent, not
 a provider's count: the provider reports a prompt as one number and does not
-split it. The memory is the recalled segment, wherever it rides: the turn's
+split it. The files are what the request carries besides talk: the attachment
+notes the assembler appended, recorded under `_attachment_notes` on the message
+that carries them, plus the pictures sent as `image_url` blocks. The record's
+scope is that one message, not the request: a reply that quotes a note, or a
+second message with the same `[Attachment: ...]` text and no record, stays
+conversation. The memory is the recalled segment, wherever it rides: the turn's
 scratch, or the system prompt when `context.cache.turn_scratch` is off. The
 skills are every byte the skill subsystem put in the prompt: the always-on
-digest in the system prompt, the routed segment beside the memory, the
-pull-mode scent menu in the user envelope, and the results of the skill tools
+digest in the system prompt, the scent menu in the user envelope, and the
+results of the skill tools
 (`find_skill`, `read_skill`, `use_skill`) — including one the model reached by
 forwarding through `tool_call`, whose message is named for the tool that
 produced it. A `SKILL.md` read through `read_file` or `exec` is not counted:
 the split follows what the skill subsystem wrote, not what a general-purpose
 tool happened to read. Carried on the wire as `context_parts` on a turn's
-usage, and absent until a turn has measured one.
+usage, and absent until a turn has measured one. A turn files its breakdown on
+the reply that carries its window reading, and a resumed session reads the two
+off that same reply -- an older breakdown describes a prompt the newer reading
+did not measure.
 _Avoid_: "segments" for these — a Segment is a piece the context engine assembles
 the prompt from, not a share of the window.
 
@@ -1772,7 +1864,7 @@ the box). Its own distribution rather than part of the raven wheel, found throug
 the group's other distributed members: a deck-building toolchain, a visual-design
 engine, and the hosted memory backend below.) Provides dual-track semantic recall — the user track (episodes/profiles,
 injected into the `# Memory` segment) and the agent track (skills/cases, one of
-SkillForge's three sources at RRF weight 0.9). The name refers to the external package
+SkillForge's four sources at RRF weight 0.9). The name refers to the external package
 [EverMind-AI/EverOS](https://github.com/EverMind-AI/EverOS); the in-tree code is only an
 adapter. The same plugin also contributes the `understand_media` multimodal-parsing tool.
 
@@ -1836,17 +1928,18 @@ endpoint.
 **Memory Engine face** (`memory_engine/__init__.py`):
 The one address the rest of the tree reaches memory machinery by: `MemoryStore`,
 `MemoryConsolidator`, the attention and behaviors parsers, the skill catalog,
-sources, router, gate and rewriter, the store pipeline. Names resolve lazily, so
+sources and router, the store pipeline. Names resolve lazily, so
 importing the face costs nothing until one is used, and `tests/test_memory_engine_face.py`
 keeps every consumer on it -- the modules underneath are the engine's to rearrange.
 _Avoid_: importing `memory_engine.consolidate.consolidator` (or any other submodule)
 from outside the engine.
 
 **SkillForge** (`memory_engine/skill_forge/`):
-A skill retrieval and injection subsystem — it fuses candidates from three sources
+A skill retrieval subsystem — it fuses candidates from four sources
 (local BM25-indexed files, self-evolved skills recalled from the pluggable `MemoryBackend`
-— typically the EverOS plugin — and remote skills from the Skill Hub) via weighted RRF,
-with optional LLM gating and query rewriting before injecting them into the agent prompt.
+— typically the EverOS plugin — remote skills from the Skill Hub, and the project's own
+skills under `.agents/skills`) via weighted RRF, and offers them to the agent through the
+Scent Menu and the skill tools (see Skill Discovery and Project skill).
 Skill distillation/evolution is handled by the local extraction pipeline
 (`skillForge.extraction`), not by SkillForge itself — that pipeline distils skills out of
 finished turns into the workspace cache, calls no service and needs no memory plugin;
@@ -1855,20 +1948,49 @@ versioning, and the retirement knobs (`retire_confidence`, `retirement_idle_days
 unwired config placeholders, not active behavior. The name is retained; it is now a live
 module under the Memory Engine, not the old top-level husk.
 
-**Skill Discovery** (`skillForge.discovery`, default `"pull"`):
-How retrieved skills reach the model. Under **pull**, a per-turn **Scent Menu**
-(`context_engine/scent.py`) rides the user envelope: on a *fat* turn (rule-judged —
-length, function-word residue, character-bigram novelty against the recent user
-window), one `SkillForgeRouter.select` renders a few `qualified_id: description`
-lines, and the model fetches bodies itself through `find_skill` (intent-bearing
-search over the same router) and `read_skill`; the system prefix carries no
-retrieved-skill bytes and no per-turn rewriter/gate LLM calls run. Under **push**,
-the pre-existing pipeline (rewriter, router, gate, selected bodies rendered into
-the system prefix) is restored unchanged.
-_Avoid_: conflating the Scent Menu with the `# Skills` segment — the menu is
-advisory tail-of-sequence data (wrapped untrusted), never a system segment; and
-conflating `find_skill` (search, returns ids + descriptions) with `read_skill`
-(body fetch by id).
+**Skill Discovery** (`context_engine/scent.py`, `agent/tools/skill_hub.py`):
+How retrieved skills reach the model, and there is one way. A per-turn **Scent Menu**
+rides the user envelope: on a *fat* turn (rule-judged — length, function-word
+residue, character-bigram novelty against the recent user window), one
+`SkillForgeRouter.select` renders a few `qualified_id: description` lines, and the
+model fetches bodies itself through `find_skill` (intent-bearing search over the
+same router) and `read_skill`. A local id reads from the registry; a memory-backend id
+(an evolved skill or a case from the agent track) has no file, so the router holds the
+hits it returned and `read_skill` / `use_skill` serve that hit's text, verbatim, until a
+restart or a memory switch drops it, after which `find_skill` puts it back. A
+`project/<name>` id is not read from those held hits: it resolves per turn against the
+project's own `.agents/skills` (see Project skill). The system prefix carries only the
+`always` skills (`# Active Skills`), and no model call is spent choosing skills. The push
+pipeline (an LLM query rewriter and gate, selected bodies in the prompt) and its
+`skillForge.discovery` / `llmGate*` / `rewrite*` / `injectionMode` settings were
+retired 2026-11-13; the config loader drops those keys from older files. A built-in
+(raven-loop) sub-agent is shown agent home's skills as a directory instead and reads one
+with its own `read_skill`, the same registry route, so a run fenced by
+`restrictToWorkspace` still reaches a builtin skill whose file sits inside the package.
+_Avoid_: calling the Scent Menu a segment — it is advisory tail-of-sequence data
+(wrapped untrusted), never part of the system prompt; and conflating `find_skill`
+(search, returns ids + descriptions) with `read_skill` (body fetch by id).
+
+**Project skill** (`memory_engine/skill_forge/project_skills.py`):
+A skill the repository itself carries: a flat `<name>/SKILL.md` under a `.agents/skills`
+directory found by walking from the running turn's working directory to the nearest
+ancestor holding a `.git` entry, inclusive (the working directory alone when it has none),
+the nearest directory winning a name collision. The `project` router source offers each as
+`project/<name>`, and `read_skill` / `use_skill` resolve that id against the turn's own
+project at read time — never from the router's held hits, which may belong to another
+session's project. Neither the user's home nor agent home nor any ancestor of agent home
+is a project directory; a symlink counts only when its resolved target stays inside the
+git root; a deeper `SKILL.md` is not a project skill. Project skills are never
+`always`-injected: `always` and `inject` frontmatter are ignored, and the system prefix
+carries none of them. The index is per project — a process-wide cache keyed by the resolved
+directory tuple and its git-root boundary, rebuilt when a fingerprint of the directories
+changes — and the leader agent is the only one that reads it: a process launched as a
+sub-agent mounts no project source and its tools answer `project/` with "not available to
+this agent". The switch is `skillForge.projectSkills.enabled`, default on, read live: off
+stops the next search and the next `project/` resolution, and a shape the loader refuses
+reads off too.
+_Avoid_: "workspace skill" — that is agent home's `skills/` layer, read by the local
+source and a different directory.
 
 **Skill Hub** (`skill_hub/`):
 A remote OpenAPI skill marketplace, configured via `skillForge.router.hub` (`endpoint` /
@@ -2123,8 +2245,15 @@ separate process. It is not a **Plugin** (the kernel kind, which ships Python fa
 imports `config`, `security`, `skill_hub` and `utils`, and no surface. The loader imports
 a package's skills into the workspace skill tree under `<workspace>/skills/<package name>/`,
 one directory per package, so the pool mints one source label per package rather than one
-per skill; the copy is recorded in the package ledger (`<home>/agent-plugins.json`), which is
-what makes removal safe. An imported skill carries no unconditional-injection flag: `always`
+per skill; the copy is recorded in the **package ledger** (`<home>/agent-plugins.json`,
+version 2), one record per workspace, and that record is what makes removal safe: the
+package root and every skill root carry an **install marker** (`.raven-install.json`, a
+random token minted by the host at install time), and a directory is deletable only while
+its marker still matches the recorded token
+-- so a same-named user directory, whether in another workspace sharing the home or
+standing where an install was moved away from, is never claimed. Records written by ledger
+version 1 load as unverified legacy records that grant nothing; a fresh verified import of
+the same name supersedes one. An imported skill carries no unconditional-injection flag: `always`
 is dropped from the copy, so a third-party package cannot put text into every turn. A package
 may also carry `mcp.json`, and those servers are composed under the package's own names
 (`<package>__<server>`) with the package root as their working directory and `PLUGIN_ROOT` /
@@ -2473,6 +2602,40 @@ lands on one, and is recorded on the call's tool.call span as
 wait on a human, and answers with a full ToolResult.
 _Avoid_: "tool gate" for this -- that name is the plugin paper's.
 
+**Runtime approval** (`permissions/runtime.py`):
+Asking about an action a tool finds while its body runs, not before dispatch:
+`PermissionGate.authorize_runtime`, reached through `current_gate()`, which the
+registry binds for the length of the tool body. It follows the gate's own order
+(this turn's earlier answers, the conversation's grants, the mode, the smart-mode
+reviewer, the person) and answers with a `RuntimeAnswer`: once, session, always,
+deny, deny and stop, lapsed (asked, nobody answered) or unattended. A person
+deciding stops the tool's deadline, which the registry runs under
+`asyncio.timeout` for this reason. The first such action is a Network denial.
+_Avoid_: "re-check" or "second gate" -- it is the one gate, asked later.
+
+**Network denial** (`sandbox/denials.py`):
+One connection an OpenShell sandbox's network policy refused, read from the
+gateway's OCSF log over the time a command (or, for a long-lived MCP server, a
+call) ran: the program, the host, the port and the reason (`NetworkDenial`). The
+log names the sandbox, not the command, so a denial in that window may be
+another process's in the same sandbox. A DNS refusal names only the host.
+Carried on `ExecResult.denials` and settled by `permissions/sandbox_network.py`.
+_Avoid_: "network error" -- a denial is the policy's decision, and the command
+sees only a failed connect.
+
+**Network grant** (`sandbox/network_policy.py`, `permissions/network_grants.py`):
+A person's yes to one program reaching one host and port, compiled into a named
+rule (`raven_grant_<hash>`) of the sandboxes it reaches: "once" in the refused
+sandbox until it stops, "this session" in every sandbox of the conversation
+until Raven restarts (the `GrantRegistry`, keyed by the conversation's
+`session_key`; the main agent's shared sandbox runs under every conversation's),
+"always" as a `permissions.network` rule. A deny rule naming the same target
+leaves a session grant out of the policy the conversation's sandboxes compile;
+what the refused sandbox was granted directly, once or for the session, stays
+there until it stops. Distinct from a session grant in
+`permissions/session.py`, which remembers the action's keys so the gate does not
+ask again; a network grant is what makes the sandbox let the connection through.
+
 **Credential scope**:
 Which credential store an MCP server's secrets are read from and written to.
 `None` is the host's own -- `<credentials>/mcp/<server>.json` for OAuth tokens,
@@ -2578,7 +2741,8 @@ second owner, and that distinction is what keeps it off its parent's tab.
 ### Execution & Evaluation
 
 **SandBox** (`sandbox/`):
-Isolated command execution (microVM / boxlite); owns the debug server and VM lifecycle.
+Isolated command execution: one OpenShell sandbox per executor on a local gateway, or direct host
+execution when disabled; owns sandbox lifecycle, mounts, and the egress policy.
 
 **EvalEngine** (`eval_engine/`):
 The L3 evaluation engine: task judging and cognitive coordination, implemented as three
@@ -3173,7 +3337,7 @@ are diagnostics, not the span clock.
 The caller's own name for why a model call is made — `main` for the agent
 loop's action call and for its wrap-up when the iterations run out (the turn's
 own conversation plus one instruction), `watch_work`, `title`,
-`permission_judge`, `memory_extract`, `skill_gate`, `dag_verdict`, `playbook` —
+`permission_judge`, `memory_extract`, `dag_verdict`, `playbook` —
 set with `with purpose(name):` around a provider call that records an
 `llm.call` span (`chat_with_retry` or the loop's streaming call; a bare
 `chat()` records none, so a label there would never land) and read by that
@@ -3377,9 +3541,11 @@ does its content get -- are answered independently and neither leans on the othe
 
 **Handoff Block** (`raven/agent/subagent/direct_chat.py`):
 The pointer block the runtime prepends to the user's next turn to the main agent after
-direct-chat activity: per instance, a UTC time span and the paths of each turn's
-`prompt.md` and `out.md`, inside `subagents/direct/<agent>/<handle>/<call_id>/` beside the
-Subagent history. Activity, not only chats - a User-Created Instance is reported in its own
+direct-chat activity: per instance, a UTC time span and the record files present in each
+turn's directory - `prompt.md`, `out.md`, `error.md` - inside
+`subagents/direct/<agent>/<handle>/<call_id>/` beside the Subagent history. A still-running
+turn names `prompt.md` only, and an ended turn whose directory holds none of the three is
+marked unavailable. Activity, not only chats - a User-Created Instance is reported in its own
 right, and one with no turns yet names no path, because the record directories are made per
 turn. An instance answering a direct turn at take time is reported as running, with the
 time it began answering (the handle lock held, not the moment the turn queued), read from
@@ -3476,9 +3642,11 @@ The same trust boundary the cli transport already ran under (`codex -a never`,
 The one request it refuses is one naming a shell command (`toolCall.rawInput.command`,
 codex's `commandActions`) that the host's own deny rules refuse - the builtin list with
 `tools.exec.extraDenyPatterns`, or a `deny` entry in `permissions.tools`: refusing needs no
-operator, so it is answered with the agent's reject option. Raven's own products carry the
-same refusals in their rendered config (`product_render.inherit_host_denials`), because a call
-their own gate allows never reaches this handler.
+operator, so it is answered with the agent's reject option, and so is a request a raven
+agent marks `raven.needsPerson` in `_meta` (an address or internal name its own gate leaves
+to a person). Raven's own products run under the host's permission set, these refusals
+included, in their rendered config (`product_render.inherit_host_permissions`), because a
+call their own gate allows never reaches this handler.
 Distinct from what raven still refuses: `fs/read_text_file` and its siblings are declared
 unsupported in `CLIENT_CAPABILITIES`, and a handler returning `UNHANDLED` is how they stay
 that way.

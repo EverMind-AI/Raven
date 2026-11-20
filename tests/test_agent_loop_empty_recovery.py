@@ -277,6 +277,15 @@ def _kind(
         ),
         # Thinking says why a cut reply is empty, so it is named before the cut.
         ("", "length", {"truncated": True, "reasoning_content": "hmm"}, Origin.USER, False, ReplyKind.THINKING_ONLY),
+        # Except at the context window: thinking or not, only a smaller prompt makes room.
+        (
+            "",
+            "length",
+            {"truncated": True, "truncation_reason": "context_window", "reasoning_content": "hmm"},
+            Origin.USER,
+            False,
+            ReplyKind.TRUNCATED,
+        ),
         # A count the providers' reader does not accept is no evidence of thinking.
         ("", "stop", {"usage": {"reasoning_tokens": "n/a"}}, Origin.USER, False, ReplyKind.EMPTY),
         ("", "stop", {"usage": {"reasoning_tokens": True}}, Origin.USER, False, ReplyKind.EMPTY),
@@ -1034,6 +1043,122 @@ async def test_a_cut_reply_with_nothing_in_it_is_continued_with_more_room(worksp
     assert _efforts(calls) == ["medium"] * 4, "there was no reasoning to blame, so the effort is left alone"
     assert str(failed) == TRUNCATED_FAILURE.format(n=3, s="s")
     assert failed.no_output is False
+
+
+@pytest.mark.asyncio
+async def test_context_window_cut_shrinks_prompt_without_doubling_max_tokens(workspace, monkeypatch):
+    from raven.agent.loop.recovery import CONTEXT_WINDOW_CONTINUATION, CONTEXT_WINDOW_FAILURE
+    from raven.contracts.llm_provider import LLMResponse
+
+    calls: list[dict] = []
+    responses = [
+        LLMResponse(
+            content=None,
+            finish_reason="length",
+            truncated=True,
+            truncation_reason="context_window",
+            max_tokens=4096,
+        ),
+        LLMResponse(content="recovered after shrinking", finish_reason="stop"),
+    ]
+
+    class StubProvider:
+        default_model = _MODEL
+        generation = None
+
+        async def chat_with_retry(self, *, messages, tools=None, model=None, max_tokens=None, **_kwargs):
+            calls.append({"messages": list(messages), "max_tokens": max_tokens})
+            return responses.pop(0)
+
+    agent = _make_agent(workspace, StubProvider())
+
+    async def fake_shrink(messages, *, pressure, state, model):
+        from raven.contracts.harness import ShrinkResult, WindowPressure
+
+        if pressure is WindowPressure.OVERFLOW:
+            return ShrinkResult(messages=messages[:1], changed=True)
+        return ShrinkResult(messages=messages, changed=False)
+
+    monkeypatch.setattr(agent.harness.memory, "shrink", fake_shrink)
+
+    out = await agent._process_message(_turn("hi"), session_key="s1")
+
+    assert out is not None and out[0] == "recovered after shrinking"
+    assert len(calls) == 2
+    assert calls[1]["messages"][-1]["content"] == CONTEXT_WINDOW_CONTINUATION
+    assert calls[1]["max_tokens"] != 8192
+
+    # When nothing can be shrunk, stop immediately instead of wasting continuation turns.
+    calls.clear()
+    responses = [
+        LLMResponse(
+            content=None,
+            finish_reason="length",
+            truncated=True,
+            truncation_reason="context_window",
+            max_tokens=4096,
+        )
+    ] * 4
+
+    async def noop_shrink(messages, *, pressure, state, model):
+        from raven.contracts.harness import ShrinkResult
+
+        return ShrinkResult(messages=messages, changed=False)
+
+    monkeypatch.setattr(agent.harness.memory, "shrink", noop_shrink)
+
+    failed = await _run_answerless(agent, "hi")
+    assert len(calls) == 1
+    assert CONTEXT_WINDOW_FAILURE in failed
+
+
+@pytest.mark.asyncio
+async def test_a_window_cut_that_thought_shrinks_the_prompt_instead_of_refeeding_the_thought(workspace, monkeypatch):
+    """Re-feeding the thought, or asking again at a lower effort, sends the same full window back."""
+    from raven.agent.loop.recovery import CONTEXT_WINDOW_CONTINUATION
+    from raven.contracts.harness import ShrinkResult, WindowPressure
+    from raven.contracts.llm_provider import LLMResponse
+
+    calls: list[dict] = []
+    pressures: list[WindowPressure] = []
+    responses = [
+        LLMResponse(
+            content=None,
+            reasoning_content="a long thought that ran into the window",
+            finish_reason="length",
+            truncated=True,
+            truncation_reason="context_window",
+            max_tokens=4096,
+        ),
+        LLMResponse(content="recovered after shrinking", finish_reason="stop"),
+    ]
+
+    class StubProvider:
+        default_model = _MODEL
+        generation = None
+
+        async def chat_with_retry(self, *, messages, tools=None, model=None, **kwargs):
+            calls.append({"messages": list(messages), "reasoning_effort": kwargs.get("reasoning_effort")})
+            return responses.pop(0)
+
+    agent = _make_agent(workspace, StubProvider())
+
+    async def fake_shrink(messages, *, pressure, state, model):
+        pressures.append(pressure)
+        if pressure is WindowPressure.OVERFLOW:
+            return ShrinkResult(messages=messages[:1], changed=True)
+        return ShrinkResult(messages=messages, changed=False)
+
+    monkeypatch.setattr(agent.harness.memory, "shrink", fake_shrink)
+
+    out = await agent._process_message(_turn("hi"), session_key="s1")
+
+    assert out is not None and out[0] == "recovered after shrinking"
+    assert WindowPressure.OVERFLOW in pressures
+    assert len(calls) == 2
+    assert calls[1]["messages"][-1]["content"] == CONTEXT_WINDOW_CONTINUATION
+    assert not any(m.get("reasoning_content") for m in calls[1]["messages"]), "the cut thought is not re-fed"
+    assert calls[1]["reasoning_effort"] == calls[0]["reasoning_effort"], "the effort is not stepped down"
 
 
 @pytest.mark.asyncio

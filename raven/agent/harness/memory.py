@@ -46,6 +46,7 @@ from raven.agent.harness.participants import Intake, compose_addendum, compose_i
 from raven.agent.window import compaction, shrink
 from raven.agent.window.images import ATTACHED_IMAGE_KEY
 from raven.context_engine import headroom
+from raven.context_engine.runtime_context import retell_notices, without_runtime_context
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.harness import MemoryModule, ShrinkResult, WindowPressure, WindowState
 from raven.contracts.participant import AgentParticipant, StepView
@@ -188,7 +189,7 @@ class DefaultMemory:
         self, messages: list[dict[str, Any]], model: str | None, cfg: Any
     ) -> tuple[list[dict[str, Any]], str]:
         chosen = model or self._model()
-        return await shrink.summarize_head(
+        summarized, verdict = await shrink.summarize_head(
             messages,
             provider=self._provider(),
             model=chosen,
@@ -196,6 +197,12 @@ class DefaultMemory:
             ceiling=self._output_ceiling(chosen),
             cfg=cfg,
         )
+        if verdict == "changed":
+            # The replaced head may be the only place a still-standing plugin
+            # note was told, and the brief that replaces it is prose, not a
+            # notice block, so what it took away is said again on the question.
+            summarized = retell_notices(messages, summarized)
+        return summarized, verdict
 
     async def _compact_ahead(
         self, messages: list[dict[str, Any]], state: WindowState, model: str | None
@@ -455,7 +462,9 @@ def _keeps_the_question(sent: list[dict[str, Any]], reclaimed: list[dict[str, An
     """Whether ``reclaimed`` still holds the latest user message ``sent`` held.
 
     A message carrying only pictures a tool showed (``ATTACHED_IMAGE_KEY``) is the
-    loop's, not the user's, and is not the question.
+    loop's, not the user's, and is not the question. The lines each side recorded
+    for itself are left out of the comparison: a reclaim may retell a plugin note
+    into the question's block without touching the words it opened with.
     """
     question = next(
         (m for m in reversed(sent) if m.get("role") == "user" and not m.get(ATTACHED_IMAGE_KEY)),
@@ -463,7 +472,9 @@ def _keeps_the_question(sent: list[dict[str, Any]], reclaimed: list[dict[str, An
     )
     if question is None:
         return True
-    return any(m.get("role") == "user" and m.get("content") == question.get("content") for m in reclaimed)
+    return any(
+        m.get("role") == "user" and without_runtime_context(m) == without_runtime_context(question) for m in reclaimed
+    )
 
 
 def bind(memory: DefaultMemory) -> MemoryModule:

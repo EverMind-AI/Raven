@@ -210,7 +210,7 @@ async def test_turn_checkpoint_commits_the_session_working_directory(tmp_path: P
 def test_sandbox_mounts_the_root_covering_every_session(tmp_path: Path, monkeypatch) -> None:
     recorded: dict = {}
 
-    def _fake_build_executor(cfg, workspace, owned_ids=None, extra_volumes=(), *, sandbox_dir=None):
+    def _fake_build_executor(cfg, workspace, extra_volumes=(), **_kw):
         recorded["workspace"] = workspace
         recorded["extra_volumes"] = list(extra_volumes)
 
@@ -238,7 +238,7 @@ def test_sandbox_skips_the_home_volume_when_the_mount_already_covers_it(tmp_path
     directory."""
     recorded: dict = {}
 
-    def _fake_build_executor(cfg, workspace, owned_ids=None, extra_volumes=(), *, sandbox_dir=None):
+    def _fake_build_executor(cfg, workspace, extra_volumes=(), **_kw):
         recorded["workspace"] = workspace
         recorded["extra_volumes"] = list(extra_volumes)
 
@@ -260,7 +260,7 @@ def test_sandbox_mounts_the_plugin_data_root_for_package_stdio_servers(tmp_path:
     """PLUGIN_DATA has to be a guest path too, so its root gets a fixed mount."""
     recorded: dict = {}
 
-    def _fake_build_executor(cfg, workspace, owned_ids=None, extra_volumes=(), *, sandbox_dir=None):
+    def _fake_build_executor(cfg, workspace, extra_volumes=(), **_kw):
         recorded["extra_volumes"] = list(extra_volumes)
 
         class _Stub:
@@ -274,7 +274,7 @@ def test_sandbox_mounts_the_plugin_data_root_for_package_stdio_servers(tmp_path:
     AgentLoop(
         provider=_FakeChatProvider(),
         workspace=tmp_path,
-        sandbox_config=SandboxConfig(backend="boxlite"),
+        sandbox_config=SandboxConfig(backend="openshell"),
         package_mcp_servers={"demo__search": MCPServerConfig(type="stdio", command="demo")},
     )
 
@@ -457,3 +457,69 @@ def test_refused_workdir_is_not_created(tmp_path, monkeypatch) -> None:
     with pytest.raises(ValueError, match="outside the sandbox mount"):
         loop.session_workdir("web:abc")
     assert not outside.exists()
+
+
+async def test_closing_the_executor_gives_up_on_slow_sandbox_deletes(monkeypatch) -> None:
+    """Deletions run in the background; teardown waits only its budget for them."""
+    import asyncio
+
+    from raven.sandbox import openshell_executor as ox
+
+    started = asyncio.Event()
+
+    async def never_drains() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(ox, "drain_pending_deletes", never_drains)
+    await asyncio.wait_for(AgentLoop._drain_sandbox_deletes(budget_s=0.05), 2)
+    assert started.is_set()
+
+
+def test_the_main_sandbox_reads_the_live_permission_set(tmp_path, monkeypatch) -> None:
+    """The shared sandbox's network policy follows permissions.network as it changes on disk."""
+    import json
+
+    from raven.home import get_config_path
+
+    recorded: dict = {}
+
+    def _fake_build_executor(cfg, workspace, extra_volumes=(), *, network_source=None):
+        recorded["network_source"] = network_source
+
+        class _Stub:
+            is_sandboxed = True
+
+        return _Stub()
+
+    monkeypatch.setattr("raven.agent.loop.main.build_executor", _fake_build_executor)
+    AgentLoop(provider=_FakeChatProvider(), workspace=tmp_path, sandbox_config=SandboxConfig(backend="openshell"))
+    source = recorded["network_source"]
+    assert "allow_open" in source()
+    get_config_path().write_text(json.dumps({"permissions": {"network": {"default": "closed"}}}))
+    assert source() == {}
+
+
+@pytest.mark.asyncio
+async def test_the_loops_sandbox_is_every_conversations_while_it_runs(tmp_path: Path, monkeypatch) -> None:
+    """A grant in any conversation reaches the one sandbox the loop runs them all in."""
+    from raven.permissions import network_grants
+
+    registry = network_grants.GrantRegistry()
+    monkeypatch.setattr(network_grants, "GRANTS", registry)
+
+    class _Sandbox:
+        is_sandboxed = True
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+    sandbox = _Sandbox()
+    loop = AgentLoop(provider=_FakeChatProvider(), workspace=tmp_path, executor=sandbox)
+    await loop._start_executor()
+    assert registry.is_shared(sandbox) and registry.executors_for("conv-a") == [sandbox]
+    await loop.close_executor()
+    assert registry.executors_for("conv-a") == []

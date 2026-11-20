@@ -34,7 +34,7 @@ nothing by itself about every inbound media format or platform size limit.
 | `slack` | Slack Socket Mode / Web API | Bot token and app token | Yes |
 | `whatsapp` | WhatsApp via Node bridge | Interactive QR linking; bridge configuration | No |
 | `weixin` | Personal WeChat via iLink | Interactive QR linking | Yes |
-| `wecom` | WeCom AI bot WebSocket | Bot id and secret | No |
+| `wecom` | WeCom AI bot WebSocket | Bot id and secret | Yes |
 | `feishu` | Feishu/Lark long connection | App id and app secret | Yes |
 | `dingtalk` | DingTalk | Client id and client secret | Yes |
 | `matrix` | Matrix sync | Homeserver, user id, access token | Yes |

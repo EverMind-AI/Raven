@@ -545,6 +545,23 @@ async def test_each_case_carries_its_own_tool_advice() -> None:
     assert "If it was the output limit" not in certain, "no hedging where the upstream was explicit"
 
 
+@pytest.mark.asyncio
+async def test_context_window_truncation_names_context_window_and_omits_output_hint() -> None:
+    registry = ToolRegistry()
+    registry.register(WriteFileTool(workspace=Path(".")))
+
+    text = await registry.execute(
+        "write_file",
+        {"path": "a.py", "content": "x"},
+        run_meta=RunMeta(truncation=TruncationInfo(at_tokens=8192, reason="context_window")),
+    )
+
+    assert "[truncated]" in text
+    assert "context window" in text
+    assert "output limit" not in text
+    assert "mode=append" not in text
+
+
 def test_a_tool_that_speaks_to_one_case_speaks_to_both() -> None:
     """The two hints say nearly the same thing in different frames, which is
     exactly how they drift apart. A tool that answers one and not the other

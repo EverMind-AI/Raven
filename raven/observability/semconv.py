@@ -371,11 +371,23 @@ def _skill_scripts_dir(result: Any) -> str | None:
     return None
 
 
-def _skill_attrs(tool_name: str, params: Any, result: Any) -> dict[str, Any]:
+def _skill_attrs(tool_name: str, params: Any, result: Any, tool: Any = None) -> dict[str, Any]:
+    """``skill.source`` is the layer the skill lives in when the tool can say so.
+
+    The id's prefix is the addressing namespace, ``local`` for every on-disk
+    skill, so it is only the fallback: the tool that read the skill resolves the
+    id against its registry (``builtin`` / ``workspace`` / ...).
+    """
     skill_id = params.get("skill_id") if isinstance(params, dict) else None
     source = native = None
     if isinstance(skill_id, str) and "/" in skill_id:
         source, _, native = skill_id.partition("/")
+    resolve = getattr(tool, "source_of", None)
+    if isinstance(skill_id, str) and callable(resolve):
+        try:
+            source = resolve(skill_id) or source
+        except Exception:  # noqa: BLE001 - a registry hiccup must not lose the span
+            pass
     attrs: dict[str, Any] = {
         "skill.id": skill_id,
         "skill.source": source,
@@ -404,9 +416,9 @@ def _skill_name_from_path(path: str | None) -> str | None:
 def _skill_read_path(name: str, params: Any) -> str | None:
     """If a read_file targets a SKILL.md, return that path; else ``None``.
 
-    This is the discovery→injection follow-through: raven's summary mode
-    tells the agent to ``read_file`` a skill's SKILL.md, and subagents (which
-    only get the skill *catalog*) do the same. Those reads carry the real body
+    This is the discovery→injection follow-through: a subagent's skill
+    catalog tells it to ``read_file`` a skill's SKILL.md, and an agent that
+    found a skill path on its own does the same. Those reads carry the real body
     into context but look like a plain file read — re-type them to skill.read.
     """
     if name not in _FILE_READ_TOOLS:
@@ -446,7 +458,6 @@ __all__ = [
     "memory_consolidate",
     "plugin_load",
     "skill_inject_active",
-    "skill_inject_skills",
     "subagent",
     "subagent_attrs",
     "subagent_open",
@@ -664,72 +675,6 @@ def skill_inject_active(span, bound: dict[str, Any], result: Any, exc: BaseExcep
             )
             return
     span.cancel()
-
-
-def skill_inject_skills(span, bound: dict[str, Any], result: Any, exc: BaseException | None) -> None:
-    """``# Skills`` — emit only when gate-selected skills' bodies were rendered."""
-    seg_meta = (getattr(result, "meta", None) or {}) if result is not None else {}
-    ids = list(seg_meta.get("injected_skill_ids") or [])
-    if ids:
-        _skill_inject_fill(
-            span,
-            via="skills_segment",
-            names=[str(i).split("/")[-1] for i in ids],
-            ids=ids,
-            sources=dict(seg_meta.get("skill_hits_by_source") or {}),
-            body_len=len(getattr(result, "text", "") or ""),
-        )
-    else:
-        span.cancel()
-
-
-def _hit_ref(hit: Any) -> dict[str, Any]:
-    """Light, serializable view of a RouterHit candidate (avoid dumping bodies)."""
-    return {
-        "id": getattr(hit, "id", None) or getattr(hit, "skill_id", None),
-        "name": getattr(hit, "name", None),
-        "source": getattr(hit, "source", None),
-        "score": getattr(hit, "score", None),
-    }
-
-
-def skill_rewrite(span, bound: dict[str, Any], result: Any, exc: BaseException | None) -> None:
-    """``QueryRewriter.analyze`` — the need_retrieval judgment + query rewrite that
-    precedes skill retrieval. Its inner model call nests here (invocation source)."""
-    need = getattr(result, "need_retrieval", None)
-    rewritten = getattr(result, "rewritten_query", None)
-    span.set(
-        {
-            "skill.rewrite.query_preview": _preview(bound.get("query")),
-            "skill.rewrite.need_retrieval": need,
-            "skill.rewrite.rewritten": _preview(rewritten),
-        }
-    )
-    span.artifact("skill.rewrite.input", {"query": bound.get("query")})
-    span.artifact("skill.rewrite.output", {"need_retrieval": need, "rewritten_query": rewritten})
-
-
-def skill_gate(span, bound: dict[str, Any], result: Any, exc: BaseException | None) -> None:
-    """``LLMGateFilter.filter`` — narrows the skill candidates to the selected few."""
-    candidates = bound.get("candidates") or []
-    selected = result if isinstance(result, list) else []
-    span.set(
-        {
-            "skill.gate.task_preview": _preview(bound.get("task")),
-            "skill.gate.candidate_count": len(candidates),
-            "skill.gate.selected_count": len(selected),
-        }
-    )
-    span.artifact(
-        "skill.gate.input",
-        {
-            "task": bound.get("task"),
-            "candidates": [_hit_ref(h) for h in candidates],
-            "available_tools": bound.get("available_tools"),
-            "available_subagents": bound.get("available_subagents"),
-        },
-    )
-    span.artifact("skill.gate.output", {"selected": [_hit_ref(h) for h in selected]})
 
 
 def context_curate(span, bound: dict[str, Any], result: Any, exc: BaseException | None) -> None:
@@ -1001,7 +946,9 @@ def tool_call(span, bound: dict[str, Any], result: Any, exc: BaseException | Non
     skill_read_path = _skill_read_path(name, params)
     if name in _SKILL_TOOLS:
         span.retype("skill.read", "skill")
-        span.set(_skill_attrs(name, params, result))
+        lookup = getattr(bound.get("self"), "get", None)
+        tool = lookup(name) if callable(lookup) else None
+        span.set(_skill_attrs(name, params, result, tool))
     elif skill_read_path:
         span.retype("skill.read", "skill")
         span.set(

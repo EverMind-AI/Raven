@@ -67,7 +67,6 @@ __all__ = [
     "media_tool_config",
     "permissions_config",
     "routing_profile",
-    "skill_gate_pin",
     "subagent_runtime",
     "web_provider_keys",
     "web_search_key",
@@ -136,6 +135,9 @@ class LiveConfig:
         self._bytes: bytes | None = None
         self._raw: dict[str, Any] = {}
         self._loaded = False
+        # Whether ``_raw`` is an answer: a file that parsed as an object, or no
+        # file. Before either, ``_raw`` is only the empty start.
+        self._answered = False
         # The last slice each reader successfully admitted, keyed by reader
         # slot. The slice-level form of the torn-read rule above: a candidate
         # the schema rejects keeps the last admitted answer serving, and a
@@ -156,10 +158,13 @@ class LiveConfig:
         path = self.path()
         try:
             data = path.read_bytes()
-        except OSError:
+        except FileNotFoundError:
             # Absent is a real answer and a stable one: no file, no preferences.
             # Distinguished from a failed parse below, which keeps what it had.
-            self._bytes, self._raw, self._loaded = None, {}, True
+            self._bytes, self._raw, self._loaded, self._answered = None, {}, True, True
+            return self._raw
+        except OSError as exc:
+            logger.debug("live config: {} is not readable right now ({})", path, exc)
             return self._raw
         if self._loaded and data == self._bytes:
             return self._raw
@@ -177,8 +182,19 @@ class LiveConfig:
             return self._raw
         self._bytes = data
         self._raw = parsed if isinstance(parsed, dict) else {}
+        self._answered = isinstance(parsed, dict)
         self._loaded = True
         return self._raw
+
+    def readable(self) -> bool:
+        """Whether :meth:`raw` is an answer: the file parsed as an object, or there is none.
+
+        A file that has not parsed since this reader started, or parsed as
+        something other than an object, leaves ``raw`` empty without saying
+        anything; a reader that must not mistake that for "no preferences" asks.
+        """
+        self.raw()
+        return self._answered
 
     def get(self, dotted: str, default: Any = None) -> Any:
         """One dotted key, the way the settings surface names them."""
@@ -667,21 +683,12 @@ def curator_pin(live: LiveConfig) -> tuple[str | None, str | None]:
     Read per curation rather than resolved once when the context engine is
     built, so that repointing the curator on a settings surface reaches the
     next turn instead of the next restart. ``permissions.judgeModel`` and
-    ``sessionTitle.model`` are already read this way; this pair and the skill
-    gate's were the subsystem pins that still owed a reload.
+    ``sessionTitle.model`` are read this way too.
 
     Turning the pair into a binding stays with the caller: that goes through
     the provider pool, which is where the cost of building one is visible.
     """
     return _block_pin(live, ("context",), "curator_model", "curator_provider")
-
-
-def skill_gate_pin(live: LiveConfig) -> tuple[str | None, str | None]:
-    """``skillForge.llmGateModel`` and the provider serving it, read live.
-
-    Same reasoning as :func:`curator_pin`.
-    """
-    return _block_pin(live, ("skillForge", "skill_forge"), "llm_gate_model", "llm_gate_provider")
 
 
 def disabled_tool_names(live: LiveConfig) -> frozenset[str]:
@@ -792,6 +799,65 @@ def skill_hub_enabled(live: LiveConfig) -> bool:
     return answer
 
 
+def project_skills_on(raw: Any) -> bool:
+    """Whether a config, as the file writes it, leaves the project skill source on.
+
+    Mirrors :func:`skill_hub_on`: the loader's migrations run first, on a copy,
+    because some of them never reach the file, and both top-level spellings are
+    accepted. A shape this reader cannot validate answers off, the way the Hub's
+    does -- the source reads files the project carries, and a file the loader
+    would refuse is not consent to read them. A ``projectSkills`` node that is
+    absent or null was never written and answers the schema default, which is on.
+    """
+    from raven.config.loader import _migrate_config
+    from raven.config.raven import ProjectSkillsConfig
+
+    default = ProjectSkillsConfig().enabled
+    if not isinstance(raw, dict):
+        return False
+    try:
+        data = _migrate_config(copy.deepcopy(raw), pop_extension_keys=False)
+    except Exception:  # noqa: BLE001 - a file the loader cannot walk is not consent
+        return False
+    camel = data.get("skillForge")
+    snake = data.get("skill_forge")
+    if camel is not None and snake is not None:
+        return False
+    block = camel if camel is not None else snake
+    if not isinstance(block, dict):
+        return default
+    value = block.get("projectSkills")
+    if value is None:
+        value = block.get("project_skills")
+    if value is None:
+        return default
+    try:
+        cfg = ProjectSkillsConfig.model_validate(value)
+    except Exception:  # noqa: BLE001 - a block the loader refuses is not consent
+        return False
+    return cfg.enabled
+
+
+_PROJECT_ANSWERS: "weakref.WeakKeyDictionary[LiveConfig, tuple[dict[str, Any], bool]]" = weakref.WeakKeyDictionary()
+
+
+def project_skills_enabled(live: LiveConfig) -> bool:
+    """Whether the project skill source may run, read on every ask.
+
+    Read live rather than captured at loop start so switching the source off
+    stops the next search, not the next process. The answer is kept per parsed
+    file, the way :func:`skill_hub_enabled` keeps the Hub's, so the migration
+    runs once per change of the bytes rather than once per search.
+    """
+    raw = live.raw()
+    kept = _PROJECT_ANSWERS.get(live)
+    if kept is not None and kept[0] is raw:
+        return kept[1]
+    answer = project_skills_on(raw)
+    _PROJECT_ANSWERS[live] = (raw, answer)
+    return answer
+
+
 _LAST_VALID_PERMISSIONS: "weakref.WeakKeyDictionary[LiveConfig, Any]" = weakref.WeakKeyDictionary()
 
 
@@ -827,3 +893,61 @@ def permissions_config(live: LiveConfig) -> "Any":
         return kept if kept is not None else PermissionsConfig()
     _LAST_VALID_PERMISSIONS[live] = validated
     return validated
+
+
+def network_permissions_of(raw: dict[str, Any]) -> Any:
+    """``permissions.network`` as the loader reads it from ``raw``; raises when it does not validate.
+
+    The loader reads a ``tools.sandbox.allowNet`` that an older build wrote back
+    into ``permissions.network`` on every load without writing the file, so the
+    same move is made here, on a copy.
+    """
+    from raven.config.loader import _migrate_sandbox_network
+    from raven.config.schema import NetworkPermissions
+
+    permissions = raw.get("permissions", {})
+    if not isinstance(permissions, dict):
+        raise ValueError("permissions is not an object")
+    tools = raw.get("tools")
+    sandbox = tools.get("sandbox") if isinstance(tools, dict) else None
+    data: dict[str, Any] = {"permissions": dict(permissions)}
+    if isinstance(sandbox, dict):
+        data["tools"] = {"sandbox": dict(sandbox)}
+    _migrate_sandbox_network(data)
+    if "network" not in data["permissions"]:
+        return NetworkPermissions()
+    node = data["permissions"]["network"]
+    if node is None:
+        # The loader refuses it; read as a missing section it would open the network.
+        raise ValueError("permissions.network is null")
+    return NetworkPermissions.model_validate(node)
+
+
+_LAST_VALID_NETWORK: "weakref.WeakKeyDictionary[LiveConfig, Any]" = weakref.WeakKeyDictionary()
+
+
+def network_permissions(live: LiveConfig) -> Any:
+    """What sandboxes may reach, read live the way the loader reads it.
+
+    A section that does not validate keeps the last validated one, as
+    :func:`permissions_config` does. One that has never validated in this
+    process closes the network instead of answering the open default: the
+    rules it was meant to hold are not known, and the open default is for a
+    file that says nothing.
+    """
+    from raven.config.schema import NetworkPermissions
+
+    try:
+        if not live.readable():
+            raise ValueError("the config file has not parsed as an object")
+        network = network_permissions_of(live.raw())
+    except Exception as exc:  # noqa: BLE001 - a torn or wrong section keeps the last good one
+        kept = _LAST_VALID_NETWORK.get(live)
+        logger.warning(
+            "live config: permissions.network is not valid right now ({}); keeping the {}",
+            exc,
+            "last validated set" if kept is not None else "network closed",
+        )
+        return kept if kept is not None else NetworkPermissions(default="closed")
+    _LAST_VALID_NETWORK[live] = network
+    return network

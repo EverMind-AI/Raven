@@ -30,7 +30,7 @@ from nio.exceptions import EncryptionError
 from raven.channels.adapters.matrix import content
 from raven.channels.base import ChannelBase
 from raven.channels.contract import Capabilities
-from raven.channels.transcribe import transcribe_audio
+from raven.channels.transcribe import transcribe_audio, transcription_marker
 from raven.config.paths import get_data_dir, get_media_dir
 from raven.utils.paths import safe_filename
 
@@ -390,12 +390,8 @@ class MatrixChannel(ChannelBase):
             parts.append(body.strip())
 
         if attachment and attachment.get("type") == "audio":
-            if transcription := await transcribe_audio(
-                attachment["path"], self.transcription_api_key, channel=self.name
-            ):
-                parts.append(f"[transcription: {transcription}]")
-            else:
-                parts.append(marker)
+            result = await transcribe_audio(attachment["path"], self.transcription_api_key, channel=self.name)
+            parts.append(transcription_marker(result) or marker)
         elif marker:
             parts.append(marker)
 

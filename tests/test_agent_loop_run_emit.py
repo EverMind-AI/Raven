@@ -18,7 +18,7 @@ import pytest
 from raven.agent.hook import AgentHook, HookDecision
 from raven.agent.hook.adapters import DecisionConsumerAdapter
 from raven.agent.loop import AgentLoop
-from raven.agent.loop._shared import _MID_TURN_HEADER
+from raven.agent.loop._shared import _MID_TURN_HEADER, _MID_TURN_USER_KEY
 from raven.agent.loop.bundles import HostWiring
 from raven.agent.loop.recovery import NETWORK_CUT_CONTINUATION
 from raven.agent.window.parts import CONVERSATION, SKILLS, measure_parts
@@ -630,57 +630,10 @@ async def test_a_forwarded_skill_read_is_named_for_the_tool_that_produced_it(tmp
     assert parts[CONVERSATION] < as_talk[CONVERSATION]
 
 
-class _SkillSink:
-    """Records what ``set_skills_sink`` reports to the skill panel."""
-
-    def __init__(self) -> None:
-        self.events: list[tuple[str, str, dict]] = []
-
-    async def __call__(self, conversation: str, name: str, payload: dict) -> None:
-        self.events.append((conversation, name, payload))
-
-    def read_skills(self) -> list[dict]:
-        return [
-            skill
-            for _, name, payload in self.events
-            if name == "skills_injected"
-            for skill in payload["skills"]
-            if skill["kind"] in ("read_skill", "use_skill")
-        ]
-
-
-async def test_a_forwarded_skill_read_reaches_the_skill_panel(tmp_path):
-    """The outer call is ``tool_call``; the panel must still hear about the
-    skill the model loaded through it."""
-    provider = _FakeStreamToolProvider(
-        [
-            [_call_by_route("s1", "read_skill", "tool_call", arguments={"skill_id": "local/deck-engine"})],
-            [ChatDelta(content="done")],
-        ]
-    )
-    loop = AgentLoop(provider=provider, workspace=tmp_path)
-    _stub_edges(loop)
-    loop.tools.register(_ReadSkillTool())
-    sink = _SkillSink()
-    loop.set_skills_sink(sink)
-
-    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
-
-    reported = sink.read_skills()
-    assert len(reported) == 1
-    assert reported[0]["id"] == "local/deck-engine"
-    assert reported[0]["name"] == "deck-engine"
-    assert reported[0]["kind"] == "read_skill"
-
-
-async def test_a_forwarded_skill_read_with_string_arguments_reaches_the_skill_panel(tmp_path):
-    """The tool accepts a JSON-string ``arguments``; the panel's read must too.
-
-    ``ToolCallController.call`` parses that spelling, so the read_skill body
-    really lands. A report path reading the raw envelope instead saw no
-    ``skill_id`` and dropped the report, leaving the panel empty for a call
-    that had run.
-    """
+async def test_a_forwarded_skill_read_with_string_arguments_lands_its_body(tmp_path):
+    """The tool accepts a JSON-string ``arguments``: ``ToolCallController.call``
+    parses that spelling, so the read_skill body really lands, filed under the
+    skill tool that produced it."""
     provider = _FakeStreamToolProvider(
         [
             [
@@ -711,8 +664,6 @@ async def test_a_forwarded_skill_read_with_string_arguments_reaches_the_skill_pa
     loop = AgentLoop(provider=provider, workspace=tmp_path)
     _stub_edges(loop)
     loop.tools.register(_ReadSkillTool())
-    sink = _SkillSink()
-    loop.set_skills_sink(sink)
 
     results: list[tuple[str, str]] = []
     original_add = loop.context.add_tool_result
@@ -729,43 +680,13 @@ async def test_a_forwarded_skill_read_with_string_arguments_reaches_the_skill_pa
 
     assert results and results[0][0] == "read_skill"
     assert _ReadSkillTool.BODY in results[0][1]
-    reported = sink.read_skills()
-    assert len(reported) == 1
-    assert reported[0]["id"] == "local/deck-engine"
-    assert reported[0]["kind"] == "read_skill"
 
 
-async def test_a_direct_skill_read_still_reaches_the_skill_panel(tmp_path):
-    """The control for the forwarded case: a direct call reports unchanged."""
-    provider = _FakeStreamToolProvider(
-        [
-            [_call_by_route("s1", "read_skill", "direct", arguments={"skill_id": "local/deck-engine"})],
-            [ChatDelta(content="done")],
-        ]
-    )
-    loop = AgentLoop(provider=provider, workspace=tmp_path)
-    _stub_edges(loop)
-    loop.tools.register(_ReadSkillTool())
-    sink = _SkillSink()
-    loop.set_skills_sink(sink)
-
-    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
-
-    reported = sink.read_skills()
-    assert len(reported) == 1
-    assert reported[0]["id"] == "local/deck-engine"
-    assert reported[0]["kind"] == "read_skill"
-
-
-async def test_a_refused_forward_reports_nothing_to_the_skill_panel(tmp_path):
-    """A ``tool_call`` whose target does not resolve reports no skill at all.
-
-    Both gates stay shut: ``metadata_owner`` falls back to the forwarder when
-    the target does not resolve, so the result is filed under ``tool_call``
-    rather than a skill tool, and the refusal text starts with ``Error``. The
-    forwarded arguments here carry a ``skill_id``, so a guard that keyed on the
-    arguments rather than the resolved target would report and turn this red.
-    """
+async def test_a_refused_forward_is_filed_under_the_forwarder(tmp_path):
+    """A ``tool_call`` whose target does not resolve is a refusal, not a skill
+    read: ``metadata_owner`` falls back to the forwarder, so the result is filed
+    under ``tool_call`` even though the forwarded arguments carry a
+    ``skill_id``, and the turn still answers."""
     provider = _FakeStreamToolProvider(
         [
             [_call_by_route("s1", "no_such_tool", "tool_call", arguments={"skill_id": "local/deck-engine"})],
@@ -775,8 +696,6 @@ async def test_a_refused_forward_reports_nothing_to_the_skill_panel(tmp_path):
     loop = AgentLoop(provider=provider, workspace=tmp_path)
     _stub_edges(loop)
     loop.tools.register(_ReadSkillTool())
-    sink = _SkillSink()
-    loop.set_skills_sink(sink)
 
     results: list[tuple[str, str]] = []
     original_add = loop.context.add_tool_result
@@ -796,7 +715,6 @@ async def test_a_refused_forward_reports_nothing_to_the_skill_panel(tmp_path):
     assert any(isinstance(e, EvStreamDelta) and e.delta == "done" for e in events.events)
     assert results and results[0][0] == "tool_call"
     assert results[0][1].startswith("Error: tool 'no_such_tool' is not available")
-    assert sink.events == []
 
 
 @pytest.mark.parametrize("watched", [True, False], ids=["watched", "unwatched"])
@@ -2606,3 +2524,26 @@ async def test_a_marker_after_a_file_delivery_does_not_make_the_turn_silent(tmp_
     assert not any(isinstance(e, EvNotice) and e.kind is NoticeKind.SILENT_TURN for e in sink.events)
     assert not any(isinstance(e, EvText) for e in sink.events), "the marker is no reply to send"
     assert outcome.silent is False and outcome.explicit_reply is True
+
+
+async def test_a_mid_turn_arrival_is_replayed_as_it_was_sent(tmp_path):
+    # The turn boundary is where a provider's prefix cache breaks: the next
+    # request only reuses this one when the bytes match. History keeps one entry
+    # per arrival, so the replay has to fold them back into the single labelled
+    # message the model was handed.
+    provider = _RecordingStreamProvider([*_stream_scripts(1), [ChatDelta(content="second")]])
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_FakeTool())
+
+    drain = _gap_drain([[], [_req("wait, skip the 2023 numbers"), _req("Q4 only")]])
+    await loop.run_turn(_req("summarise the report"), _EmitCollector(), drain, stream=True)
+    await loop.run_turn(_req("and the total?"), _EmitCollector(), _drain, stream=True)
+
+    sent = _labelled(provider.calls[1])
+    replayed = _labelled(provider.calls[2])
+    assert len(sent) == 1, provider.calls[1]
+    assert replayed == sent, "the next request replays the arrival as it was sent"
+    # The rerun seed reads this key off the live list, so a replayed arrival
+    # wearing it would put the whole history into the next attempt.
+    assert not any(_MID_TURN_USER_KEY in m for m in provider.calls[2]), provider.calls[2]

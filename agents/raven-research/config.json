@@ -159,8 +159,7 @@
     "dropSegments": [
       "identity",
       "memory",
-      "active_skills",
-      "skills"
+      "active_skills"
     ]
   }
 }

@@ -50,6 +50,17 @@ def _safe_loop(factory) -> Any:
         return None
 
 
+def _mcp_live_states(loop: Any) -> dict[str, dict]:
+    """The connection manager's snapshot of every server it knows, by name.
+
+    The console's one read-only peek at the manager, shared by every status
+    read here. Empty until the manager has started: it starts on the first
+    turn, and a status read must not start it.
+    """
+    mgr = getattr(loop, "mcp_manager_if_started", None)
+    return {snap["name"]: snap for snap in mgr.status()} if mgr is not None else {}
+
+
 def _hub_marker_name() -> str | None:
     """Filename marking a hub-installed skill, or ``None`` without the market.
 
@@ -222,8 +233,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
             from raven.mcp.client import resolve_transport
             from raven.mcp.oauth import pending_url
 
-            mgr = getattr(loop, "mcp_manager_if_started", None)
-            live = {snap["name"]: snap for snap in mgr.status()} if mgr is not None else {}
+            live = _mcp_live_states(loop)
             for name, sc in servers.items():
                 count = owned.get(name, 0)
                 snap = live.get(name)
@@ -653,6 +663,15 @@ def _mask_secrets(node: Any, key_hint: str = "") -> Any:
     return node
 
 
+def _raw_selected_vendor(raw: Any) -> str:
+    """``tools.web.search.provider`` off a config the loader refused, else ``""``."""
+    node = raw
+    for key in ("tools", "web", "search"):
+        node = node.get(key) if isinstance(node, dict) else None
+    provider = node.get("provider") if isinstance(node, dict) else None
+    return provider if isinstance(provider, str) else ""
+
+
 async def settings_get(params: dict, *, agent_loop_factory=None) -> dict:
     del agent_loop_factory  # the answer no longer depends on the serving loop
     from importlib.metadata import version as pkg_version
@@ -673,11 +692,44 @@ async def settings_get(params: dict, *, agent_loop_factory=None) -> dict:
     # through the loader's migrations and its boolean rules, and a copy of
     # either in the page drifts from it.
     hub_on = skill_hub_on(raw)
+    from raven.agent.subagent.vendored_agents import picture_search_report, product_secret
+    from raven.agent.tools.web import SEARCH_PROVIDERS
+    from raven.config.loader import load_config
+
+    # A file the loader refuses is a state this page is opened to repair, so it
+    # still answers: the raw file names the selection, and the credentials that
+    # are not in it (the lane's own, the environment) are still readable.
+    try:
+        config = load_config(path)
+    except Exception:  # noqa: BLE001 - the page still renders with an unreadable host config
+        config = None
+    selected = config.tools.web.search.provider if config is not None else _raw_selected_vendor(raw)
+
+    def lane_key(vendor: str) -> str:
+        spec = SEARCH_PROVIDERS.get(vendor)
+        return (
+            product_secret("Raven-PPT", f"{vendor.upper()}_API_KEY")
+            or (config.effective_web_vendor_key(vendor) if config is not None else "")
+            or (os.environ.get(spec.env_var, "") if spec else "")
+        )
+
+    try:
+        vendor, ready, reason = picture_search_report("Raven-PPT", selected, lane_key, host=raw)
+    except Exception:  # noqa: BLE001 - a probe that cannot answer must not fail the page
+        vendor, ready, reason = "", False, "not_ready"
     return {
         "settings": _mask_secrets(raw),
         "config_path": str(path),
         "raven_version": ver,
         "skill_hub_on": hub_on,
+        "picture_search": {
+            "vendor": vendor if ready else "",
+            "ready": ready,
+            # Derived from the reason: a deck pinned to its own vendor is not
+            # falling back, and the page must not warn that it is.
+            "fallback": reason in ("fallback_no_key", "no_surface"),
+            "reason": reason,
+        },
     }
 
 
@@ -900,7 +952,6 @@ _MERGED_KEYS = frozenset(
         "tools.media.video",
         "sessionTitle",
         "context",
-        "skillForge",
         "translate",
         "knowledge",
     }
@@ -1210,12 +1261,9 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "agents.defaults.contextWindowTokens": _chk_int_or_null("agents.defaults.contextWindowTokens", 1024, 100_000_000),
     "context.curatorModel": _chk_pin_model("context.curatorModel"),
     "context.curatorProvider": _chk_pin_provider("context.curatorProvider"),
-    "skillForge.llmGateModel": _chk_pin_model("skillForge.llmGateModel"),
-    "skillForge.llmGateProvider": _chk_pin_provider("skillForge.llmGateProvider"),
-    # The two pins as one write each, the way sessionTitle already is: a pair
-    # written a key at a time can be left half-changed by a dropped connection.
+    # The pin as one write, the way sessionTitle already is: a pair written a
+    # key at a time can be left half-changed by a dropped connection.
     "context": _chk_pin_pair("context", "curatorModel", "curatorProvider"),
-    "skillForge": _chk_pin_pair("skillForge", "llmGateModel", "llmGateProvider"),
     # The three media tools share one config shape; speech's has no provider,
     # because only the image and video tools run elsewhere.
     "tools.media.speech": _chk_media_selection,
