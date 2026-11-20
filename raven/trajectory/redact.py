@@ -122,6 +122,9 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("aws-access-key-id", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("github-token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b")),
     ("github-fine-grained-pat", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}\b")),
+    # Scheme://user:secret@host, the user may be empty as in redis://:secret@host.
+    # The first group is kept, so the URL keeps its shape.
+    ("url-password", re.compile(r"(://[^\s/:@]*:)([^\s/@]{3,})(?=@)")),
     ("slack-token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}")),
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")),
     ("bearer-token", re.compile(r"\bBearer +[A-Za-z0-9._~+/=-]{16,}")),
@@ -480,7 +483,14 @@ def _apply_exact(text: str, secrets: list[KnownSecret], counts: dict[str, int]) 
 
 def _apply_patterns(text: str, counts: dict[str, int]) -> str:
     for name, pattern in PATTERNS:
-        text, hits = pattern.subn(f"[REDACTED:pattern.{name}]", text)
+        placeholder = f"[REDACTED:pattern.{name}]"
+
+        def _sub(match: re.Match[str], placeholder: str = placeholder) -> str:
+            # A pattern captures a leading group only when it keeps that part,
+            # as the URL rule keeps everything before the password.
+            return (match.group(1) if match.groups() else "") + placeholder
+
+        text, hits = pattern.subn(_sub, text)
         if hits:
             counts[name] = counts.get(name, 0) + hits
     return text

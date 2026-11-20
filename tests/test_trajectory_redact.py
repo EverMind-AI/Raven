@@ -140,6 +140,27 @@ def test_pattern_fallback(tmp_path):
         assert f"[REDACTED:pattern.{name}]" in text
 
 
+def test_url_passwords_are_redacted_in_the_pattern_layer(tmp_path):
+    """A bundle copies the model's tool calls verbatim, so a connection string
+    is a credential channel here too. The user part may be empty, as redis
+    accepts, and stays as it was; a URL with no password is untouched."""
+    lines = [
+        "redis-cli -u redis://:hunter2secret@cache:6379/0 ping",
+        "psql postgres://admin:hunter2secret@db:5432/app",
+        "redis-cli -u redis://cache:6379/0 ping",
+    ]
+    bundle = _make_bundle(tmp_path, spans_text="\n".join(lines), artifact_text="clean")
+
+    report = tredact.redact_bundle(bundle, tmp_path / "red", secrets=[])
+
+    text = (report.redacted_dir / "spans.jsonl").read_text(encoding="utf-8")
+    assert "hunter2secret" not in text
+    assert "redis://:[REDACTED:pattern.url-password]@cache:6379/0" in text
+    assert "postgres://admin:[REDACTED:pattern.url-password]@db:5432/app" in text
+    assert "redis://cache:6379/0" in text
+    assert report.patterns["url-password"] == 2
+
+
 # ── layer 3: residual scan ────────────────────────────────────────────
 
 
