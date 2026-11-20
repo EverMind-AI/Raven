@@ -5648,7 +5648,12 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 }
 .memkv .v { font-size: 13px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
 .memnote { font-size: 11.5px; color: var(--faint); margin-top: 8px; line-height: 1.7; }
-.mempre { font-size: 14px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* The memory body is markdown, and the page's own prose rules draw it, so a
+   memory reads as the document it is rather than as the source of one. The
+   size is this column's own; the measure, the headings, the lists and the
+   code are the shell's, the same ones a chat answer and a knowledge page
+   are drawn with. */
+.mempre { font-size: 14px; }
 
 /* minmax(0, 1fr), not 1fr: a grid track's automatic minimum is min-content, so
    one long unbroken string in column 1 -- a probe that reported 2000 characters
