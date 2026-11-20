@@ -66,6 +66,34 @@ def test_set_api_key_for_simple_provider(cfg_path: Path) -> None:
     assert section["apiKey"] == "sk-or-v1-abc"
 
 
+def test_setting_a_literal_key_supersedes_an_env_reference(cfg_path: Path) -> None:
+    """``apiKey`` and ``apiKeyEnv`` are mutually exclusive; the write just made wins.
+
+    Without this, `provider set --api-key` on an ``apiKeyEnv`` section would
+    hit the both-set validator and fail -- or write a section the next load
+    rejects, taking the whole config file down with it.
+    """
+    from raven.config.schema import Config
+
+    set_provider_fields("openrouter", {"api_key_env": "OPENROUTER_KEY"}, config_path=cfg_path)
+    assert _read(cfg_path)["providers"]["openrouter"]["apiKeyEnv"] == "OPENROUTER_KEY"
+
+    set_provider_fields("openrouter", {"api_key": "sk-literal"}, config_path=cfg_path)
+    section = _read(cfg_path)["providers"]["openrouter"]
+    assert section["apiKey"] == "sk-literal"
+    assert not section.get("apiKeyEnv")
+    Config.model_validate(_read(cfg_path))
+
+
+def test_setting_an_env_reference_supersedes_a_literal_key(cfg_path: Path) -> None:
+    set_provider_fields("openrouter", {"api_key": "sk-literal"}, config_path=cfg_path)
+    set_provider_fields("openrouter", {"api_key_env": "OPENROUTER_KEY"}, config_path=cfg_path)
+
+    section = _read(cfg_path)["providers"]["openrouter"]
+    assert section["apiKeyEnv"] == "OPENROUTER_KEY"
+    assert not section.get("apiKey")
+
+
 def test_set_api_base_for_local_provider(cfg_path: Path) -> None:
     set_provider_fields(
         "ollama_chat",

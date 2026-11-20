@@ -785,6 +785,16 @@ def set_provider_fields(
                 coerced = None
             prev[path_key] = _set_nested(path_key, coerced, working)
 
+        # apiKey and apiKeyEnv are mutually exclusive (ProviderConfig._one_key_source):
+        # the source just written supersedes the other, or the section this
+        # function is about to validate would be one no later load accepts.
+        if fields.get("api_key") and working.get("api_key_env"):
+            prev.setdefault("api_key_env", working["api_key_env"])
+            working["api_key_env"] = None
+        if fields.get("api_key_env") and working.get("api_key"):
+            prev.setdefault("api_key", working["api_key"])
+            working["api_key"] = ""
+
         validated = cls.model_validate(working)
 
         _write_raw_section(data, name, validated.model_dump(by_alias=True))
