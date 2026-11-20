@@ -585,7 +585,7 @@ def test_a_proactive_summary_tells_again_the_note_it_took_away():
         "fixture must have the summary replace the note's carrier, not tail or protect it"
     )
     assert messages == before, "the list handed in is the turn's own record, not the summary's to edit"
-    assert told_notices(result.messages) == {"github": _AUTH}
+    assert told_notices(result.messages) == {("mcp", "github"): _AUTH}
     [repaired] = [m for m in result.messages if m.get(RUNTIME_CONTEXT_KEY)]
     assert repaired["content"].split("\n\n", 1)[0] == repaired[RUNTIME_CONTEXT_KEY]
     assert repaired[RUNTIME_CONTEXT_KEY].splitlines().count(MCP_NOTICE_HEADER) == 1
@@ -606,7 +606,7 @@ def test_an_overflow_head_summary_tells_again_the_note_it_took_away():
 
     assert provider.calls == 1, "nothing is elidable in this fixture, so the summary is the answer"
     assert result.changed and state.compress_retries == 1 and state.reactive_summary_tried
-    assert told_notices(result.messages) == {"github": _AUTH}
+    assert told_notices(result.messages) == {("mcp", "github"): _AUTH}
 
 
 _CLEARED = "the earlier note about it no longer applies; this turn's tool definitions show what it offers."
@@ -630,7 +630,7 @@ def test_the_newest_note_state_is_what_comes_back():
     result = asyncio.run(memory.shrink(messages, pressure=WindowPressure.PROACTIVE, state=state, model="m"))
 
     assert provider.calls == 1 and result.changed
-    assert told_notices(result.messages) == {_QUOTED_NAME: _QUOTED, "slides": _SLIDES_CONNECTED}
+    assert told_notices(result.messages) == {("mcp", _QUOTED_NAME): _QUOTED, ("mcp", "slides"): _SLIDES_CONNECTED}
     assert not any(_AUTH in str(m.get("content")) for m in result.messages), "a cleared note must not come back"
 
 
@@ -649,7 +649,7 @@ def test_a_note_the_question_already_carries_is_not_told_twice():
 
     assert provider.calls == 1 and result.changed
     assert result.messages[-1] is question, "nothing was lost, so nothing was rewritten"
-    assert told_notices(result.messages) == {"github": _AUTH}
+    assert told_notices(result.messages) == {("mcp", "github"): _AUTH}
     assert question["content"].split("\n\n", 1)[0].splitlines().count(MCP_NOTICE_HEADER) == 1
 
 
@@ -665,7 +665,7 @@ def test_consecutive_summaries_do_not_stack_the_notes():
     first = asyncio.run(
         memory.shrink(_pressured_turn(_question(), block), pressure=WindowPressure.PROACTIVE, state=state, model="m")
     )
-    assert first.changed and told_notices(first.messages) == {"github": _AUTH}
+    assert first.changed and told_notices(first.messages) == {("mcp", "github"): _AUTH}
 
     call = {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function"}]}
     result_msg = {"role": "tool", "tool_call_id": "c1", "content": "done"}
@@ -684,7 +684,7 @@ def test_consecutive_summaries_do_not_stack_the_notes():
     [repaired] = [m for m in second.messages if m.get(RUNTIME_CONTEXT_KEY)]
     block_lines = repaired["content"].split("\n\n", 1)[0].splitlines()
     assert block_lines.count(MCP_NOTICE_HEADER) == 1 and block_lines.count(_AUTH) == 1
-    assert told_notices(second.messages) == {"github": _AUTH}
+    assert told_notices(second.messages) == {("mcp", "github"): _AUTH}
 
 
 def test_a_multimodal_question_gets_the_note_in_its_first_block():
@@ -720,7 +720,7 @@ def test_a_multimodal_question_gets_the_note_in_its_first_block():
     assert repaired["content"][0]["text"].endswith(_AUTH)
     assert repaired["content"][1:] == [{"type": "text", "text": "look at this"}]
     assert result.messages[-2:] == [call, result_msg]
-    assert told_notices(result.messages) == {"github": _AUTH}
+    assert told_notices(result.messages) == {("mcp", "github"): _AUTH}
 
 
 async def _raising_chat(**_kwargs):
@@ -742,7 +742,7 @@ def test_a_failed_summary_leaves_the_transcript_alone():
 
     assert result.messages is messages and not result.changed
     assert state.compress_retries == 1 and state.head_summary_failures == 1
-    assert told_notices(messages) == {"github": _AUTH}, "nothing was taken away, so nothing needed retelling"
+    assert told_notices(messages) == {("mcp", "github"): _AUTH}, "nothing was taken away, so nothing needed retelling"
 
 
 def test_a_skipped_summary_leaves_the_transcript_alone():
@@ -762,7 +762,7 @@ def test_a_skipped_summary_leaves_the_transcript_alone():
 
     assert result.messages is messages and not result.changed and provider.calls == 0
     assert state.compress_retries == 0
-    assert told_notices(messages) == {"github": _AUTH}
+    assert told_notices(messages) == {("mcp", "github"): _AUTH}
 
 
 def test_compaction_disabled_leaves_the_transcript_alone():
@@ -786,7 +786,7 @@ def test_compaction_disabled_leaves_the_transcript_alone():
     result = asyncio.run(memory.shrink(messages, pressure=WindowPressure.PROACTIVE, state=state, model="m"))
 
     assert result.messages is messages and not result.changed and provider.calls == 0
-    assert told_notices(messages) == {"github": _AUTH}
+    assert told_notices(messages) == {("mcp", "github"): _AUTH}
 
 
 def test_pruning_tool_results_alone_touches_no_notice_blocks():
@@ -823,7 +823,7 @@ def test_pruning_tool_results_alone_touches_no_notice_blocks():
     carrier = next(m for m in result.messages if "older work" in str(m.get("content")))
     assert carrier is messages[1], "a user message is never the pruner's to edit"
     assert result.messages[-1] is question and MCP_NOTICE_HEADER not in str(question["content"])
-    assert told_notices(result.messages) == {"github": _AUTH}
+    assert told_notices(result.messages) == {("mcp", "github"): _AUTH}
 
 
 def test_a_summary_never_takes_the_question_out_of_the_turn():
@@ -848,4 +848,4 @@ def test_a_summary_never_takes_the_question_out_of_the_turn():
         m.get("role") == "user" and without_runtime_context(m) == without_runtime_context(question)
         for m in result.messages
     ), "the turn's question may not be summarized away"
-    assert told_notices(result.messages) == {"github": _AUTH}, "the note the summary took away is told again"
+    assert told_notices(result.messages) == {("mcp", "github"): _AUTH}, "the note the summary took away is told again"

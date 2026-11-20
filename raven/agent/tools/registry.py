@@ -63,6 +63,30 @@ class ToolSpec:
     tool: Tool
 
 
+@dataclass(frozen=True)
+class _SessionDefinitions:
+    """One session's frozen tool array and where each name came from.
+
+    ``origins`` is captured beside the schemas because an MCP tool that
+    unregisters later takes its ``_origins`` entry with it, and the notice
+    source still has to say which server's tools left the registry.
+    """
+
+    entries: list[tuple[str, dict[str, Any]]]
+    origins: dict[str, "MCPToolRef | None"]
+    #: Names whose schema was AUTHORED as dynamic. Their captured schema is the
+    #: fallback; each read re-renders the live one, the way the live view always
+    #: has. A frozen enum here would hide an agent table a playbook just bound.
+    dynamic: frozenset[str]
+    log_id: str | None
+
+
+#: Sessions whose array is kept for a refresh. One entry per session that has
+#: assembled; old ones are evicted first, which costs that session one recapture.
+_DEFINITION_CACHE_MAX = 64
+_MISSING = object()
+
+
 def admit_tool(tool: Tool) -> ToolSpec:
     """Check the four authored members, normalize the optional ones, dispense
     the frozen spec.
@@ -165,6 +189,21 @@ def absent_tool_error(name: str, *, tail: str = "") -> str:
     one has none to point at -- the model is already holding every schema.
     """
     return f"Error: tool '{name}' is not available. It may have been unloaded, or the name may be wrong{tail}."
+
+
+def unavailable_tool_error(name: str, reason: str) -> str:
+    """What a call to an advertised-but-withheld tool gets.
+
+    Distinct from :func:`absent_tool_error`: the model can see this schema in
+    the session's frozen array, so "not found" would send it looking for a name
+    problem that does not exist. Naming the reason is what makes the refusal
+    actionable instead of a retry loop.
+    """
+    why = f" ({reason})" if reason else ""
+    return (
+        f"Error: tool '{name}' is currently unavailable{why}. It stays in this conversation's tool list "
+        "and can be called again once it is enabled; do not retry it in this turn."
+    )
 
 
 def _received_tail(params: dict[str, Any]) -> str:
@@ -369,6 +408,24 @@ class ToolRegistry:
         # consults it for dispatch, so the three cannot disagree).
         self._withheld: Callable[[], frozenset[str]] | None = None
         self._schema_hidden: set[str] = set()
+        # A name the constructor's own list takes off for the life of the
+        # process (an eval harness's strict subset). It never enters a session
+        # snapshot: it cannot change mid-session, so keeping it out costs no
+        # cache, and the harness's contract is "the model never sees it".
+        self._hard_withheld: Callable[[], frozenset[str]] | None = None
+        # Why a withheld tool is off, for the runtime-context line and for the
+        # refusal a call gets. Asked per read, like the off switch itself.
+        self._withheld_reason: Callable[[], Mapping[str, str]] | None = None
+        # The session whose array this task serves. Set by ``session_scope_for``
+        # and unset outside a turn (a sub-agent, a bare test), which is what keeps the live view there.
+        self._definition_session: ContextVar[str | None] = ContextVar("tool_registry_definition_session", default=None)
+        # The frozen array per session, and the log id it was captured under.
+        self._session_definitions: dict[str, _SessionDefinitions] = {}
+        self._session_log_ids: dict[str, str | None] = {}
+        # Sessions whose next assembly recaptures. A compaction marks its
+        # session here instead of dropping the array mid-turn: the notices and
+        # system-prompt derivations for that turn were already built from it.
+        self._definitions_refresh_pending: set[str] = set()
         # Placed at assembly, not by registering late: an MCP server connects,
         # and a session brings its own tools, after the host wired its own, so
         # registration order cannot keep anything at the end. See ``list_last``.
@@ -420,6 +477,29 @@ class ToolRegistry:
         and it is the same shape the channel restriction already has.
         """
         self._withheld = source
+
+    def set_hard_withheld_source(self, source: Callable[[], frozenset[str]] | None) -> None:
+        """Install the names off for the life of the process, not for a turn.
+
+        A session snapshot keeps live-withheld tools in the array so a switch
+        flipped mid-session never moves the prompt-cache prefix. That reasoning
+        does not cover a name the *constructor* fixed off: it cannot change
+        while the process runs, so keeping it out costs no cache, and the eval
+        harness that passes such a list means "the model never sees it". This
+        source is that list, resolved against the registry at capture time so a
+        name that arrives later (an MCP tool) is still judged.
+        """
+        self._hard_withheld = source
+
+    def set_withheld_reason_source(self, source: Callable[[], Mapping[str, str]] | None) -> None:
+        """Install the answer to "why is this name off right now".
+
+        Only a reason's *presence* changes behaviour elsewhere; the text is for
+        the runtime-context line and the refusal a call gets, which is what
+        turns "tool unavailable" into something the model can act on (add the
+        key, select a base, flip the switch). Asked per read, like the switch.
+        """
+        self._withheld_reason = source
 
     def _verifier_refusals(self, name: str, params: dict[str, Any]) -> list[str]:
         """Why the Action role refuses this call, or an empty list.
@@ -649,8 +729,15 @@ class ToolRegistry:
         self._session_tools[session_key] = dict(tools)
 
     def release_session_tools(self, session_key: str) -> None:
-        """Forget one session's tools. Idempotent -- a session that brought none is normal."""
+        """Forget one session's tools. Idempotent -- a session that brought none is normal.
+
+        Also drops the session's frozen tool array: a session that ends must not
+        leave a snapshot behind for a later key reuse to inherit.
+        """
         self._session_tools.pop(session_key, None)
+        self._session_definitions.pop(session_key, None)
+        self._session_log_ids.pop(session_key, None)
+        self._definitions_refresh_pending.discard(session_key)
 
     @contextmanager
     def session_scope(self, tools: "Mapping[str, Tool] | None") -> Iterator[None]:
@@ -673,9 +760,19 @@ class ToolRegistry:
 
     @contextmanager
     def session_scope_for(self, session_key: str) -> Iterator[None]:
-        """:meth:`session_scope` over whatever this session bound, if anything."""
+        """:meth:`session_scope` over whatever this session bound, if anything.
+
+        Also names the session whose frozen tool array this task reads. The
+        array is the prompt-cache prefix, so it is captured once per session
+        and served byte-identically until a refresh point (a new session, a
+        compaction, a log id change, a release).
+        """
         with self.session_scope(self._session_tools.get(session_key)):
-            yield
+            token = self._definition_session.set(session_key)
+            try:
+                yield
+            finally:
+                self._definition_session.reset(token)
 
     @contextmanager
     def turn_scope(self) -> Iterator[None]:
@@ -724,7 +821,10 @@ class ToolRegistry:
         It is wrong when the turn's own call produced the arrival -- the
         ``plugin`` tool connecting what the user just asked for -- because then
         all the wait buys is a user having to say "go on" before the agent can
-        use it. That is paid for with one rebuilt cache prefix, once.
+        use it. The session's schema array is frozen, so this does not put the
+        arrival in it; it admits the name to ``offers`` (tool-search and
+        ``tool_call``), which is the route the plugin result names. The array
+        joins at the next refresh.
 
         Mutated in place rather than re-set, so the admission reaches the
         loop's reads however the call was dispatched: a ``set`` made inside a
@@ -843,13 +943,44 @@ class ToolRegistry:
         return tool.metadata_owner(params or {}).take_metadata()
 
     def get_definitions(self) -> list[dict[str, Any]]:
-        """Tool definitions in OpenAI format, minus those not on offer right now.
+        """Tool definitions in OpenAI format, from the session's frozen array when one is bound.
 
-        Assembled per LLM call, which is what makes an off switch take effect on
-        the next turn rather than the next restart: the list is computed here, so
-        the only thing a preference has to do is be readable by the time this
-        runs.
+        Inside a turn the array is the prompt-cache prefix: it is captured the
+        first time a session asks for it and served unchanged until the loop
+        invalidates it (a compaction, a log id change, a release). Availability
+        changes -- an off switch, a credential, a base attached mid-conversation
+        -- are reported in the runtime context instead, so they never move the
+        prefix. Outside a turn (a sub-agent, a bare test) the live
+        view is served, unchanged.
+
+        The live view is assembled per LLM call, which is what makes an off
+        switch take effect on the next turn rather than the next restart: the
+        list is computed here, so the only thing a preference has to do is be
+        readable by the time this runs.
+
+        Inside a session the snapshot is narrowed on read by the turn's
+        charter. That is a per-dispatch restriction, not a session availability
+        switch: a maker turn must not be able to see a writing tool at all, so
+        the narrowing is applied per read rather than frozen into the snapshot.
         """
+        session = self._definition_session.get()
+        if session is not None:
+            cached = self._session_definitions_for(session)
+            charter = _charter_withheld(self._tools)
+            out: list[dict[str, Any]] = []
+            for name, schema in cached.entries:
+                if name in charter:
+                    continue
+                if name in cached.dynamic:
+                    tool = self._visible(name)
+                    if tool is not None:
+                        schema = tool.to_schema()
+                out.append(schema)
+            return copy.deepcopy(out)
+        return self._live_definitions()
+
+    def _live_definitions(self) -> list[dict[str, Any]]:
+        """The unfrozen view: registered, offered on this turn, not schema-hidden."""
         withheld = self.withheld_names()
         # Served from the admitted snapshot, not the live object: what the
         # model is shown is what the door checked, whatever the object has
@@ -870,6 +1001,170 @@ class ToolRegistry:
                 out.append(schema)
         out.extend(last[name] for name in self._listed_last if name in last)
         return out
+
+    def _session_definitions_for(self, session_key: str) -> _SessionDefinitions:
+        """The session's frozen array, capturing it on first ask."""
+        cached = self._session_definitions.get(session_key)
+        if cached is None:
+            cached = self._capture_definitions(session_key)
+            self._session_definitions[session_key] = cached
+            self._trim_session_definitions()
+        return cached
+
+    def _capture_definitions(self, session_key: str) -> _SessionDefinitions:
+        """Take the session's array from the REGISTERED set, not the offered one.
+
+        The live withheld axis is deliberately not consulted: a tool it has off
+        is still in the array, so flipping the switch either way mid-session
+        changes only whether calls run. The constructor's hard subset and the
+        schema-hidden declarations are the exceptions -- neither can move while
+        the process runs, so keeping them out costs no cache.
+        """
+        try:
+            hard = self._hard_withheld() if self._hard_withheld is not None else frozenset()
+        except Exception:  # noqa: BLE001 - a bad read must not cost the session its array
+            logger.warning("tools: could not read the hard-disabled list; keeping every name")
+            hard = frozenset()
+        entries: list[tuple[str, dict[str, Any]]] = []
+        last: dict[str, tuple[str, dict[str, Any]]] = {}
+        origins: dict[str, "MCPToolRef | None"] = {}
+        dynamic: set[str] = set()
+        for name, tool in self._visible_tools().items():
+            if name in hard or name in self._schema_hidden:
+                continue
+            if not self.offers_on_this_channel(tool) or not self._visible_to_this_turn(name):
+                continue
+            spec = self._specs.get(name)
+            schema = tool.to_schema() if spec is None or spec.schema_dynamic else spec.schema
+            if spec is not None and spec.schema_dynamic:
+                dynamic.add(name)
+            origins[name] = self._origins.get(name)
+            pair = (name, schema)
+            if name in self._listed_last:
+                last[name] = pair
+            else:
+                entries.append(pair)
+        entries.extend(last[name] for name in self._listed_last if name in last)
+        return _SessionDefinitions(
+            entries=entries,
+            origins=origins,
+            dynamic=frozenset(dynamic),
+            log_id=self._session_log_ids.get(session_key),
+        )
+
+    def _trim_session_definitions(self) -> None:
+        while len(self._session_definitions) > _DEFINITION_CACHE_MAX:
+            oldest = next(iter(self._session_definitions))
+            self._session_definitions.pop(oldest, None)
+            self._session_log_ids.pop(oldest, None)
+
+    def invalidate_session_definitions(self, session_key: str) -> None:
+        """Drop the frozen array; the next read captures a fresh one.
+
+        Called at the refresh points that are not a new session: a context
+        compaction and a log id change. Costs one rebuilt prefix, which the
+        caller has already paid for by rebuilding the history.
+        """
+        self._session_definitions.pop(session_key, None)
+
+    def schedule_definitions_refresh(self, session_key: str) -> None:
+        """Mark the array for recapture at the session's next assembly.
+
+        A compaction turn cannot switch arrays coherently: the assembler has
+        already read the tool definitions into its notices and system-prompt
+        derivations, and only the history half is being rebuilt. Marking
+        instead of invalidating keeps that turn on one array; the next
+        assembly's :meth:`bind_session_revision` does the recapture, so the
+        array, the notices and the system-prompt text move together.
+        """
+        self._definitions_refresh_pending.add(session_key)
+
+    def bind_session_revision(self, session_key: str, log_id: str | None) -> None:
+        """Record the session log this turn reads, dropping a stale snapshot.
+
+        ``/clear`` mints a new ``log_id`` on the same session key; a snapshot
+        taken under the old log is reset with it, while a turn that reads the
+        same log keeps the array it already has. A refresh scheduled by the
+        previous turn's compaction is cashed here, at the start of the next
+        assembly.
+        """
+        known = self._session_log_ids.get(session_key, _MISSING)
+        if known is not _MISSING and known != log_id:
+            self._session_definitions.pop(session_key, None)
+        if session_key in self._definitions_refresh_pending:
+            self._definitions_refresh_pending.discard(session_key)
+            self._session_definitions.pop(session_key, None)
+        self._session_log_ids[session_key] = log_id
+
+    def session_definition_names(self) -> frozenset[str] | None:
+        """Names in the session's frozen array, or ``None`` outside a session.
+
+        Forces the capture: the notice source runs during assembly, before the
+        tool definitions are necessarily read, and it must describe the array
+        the turn is about to send.
+        """
+        session = self._definition_session.get()
+        if session is None:
+            return None
+        return frozenset(self._session_definitions_for(session).origins)
+
+    def session_definition_origin(self, name: str) -> "MCPToolRef | None":
+        """Where a name in the session's frozen array came from, or ``None``.
+
+        ``None`` covers both "not in the array" and "a tool with no MCP
+        origin"; a caller that needs the difference asks
+        :meth:`session_definition_names` first.
+        """
+        session = self._definition_session.get()
+        if session is None:
+            return None
+        return self._session_definitions_for(session).origins.get(name)
+
+    def session_definition_names_of_server(self, server: str) -> list[str]:
+        """Snapshot names one MCP server contributed, whether or not it is still connected."""
+        session = self._definition_session.get()
+        if session is None:
+            return []
+        cached = self._session_definitions_for(session)
+        return [name for name, ref in cached.origins.items() if ref is not None and ref.server == server]
+
+    def session_definition_servers(self) -> frozenset[str]:
+        """Every MCP server that contributed a name to the session's frozen array.
+
+        Kept beside the schemas so a server the manager has since removed from
+        ``status()`` still gets a notice: its names were advertised and calls to
+        them fail, and no live row is left to speak for them.
+        """
+        session = self._definition_session.get()
+        if session is None:
+            return frozenset()
+        cached = self._session_definitions_for(session)
+        return frozenset(ref.server for ref in cached.origins.values() if ref is not None)
+
+    def unavailable_reason(self, name: str) -> str | None:
+        """Why a name in the frozen array cannot run right now, or ``None``.
+
+        ``None`` when the name is not withheld, is outside a session, never
+        made the array (a hard-withheld name is answered as absent, the way an
+        unregistered one is), or is withheld by an axis the reason source does
+        not speak for -- a charter narrowing this dispatch, or the turn freeze.
+        Those are restrictions on *this turn*, not an operator setting, and
+        inventing a settings sentence for them is a fact the model would act
+        on wrongly.
+        """
+        if name not in self.withheld_names():
+            return None
+        session = self._definition_session.get()
+        if session is None:
+            return None
+        if name not in self._session_definitions_for(session).origins:
+            return None
+        if self._withheld_reason is None:
+            return None
+        try:
+            return self._withheld_reason().get(name)
+        except Exception:  # noqa: BLE001 - a bad read must not cost the refusal
+            return None
 
     def hidden_definition(self, name: str) -> dict[str, Any] | None:
         """One schema-hidden tool's definition, in the shape a visible tool gets.
@@ -968,7 +1263,15 @@ class ToolRegistry:
         # A registered tool answers data questions from its admitted spec; a
         # session overlay tool never passed the door and answers live.
         spec = self._specs.get(name) if tool is not None and self._tools.get(name) is tool else None
-        if not tool or name in self.withheld_names() or not self._visible_to_this_turn(name):
+        withheld = self.withheld_names()
+        if not tool or name in withheld or not self._visible_to_this_turn(name):
+            # A name in the session's frozen array that is withheld is
+            # advertised: the model can see its schema, so answer with the
+            # reason and the fact that it returns, not with "not found".
+            if tool is not None and name in withheld:
+                reason = self.unavailable_reason(name)
+                if reason is not None:
+                    return unavailable_tool_error(name, reason)
             # No catalog listing on the end of it. Unfolded, every schema is
             # already in this request and a list only repeats it; folded, a
             # cataloged tool is reached through ``tool_call``, which appends the

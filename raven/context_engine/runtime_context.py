@@ -74,6 +74,11 @@ def replayed_content(message: dict[str, Any]) -> Any:
 MCP_NOTICE_HEADER = "MCP plugin changes since the last note (an earlier note stands until one here replaces it):"
 """Opens a turn's MCP lines, so a plugin no line names reads as unchanged rather than resolved."""
 
+TOOL_NOTICE_HEADER = (
+    "Tool availability changes since the last note (an earlier note stands until one here replaces it):"
+)
+"""Opens a turn's tool-availability lines, so a tool no line names reads as unchanged."""
+
 _MCP_SUBJECT = re.compile(r"MCP plugin '(?P<name>(?:[^'\\]|\\.)*)': ")
 _LEGACY_MCP_SUBJECT = re.compile(r"MCP plugin '(?P<name>.+?)': ")
 """The name a line filed before the escaping held: the raw text up to the first ``': ``.
@@ -82,7 +87,10 @@ Read when the strict pattern above does not describe a line :func:`mcp_notice` w
 which is how a raw name holding a quote or a lone backslash is still recovered.
 """
 
+_TOOL_SUBJECT = re.compile(r"Tool '(?P<name>(?:[^'\\]|\\.)*)': ")
+
 _CLEARED = "the earlier note about it no longer applies; this turn's tool definitions show what it offers."
+_TOOL_CLEARED = "available again -- the earlier note no longer applies."
 
 
 def mcp_notice(name: str, text: str) -> str:
@@ -95,6 +103,17 @@ def mcp_notice(name: str, text: str) -> str:
     return f"MCP plugin '{quoted}': {text}"
 
 
+def tool_notice(name: str, text: str) -> str:
+    """One tool's availability line, keyed by the tool name the same way.
+
+    A tool and an MCP plugin can share a name (``web_search`` is plausible for
+    both), so the kind is part of the key :func:`notice_key` reads back; the
+    two lines never replace each other.
+    """
+    quoted = name.replace("\\", "\\\\").replace("'", "\\'")
+    return f"Tool '{quoted}': {text}"
+
+
 def notice_subject(line: str) -> str | None:
     """The plugin ``line`` speaks of, or ``None`` for a line that names none.
 
@@ -103,11 +122,32 @@ def notice_subject(line: str) -> str | None:
     to the first ``': ``. The two formats are ambiguous for a raw name holding a
     backslash: it can look escaped, and the escaped reading wins there.
     """
+    key = _mcp_key(line)
+    return key[1] if key is not None else None
+
+
+def notice_key(line: str) -> tuple[str, str] | None:
+    """What ``line`` speaks of: ``("mcp", plugin)``, ``("tool", name)``, or ``None``.
+
+    The kind is in the key so a plugin and a tool of the same name keep their
+    own notes; a line that names neither (a header, a host notice) is unkeyed and
+    is sent every turn.
+    """
+    mcp = _mcp_key(line)
+    if mcp is not None:
+        return mcp
+    match = _TOOL_SUBJECT.match(line)
+    if match is not None and _written_escaped(match["name"]):
+        return "tool", re.sub(r"\\(.)", r"\1", match["name"])
+    return None
+
+
+def _mcp_key(line: str) -> tuple[str, str] | None:
     match = _MCP_SUBJECT.match(line)
     if match is not None and _written_escaped(match["name"]):
-        return re.sub(r"\\(.)", r"\1", match["name"])
+        return "mcp", re.sub(r"\\(.)", r"\1", match["name"])
     legacy = _LEGACY_MCP_SUBJECT.match(line)
-    return legacy["name"] if legacy else None
+    return ("mcp", legacy["name"]) if legacy else None
 
 
 def _written_escaped(name: str) -> bool:
@@ -127,41 +167,56 @@ def _written_escaped(name: str) -> bool:
     return True
 
 
-def _clears(name: str, line: str) -> bool:
-    """Whether ``line`` clears ``name``: in the escaped form, or the raw one filed before it."""
+def _clears(key: tuple[str, str], line: str) -> bool:
+    """Whether ``line`` clears ``key``: in the escaped form, or the raw one filed before it."""
+    kind, name = key
+    if kind == "tool":
+        return line == tool_notice(name, _TOOL_CLEARED)
     return line == mcp_notice(name, _CLEARED) or line == f"MCP plugin '{name}': {_CLEARED}"
 
 
-def told_notices(messages: list[dict[str, Any]]) -> dict[str, str]:
-    """The MCP lines a model reading ``messages`` holds as current, by plugin.
+def _cleared_line(key: tuple[str, str]) -> str:
+    kind, name = key
+    return tool_notice(name, _TOOL_CLEARED) if kind == "tool" else mcp_notice(name, _CLEARED)
 
-    The runtime-context blocks are read in order: a line sets its plugin's
+
+def told_notices(messages: list[dict[str, Any]]) -> dict[tuple[str, str], str]:
+    """The notes a model reading ``messages`` holds as current, by kind and name.
+
+    The runtime-context blocks are read in order: a line sets its subject's
     note and a cleared line drops it. What a compaction took out of the
     messages is not read, so it is told again.
     """
-    told: dict[str, str] = {}
+    told: dict[tuple[str, str], str] = {}
     for message in messages:
         for line in _block_lines(message):
-            name = notice_subject(line)
-            if name is None:
+            key = notice_key(line)
+            if key is None:
                 continue
-            if _clears(name, line):
-                told.pop(name, None)
+            if _clears(key, line):
+                told.pop(key, None)
             else:
-                told[name] = line
+                told[key] = line
     return told
 
 
-def notice_changes(current: list[str], told: dict[str, str]) -> list[str]:
-    """The tool-notice lines to send: each plugin line unlike ``told``, and every line that names no plugin.
+def notice_changes(current: list[str], told: dict[tuple[str, str], str]) -> list[str]:
+    """The tool-notice lines to send: each subject line unlike ``told``, and every line that names no subject.
 
-    A plugin ``told`` holds and ``current`` no longer names gets a cleared line,
+    A subject ``told`` holds and ``current`` no longer names gets a cleared line,
     since a missing line now means "unchanged".
     """
     unkeyed, keyed = _split(current)
-    lines = [line for name, line in keyed.items() if told.get(name) != line]
-    lines += [mcp_notice(name, _CLEARED) for name in told if name not in keyed]
-    return [*unkeyed, MCP_NOTICE_HEADER, *lines] if lines else unkeyed
+    pairs = [(key, line) for key, line in keyed.items() if told.get(key) != line]
+    pairs += [(key, _cleared_line(key)) for key in told if key not in keyed]
+    mcp = [line for key, line in pairs if key[0] == "mcp"]
+    tools = [line for key, line in pairs if key[0] == "tool"]
+    lines = list(unkeyed)
+    if mcp:
+        lines += [MCP_NOTICE_HEADER, *mcp]
+    if tools:
+        lines += [TOOL_NOTICE_HEADER, *tools]
+    return lines
 
 
 def notice_ceiling(current: list[str], session_messages: list[dict[str, Any]]) -> list[str]:
@@ -169,12 +224,22 @@ def notice_ceiling(current: list[str], session_messages: list[dict[str, Any]]) -
 
     The history a turn replays exists only after the history strategy has
     budgeted the turn, so the budget is taken over this: all of ``current``,
-    plus a cleared line for every plugin the session ever noted.
+    plus a cleared line for every subject the session ever noted.
     """
     unkeyed, keyed = _split(current)
-    noticed = {name for message in session_messages for line in _block_lines(message) if (name := notice_subject(line))}
-    lines = [*keyed.values(), *(mcp_notice(name, _CLEARED) for name in sorted(noticed - keyed.keys()))]
-    return [*unkeyed, MCP_NOTICE_HEADER, *lines] if lines else unkeyed
+    noticed = {
+        key for message in session_messages for line in _block_lines(message) if (key := notice_key(line)) is not None
+    }
+    pairs = list(keyed.items())
+    pairs += [(key, _cleared_line(key)) for key in sorted(noticed - keyed.keys())]
+    mcp = [line for key, line in pairs if key[0] == "mcp"]
+    tools = [line for key, line in pairs if key[0] == "tool"]
+    lines = list(unkeyed)
+    if mcp:
+        lines += [MCP_NOTICE_HEADER, *mcp]
+    if tools:
+        lines += [TOOL_NOTICE_HEADER, *tools]
+    return lines
 
 
 def retell_notices(before: list[dict[str, Any]], after: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -195,7 +260,9 @@ def retell_notices(before: list[dict[str, Any]], after: list[dict[str, Any]]) ->
         lines = message.get(RUNTIME_CONTEXT_KEY)
         if message.get("role") != "user" or not isinstance(lines, str) or not lines:
             continue
-        told = "\n".join([lines, *(repair[1:] if MCP_NOTICE_HEADER in lines.splitlines() else repair)])
+        present = set(lines.splitlines())
+        extra = [line for line in repair if line not in (MCP_NOTICE_HEADER, TOOL_NOTICE_HEADER) or line not in present]
+        told = "\n".join([lines, *extra])
         content = _replaced(message.get("content"), lines, told)
         if content is None:
             continue
@@ -230,15 +297,15 @@ def _replaced(content: Any, lines: str, told: str) -> Any:
     return [*content[:at], {**content[at], "text": content[at]["text"].replace(lines, told, 1)}, *content[at + 1 :]]
 
 
-def _split(lines: list[str]) -> tuple[list[str], dict[str, str]]:
+def _split(lines: list[str]) -> tuple[list[str], dict[tuple[str, str], str]]:
     unkeyed: list[str] = []
-    keyed: dict[str, str] = {}
+    keyed: dict[tuple[str, str], str] = {}
     for line in lines:
-        name = notice_subject(line)
-        if name is None:
+        key = notice_key(line)
+        if key is None:
             unkeyed.append(line)
         else:
-            keyed[name] = line
+            keyed[key] = line
     return unkeyed, keyed
 
 

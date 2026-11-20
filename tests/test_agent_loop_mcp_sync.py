@@ -512,6 +512,106 @@ async def test_the_count_is_what_the_array_carries_not_what_the_server_registere
     assert all_off._mcp_tool_notices() == [], "a server offering nothing gets no line"
 
 
+class _StatusManager:
+    """The manager surface ``_mcp_tool_notices`` reads, with the state handed to it."""
+
+    def __init__(self, *snaps: dict) -> None:
+        self._snaps = list(snaps)
+
+    def status(self) -> list[dict]:
+        return self._snaps
+
+    def servers_offering(self, primitive: str) -> list[str]:
+        return []
+
+
+def _snap(name: str, state: str, *, enabled: bool = True) -> dict:
+    return {
+        "name": name,
+        "state": state,
+        "connected": state == "connected",
+        "enabled": enabled,
+        "tool_count": 0,
+    }
+
+
+async def test_a_server_connected_mid_session_joins_at_the_next_refresh(workspace) -> None:
+    loop = _loop(workspace)
+    with loop.tools.session_scope_for("s1"):
+        loop.tools.get_definitions()
+        loop.tools.register(
+            _FakeTool("mcp_svc_search"), origin=MCPToolRef(name="mcp_svc_search", server="svc", tool="search")
+        )
+        loop._mcp_manager = _StatusManager(_snap("svc", "connected"))
+        notes = loop._mcp_tool_notices()
+
+    assert len(notes) == 1, notes
+    assert "1 tool(s)" in notes[0]
+    assert "next compaction or new conversation" in notes[0]
+
+
+async def test_a_server_still_connecting_joins_at_the_next_refresh(workspace) -> None:
+    loop = _loop(workspace)
+    with loop.tools.session_scope_for("s1"):
+        loop.tools.get_definitions()
+        loop._mcp_manager = _StatusManager(_snap("svc", "connecting"))
+        notes = loop._mcp_tool_notices()
+
+    assert len(notes) == 1, notes
+    assert "next compaction or new conversation" in notes[0]
+
+
+async def test_a_disconnected_server_keeps_its_tools_in_the_list(workspace) -> None:
+    loop = _loop(workspace)
+    loop.tools.register(
+        _FakeTool("mcp_svc_search"), origin=MCPToolRef(name="mcp_svc_search", server="svc", tool="search")
+    )
+    with loop.tools.session_scope_for("s1"):
+        assert "mcp_svc_search" in {d["function"]["name"] for d in loop.tools.get_definitions()}
+        # The manager unregisters its tools on disconnect. The snapshot's
+        # origin record is what still knows which server they belonged to.
+        loop.tools.unregister("mcp_svc_search")
+        loop._mcp_manager = _StatusManager(_snap("svc", "disconnected"))
+        notes = loop._mcp_tool_notices()
+
+    assert len(notes) == 1, notes
+    assert "remain in this conversation's tool list" in notes[0]
+
+
+async def test_a_removed_server_still_gets_a_notice(workspace) -> None:
+    loop = _loop(workspace)
+    loop.tools.register(
+        _FakeTool("mcp_svc_search"), origin=MCPToolRef(name="mcp_svc_search", server="svc", tool="search")
+    )
+    with loop.tools.session_scope_for("s1"):
+        assert "mcp_svc_search" in {d["function"]["name"] for d in loop.tools.get_definitions()}
+        loop.tools.unregister("mcp_svc_search")
+        # A removed server is dropped from the manager entirely: status() has
+        # no row to hang the disconnected line on.
+        loop._mcp_manager = _StatusManager()
+        notes = loop._mcp_tool_notices()
+
+    assert len(notes) == 1, notes
+    assert "svc" in notes[0] and "no longer loaded" in notes[0]
+
+
+async def test_a_reconnected_server_that_gained_tools_says_they_join_at_the_next_refresh(workspace) -> None:
+    loop = _loop(workspace)
+    loop.tools.register(
+        _FakeTool("mcp_svc_search"), origin=MCPToolRef(name="mcp_svc_search", server="svc", tool="search")
+    )
+    with loop.tools.session_scope_for("s1"):
+        assert "mcp_svc_search" in {d["function"]["name"] for d in loop.tools.get_definitions()}
+        loop.tools.register(
+            _FakeTool("mcp_svc_create"), origin=MCPToolRef(name="mcp_svc_create", server="svc", tool="create")
+        )
+        loop._mcp_manager = _StatusManager(_snap("svc", "connected"))
+        notes = loop._mcp_tool_notices()
+
+    assert len(notes) == 1, notes
+    assert "1 new tool(s)" in notes[0] and "next compaction" in notes[0]
+
+
 async def test_tool_notices_ride_the_runtime_context_block(workspace) -> None:
     from datetime import datetime
 
