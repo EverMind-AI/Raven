@@ -45,9 +45,9 @@ def _offered(loop: AgentLoop) -> set[str]:
 
 
 class TestTheFileIsTheAuthority:
-    """The direction that used to be impossible. Asserted through the assembled
-    array rather than through ``_withheld_tool_names``, because the array is what a
-    turn actually sends and the helper is an implementation detail of it."""
+    """The direction that used to be impossible. Asserted through the live
+    array, which is what callers outside a turn see; a session's frozen array is
+    covered in test_tool_registry_session_snapshot.py."""
 
     def test_a_switch_flipped_after_startup_is_honoured(self, tmp_path: Path, monkeypatch) -> None:
         cfg = tmp_path / "config.json"

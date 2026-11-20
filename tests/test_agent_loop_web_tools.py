@@ -558,11 +558,11 @@ def test_design_image_offer_and_execution_follow_host_selection(tmp_path, initia
     tool = loop.tools.get("image_generate")
     for enabled in [initially_enabled, not initially_enabled, initially_enabled]:
         write(enabled)
-        assert ("image_generate" not in loop._unconfigured_tool_names()) is enabled
+        assert ("image_generate" not in loop._unconfigured_tool_reasons()) is enabled
         assert tool._config.api_key == ("host-key" if enabled else "")
         assert tool._config.model == ("openai/gpt-image-2" if enabled else "")
     host.write_text(json.dumps({"tools": {}}))
-    assert "image_generate" in loop._unconfigured_tool_names()
+    assert "image_generate" in loop._unconfigured_tool_reasons()
     assert not tool._config.api_key
 
 

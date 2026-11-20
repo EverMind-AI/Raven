@@ -194,8 +194,9 @@ class PluginTool(Tool):
             "command line, and you must not compose one. Never put an API key, token, password or account "
             "name in these arguments: a plugin that needs a secret is reported with "
             "the field's name, and the user enters it in the plugin panel. A newly "
-            "connected plugin's tools appear in your tool list from the next step on, "
-            "not inside this call's result."
+            "connected plugin's tools join this conversation's tool list at the next "
+            "compaction or new conversation; until then `tool_call` can reach them by "
+            "name, not inside this call's result."
         )
 
     @property
@@ -383,7 +384,7 @@ class PluginTool(Tool):
             named = f": {', '.join(tools)}" if tools else ""
             return (
                 f"Connected '{name}'. It registered {snap.get('tool_count') or len(tools)} tool(s){named}. "
-                f"They are in your tool list from the next step on."
+                f"{self._joined_note()}"
             )
 
         url = pending_url(name)
@@ -448,7 +449,7 @@ class PluginTool(Tool):
             named = f": {', '.join(tools)}" if tools else ""
             return (
                 f"'{name}' is authorized and connected, with {snap.get('tool_count') or len(tools)} tool(s){named}. "
-                f"They are in your tool list from the next step on."
+                f"{self._joined_note()}"
             )
         url = pending_url(name)
         if url:
@@ -491,7 +492,11 @@ class PluginTool(Tool):
         except PlugConnectError as e:
             return f"Error: removing '{name}' failed: {e.detail}"
         origin = out.get("origin") or "market"
-        return f"Removed '{name}' ({origin} entry), with its stored credentials. Its tools are gone from your list."
+        return (
+            f"Removed '{name}' ({origin} entry), with its stored credentials. Its tools keep their "
+            "schemas in this conversation's tool list until the next compaction or new conversation, "
+            "but calls to them now fail."
+        )
 
     # ── helpers ────────────────────────────────────────────────────
 
@@ -523,12 +528,29 @@ class PluginTool(Tool):
         reader of a refused hub."""
         return (await self._lookup(name, _NEAR_LIMIT))[:_NEAR_LIMIT]
 
+    def _joined_note(self) -> str:
+        """What a newly connected plugin's tools can do before the array refreshes.
+
+        The session's schema array is the prompt-cache prefix and is frozen
+        until a compaction or a new conversation, so the tools are not in it
+        yet. The turn admission makes them reachable through ``tool_call`` by
+        name; the note names that route only where it exists.
+        """
+        if self._registry is not None and self._registry.offers_by_name("tool_call"):
+            return (
+                "They join this conversation's tool list at the next compaction or new conversation; "
+                "`tool_call` can reach them by name now."
+            )
+        return "They join this conversation's tool list at the next compaction or new conversation."
+
     def _join_turn(self, server: str) -> list[str]:
         """The server's tools, let into the running turn.
 
-        Without this the turn freeze holds them back until the user sends
-        another message, and the result's "from the next step on" is a promise
-        the agent then fails to keep.
+        The session's schema array is frozen; admission is what makes the tools
+        reachable through ``offers`` (``tool_search`` and ``tool_call``) now,
+        while the result text names the refresh point for the array. Without it
+        the turn freeze would refuse even ``tool_call`` until the user sent
+        another message.
         """
         tools = self._tools_of(server)
         if self._registry is not None:

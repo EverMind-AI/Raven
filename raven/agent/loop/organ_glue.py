@@ -223,6 +223,13 @@ class OrganGlueMixin:
         model answer for a routed one.
         """
         from raven.context_engine import TurnContext  # deferred — see module note
+        from raven.context_engine.history.markers import HISTORY_COMPACTED_META
+
+        # The session log this turn reads. ``/clear`` mints a new log id on the
+        # same key; a frozen array captured under the old one is dropped and
+        # recaptured here, before the engine budgets with it.
+        revision = session.revision if isinstance(session, Session) else None
+        self.tools.bind_session_revision(session_key, revision.log_id if revision is not None else None)
 
         # Reset the metadata stash BEFORE calling the engine. If
         # ``engine.assemble`` raises partway, the next caller falls back to
@@ -248,6 +255,11 @@ class OrganGlueMixin:
                 session_revision=session.revision if isinstance(session, Session) else None,
             ),
         )
+        if assembled.metadata.get(HISTORY_COMPACTED_META):
+            # Mark, not invalidate: this turn's array is the one its notices and
+            # system-prompt derivations were built from. The next assembly
+            # cashes the mark, so the array, notices and text all move together.
+            self.tools.schedule_definitions_refresh(session_key)
         # Stash the engine's injected_skill_ids so the after-turn
         # feedback dispatcher can read the source-qualified ids the
         # unified engine populates via SkillForgeRouter. If the key is absent
