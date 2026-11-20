@@ -749,20 +749,34 @@
 }
 .tkqtext { flex: 1; min-width: 0; color: var(--text); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
 .tkqtext::before { content: counter(tkq) ". "; color: var(--muted); }
-.tkqignore {
+.tkqignore,
+.tkaskbtn[data-kind="ignore"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: none;
-  padding: 1px 8px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--paper);
   color: var(--muted);
   font: inherit;
-  font-size: 11.5px;
-  white-space: nowrap;
   cursor: pointer;
+  transition: background .14s ease, border-color .14s ease, color .14s ease;
 }
-.tkqignore:hover { border-color: var(--faint); color: var(--text); }
-.tkaskacts { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.tkqignore:hover,
+.tkaskbtn[data-kind="ignore"]:hover {
+  border-color: var(--faint);
+  background: var(--raised);
+  color: var(--text);
+}
+.tkqignore:active,
+.tkaskbtn[data-kind="ignore"]:active { background: var(--line-soft); }
+.tkqignore:focus-visible,
+.tkaskbtn[data-kind="ignore"]:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.tkaskacts { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 8px; }
 .tkaskbtn {
   padding: 3px 12px;
   white-space: nowrap;
@@ -1011,7 +1025,7 @@
   margin-top: 2px;
 }
 .tkthreadacts .tkgroupact:not(:only-child) { margin-right: auto; }
-.tkaskpair { display: inline-flex; gap: 6px; }
+.tkaskpair { display: inline-flex; align-items: center; gap: 6px; }
 .tkthread .tkasklist { margin-bottom: 8px; }
 .tkgroupact {
   display: inline-flex;
