@@ -207,3 +207,20 @@ def test_a_compaction_schedules_the_next_turns_refresh(tmp_path: Path, monkeypat
 
     asyncio.run(loop.run_turn(_request(), _nowhere, lambda: [], stream=False))
     assert "late_tool" in _names(provider.tools[3]), "the next assembly recaptures the array"
+
+
+def test_deleting_a_session_releases_its_frozen_array(tmp_path: Path) -> None:
+    """A deleted session's snapshot is released with its binding, so a later
+    session reusing the key captures the registry as it is then -- and an
+    active session's snapshot is never dropped to make room for another."""
+    loop = _loop(tmp_path)
+
+    with loop.tools.session_scope_for("test:c1"):
+        assert "late_tool" not in {d["function"]["name"] for d in loop.tools.get_definitions()}
+        loop.tools.register(_LateTool())
+        assert "late_tool" not in {d["function"]["name"] for d in loop.tools.get_definitions()}
+
+    loop.clear_session_binding("test:c1")
+
+    with loop.tools.session_scope_for("test:c1"):
+        assert "late_tool" in {d["function"]["name"] for d in loop.tools.get_definitions()}

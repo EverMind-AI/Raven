@@ -81,9 +81,6 @@ class _SessionDefinitions:
     log_id: str | None
 
 
-#: Sessions whose array is kept for a refresh. One entry per session that has
-#: assembled; old ones are evicted first, which costs that session one recapture.
-_DEFINITION_CACHE_MAX = 64
 _MISSING = object()
 
 
@@ -420,6 +417,9 @@ class ToolRegistry:
         # and unset outside a turn (a sub-agent, a bare test), which is what keeps the live view there.
         self._definition_session: ContextVar[str | None] = ContextVar("tool_registry_definition_session", default=None)
         # The frozen array per session, and the log id it was captured under.
+        # Dropped only by a release, an explicit invalidation, or a log id
+        # change -- never evicted to make room for another session: that would
+        # silently recapture an active session's array on its next turn.
         self._session_definitions: dict[str, _SessionDefinitions] = {}
         self._session_log_ids: dict[str, str | None] = {}
         # Sessions whose next assembly recaptures. A compaction marks its
@@ -1008,7 +1008,6 @@ class ToolRegistry:
         if cached is None:
             cached = self._capture_definitions(session_key)
             self._session_definitions[session_key] = cached
-            self._trim_session_definitions()
         return cached
 
     def _capture_definitions(self, session_key: str) -> _SessionDefinitions:
@@ -1051,12 +1050,6 @@ class ToolRegistry:
             dynamic=frozenset(dynamic),
             log_id=self._session_log_ids.get(session_key),
         )
-
-    def _trim_session_definitions(self) -> None:
-        while len(self._session_definitions) > _DEFINITION_CACHE_MAX:
-            oldest = next(iter(self._session_definitions))
-            self._session_definitions.pop(oldest, None)
-            self._session_log_ids.pop(oldest, None)
 
     def invalidate_session_definitions(self, session_key: str) -> None:
         """Drop the frozen array; the next read captures a fresh one.

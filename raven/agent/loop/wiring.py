@@ -952,6 +952,10 @@ class WiringMixin:
         # does: a deleted session has nothing left to run as, and this is the
         # one place that says a session is over.
         self._session_personas.pop(session_key, None)
+        # The frozen tool array and its log id go with it for the same reason:
+        # the key may be reused by a later session, and an active session's
+        # array must never be evicted to make room for another.
+        self.tools.release_session_tools(session_key)
 
     def _forget_transport_verdicts(self) -> None:
         """Drop the capability verdicts a new provider may answer differently.
