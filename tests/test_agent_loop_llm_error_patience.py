@@ -667,20 +667,24 @@ def test_the_budget_window_collapses_once_when_the_pictures_outgrow_it_and_not_b
     assert shrink.window_images(messages, 2, budget=40, reason="budget") == (0, 0), "idempotent under budget"
 
 
-def test_the_budget_weighs_inline_bytes_only_and_the_users_picture_is_outside_it() -> None:
+def test_the_budget_counts_history_user_pictures_and_protects_the_current_question() -> None:
     remote = {"type": "image_url", "image_url": {"url": "https://example.test/a.png"}}
     sketch = {"role": "user", "content": [_picture("SKETCHSKETCH")]}
+    current = {"role": "user", "content": [_picture("CURRENTCURRE")]}
     messages = [
         sketch,
         {"role": "tool", "tool_call_id": "1", "content": [remote]},
         _batch("b1", 2, 1),
         _batch("b2", 2, 2),
+        current,
     ]
 
-    # 16 wire bytes across the two batches, the remote reference weighing nothing.
-    assert shrink.window_images(messages, 1, budget=16, reason="budget") == (0, 0)
-    assert shrink.window_images(messages, 1, budget=15, reason="budget") == (2, 3)
-    assert messages[0] is sketch, "the user's own picture is neither weighed nor withdrawn"
+    # 12 + 0 + 8 + 8 + 12 = 40 wire bytes; the remote reference weighs nothing.
+    assert shrink.window_images(messages, 1, budget=40, reason="budget") == (0, 0)
+    assert shrink.window_images(messages, 1, budget=39, reason="budget") == (3, 4)
+    assert _pictures_in(messages[0]) == 0, "the earlier turn's picture is withdrawn"
+    assert "earlier turn" in messages[0]["content"][0]["text"]
+    assert _pictures_in(messages[-1]) == 1, "the current question keeps its picture"
 
 
 def test_the_budget_is_charged_the_base64_the_request_carries_not_the_bytes_it_decodes_to() -> None:
@@ -721,10 +725,9 @@ def test_a_picture_without_provenance_is_still_accounted_for() -> None:
     assert notes[0].endswith("To see it again, ask for it again]")
 
 
-def test_a_picture_the_user_sent_is_not_part_of_the_window() -> None:
-    """The user's own picture is the subject of the turn, not a result the model has
-    finished with: however many renders follow it, it stays -- until the endpoint has
-    refused the request and the window is closed with nothing else left to take out."""
+def test_the_current_questions_picture_is_never_withdrawn() -> None:
+    """The picture on this turn's question is the subject of the turn: it stays even
+    when the window is closed, while the pictures from the tool exchange go."""
     sketch = {"role": "user", "content": [text_block("make it look like this"), _picture("SKETCH")]}
     messages = [sketch, *_with_pictures()[1:]]
 
@@ -733,8 +736,8 @@ def test_a_picture_the_user_sent_is_not_part_of_the_window() -> None:
 
     assert shrink.window_images(messages, 0, reason="refused") == (1, 2), "the tool pictures, not the sketch"
     assert _pictures_in(messages[0]) == 1
-    assert shrink.window_images(messages, 0, reason="refused", any_role=True) == (1, 1)
-    assert _pictures_in(messages[0]) == 0 and "refused this request's pictures" in messages[0]["content"][1]["text"]
+    assert shrink.window_images(messages, 0, reason="refused") == (0, 0), "nothing else is left to withdraw"
+    assert _pictures_in(messages[0]) == 1
 
 
 def test_a_closed_window_withdraws_the_newest_picture_and_says_why() -> None:
@@ -767,11 +770,10 @@ def test_the_overflow_path_uses_the_same_notes() -> None:
     assert shrink.elide_older_images(out) == (out, 0)
 
 
-def test_the_overflow_path_sheds_the_users_own_pictures_last() -> None:
-    """A turn that is nothing but pasted screenshots overflows on them alone, and the
-    overflow path could always reach them: they go after every result picture and
-    tool body, newest kept, with the same note. While a result picture is still in
-    the transcript it goes first and the user's stay."""
+def test_the_overflow_path_sheds_earlier_pictures_and_keeps_the_current_question() -> None:
+    """A turn that is nothing but pasted screenshots overflows on them alone. The
+    pictures from earlier turns go after every result picture and tool body, with
+    the same note; the picture on the current question stays."""
     pasted = [
         {"role": "user", "content": [text_block("first screenshot"), _picture("U1")]},
         {"role": "assistant", "content": "seen"},
@@ -784,16 +786,13 @@ def test_the_overflow_path_sheds_the_users_own_pictures_last() -> None:
     assert elided == 2 and out is not pasted
     assert [_pictures_in(m) for m in pasted] == [1, 0, 1, 0, 1], "the input is left alone"
     assert [_pictures_in(m) for m in out] == [0, 0, 0, 0, 1]
-    assert "elided to fit the context window" in out[0]["content"][1]["text"]
+    assert "earlier turn" in out[0]["content"][1]["text"]
     assert shrink.emergency_shrink(out) == (out, 0)
 
     mixed = [*_with_pictures(), {"role": "user", "content": [_picture("U9")]}]
     first, freed = shrink.emergency_shrink(mixed)
-    assert freed == 2 and _pictures_in(first[-1]) == 1, "result pictures go first, the user's stays"
-    again, freed_again = shrink.emergency_shrink(first)
-    assert freed_again == 1 and _pictures_in(again[5]) == 0, "then the older result picture goes"
-    assert _pictures_in(again[-1]) == 1, "the newest picture, the user's, is kept"
-    assert shrink.emergency_shrink(again) == (again, 0)
+    assert freed == 2 and _pictures_in(first[-1]) == 1, "result pictures go first, the current question stays"
+    assert shrink.emergency_shrink(first) == (first, 0), "the newest result picture is kept by the window"
 
 
 class _PageRender(Tool):

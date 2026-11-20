@@ -166,7 +166,10 @@ order. A replacement loop may name its own roles, which is why the paper is fact
 The index-and-URL record filed beside an inline picture's `[image]` placeholder when a
 message is saved. The exact data URI is archived in that private field, so the next
 turn's replay sends the same bytes, character for character, while the display content
-keeps the placeholder. A malformed reference falls back to the placeholder.
+keeps the placeholder. Replay expands a picture only when the receiving model can see it
+(and, for a tool result, the transport can carry one); the image window may withdraw
+pictures from earlier turns when their byte budget is crossed, while the current
+question's picture stays. A malformed reference falls back to the placeholder.
 _Avoid_: calling the schema's `content` a copy of the model's picture — the display form
 keeps `[image]`, and the private refs hold the bytes.
 

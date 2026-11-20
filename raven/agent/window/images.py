@@ -89,7 +89,8 @@ _REFUSED = "The endpoint refused"
 _ELIDED = "It was elided"
 _OUTGREW = "This turn's pictures"
 _SEEN = "You looked at it"
-_WITHDRAWAL_OPENINGS = (_REFUSED, _ELIDED, _OUTGREW, _SEEN)
+_HISTORY = "It came from an earlier turn"
+_WITHDRAWAL_OPENINGS = (_REFUSED, _ELIDED, _OUTGREW, _SEEN, _HISTORY)
 _WITHDRAWN_NOTE_FACTS = re.compile(
     r"^(\[image no longer in context: .*?)\. (?:" + "|".join(map(re.escape, _WITHDRAWAL_OPENINGS)) + r").*\]$",
     re.DOTALL,
@@ -117,10 +118,11 @@ def withdrawn_image_note(source: dict[str, Any], *, index: int, total: int, reas
     for it again" rather than a bare "elided" it has to guess about. ``reason`` is
     ``budget`` (the turn's pictures outgrew their byte budget and collapsed to the
     newest few), ``superseded`` (a fixed count moved past it), ``refused`` (the
-    endpoint would not take the request's pictures), ``context`` (an overflow) or
-    ``summary`` (a head summary took the place of the message that showed it).
-    Written once, when the picture leaves; the same inputs always give the same
-    text.
+    endpoint would not take the request's pictures), ``context`` (an overflow),
+    ``summary`` (a head summary took the place of the message that showed it) or
+    ``history`` (a picture from an earlier turn lost its place to the picture
+    budget). Written once, when the picture leaves; the same inputs always give
+    the same text.
     """
     caption = source.get("caption")
     tool = source.get("tool")
@@ -137,6 +139,9 @@ def withdrawn_image_note(source: dict[str, Any], *, index: int, total: int, reas
         why = f"{_ELIDED} with the start of this turn, which a summary now stands for."
     elif reason == "budget":
         why = f"{_OUTGREW} outgrew their byte budget, so only the {keep} newest image-bearing result(s) keep theirs."
+    elif reason == "history":
+        why = f"{_HISTORY} and was withdrawn to fit this request's picture budget."
+        again = "ask the user to send it again"
     elif keep == 0:
         why = f"{_REFUSED} this turn's pictures as too large, so none are kept in context now."
     else:

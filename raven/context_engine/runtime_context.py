@@ -59,13 +59,25 @@ def _block_holding(content: list[Any], lines: str) -> int | None:
     )
 
 
-def replayed_content(message: dict[str, Any]) -> Any:
+def replayed_content(
+    message: dict[str, Any],
+    *,
+    can_see_images: bool = True,
+    tool_images_ok: bool = True,
+) -> Any:
     """The content ``message`` was sent with, as far as its filed lines go.
 
     A user entry filed before the field existed, and every other entry, comes
-    back as it is.
+    back as it is. Archived pictures are expanded only when the receiving model
+    and transport can take them, which is the same verdict the live assembly
+    applied to the message they came from.
     """
-    content = expand_images(message.get("content"), message)
+    content = expand_images(
+        message.get("content"),
+        message,
+        can_see_images=can_see_images,
+        tool_images_ok=tool_images_ok,
+    )
     lines = message.get(RUNTIME_CONTEXT_FIELD)
     if message.get("role") != "user" or not isinstance(lines, str) or not lines:
         return content

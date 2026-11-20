@@ -20,8 +20,9 @@ This file documents non-obvious constraints and usage patterns.
   happened — fine detail and small text may be unreadable after a downscale, so
   crop the region you care about and read that instead of squinting at the whole
   screenshot.
-- An image is visible for the turn that read it. Later turns see a placeholder
-  with the file path, so read the file again if you need another look.
+- An image stays visible on later turns while the receiving model can see it;
+  the image window or the endpoint may withdraw an old picture, leaving a note
+  with its file path. Read the file again if you need another look.
 - Some model endpoints cannot carry an image inside a tool result. There the
   picture arrives in the message right after it instead; nothing is lost.
 

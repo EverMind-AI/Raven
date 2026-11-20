@@ -69,12 +69,27 @@ def capture_images(
     return kept, refs
 
 
-def expand_images(content: Any, message: dict[str, Any]) -> Any:
+def expand_images(
+    content: Any,
+    message: dict[str, Any],
+    *,
+    can_see_images: bool = True,
+    tool_images_ok: bool = True,
+) -> Any:
     """``content`` with each recorded placeholder replaced by the picture it stood for.
 
     A message without references comes back as it is. A reference whose URL is
-    malformed leaves the placeholder.
+    malformed leaves the placeholder. The two gates are the receiving model's:
+    a tool result needs a model that sees images and a transport that carries
+    one in ``role="tool"``; a user message needs only the former. A false gate
+    leaves the placeholder, so a replay never sends a picture the live assembly
+    would not have sent.
     """
+    role = message.get("role")
+    if role == "tool" and not (can_see_images and tool_images_ok):
+        return content
+    if role == "user" and not can_see_images:
+        return content
     refs = message.get(IMAGE_REFS_KEY)
     if not isinstance(content, list) or not isinstance(refs, list):
         return content
