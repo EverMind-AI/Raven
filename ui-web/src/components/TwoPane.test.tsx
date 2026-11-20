@@ -62,6 +62,27 @@ describe('the card that marks the selected row', () => {
     expect(card()?.style.transform).toBe('translateY(126px)')
   })
 
+  it('follows the row when the list moves it under the same selection', () => {
+    place(42, 40)
+    /* The rows arrive as a list, the way the pages that draw this frame hand
+       them over: `items.map(...)` is an array even when it holds one row. */
+    const rows = (names: string[], current: number) => names.map((n, i) => (
+      <TwoPaneRow key={n} current={i === current} name={n} onOpen={() => {}} />
+    ))
+    const { rerender } = render(<TwoPaneList>{rows(['first', 'second'], 0)}</TwoPaneList>)
+    expect(card()?.style.transform).toBe('translateY(42px)')
+    /* The row is the same row afterwards: the card must not renumber the
+       list, or every selection would rebuild the rows under it. */
+    const before = document.querySelector('.two-pane-row')
+    /* The same row is still selected, but the row above it went away (a
+       search narrowed the list): its own box moved and nothing about the
+       selection changed. */
+    place(0, 40)
+    rerender(<TwoPaneList>{rows(['first'], 0)}</TwoPaneList>)
+    expect(document.querySelector('.two-pane-row')).toBe(before)
+    expect(card()?.style.transform).toBe('translateY(0px)')
+  })
+
   it('is not drawn when nothing is selected', () => {
     place(42, 40)
     render(

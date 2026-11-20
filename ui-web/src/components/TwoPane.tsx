@@ -109,6 +109,11 @@ export function TwoPaneList({ children }: { children: ReactNode }): JSX.Element 
   return (
     <RowBox.Provider value={report}>
       <div className="two-pane-list">
+        {children}
+        {/* After the rows, not before: a card inserted in front of them
+            renumbers every row the first time one is selected, and React
+            rebuilds each row from scratch. Absolutely positioned, so where it
+            sits in the source has no bearing on where it is drawn. */}
         {mark ? (
           <span
             className="two-pane-sel"
@@ -116,7 +121,6 @@ export function TwoPaneList({ children }: { children: ReactNode }): JSX.Element 
             style={{ transform: `translateY(${mark.top}px)`, height: `${mark.height}px` }}
           />
         ) : null}
-        {children}
       </div>
     </RowBox.Provider>
   )
@@ -184,13 +188,28 @@ export function TwoPaneRow({ current, off, icon, name, sub, tone, when, trailing
   const report = useContext(RowBox)
   const id = useId()
   const el = useRef<HTMLDivElement>(null)
+  /* The box this row last handed up, so a commit that moved nothing says
+     nothing. */
+  const said = useRef<{ top: number; height: number } | null>(null)
+  /* After every commit, not only when `current` changes. A row that stays
+     selected still moves: a search can filter away the rows above it, and a
+     refresh can regroup it -- the selection did not change, but the box did,
+     and a mark left at the old coordinate outlines a different row. */
   useLayoutEffect(() => {
     if (!report) return
     const box = el.current
-    report(id, current && box ? { top: box.offsetTop, height: box.offsetHeight } : null)
-    /* Leaving the mark behind is the row's own to take back. */
-    return () => report(id, null)
-  }, [current, id, report])
+    const next = current && box ? { top: box.offsetTop, height: box.offsetHeight } : null
+    const last = said.current
+    const same = next === null
+      ? last === null
+      : last !== null && last.top === next.top && last.height === next.height
+    if (same) return
+    said.current = next
+    report(id, next)
+  })
+  /* Leaving is not a commit: a row unmounting while it is the selected one
+     takes the mark with it. */
+  useLayoutEffect(() => () => report?.(id, null), [id, report])
   return (
     <div ref={el} className={off ? 'two-pane-row two-pane-off' : 'two-pane-row'} aria-current={current}>
       <button type="button" className="two-pane-hit" onClick={onOpen}>

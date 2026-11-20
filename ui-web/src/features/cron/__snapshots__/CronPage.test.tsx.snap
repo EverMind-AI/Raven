@@ -13,7 +13,6 @@ exports[`cron island > keeps its rendered shape, job page 1`] = `
         svg
           path
     div.two-pane-list
-      span.two-pane-sel
       div.two-pane-grp
       div.two-pane-row
         button.two-pane-hit
@@ -21,6 +20,7 @@ exports[`cron island > keeps its rendered shape, job page 1`] = `
             span.nm
             span.ds.bad
         button.two-pane-swi
+      span.two-pane-sel
   div.two-pane-main
     div.two-pane-head
       div.ttl
