@@ -58,6 +58,14 @@ SCENARIOS: dict[str, dict[str, Any]] = {
         "model": "anthropic/claude-sonnet-5",
         "section": {"apiKey": "sk-ant-TEST"},
     },
+    "anthropic_key_env": {
+        "provider": "anthropic",
+        "model": "anthropic/claude-sonnet-5",
+        # The credential lives in the environment; config.json carries only
+        # the variable's name. The gates count the declared reference, and
+        # the build is what fails when the variable itself is absent.
+        "section": {"apiKeyEnv": "RAVEN_TEST_ANTHROPIC_KEY_ENV"},
+    },
     "anthropic_empty": {
         "provider": "anthropic",
         "model": "anthropic/claude-sonnet-5",
@@ -415,6 +423,58 @@ def test_a_provider_whose_key_lives_in_a_list_sends_a_key(tmp_path: Path) -> Non
     assert provider is not None
     assert provider.effective_api_key == "AIzaTEST"
     assert config.get_api_key(case["model"]) == "AIzaTEST"
+
+
+def test_a_key_named_by_an_environment_variable_sends_that_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A section whose credential lives outside config.json still serves a key.
+
+    Resolved at build time, in memory: a secret manager writes the variable,
+    config.json carries only its name, and the request carries the value.
+    """
+    monkeypatch.setenv("RAVEN_TEST_ANTHROPIC_KEY_ENV", "sk-from-env")
+    case = SCENARIOS["anthropic_key_env"]
+    path = _config_file(tmp_path, case)
+    config = Config.model_validate(json.loads(path.read_text(encoding="utf-8")))
+
+    provider = config.get_provider(case["model"])
+    assert provider is not None
+    assert provider.effective_api_key == "sk-from-env"
+    assert config.get_api_key(case["model"]) == "sk-from-env"
+
+
+def test_an_unset_environment_variable_fails_where_the_key_is_built(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gates count the declared reference; the build names the variable it lacks.
+
+    Split on purpose: a gate that demanded the variable would send the user to
+    `provider set --api-key` (writing a literal over the reference they meant
+    to keep), while a build that resolved to an empty key would fail at the API
+    as an auth error instead of naming the variable.
+    """
+    from raven.providers.auth import MissingCredentialsError
+
+    monkeypatch.delenv("RAVEN_TEST_ANTHROPIC_KEY_ENV", raising=False)
+    case = SCENARIOS["anthropic_key_env"]
+    path = _config_file(tmp_path, case)
+    assert _startup_says(case, path)
+
+    config = Config.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    provider = config.get_provider(case["model"])
+    assert provider is not None
+    with pytest.raises(MissingCredentialsError) as excinfo:
+        provider.effective_api_key
+    assert "RAVEN_TEST_ANTHROPIC_KEY_ENV" in excinfo.value.summary
+    assert "apiKeyEnv" in (excinfo.value.remedy or "")
+
+
+def test_an_environment_variable_answers_for_gemini_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Gemini's override must not silently ignore the reference the base gained."""
+    from raven.config.schema import GeminiProviderConfig
+
+    monkeypatch.setenv("RAVEN_TEST_GEMINI_KEY_ENV", "AIzaFROMENV")
+    section = GeminiProviderConfig(api_key_env="RAVEN_TEST_GEMINI_KEY_ENV", api_key_list=["AIzaLIST"])
+    assert section.effective_api_key == "AIzaFROMENV"
 
 
 def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
