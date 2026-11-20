@@ -610,8 +610,8 @@ class WiringMixin:
         return self.enable_personalization if configured is None else configured
 
     @property
-    def max_iterations(self) -> int:
-        """The ReAct cap a turn runs under when its session pinned none.
+    def max_iterations(self) -> int | None:
+        """The ReAct cap a turn runs under when its session pinned none, or None for no cap.
 
         Read live rather than frozen at build for the reason the permission
         mode is: a cap is a sentence about the next turn, not work to redo.
@@ -624,7 +624,9 @@ class WiringMixin:
         from raven.config.live import held, max_tool_iterations
 
         configured = held(_CAP_KEY, lambda: max_tool_iterations(self._live_config))
-        return configured or self._default_max_iterations
+        if configured is None:
+            return self._default_max_iterations
+        return configured if configured > 0 else None
 
     @property
     def provider_pool(self) -> "ProviderPool | None":

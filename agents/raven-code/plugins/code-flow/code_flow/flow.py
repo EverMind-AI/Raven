@@ -25,6 +25,8 @@ from code_flow.tools.read_state import Owner, ReadSessions, forget_session, owne
 from code_flow.tools.todo import STORES, TodoStore
 from raven.agent import workdir
 from raven.agent.hook.participant import ParticipantHook
+from raven.agent.loop import TURN_BUDGETS_KEY
+from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 from raven.contracts.participant import AgentParticipant, Answer, StepView
 
 if TYPE_CHECKING:
@@ -300,6 +302,35 @@ def make_flow_hook(ctx: "PluginContext") -> CodeFlowHook | None:
         flow_enabled=cfg.enabled,
         reads=ReadSessions(owner_for(ctx)) if cfg.tools.enabled else None,
     )
+
+
+class TurnBudgetHook(AgentHook):
+    """The turn clock this product asks the loop to run under.
+
+    Data rather than config the loop reads: the loop serves every agent and
+    must not know any of them, so a product that leaves this unset is bounded
+    exactly as it was before the key existed. The value travels under the
+    shared budget key, which the loop reads once, at turn start.
+    """
+
+    def __init__(self, wall_clock_seconds: float) -> None:
+        self._wall_clock_seconds = wall_clock_seconds
+
+    async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
+        ctx.metadata[TURN_BUDGETS_KEY] = {"wall_clock_seconds": self._wall_clock_seconds}
+        return HookDecision()
+
+
+def make_turn_budget_hook(ctx: "PluginContext") -> TurnBudgetHook | None:
+    """Factory for the ``code_turn_budget`` contribution; declines with no clock."""
+    try:
+        cfg = FlowConfig.from_slice(dict(ctx.config or {}))
+    except ValidationError as exc:
+        logger.warning("code-flow: config slice is malformed; declining the turn-budget seat: {}", exc)
+        return None
+    if not cfg.wall_clock_seconds:
+        return None
+    return TurnBudgetHook(float(cfg.wall_clock_seconds))
 
 
 def make_session_observer(ctx: "PluginContext") -> SessionForget | None:
