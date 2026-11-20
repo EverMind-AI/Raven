@@ -106,7 +106,10 @@ def read_fired_tasks(out_dirs: "list[Path | str]", task_ids: "list[str]") -> "se
 
     A task id names a directory, so it is escaped before it reaches the glob:
     an id containing ``[``, ``*`` or ``?`` would otherwise be read as pattern
-    syntax, dropping the task or matching a neighbour without an error.
+    syntax, dropping the task or matching a neighbour without an error. The
+    workspace is ``<task id>_k<attempt>``, so only the attempt index may follow
+    that literal stem: a neighbour id such as ``t_k1`` would otherwise be read
+    as an attempt of ``t``.
     """
     roots = [Path(d) / BEACONS_DIRNAME for d in out_dirs]
     if not any((r / ENABLED_MARKER).exists() for r in roots):
@@ -118,7 +121,10 @@ def read_fired_tasks(out_dirs: "list[Path | str]", task_ids: "list[str]") -> "se
         for tid in task_ids:
             if tid in fired:
                 continue
+            stem = f"{tid}_k"
             for ws in root.glob(f"{glob.escape(tid)}_k*"):
+                if not ws.relative_to(root).as_posix()[len(stem) :].isdigit():
+                    continue
                 lf = ws / LEDGER_FILENAME
                 try:
                     if lf.is_file() and lf.stat().st_size > 0:

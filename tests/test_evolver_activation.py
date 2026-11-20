@@ -98,3 +98,28 @@ def test_read_fired_tasks_does_not_match_a_neighbour_workspace(tmp_path: Path) -
     _record_beacon(tmp_path, "taskY3", 0, fired=True)
 
     assert read_fired_tasks([tmp_path], ["task*2", "task?3"]) == set()
+
+
+def test_read_fired_tasks_does_not_claim_a_neighbour_workspace_sharing_the_k_stem(tmp_path: Path) -> None:
+    """``t`` names ``t_k*``, and a sibling task ``t_k1`` names ``t_k1_k*``.
+
+    The same pattern reaches the sibling's workspace, whose beacon line says the
+    sibling fired, not ``t``. Only the attempt index may follow ``<id>_k``, so
+    ``t`` must read the empty ``t_k0`` and nothing else, while ``t_k1`` keeps
+    reading its own workspace.
+    """
+    mark_beacons_enabled(tmp_path)
+    _record_beacon(tmp_path, "t", 0, fired=False)
+    _record_beacon(tmp_path, "t_k1", 0, fired=True)
+
+    assert read_fired_tasks([tmp_path], ["t"]) == set()
+    assert read_fired_tasks([tmp_path], ["t_k1"]) == {"t_k1"}
+
+
+def test_read_fired_tasks_reads_the_attempt_index_of_a_short_id(tmp_path: Path) -> None:
+    """Excluding the neighbour must not drop the task's own attempts."""
+    mark_beacons_enabled(tmp_path)
+    _record_beacon(tmp_path, "t", 0, fired=False)
+    _record_beacon(tmp_path, "t", 12, fired=True)
+
+    assert read_fired_tasks([tmp_path], ["t"]) == {"t"}
