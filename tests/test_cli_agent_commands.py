@@ -1049,3 +1049,21 @@ async def test_a_one_shot_run_waits_for_its_background_commands(monkeypatch):
         subagents = None
 
     await agent_commands._wait_for_background_work(Loop(), Scheduler(), "cli:c")
+
+
+@pytest.mark.asyncio
+async def test_a_run_with_nothing_to_wait_for_returns_at_once(monkeypatch):
+    """No sub-agents and no background command is the common one-shot case."""
+    from raven.agent.tools import background_exec
+    from raven.cli import agent_commands
+
+    monkeypatch.setattr(background_exec, "running", lambda session_key=None: [])
+
+    class Scheduler:
+        def has_inflight(self, lane):
+            raise AssertionError("nothing to wait for; the scheduler must not be polled")
+
+    class Loop:
+        subagents = None
+
+    await agent_commands._wait_for_background_work(Loop(), Scheduler(), "cli:c")
