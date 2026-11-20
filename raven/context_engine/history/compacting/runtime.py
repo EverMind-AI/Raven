@@ -91,6 +91,7 @@ from raven.context_engine.runtime_context import retell_notices
 from raven.contracts.context import AssemblyContext, OverflowOutcome, Segment
 from raven.providers import prompt_cache
 from raven.providers.binding import ModelBinding, active_window, resolve
+from raven.providers.capabilities import supports_image_tool_result, supports_vision
 from raven.session.refs import session_ref
 from raven.utils.tokens import estimate_message_tokens, estimate_prompt_tokens
 
@@ -834,7 +835,12 @@ class CompactingHistoryBuilder:
         """
         end = ledger.align_forward(through + 1, self.cfg.boundary)
         ordinals = [index for index in range(end) if index not in retired]
-        messages = HistoryTrimmer.history_from_ids(session, ordinals)
+        messages = HistoryTrimmer.history_from_ids(
+            session,
+            ordinals,
+            can_see_images=supports_vision(self.model),
+            tool_images_ok=supports_image_tool_result(self.provider, self.model),
+        )
         if len(messages) != len(ordinals):
             return ((), ())
         keys: list[MessageKey] = [session_message_key(index) for index in ordinals]

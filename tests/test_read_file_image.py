@@ -664,6 +664,119 @@ def test_remote_image_url_is_not_copied_or_rewritten(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
+# replay gates: the image window and the target's capability
+# --------------------------------------------------------------------------
+
+
+def _wire_mb_uri() -> str:
+    return _data_uri(b"\x89PNG\r\n\x1a\n" + b"\x00" * 749_992)
+
+
+def test_standing_window_bounds_replayed_user_images(tmp_path: Path) -> None:
+    from raven.agent.loop.main import AgentLoop
+    from raven.agent.window.images import wire_image_bytes
+    from raven.agent.window.shrink import window_images
+    from raven.context_engine.history_trimmer import HistoryTrimmer
+    from raven.session.manager import Session
+    from raven.utils.images import is_image_part
+
+    uri = _wire_mb_uri()
+    messages: list[dict] = []
+    for index in range(14):
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": uri}},
+                    {"type": "text", "text": f"photo {index}"},
+                ],
+            }
+        )
+        messages.append({"role": "assistant", "content": "seen"})
+    session = Session(key="cli:u")
+    AgentLoop._save_turn(_saving_loop(tmp_path), session, messages, 0)
+    history = HistoryTrimmer.history_from_ids(session.messages, list(range(len(session.messages))))
+
+    changed, withdrawn = window_images(history, 2, budget=12_000_000, reason="budget")
+
+    assert changed > 0 and withdrawn > 0
+    live = sum(
+        wire_image_bytes(part)
+        for message in history
+        if isinstance(message.get("content"), list)
+        for part in message["content"]
+    )
+    assert live <= 12_000_000
+    assert any(is_image_part(part) for part in history[-2]["content"]), "the current question keeps its picture"
+
+
+def test_replay_leaves_placeholder_when_target_cannot_see(tmp_path: Path) -> None:
+    from raven.agent.loop.main import AgentLoop
+    from raven.context_engine.history_trimmer import HistoryTrimmer
+    from raven.session.manager import Session
+    from raven.utils.images import image_block
+
+    uri = _data_uri(_png_header())
+    session = Session(key="cli:u")
+    AgentLoop._save_turn(
+        _saving_loop(tmp_path),
+        session,
+        [
+            {"role": "tool", "tool_call_id": "c1", "content": [image_block(uri)]},
+            {"role": "user", "content": [image_block(uri)]},
+        ],
+        0,
+    )
+    ids = [0, 1]
+
+    blind = HistoryTrimmer.history_from_ids(session.messages, ids, can_see_images=False)
+    assert [message["content"] for message in blind] == [
+        [{"type": "text", "text": "[image]"}],
+        [{"type": "text", "text": "[image]"}],
+    ]
+
+    no_tool = HistoryTrimmer.history_from_ids(session.messages, ids, can_see_images=True, tool_images_ok=False)
+    assert no_tool[0]["content"] == [{"type": "text", "text": "[image]"}]
+    assert no_tool[1]["content"] == [image_block(uri)]
+
+    both = HistoryTrimmer.history_from_ids(session.messages, ids, can_see_images=True, tool_images_ok=True)
+    assert both[0]["content"] == [image_block(uri)]
+    assert both[1]["content"] == [image_block(uri)]
+
+
+def test_trim_honours_the_target_capability_gates(tmp_path: Path, monkeypatch) -> None:
+    import raven.context_engine.history_trimmer as trimmer_module
+    from raven.agent.loop.main import AgentLoop
+    from raven.session.manager import Session
+    from raven.utils.images import image_block
+
+    class _Provider:
+        api_key = "test"
+
+    monkeypatch.setattr(trimmer_module, "supports_vision", lambda model, *args, **kwargs: False)
+    monkeypatch.setattr(trimmer_module, "supports_image_tool_result", lambda provider, model, *args, **kwargs: True)
+    uri = _data_uri(_png_header())
+    session = Session(key="cli:u")
+    AgentLoop._save_turn(
+        _saving_loop(tmp_path),
+        session,
+        [{"role": "user", "content": [image_block(uri)]}],
+        0,
+    )
+    trimmer = trimmer_module.HistoryTrimmer(_Provider(), "blind", lambda: [], 200_000)
+
+    messages, _ = trimmer.trim(
+        session_messages=session.messages,
+        ids=[0],
+        protected_ids=set(),
+        reserved_output=100,
+        build_messages=lambda history: [{"role": "system", "content": "s"}, *history],
+    )
+
+    assert messages[1]["content"] == [{"type": "text", "text": "[image]"}]
+
+
+# --------------------------------------------------------------------------
 # emergency shrink
 # --------------------------------------------------------------------------
 
