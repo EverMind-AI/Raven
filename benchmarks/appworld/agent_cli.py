@@ -58,8 +58,10 @@ Your task:
 def _build_agent(args):
     from benchmarks.appworld.tool import AppWorldExecuteTool
     from raven.agent.loop import AgentLoop
-    from raven.cli._helpers import load_runtime_config, make_provider
+    from raven.agent.loop.bundles import EngineWiring, HostWiring, ToolWiring, TurnPolicy
+    from raven.cli._helpers import load_runtime_config
     from raven.config.raven import load_raven_config
+    from raven.providers.factory import make_provider
     from raven.session.manager import SessionManager
 
     config = load_runtime_config(args.config, args.workspace)
@@ -83,14 +85,23 @@ def _build_agent(args):
         provider=provider,
         workspace=config.workspace_path,
         model=args.model or config.agents.defaults.model,
-        max_iterations=config.agents.defaults.max_tool_iterations,
-        context_window_tokens=config.agents.defaults.context_window_tokens,
-        exec_config=config.tools.exec,
-        restrict_to_workspace=config.tools.restrict_to_workspace,
         session_manager=SessionManager(config.workspace_path),
-        context_config=ec_config.context,
-        hooks=None,
-        disabled_tools=disabled,
+        tools=ToolWiring(
+            exec_config=config.tools.exec,
+            restrict_to_workspace=config.tools.restrict_to_workspace,
+            disabled_tools=disabled,
+        ),
+        engine=EngineWiring(
+            context_window_tokens=config.agents.defaults.context_window_tokens,
+            context_config=ec_config.context,
+        ),
+        # AppWorld is a non-interactive batch run: no recovery channel to
+        # inject into, and no ``.raven/shadow.git`` in the task workspace.
+        policy=TurnPolicy(
+            max_iterations=config.agents.defaults.max_tool_iterations,
+            interactive=False,
+        ),
+        host=HostWiring(hooks=None),
     )
     exec_tool = AppWorldExecuteTool(args.env_url, args.task_id)
     agent.tools.register(exec_tool)
