@@ -176,5 +176,6 @@ def test_a_turn_meta_restates_a_row_by_its_identifier(tmp_path):
     session = read_session_file(path, "cli:c")
 
     assert session is not None
-    filed = [m for m in session.messages if m.get("_row_id") == "abc123"]
+    filed = [m for m in session.messages if m.get("content") == "done"]
     assert filed and filed[0]["replied_via_tool"] is True
+    assert "_row_id" not in filed[0], "the filing key is not handed to readers"
