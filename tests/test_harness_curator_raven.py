@@ -25,6 +25,21 @@ from raven.contracts.participant import Accept, AgentParticipant, StepView
 from raven.spine.turn import Origin
 
 
+def _symlink_to(link: Path, target: Path, **kwargs) -> None:
+    """Create a symlink, or skip where the platform refuses one.
+
+    Unelevated Windows without Developer Mode raises WinError 1314 for every
+    symlink, and none of these fixtures can express the resolved-target rule
+    another way.
+    """
+    try:
+        link.symlink_to(target, **kwargs)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink creation requires an unavailable privilege")
+        raise
+
+
 @pytest.fixture
 def declaration():
     return Declaration("worker", catalogue())
@@ -87,7 +102,7 @@ def test_owned_content_rollback_restores_files_symlinks_and_permissions(tmp_path
     outside = tmp_path / "template.md"
     outside.write_text("shared template")
     target = home / "TOOLS.md"
-    target.symlink_to(outside)
+    _symlink_to(target, outside)
     script = home / "skills" / "old" / "run.sh"
     script.parent.mkdir(parents=True)
     script.write_text("old")
@@ -116,7 +131,7 @@ def test_content_writes_reject_an_escaping_parent(tmp_path, declaration):
     home.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
-    (home / "skills").symlink_to(outside, target_is_directory=True)
+    _symlink_to(home / "skills", outside, target_is_directory=True)
     with pytest.raises(ValueError, match="escapes"):
         with install_content(home, Artifact(values={"planning.skills": {"new/SKILL.md": "text"}}), declaration):
             pytest.fail("the write should not be attempted")
