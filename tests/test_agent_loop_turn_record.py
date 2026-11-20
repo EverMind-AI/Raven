@@ -85,8 +85,8 @@ def _agent(workspace: Path, provider: LLMProvider, *, compact: bool = True) -> A
         policy=TurnPolicy(max_iterations=12),
         tools=ToolWiring(restrict_to_workspace=True),
         engine=EngineWiring(
-            # Wide enough that the history slot has room and the Curator takes
-            # its fast path; the reserve puts the in-turn trigger at 900 tokens.
+            # Wide enough that the history slot has room; the reserve puts the
+            # in-turn trigger at 900 tokens.
             context_window_tokens=200_000,
             compaction_config=cfg,
             runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="never")),

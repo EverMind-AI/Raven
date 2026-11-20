@@ -1245,8 +1245,8 @@ def test_a_row_whose_ceiling_sits_below_its_window_is_left_alone(monkeypatch):
 
 def test_an_explicit_pin_is_still_the_caller_s_to_make(monkeypatch):
     """A pin asks for a deliberately *short* answer, and every pin in the tree
-    is one: the curator asks for 2048, the judge for 64. Those are the ones that
-    must keep arriving unchanged.
+    is one: a summary call asks for 2048, the judge for 64. Those are the ones
+    that must keep arriving unchanged.
 
     A pin is bounded above by the same resolution everything else is, because
     this number is the loop's reservation as well as the request body's -- a pin
@@ -1254,7 +1254,7 @@ def test_an_explicit_pin_is_still_the_caller_s_to_make(monkeypatch):
     """
     _patch_table(monkeypatch, {"probe/roomy": {"max_input_tokens": 200_000, "max_output_tokens": 64_000}})
 
-    assert send_max_tokens(None, "probe/roomy", pinned=2048) == 2048, "the curator's pin is untouched"
+    assert send_max_tokens(None, "probe/roomy", pinned=2048) == 2048, "the summary pin is untouched"
     assert send_max_tokens(None, "probe/roomy", pinned=64) == 64, "the judge's pin is untouched"
     assert send_max_tokens(None, "probe/roomy", pinned=999_999) == rates.MAX_OUTPUT_TOKENS_PER_ITERATION
 

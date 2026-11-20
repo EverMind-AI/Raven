@@ -31,7 +31,7 @@ Platform message
 | `slack` | Slack Socket Mode / Web API | Bot token 和 app token | 是 |
 | `whatsapp` | 经 Node bridge 连接 WhatsApp | 交互式扫码、bridge 配置 | 否 |
 | `weixin` | 经 iLink 连接个人微信 | 交互式扫码 | 是 |
-| `wecom` | 企业微信 AI bot WebSocket | Bot id 和 secret | 否 |
+| `wecom` | 企业微信 AI bot WebSocket | Bot id 和 secret | 是 |
 | `feishu` | 飞书/Lark 长连接 | App id 和 app secret | 是 |
 | `dingtalk` | 钉钉 | Client id 和 client secret | 是 |
 | `matrix` | Matrix sync | Homeserver、user id、access token | 是 |

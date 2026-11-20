@@ -68,7 +68,7 @@ Additional implementation checks:
   `raven/rpc/methods/knowledge.py`, and `raven/rpc/models.py`. The default
   parsers are text/structured text; the current WebUI source has backend
   fixtures and styling but no complete mounted knowledge-management feature.
-- Memory: `raven/context_engine/factory.py`, `segments/curator.py`,
+- Memory: `raven/context_engine/factory.py`, `history/compacting/`,
   `raven/memory_engine/store_pipeline.py`, and
   `plugins-dist/everos-memory/raven_everos/backend.py`. The current host has
   no runtime consumer of the retained `skillForge.extraction` config despite

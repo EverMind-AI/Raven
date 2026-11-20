@@ -1,18 +1,21 @@
 import { Download04Icon } from '@hugeicons/core-free-icons'
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { Icon } from '../../components/Icon'
 import { PaneHead, PaneHeadSeg, usePaneHead } from '../../components/PaneHead'
 import { t } from '../../i18n/t'
 import { toUnified } from '../../lib/hunks'
+import { current as currentSession } from '../../lib/session'
 import * as lang from '../../state/lang'
 import { show as menuAt } from '../../state/menu'
 import { show as toast } from '../../state/toast'
 import * as deliveries from './deliveries'
+import { MarkdownDocument } from './MarkdownDocument'
+import { openPreviewWindow } from './preview'
 import { absPath } from './source'
 import {
   RENDERED, TWO_VIEWS, appFor, canOpenInApp, copyToClip, extOf, fileURL, pageURL,
-  hostPlatform, looksBinary, mdHtml, openInApp, runURL, setAppFor, versioned,
+  hostPlatform, looksBinary, openInApp, runURL, setAppFor, versioned,
 } from './store'
 import * as store from './store'
 import './styles.css'
@@ -34,6 +37,12 @@ const ICO = {
     + 'M9.5 16l5-4.5M14.5 15V11.5H11',
   chev: 'M9.5 6.5 15 12l-5.5 5.5',
   down: 'M7 10l5 5 5-5',
+  win: 'M4 8.5A2.5 2.5 0 0 1 6.5 6h11A2.5 2.5 0 0 1 20 8.5v7a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 15.5ZM4.5 9.5h15',
+  expand: 'M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5',
+  shrink: 'M4 9h5V4M20 9h-5V4M4 15h5v5M20 15h-5v5',
+  view: 'M2.5 12s3.6-6.2 9.5-6.2S21.5 12 21.5 12s-3.6 6.2-9.5 6.2S2.5 12 2.5 12Z'
+    + 'M8.4 12a3.6 3.6 0 1 0 7.2 0 3.6 3.6 0 0 0-7.2 0Z',
+  source: 'M8.5 8 5 12l3.5 4M15.5 8 19 12l-3.5 4M13 5.5l-2 13',
 }
 
 const FT_ICO = {
@@ -373,12 +382,48 @@ function BinNote({ f, title, detail }: { f: WsFile; title?: string; detail?: str
    which is why there is nothing left here to navigate with. */
 export function FileView({ ws, file = ws.file }: { ws: WsShared; file?: WsFile | null }): JSX.Element {
   const inPane = !!usePaneHead()
-  if (!store.source().canBrowse) return <div className="wsnote">{t('gui.ws.file_unreadable')}</div>
+  const [reader, setReader] = useState(false)
+  const [menuSlot, setMenuSlot] = useState<HTMLSpanElement | null>(null)
+  const frame = useRef<HTMLDivElement>(null)
+  const [compact, setCompact] = useState(false)
   const f = file
   const view = f ? String(f.seq ?? f.path) : null
+  useEffect(() => {
+    setReader(false)
+  }, [view])
+  useEffect(() => {
+    if (!reader) return
+    const leave = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setReader(false)
+    }
+    document.addEventListener('keydown', leave)
+    return () => document.removeEventListener('keydown', leave)
+  }, [reader])
+  /* Under 570px the rendered/source pair is one icon button: two labelled tabs
+     beside a title and a document's own controls left the name at "/...". An
+     unmeasured box (no layout) is not narrow -- the pair is what the bar
+     served before there was a width to read. */
+  useEffect(() => {
+    const root = frame.current
+    if (!root) return
+    const read = (): void => {
+      const width = root.clientWidth
+      if (width > 0) setCompact(width < 570)
+    }
+    read()
+    if (typeof ResizeObserver === 'undefined') return
+    const watcher = new ResizeObserver(read)
+    watcher.observe(root)
+    return () => watcher.disconnect()
+  }, [])
+  if (!store.source().canBrowse) return <div className="wsnote">{t('gui.ws.file_unreadable')}</div>
+  const read = {
+    compact,
+    ...(f?.kind === 'md' ? { reader, onReader: () => setReader(!reader), menuSlot: setMenuSlot } : {}),
+  }
   return (
-    <div className="fwrap">
-      {inPane ? <FileHead f={f} /> : <Fbar f={f} />}
+    <div className="fwrap" ref={frame} data-reader={reader ? '1' : undefined}>
+      {inPane ? <FileHead f={f} {...read} /> : <Fbar f={f} {...read} />}
       <div className="fpane">
         {!f ? (
           <div className="fempty">
@@ -387,7 +432,7 @@ export function FileView({ ws, file = ws.file }: { ws: WsShared; file?: WsFile |
           </div>
         ) : (
           <div className="fbody">
-            <FileBody key={view ?? undefined} f={f} />
+            <FileBody key={view ?? undefined} f={f} menuSlot={menuSlot} />
           </div>
         )}
       </div>
@@ -424,8 +469,27 @@ function CopyPath({ path }: { path: string }): JSX.Element {
   )
 }
 
-function ViewSeg({ f }: { f: WsFile }): JSX.Element | null {
+function ViewSeg({ f, compact = false }: { f: WsFile; compact?: boolean }): JSX.Element | null {
   if (!TWO_VIEWS[f.kind]) return null
+  const flip = (): void => {
+    f.raw = !f.raw
+    store.redraw()
+  }
+  if (compact) {
+    const said = t(f.raw ? 'gui.ws.show_rendered' : 'gui.ws.show_source')
+    return (
+      <button
+        type="button"
+        className="ghost-ic tipdn workspace-mode"
+        data-tip={said}
+        aria-label={said}
+        aria-pressed={f.raw}
+        onClick={flip}
+      >
+        <Ico d={f.raw ? ICO.view : ICO.source} />
+      </button>
+    )
+  }
   return (
     <PaneHeadSeg
       options={[{ key: 'rendered', label: t('gui.ws.file_rendered') }, { key: 'source', label: t('gui.ws.file_source') }]}
@@ -438,7 +502,24 @@ function ViewSeg({ f }: { f: WsFile }): JSX.Element | null {
   )
 }
 
-function FileActs({ f }: { f: WsFile }): JSX.Element {
+/* The text family is the one a preview window can show in full: it is what the
+   pane already draws, and what no program on the host has to be handed to. */
+const IN_WINDOW = new Set(['md', 'html', 'csv', 'json', 'diff', 'code'])
+
+type ReaderProps = {
+  reader?: boolean
+  onReader?: () => void
+  /* Where the header mounts the fold-away outline, when the file is markdown. */
+  menuSlot?: (el: HTMLSpanElement | null) => void
+  /* Under 570px the rendered/source pair collapses to one icon button. */
+  compact?: boolean
+}
+
+function FileActs({ f, reader = false, onReader }: {
+  f: WsFile
+  reader?: boolean
+  onReader?: () => void
+}): JSX.Element {
   const platform = hostPlatform()
   const revealTip = t(platform === 'mac' ? 'gui.ws.reveal_finder'
     : platform === 'windows' ? 'gui.ws.reveal_explorer' : 'gui.ws.reveal_folder')
@@ -473,6 +554,30 @@ function FileActs({ f }: { f: WsFile }): JSX.Element {
           <Ico d={ICO.ext} />
         </button>
       ) : null}
+      {/* The same file on a page of its own, drawn by the pane's own body: a
+          second window is how a long document gets read beside the answer that
+          named it. A blocker answers nothing and the pane is already there. */}
+      {IN_WINDOW.has(f.kind) ? (
+        <button
+          className="ghost-ic tipdn workspace-window"
+          data-tip={t('gui.ws.file_window')}
+          aria-label={t('gui.ws.file_window')}
+          onClick={() => openPreviewWindow(f.path, currentSession())}
+        >
+          <Ico d={ICO.win} />
+        </button>
+      ) : null}
+      {f.kind === 'md' && onReader ? (
+        <button
+          className="ghost-ic tipdn workspace-reader"
+          data-tip={t(reader ? 'gui.ws.exit_reader' : 'gui.ws.expand_reader')}
+          aria-label={t(reader ? 'gui.ws.exit_reader' : 'gui.ws.expand_reader')}
+          aria-pressed={reader}
+          onClick={onReader}
+        >
+          <Ico d={reader ? ICO.shrink : ICO.expand} />
+        </button>
+      ) : null}
       {/* Reveal runs where the GATEWAY runs, like every fs call, so on a
           remote serve it shows the file on that host. */}
       <button
@@ -502,21 +607,22 @@ const copyMenu = (f: WsFile) => ctxRef(() => [
 /* In a desk pane the file is named once, in the pane's header: the base name
    as the title, the folder it sits in as the muted line after it, and the
    controls that act on it at the header's end. */
-function FileHead({ f }: { f: WsFile | null }): JSX.Element {
+function FileHead({ f, ...reader }: { f: WsFile | null } & ReaderProps): JSX.Element {
   if (!f) return <PaneHead title={t('gui.ws.file_none')} />
   const [dir, name] = splitRel(f)
   return (
     <PaneHead title={name} tip={f.path} titleRef={copyMenu(f)}
       meta={dir ? <span className="workspace-dir">{dir}</span> : null}>
-      <ViewSeg f={f} />
+      <span className="workspace-md-slot" ref={reader.menuSlot} />
+      <ViewSeg f={f} compact={reader.compact} />
       <CopyPath path={f.path} />
-      <FileActs f={f} />
+      <FileActs f={f} {...reader} />
     </PaneHead>
   )
 }
 
 /* The same file, drawn outside a pane: a bar of its own above the body. */
-function Fbar({ f }: { f: WsFile | null }): JSX.Element {
+function Fbar({ f, ...reader }: { f: WsFile | null } & ReaderProps): JSX.Element {
   const [dir, name] = f ? splitRel(f) : ['', '']
   return (
     <div className="fbar">
@@ -532,8 +638,9 @@ function Fbar({ f }: { f: WsFile | null }): JSX.Element {
         <span className="nm">{t('gui.ws.file_none')}</span>
       )}
       <span className="fsp" />
-      {f ? <ViewSeg f={f} /> : null}
-      {f ? <span className="workspace-file-acts"><FileActs f={f} /></span> : null}
+      {f ? <span className="workspace-md-slot" ref={reader.menuSlot} /> : null}
+      {f ? <ViewSeg f={f} compact={reader.compact} /> : null}
+      {f ? <span className="workspace-file-acts"><FileActs f={f} {...reader} /></span> : null}
     </div>
   )
 }
@@ -551,7 +658,10 @@ function diffLineCls(line: string): string {
   return ''
 }
 
-function FileBody({ f }: { f: WsFile }): JSX.Element {
+export function FileBody({ f, menuSlot }: {
+  f: WsFile
+  menuSlot?: HTMLElement | null
+}): JSX.Element {
   const asSource = TWO_VIEWS[f.kind] ? f.raw : !RENDERED[f.kind]
   const asImage = f.kind === 'img' || (f.kind === 'svg' && !asSource)
   const asFrame = (f.kind === 'pdf' || f.kind === 'html') && !asSource
@@ -599,7 +709,7 @@ function FileBody({ f }: { f: WsFile }): JSX.Element {
   } else if (f.text == null) {
     body = <div className="vspin">{t('gui.ws.file_loading')}</div>
   } else if (f.kind === 'md' && !asSource) {
-    body = <div className="prose" dangerouslySetInnerHTML={{ __html: mdHtml(f.text) }} />
+    body = <MarkdownDocument text={f.text} menuSlot={menuSlot} />
   } else if (f.kind === 'csv' && !asSource) {
     body = <CsvTable text={f.text} tab={/\.tsv$/i.test(f.path)} />
   } else if (f.kind === 'bin' && looksBinary(f.text)) {

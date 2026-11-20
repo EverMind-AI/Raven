@@ -45,7 +45,7 @@ class _FakeSkillCatalog:
 
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
         return [
-            {"name": "curator", "path": "/tmp/curator", "source": "builtin"},
+            {"name": "guide", "path": "/tmp/guide", "source": "builtin"},
             {"name": "cron-tracker", "path": "/tmp/cron-tracker", "source": "builtin"},
             {"name": "my-workspace-skill", "path": "/tmp/my-skill", "source": "workspace"},
         ]

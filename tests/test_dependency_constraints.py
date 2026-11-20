@@ -87,3 +87,16 @@ def test_the_three_playwright_pins_read_as_one_specifier() -> None:
         assert len(entries) == 1, f"{label}: expected exactly one playwright entry, got {entries}"
         seen[label] = entries[0]
     assert len(set(seen.values())) == 1, f"the playwright pins drifted apart: {seen}"
+
+
+def test_wecom_extra_requires_the_media_upload_api() -> None:
+    """The media path uses WECOM_UPLOAD_MAX_BYTES and the SDK's reply/send media
+    methods, which first appear in 0.1.7. A lower floor lets 0.1.5/0.1.6 import
+    the adapter and silently disable the channel.
+    """
+    manifest = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    extras = manifest["project"]["optional-dependencies"]["channel-wecom"]
+    requirements = [Requirement(entry) for entry in extras]
+    requirement = next(entry for entry in requirements if entry.name == "wecom-aibot-sdk-python")
+    assert requirement.specifier.contains("0.1.7"), f"channel-wecom must accept 0.1.7, got {requirement}"
+    assert not requirement.specifier.contains("0.1.6"), f"channel-wecom must exclude 0.1.6, got {requirement}"

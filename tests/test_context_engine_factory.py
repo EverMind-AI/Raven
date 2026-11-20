@@ -11,7 +11,9 @@ list, and the SkillForgeRouter its scent menu and ``find_skill`` share from:
   working directory).
 
 With no backend the engine still constructs (recall lane yields [],
-router mounts Local and Project). AgentLoop always delegates skill
+router mounts Local and Project). ``skillForge.router.enabled`` is the one
+switch that removes the router itself: off, the engine carries neither a
+router nor a scent menu. AgentLoop always delegates skill
 selection to the engine (``_uses_default_engine`` is always True), and
 ``_collect_injected_skill_ids`` prefers the assembled-metadata stash.
 """
@@ -38,11 +40,11 @@ from raven.config.raven import (
 from raven.config.schema import SubagentsConfig
 from raven.context_engine import ContextAssembler
 from raven.context_engine.factory import _build_router, build_context_engine
+from raven.context_engine.history.compacting import CompactingHistoryBuilder
 from raven.context_engine.segments import (
     IdentitySegmentBuilder,
     MemorySegmentBuilder,
 )
-from raven.context_engine.segments.curator import CuratorSegmentBuilder
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.context import AssemblyContext
 from raven.memory_engine.skill_forge import (
@@ -91,15 +93,6 @@ def _stub_get_defs() -> list[dict]:
     return []
 
 
-class _StubPool:
-    """Pairs any pin it is asked for, so a test can assert which one was asked."""
-
-    def bind_pin(self, model, provider_name=None):
-        from raven.providers.binding import ModelBinding
-
-        return ModelBinding(MagicMock(name=provider_name or "stub-provider"), model) if model else None
-
-
 def _point_live_config(tmp_path: Path, monkeypatch, payload: dict) -> Path:
     """Point ``LiveConfig``'s default path at a file this test owns."""
     cfg = tmp_path / "config.json"
@@ -117,14 +110,13 @@ def _build_engine(
     memory_config: MemoryConfig | None = None,
     model: str = "stub",
     skill_forge_config: SkillForgeConfig | None = None,
+    router_enabled: bool = True,
     rrf_k: int | None = None,
-    provider_pool=None,
 ) -> ContextAssembler:
     builder = ContextBuilder(workspace=tmp_path)
     engine = build_context_engine(
-        provider_pool=provider_pool,
         workspace=tmp_path,
-        config=ContextConfig(history={"strategy": "curator"}),
+        config=ContextConfig(),
         builder=builder,
         provider=_StubProvider(),
         model=model,
@@ -134,6 +126,7 @@ def _build_engine(
         memory_config=memory_config or MemoryConfig(),
         skill_forge_router_config=SkillForgeRouterConfig(
             hub=hub_config or HubSourceConfig(endpoint=hub_endpoint),
+            enabled=router_enabled,
             **({} if rrf_k is None else {"rrf_k": rrf_k}),
         ),
         skill_forge_config=skill_forge_config or SkillForgeConfig(),
@@ -150,8 +143,8 @@ def _memory_builder(engine: ContextAssembler) -> MemorySegmentBuilder:
     return next(b for b in engine._builders if isinstance(b, MemorySegmentBuilder))
 
 
-def _curator_builder(engine: ContextAssembler) -> CuratorSegmentBuilder:
-    return next(b for b in engine._builders if isinstance(b, CuratorSegmentBuilder))
+def _history_builder(engine: ContextAssembler) -> CompactingHistoryBuilder:
+    return next(b for b in engine._builders if isinstance(b, CompactingHistoryBuilder))
 
 
 # ---------------------------------------------------------------------------
@@ -170,31 +163,29 @@ class TestFactory:
 
 
 # ---------------------------------------------------------------------------
-# SF6: set_context_window cascades down to the Curator's trimmer -- a
+# SF6: set_context_window cascades down to the history strategy's trimmer -- a
 # /model switch must not leave it budgeting against the pre-switch window.
 # ---------------------------------------------------------------------------
 
 
 class TestSetContextWindow:
-    def test_engine_cascades_into_the_curator_trimmer(self, tmp_path: Path) -> None:
+    def test_engine_cascades_into_the_history_trimmer(self, tmp_path: Path) -> None:
         engine = _build_engine(tmp_path)
-        curator = _curator_builder(engine)
-        assert curator.context_window_tokens == 8192
-        assert curator.assembler.context_window_tokens == 8192
-        assert curator.assembler.trimmer.context_window_tokens == 8192
+        history = _history_builder(engine)
+        assert history.context_window_tokens == 8192
+        assert history.trimmer.context_window_tokens == 8192
 
         engine.set_context_window(4096)
 
-        assert curator.context_window_tokens == 4096
-        assert curator.assembler.context_window_tokens == 4096
-        assert curator.assembler.trimmer.context_window_tokens == 4096
+        assert history.context_window_tokens == 4096
+        assert history.trimmer.context_window_tokens == 4096
 
     def test_engine_cascade_does_not_raise_for_builders_without_the_hook(self, tmp_path: Path) -> None:
         """seg1-5 carry no budget and have no ``set_context_window`` -- the
         cascade must skip them rather than assume every builder has it."""
         engine = _build_engine(tmp_path)
-        non_curator = [b for b in engine._builders if not isinstance(b, CuratorSegmentBuilder)]
-        assert non_curator, "fixture should include builders other than the Curator"
+        non_history = [b for b in engine._builders if not isinstance(b, CompactingHistoryBuilder)]
+        assert non_history, "fixture should include builders other than the history strategy's"
 
         engine.set_context_window(4096)  # must not raise
 
@@ -345,18 +336,38 @@ class TestSkillForgeRouterAssembly:
         assert {s.name: s.weight for s in router._sources}["project"] == 0.5
 
 
-class TestCuratorPinWiring:
-    def test_the_curator_pin_follows_the_file(self, tmp_path: Path, monkeypatch) -> None:
-        """A curator model repointed on the settings page reaches the next
-        curation: the pin is read from the file when the curator runs, not
-        resolved once when the engine was built."""
-        cfg = _point_live_config(tmp_path, monkeypatch, {"context": {"curatorModel": "curator-from-file"}})
-        engine = _build_engine(tmp_path, provider_pool=_StubPool())
-        curator = next(b for b in engine._builders if isinstance(b, CuratorSegmentBuilder))
+class TestRouterMasterSwitch:
+    """``skillForge.router.enabled``, read where the router is built.
 
-        assert curator.curator_model == "curator-from-file"
-        cfg.write_text(json.dumps({"context": {"curatorModel": "curator-after-edit"}}), encoding="utf-8")
-        assert curator.curator_model == "curator-after-edit"
+    Off leaves the engine with no router and no scent menu, which is what the
+    field's docstring has promised since it was added; on is the default every
+    other test in this file already exercises.
+    """
+
+    def test_off_leaves_no_router_and_no_scent_menu(self, tmp_path: Path) -> None:
+        engine = _build_engine(tmp_path, backend=_FakeBackend(), router_enabled=False)
+
+        assert engine.skills_router is None
+        assert engine._scent is None
+
+    def test_off_never_builds_the_router(self, tmp_path: Path, monkeypatch) -> None:
+        """Not built and then dropped: constructing it would already have
+        opened a Hub client and mounted a project source."""
+        built: list[dict] = []
+        monkeypatch.setattr(
+            "raven.context_engine.factory._build_router",
+            lambda **kwargs: built.append(kwargs) or None,
+        )
+
+        _build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint="http://hub.test", router_enabled=False)
+
+        assert built == []
+
+    def test_on_builds_the_router_and_the_menu_over_it(self, tmp_path: Path) -> None:
+        engine = _build_engine(tmp_path, backend=_FakeBackend())
+
+        assert engine.skills_router is not None
+        assert engine._scent._router is engine.skills_router
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +384,7 @@ def _make_loop(tmp_path: Path, *, backend=None, agents=None, skill_forge_config=
         tools=ToolWiring(restrict_to_workspace=True),
         engine=EngineWiring(
             backend=backend,
-            context_config=ContextConfig(history={"strategy": "curator"}),
+            context_config=ContextConfig(),
             memory_config=MemoryConfig(),
             skill_forge_router_config=SkillForgeRouterConfig(),
             skill_forge_config=skill_forge_config,
@@ -438,23 +449,22 @@ class TestTheWindowFollowsTheTurnsBinding:
         monkeypatch.setattr(rates, "resolve_context_window", lambda model, **kw: windows.get(model))
 
         agent = _make_loop(tmp_path, backend=None)
-        curator = _curator_builder(agent.context_engine)
+        history = _history_builder(agent.context_engine)
 
         assert agent.context_window_tokens == 8192
-        assert curator.context_window_tokens == 8192
-        assert curator.assembler.trimmer.context_window_tokens == 8192
+        assert history.context_window_tokens == 8192
+        assert history.trimmer.context_window_tokens == 8192
         assert agent.memory_consolidator.context_window_tokens == 8192
 
         with use_binding(ModelBinding(_StubProvider(), "other-model")):
             assert agent.context_window_tokens == 4096
-            assert curator.context_window_tokens == 4096
-            assert curator.assembler.context_window_tokens == 4096
-            assert curator.assembler.trimmer.context_window_tokens == 4096
+            assert history.context_window_tokens == 4096
+            assert history.trimmer.context_window_tokens == 4096
             assert agent.memory_consolidator.context_window_tokens == 4096
 
         # And back: leaving the turn leaves nothing behind on the holders.
         assert agent.context_window_tokens == 8192
-        assert curator.assembler.trimmer.context_window_tokens == 8192
+        assert history.trimmer.context_window_tokens == 8192
 
     def test_a_pinned_window_answers_for_every_model(self, tmp_path: Path, monkeypatch) -> None:
         """An explicit ``context_window_tokens`` is a deliberate override -- the
@@ -475,17 +485,17 @@ class TestTheWindowFollowsTheTurnsBinding:
             tools=ToolWiring(restrict_to_workspace=True),
             engine=EngineWiring(
                 context_window_tokens=8192,
-                context_config=ContextConfig(history={"strategy": "curator"}),
+                context_config=ContextConfig(),
                 memory_config=MemoryConfig(),
                 skill_forge_router_config=SkillForgeRouterConfig(),
             ),
         )
-        curator = _curator_builder(agent.context_engine)
+        history = _history_builder(agent.context_engine)
 
         with use_binding(ModelBinding(_StubProvider(), "other-model", agent.default_binding.configured_window)):
             assert agent.context_window_tokens == 8192
-            assert curator.context_window_tokens == 8192
-            assert curator.assembler.trimmer.context_window_tokens == 8192
+            assert history.context_window_tokens == 8192
+            assert history.trimmer.context_window_tokens == 8192
             assert agent.memory_consolidator.context_window_tokens == 8192
 
 
@@ -668,24 +678,29 @@ def _engine_with(tmp_path: Path, config: ContextConfig) -> ContextAssembler:
 
 
 def test_a_product_drops_the_host_segments_it_names(tmp_path: Path) -> None:
-    full = [b.name for b in _engine_with(tmp_path, ContextConfig(history={"strategy": "curator"}))._builders]
-    assert full[:2] == ["identity", "bootstrap"] and "memory" in full and "curator" in full
+    full = [b.name for b in _engine_with(tmp_path, ContextConfig())._builders]
+    assert full[:2] == ["identity", "bootstrap"] and "memory" in full and "compacting" in full
 
-    slim = [
-        b.name
-        for b in _engine_with(
-            tmp_path, ContextConfig(history={"strategy": "curator"}, drop_segments=["identity", "memory"])
-        )._builders
-    ]
+    slim = [b.name for b in _engine_with(tmp_path, ContextConfig(drop_segments=["identity", "memory"]))._builders]
     assert "identity" not in slim and "memory" not in slim
     assert slim == [n for n in full if n not in ("identity", "memory")], "order and the rest untouched"
 
 
 def test_an_unknown_segment_name_drops_nothing(tmp_path: Path) -> None:
-    full = [b.name for b in _engine_with(tmp_path, ContextConfig(history={"strategy": "curator"}))._builders]
-    assert [
-        b.name
-        for b in _engine_with(
-            tmp_path, ContextConfig(history={"strategy": "curator"}, drop_segments=["nope"])
-        )._builders
-    ] == full
+    full = [b.name for b in _engine_with(tmp_path, ContextConfig())._builders]
+    assert [b.name for b in _engine_with(tmp_path, ContextConfig(drop_segments=["nope"]))._builders] == full
+
+
+def test_dropping_the_history_slot_also_withdraws_the_refs_it_would_mint(tmp_path: Path) -> None:
+    """An engine with no history builder cannot vouch for refs it never wrote.
+
+    ``AgentLoop`` registers ``context_retrieve`` on ``mints_source_refs``, so a
+    product that drops the history slot while still claiming the capability
+    gets a tool that answers "found nothing" every time the model reaches for
+    text it was told it could read back.
+    """
+    engine = _engine_with(tmp_path, ContextConfig(drop_segments=["compacting"]))
+
+    assert engine._phase_b == []
+    assert engine.mints_source_refs is False
+    assert _engine_with(tmp_path, ContextConfig(drop_segments=["identity"])).mints_source_refs is True

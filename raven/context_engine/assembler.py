@@ -11,10 +11,10 @@ message array. Two phases:
   the end of the turn's user message instead (:mod:`.scratch`), so the
   system prompt holds nothing that moves with the query.
 - **Phase B (serial)** — builders with ``needs_prefix=True`` (the
-  Curator) run with ``ctx.prefix`` populated (the assembled prefix +
-  user message + tool defs), so they size ``*history`` against the exact
-  fixed overhead. The Curator contributes segment 6 (``text``) and the
-  history slot (``history``).
+  history strategy's builder) run with ``ctx.prefix`` populated (the
+  assembled prefix + user message + tool defs), so they size ``*history``
+  against the exact fixed overhead. That builder contributes the history
+  slot and, when it has one, its own segment 6 text.
 
 The user message is a structural built-in (every turn has exactly one),
 not a pluggable builder. Tools are a side channel — passed to the LLM
@@ -75,15 +75,15 @@ def _stable_prefix_chars(parts: list[tuple[int, str, bool]], *, tail_follows: bo
     between two segments rather than inside the join.
 
     ``tail_follows`` says something is appended after these parts -- phase B,
-    which is the Curator. It decides the case where the run *is* every phase-A
-    part. On its own that boundary would sit at the end of the message and cache
-    nothing the end-of-message breakpoint does not, so it is not declared. With
-    volatile text appended after it, it is the only breakpoint in the message
-    that survives a turn, and declining to declare it gave up the whole point of
-    measuring this: identity and bootstrap present, memory and both skill
-    segments contributing nothing, Curator appending -- a reachable
-    configuration, and one where the assembled message went out as
-    ``IDENTITY<sep>CURATOR`` with no key at all.
+    which is the history builder. It decides the case where the run *is* every
+    phase-A part. On its own that boundary would sit at the end of the message
+    and cache nothing the end-of-message breakpoint does not, so it is not
+    declared. With volatile text appended after it, it is the only breakpoint
+    in the message that survives a turn, and declining to declare it gave up
+    the whole point of measuring this: identity and bootstrap present, memory
+    and both skill segments contributing nothing, history appending -- a
+    reachable configuration, and one where the assembled message went out as
+    ``IDENTITY<sep>HISTORY`` with no key at all.
 
     A stable phase-B builder would extend the head further; none exists, and
     treating phase B as volatile only caches less than it could, never wrongly.
@@ -118,14 +118,18 @@ class ContextAssembler(ContextEngine):
         mints_source_refs: bool = False,
         turn_scratch: bool = True,
     ) -> None:
-        # The two are the history strategy's, declared in its registry entry;
-        # the defaults are the Curator's, which is what an assembler built
-        # without a registry entry (a test, an embedder) has always meant.
+        # The two are the history strategy's, declared in its registry entry.
+        # These are the fallbacks for an assembler built without one (a test, an
+        # embedder): "owns compaction" is what the one registered strategy
+        # declares, while "mints no refs" is the safe answer -- a builder that
+        # never registered cannot promise the text behind a ref, and the
+        # factory overwrites both from the resolved entry on every real build.
         self._owns_compaction = owns_compaction
         self._mints_source_refs = mints_source_refs
         self._scent = scent
         self.skills_router = None
-        """Set by the factory: the SkillForgeRouter behind find_skill."""
+        """Set by the factory: the SkillForgeRouter behind find_skill, left
+        None when its master switch (``skillForge.router.enabled``) is off."""
         self._builders = sorted(builders, key=lambda b: b.order)
         self._phase_a = [b for b in self._builders if not b.needs_prefix]
         self._phase_b = [b for b in self._builders if b.needs_prefix]
@@ -243,7 +247,7 @@ class ContextAssembler(ContextEngine):
         # session write and every other reader strip is exactly this text.
         user_msg = mark_turn_scratch(self._envelope(ctx, parts, ceiling), scratch)
 
-        # ── Phase B — prefix-dependent builders (Curator), serial ───
+        # ── Phase B — prefix-dependent builders (history), serial ───
         ctx_b = replace(
             ctx,
             prefix=AssembledPrefix(
@@ -252,8 +256,8 @@ class ContextAssembler(ContextEngine):
                 tool_defs=self.get_tool_definitions(),
             ),
         )
-        # The same rule as Phase A: a failing Curator loses its segment (the
-        # turn runs on the prefix and the raw history), never the turn.
+        # The same rule as Phase A: a failing history builder loses its segment
+        # (the turn runs on the prefix and the raw history), never the turn.
         b_segs = await asyncio.gather(*[b.build(ctx_b) for b in self._phase_b], return_exceptions=True)
         for builder, seg in zip(self._phase_b, b_segs):
             if isinstance(seg, Exception):
@@ -311,7 +315,8 @@ class ContextAssembler(ContextEngine):
         outcome: dict[str, Any],
         usage: dict[str, int] | None = None,
     ) -> None:
-        # Delegate to any builder that keeps per-turn bookkeeping (Curator).
+        # Delegate to any builder that keeps per-turn bookkeeping (the history
+        # strategy's builder does).
         for builder in self._builders:
             hook = getattr(builder, "after_turn", None)
             if hook is not None:
@@ -367,7 +372,7 @@ class ContextAssembler(ContextEngine):
 
     def set_context_window(self, tokens: int) -> None:
         # Delegate to any builder that sized itself against the window at
-        # construction (only the Curator does; seg1-5 carry no budget).
+        # construction (the history builder does; seg1-5 carry no budget).
         for builder in self._builders:
             setter = getattr(builder, "set_context_window", None)
             if setter is not None:

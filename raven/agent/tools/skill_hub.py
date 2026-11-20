@@ -101,13 +101,16 @@ def router_held_hit(get_router: Callable[[], Any]) -> Callable[[str], Any]:
     """Look a qualified id up among the hits the live router last returned.
 
     The router is read per call: a live engine swap replaces it, and the menu
-    and ``find_skill`` search whichever one the engine holds now.
+    and ``find_skill`` search whichever one the engine holds now. The returned
+    callable also answers ``router_available``, so a miss hint can tell whether
+    ``find_skill`` could answer at all.
     """
 
     def lookup(qualified_id: str) -> Any:
         held = getattr(get_router(), "held_hit", None)
         return held(qualified_id) if held is not None else None
 
+    lookup.router_available = lambda: get_router() is not None
     return lookup
 
 
@@ -115,11 +118,15 @@ def _held_miss(held_hit: "Callable[[str], Any] | None", source: str, native: str
     """What follows a memory-backend miss.
 
     Nothing is held after a restart, and a search puts every id it returns back,
-    so naming ``find_skill`` stays true. A tool built without a router (a
-    sub-agent's) holds nothing and sits beside no ``find_skill``, so it names none.
+    so naming ``find_skill`` stays true only while a router is there to answer.
+    A tool built without a router (a sub-agent's, or one whose master switch is
+    off) has no search to suggest, so it names none.
     """
     miss = f"Error: no {source} skill {native!r} found."
     if held_hit is None:
+        return miss
+    available = getattr(held_hit, "router_available", lambda: True)
+    if not available():
         return miss
     return f"{miss} Search again with find_skill; an id it returns can be read right after."
 
@@ -586,10 +593,17 @@ class FindSkillTool(Tool):
 
     @property
     def description(self) -> str:
-        # The blurb must describe what is actually searched: without a Hub
-        # endpoint, or with the switch off, the search covers only the locally
-        # installed pool, and promising a 110k-skill library would send the
+        # The blurb must describe what is actually searched. With the router
+        # master switch off nothing is searched at all, and without a Hub
+        # endpoint or with the Hub switch off the search covers only the
+        # locally installed pool; promising a 110k-skill library would send the
         # model chasing results that cannot exist on this deployment.
+        if self._get_router() is None:
+            return (
+                "Search the skill library for reusable methodology. Skill "
+                "retrieval is disabled in this deployment, so this tool returns "
+                "no results; read a skill you already hold with read_skill(id)."
+            )
         searched = self._hub_wired and (self._enabled_reader is None or self._enabled_reader())
         scope = f"{_LIBRARY_BLURB} " if searched else "It searches the locally installed skill pool. "
         return (

@@ -7,9 +7,9 @@ role read the capabilities a :class:`HistoryStrategy` declares and never the
 strategy's name.
 
 Every ``build`` imports its strategy inside the function body. That is not
-tidiness: constructing the Curator's builder creates its archive directories on
-disk, and the compacting strategy keeps its checkpoints there too, so "not
-selected" has to mean "never imported", not "imported and unused".
+tidiness: constructing a strategy's builder touches disk -- the compacting
+strategy keeps its checkpoint chain under the workspace -- so "not selected"
+has to mean "never imported", not "imported and unused".
 """
 
 from __future__ import annotations
@@ -64,21 +64,6 @@ def resolve(name: str | None) -> HistoryStrategy:
     return found
 
 
-def _build_curator(**kwargs: Any) -> "SegmentBuilder":
-    from raven.context_engine.segments.curator import CuratorSegmentBuilder
-
-    return CuratorSegmentBuilder(
-        pin_resolver=kwargs["pin_resolver"],
-        workspace=kwargs["workspace"],
-        config=kwargs["config"],
-        provider=kwargs["provider"],
-        model=kwargs["model"],
-        context_window_tokens=kwargs["context_window_tokens"],
-        get_tool_definitions=kwargs["get_tool_definitions"],
-        now_fn=kwargs.get("now_fn"),
-    )
-
-
 def _build_compacting(**kwargs: Any) -> "SegmentBuilder":
     from raven.context_engine.history.compacting import CompactingHistoryBuilder
 
@@ -103,15 +88,6 @@ register(
         build=_build_compacting,
         owns_compaction=True,
         mints_source_refs=True,
-    )
-)
-
-# The earlier strategy, unchanged and kept selectable.
-register(
-    HistoryStrategy(
-        "curator",
-        build=_build_curator,
-        owns_compaction=True,
     )
 )
 

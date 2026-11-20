@@ -13,11 +13,10 @@ When tools are present (common agent scenario):
     2. The system message — on its **stable head** when it declares one
        (``prompt_cache.STABLE_PREFIX_KEY``), on its tail otherwise. The head is
        the only mark in this whole set that survives a turn: the rest of that
-       message is the Curator's working state -- and, with turn scratch off,
-       the memory recall and the router's hits -- all derived from what the
-       user just said, and a cache covers everything in front of its
-       breakpoint. With turn scratch on and nothing appended by the history
-       builder, the whole message is stable and the tail mark survives too.
+       message is the memory recall and the router's hits when turn scratch is
+       off -- all derived from what the user just said, and a cache covers
+       everything in front of its breakpoint. With turn scratch on the whole
+       message is stable and the tail mark survives too.
     3. ``messages[-2]`` — rolling tail; covers the intra-turn tool-chain
        prefix so each iteration only pays fresh for the newest result.
     4. ``messages[-1]`` — rolling tail; written as cache this call, read as

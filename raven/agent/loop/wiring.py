@@ -617,8 +617,9 @@ class WiringMixin:
         mode is: a cap is a sentence about the next turn, not work to redo.
         A turn holds the value it starts on (``run_turn`` passes it to
         ``hold_for_this_turn``), because the cap is first read after context
-        assembly -- which can spend minutes in the curator -- and an edit made
-        in that window would otherwise change the request already running.
+        assembly -- which can spend minutes in a summarising compaction -- and an
+        edit made in that window would otherwise change the request already
+        running.
         """
         from raven.config.live import held, max_tool_iterations
 
@@ -1515,10 +1516,12 @@ class WiringMixin:
 
             # A sub-agent is given no project skills, matching the router source
             # the leader process alone mounts; the tools answer ``project/`` ids
-            # with "not available to this agent."
+            # with "not available to this agent." A host that turned the router
+            # master switch off mounts no source either, so the same answer
+            # covers it.
             project_skills = (
                 None
-                if is_subagent_process()
+                if is_subagent_process() or not self._skill_router_enabled
                 else ProjectSkills(
                     agent_home=self.workspace,
                     workdir_reader=workdir.current,

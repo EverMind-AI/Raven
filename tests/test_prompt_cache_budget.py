@@ -91,10 +91,10 @@ class TestWhoOwnsPlacement:
     async def test_a_caller_with_no_strategy_in_front_of_it_still_gets_marks(self):
         """The regression this replaced a process-wide switch to avoid.
 
-        The Curator, subagents, Sentinel, the session titler and the memory
-        consolidator all reach a provider directly. A switch set when the
-        strategies were installed silenced the provider for them too, and the
-        strategy that was to place the marks instead never sees their requests.
+        Subagents, Sentinel, the session titler and the memory consolidator all
+        reach a provider directly. A switch set when the strategies were
+        installed silenced the provider for them too, and the strategy that was
+        to place the marks instead never sees their requests.
         """
         from raven.core.token_wise_stack import install_from_config
 

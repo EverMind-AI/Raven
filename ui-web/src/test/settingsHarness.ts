@@ -99,7 +99,6 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
   return {
     raw: {
       agents: { defaults: { model: 'claude-opus-4-5', provider: 'anthropic', reasoningEffort: 'low', maxToolIterations: 40 } },
-      context: { curatorModel: 'anthropic/claude-sonnet-4-5', curatorProvider: 'openrouter' },
       tools: { disabledTools: ['image_generate', 'write_file'], web: { search: { provider: 'serper' } } },
       skillForge: { blocklist: ['sql-style'] },
       sessions: { autoArchiveAfterDays: null },

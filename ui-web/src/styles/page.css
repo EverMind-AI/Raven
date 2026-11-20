@@ -5609,8 +5609,33 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 .two-pane-side > .hubpage > :first-child { justify-self: start; }
 .two-pane-side > .hubpage > :last-child { justify-self: end; }
 .two-pane-side > .hubpage .pnote { font-variant-numeric: tabular-nums; }
-.mmeter { display: inline-block; width: 76px; height: 4px; border-radius: 999px; background: var(--raised); overflow: hidden; flex: none; }
-.mmeter i { display: block; height: 100%; background: var(--amber); border-radius: 999px; }
+/* The scores a memory carries, in a block of their own: the label, the
+   number, and the word that bands it. Numbers rather than meters -- a meter
+   says "more", a number says "how much", and only the second can be quoted
+   back or read against the row above it. */
+.memstrip {
+  display: grid; gap: 0 22px; margin: 16px 0 2px; padding: 13px 16px 14px;
+  background: var(--surface); border: 1px solid var(--line-soft); border-radius: 12px;
+}
+.memstrip .memscore + .memscore { border-left: 1px solid var(--line-soft); padding-left: 22px; }
+.memstrip .memcap {
+  font-family: var(--mono); font-size: 10.5px; color: var(--faint);
+  text-transform: uppercase; letter-spacing: .12em;
+}
+.memstrip .memnum {
+  font-family: var(--mono); font-size: 25px; font-weight: 600; line-height: 1.25;
+  letter-spacing: -.02em; color: var(--text); font-variant-numeric: tabular-nums; margin-top: 3px;
+}
+/* The band is a word with a dot, never a colour alone: the colour says which
+   band, the word says what it is called. */
+.memstrip .memband {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 12px;
+  color: var(--muted); margin-top: 3px;
+}
+.memstrip .memband::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.memstrip .memband[data-band="hi"] { color: var(--moss); }
+.memstrip .memband[data-band="mid"] { color: var(--gold); }
+.memstrip .memband[data-band="lo"] { color: var(--clay); }
 .memkv {
   border: 1px solid var(--line); border-radius: 12px; background: var(--ink);
   box-shadow: var(--elev); padding: 4px 16px;

@@ -166,13 +166,193 @@ export function md(src: string): string {
   return mdBlocks(src).join('')
 }
 
+/* ── the document renderer ────────────────────────────────────────────
+   md() draws a chat answer, where a heading is a section break and nothing
+   needs an address. A Markdown FILE read in the viewer is a document instead:
+   its headings are an outline, its footnotes are links, and a `#anchor` the
+   author wrote resolves inside the same text. That is the same markdown plus
+   the three things an addressable document needs, so it is the same parser
+   given a context rather than a second parser. */
+
+export interface DocHeading {
+  id: string
+  label: string
+  level: number
+}
+
+export interface MdDocument {
+  html: string
+  headings: DocHeading[]
+}
+
+interface DocContext {
+  prefix: string
+  /** label -> the definition text, from the source's own `[^label]: ...`. */
+  notes: Map<string, string>
+  /** label -> the number the first reference gave it. */
+  numbers: Map<string, number>
+  /** Labels in the order their first reference met them. */
+  order: string[]
+  /** The slug or label a link writes -> the id this document gave it. */
+  targets: Map<string, string>
+  used: Set<string>
+  headings: DocHeading[]
+}
+
+/* A heading's label as an id: letters, marks, numbers, spaces and the two
+   joiners stay, a run of space becomes one dash. Unicode-aware because a
+   document is written in the reader's language. */
+const slugOf = (label: string): string =>
+  label.toLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}\s_-]/gu, '')
+    .replace(/\s+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'section'
+
+/* A heading's label as it reads on screen: the inline markup a reader never
+   sees in a word, removed before the slug or the outline is built. */
+const plainText = (label: string): string => label
+  .replace(/`([^`]+)`/g, '$1')
+  .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+  .replace(/[*_~]+/g, '')
+  .trim()
+
+const uniqueId = (ctx: DocContext, base: string): string => {
+  let key = base
+  for (let n = 1; ctx.used.has(key); n++) key = `${base}-${n}`
+  ctx.used.add(key)
+  return key
+}
+
+/* The footnote definitions lifted out of the source, and the source without
+   them: a definition is not a paragraph where it was written, it is the note
+   its reference names. Continuation lines are the indented lines under it. */
+function splitNotes(src: string): { body: string; notes: Map<string, string> } {
+  const lines = src.split('\n')
+  const notes = new Map<string, string>()
+  const body: string[] = []
+  /* A fence is code, and a code sample may show the footnote syntax it is
+     demonstrating: only a line outside a fence is a definition. */
+  let fence: { mark: string; size: number } | null = null
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
+    if (fence) {
+      const close = /^[ \t]*(`{3,}|~{3,})[ \t]*$/.exec(line)
+      if (close && close[1]![0] === fence.mark && close[1]!.length >= fence.size) fence = null
+      body.push(line)
+      continue
+    }
+    const open = /^[ \t]*(`{3,}|~{3,})/.exec(line)
+    if (open) {
+      fence = { mark: open[1]![0]!, size: open[1]!.length }
+      body.push(line)
+      continue
+    }
+    const m = /^\[\^([^\]\s]+)\]:[ \t]*(.*)$/.exec(line)
+    if (!m) {
+      body.push(line)
+      continue
+    }
+    const parts = [m[2]!]
+    while (i + 1 < lines.length && /^(?: {2,}|\t)\S/.test(lines[i + 1]!)) parts.push(lines[++i]!.trim())
+    notes.set(m[1]!, parts.join(' ').trim())
+  }
+  return { body: body.join('\n'), notes }
+}
+
 /**
- * An answer as markup, one string per top-level block (a paragraph, a list,
- * a listing, a table), each holding exactly one element. A streamed reply
- * only ever grows at its end, so a caller that keeps the blocks it already
- * drew only has to redraw from the first one that changed.
+ * A Markdown file as a document: the markup a reader sees, plus the outline
+ * its headings make. `prefix` keeps the ids from colliding with the page the
+ * document is drawn in; `footnotesLabel` is the catalogue's word for the
+ * section the notes are collected under.
  */
-export function mdBlocks(src: string): string[] {
+export function mdDocument(src: string, prefix = 'mdoc', footnotesLabel = 'Footnotes'): MdDocument {
+  const { body, notes } = splitNotes(src)
+  const ctx: DocContext = {
+    prefix,
+    notes,
+    numbers: new Map(),
+    order: [],
+    targets: new Map(),
+    used: new Set(),
+    headings: [],
+  }
+  const rendered = blocks(body, ctx)
+
+  let start = 0
+  const out: string[] = []
+  if (rendered[0] && /^<h1\b/.test(rendered[0])) {
+    const intro = [rendered[0]!]
+    start = 1
+    if (rendered[1]?.startsWith('<p>')) {
+      intro.push(rendered[1]!)
+      start = 2
+    }
+    out.push(`<header class="workspace-md-intro">${intro.join('')}</header>`)
+  }
+  const levelOf = (block: string): number => Number(/^<h([1-6])\b/.exec(block)?.[1] ?? 0)
+  const rest = rendered.slice(start)
+  const sectionLevel = rest.reduce((min, block) => {
+    const level = levelOf(block)
+    return level ? Math.min(level, min) : min
+  }, 7)
+
+  /* A heading at the document's own top level opens a section; everything
+     under it, until the next one, is that section's body. The paper wrapper
+     is what the reading column's width and its type are set on. */
+  let paper: string[] | null = null
+  const close = (): void => {
+    if (paper) out.push(`<div class="workspace-md-paper">${paper.join('')}</div></section>`)
+    paper = null
+  }
+  for (const block of rest) {
+    if (levelOf(block) === sectionLevel) {
+      close()
+      out.push(`<section class="workspace-md-section">${block}`)
+      paper = []
+    } else {
+      if (!paper) {
+        paper = []
+        out.push('<section class="workspace-md-section">')
+      }
+      paper.push(block)
+    }
+  }
+  close()
+
+  const order = [...ctx.order]
+  if (order.length) {
+    const inl = makeInline(ctx)
+    const items = order.map((label, k) => {
+      const n = k + 1
+      return `<li id="${prefix}-fn-${n}">${inl(notes.get(label) ?? '')}`
+        + ` <a class="workspace-md-back" href="#${prefix}-fnref-${n}" role="doc-backlink">↩</a></li>`
+    })
+    const id = `${prefix}-${uniqueId(ctx, 'footnotes')}`
+    const label = footnotesLabel
+    ctx.headings.push({ id, label, level: 2 })
+    out.push(
+      `<section class="workspace-md-section workspace-md-notes">`
+      + `<h2 id="${id}" data-mh="${esc(label)}" tabindex="-1">${esc(label)}</h2>`
+      + `<div class="workspace-md-paper"><ol>${items.join('')}</ol></div></section>`
+    )
+  }
+
+  /* Every `#fragment` the document wrote is resolved to the id it was given,
+     after the whole text is known: a link may name a heading below it. */
+  const html = out.join('').replace(/href="#([^"]+)"/g, (whole, ref: string) => {
+    let key = ref
+    try {
+      key = decodeURIComponent(ref)
+    } catch {
+      /* A fragment that is not percent-encoded is already the key. */
+    }
+    const id = ctx.targets.get(key) ?? ctx.targets.get(key.toLowerCase())
+    return id ? `href="#${id}"` : whole
+  })
+  return { html, headings: ctx.headings }
+}
+
+function makeInline(doc?: DocContext): Inline {
   /* Only http(s) is turned into a link, and the scheme is matched literally --
      an answer that mentions a URL should be openable, but nothing in the text
      gets to choose the scheme. The match is limited to the ASCII characters a
@@ -209,6 +389,23 @@ export function mdBlocks(src: string): string[] {
     const held: string[] = []
     const keep = (html: string): string => `\u0001${held.push(html) - 1}\u0001`
     let t_ = esc(s).replace(/`([^`]+)`/g, (_, c: string) => keep(codeSpan(c)))
+    /* A footnote reference is numbered by the order the document meets it,
+       not by where its definition sits: the note a reader is sent to is the
+       one it names, and two references to one note share its number. */
+    if (doc) t_ = t_.replace(/\[\^([^\]\s]+)\]/g, (whole: string, label: string) => {
+      if (!doc.notes.has(label)) return whole
+      let n = doc.numbers.get(label)
+      const first = n == null
+      if (n == null) {
+        n = doc.numbers.size + 1
+        doc.numbers.set(label, n)
+        doc.order.push(label)
+      }
+      /* One id per note, on the reference its backlink returns to: a repeated
+         reference keeps the number but not a second copy of the id. */
+      return keep(`<a class="workspace-md-ref"${first ? ` id="${doc.prefix}-fnref-${n}"` : ''}`
+        + ` href="#${doc.prefix}-fn-${n}" role="doc-noteref">${n}</a>`)
+    })
     /* TeX, held out whole like a code span and for the same reason: `a_1` and
        `x*y` inside a formula are not emphasis, and the passes below would eat
        the underscores and pair the stars with the next bold in the line.
@@ -255,6 +452,9 @@ export function mdBlocks(src: string): string[] {
       if (/^https?:\/\//.test(u)) {
         return keep(`<a href="${u}" target="_blank" rel="noreferrer noopener">${tx || u}</a>`)
       }
+      /* A `#fragment` is the document pointing inside itself: it is kept as an
+         anchor, and mdDocument resolves it once every heading has an id. */
+      if (doc && u.startsWith('#')) return keep(`<a href="${u}">${tx || u}</a>`)
       /* A local target is a deliverable being handed over, so it renders as
          one: the author's words on a chip that opens the thing. codeSpan(u)
          here used to throw the label away and show the raw path instead. */
@@ -270,6 +470,24 @@ export function mdBlocks(src: string): string[] {
     // eslint-disable-next-line no-control-regex
     return link(t_).replace(/\u0001(\d+)\u0001/g, (_, k: string) => held[+k]!)
   }
+  return inl
+}
+
+/**
+ * An answer as markup, one string per top-level block (a paragraph, a list,
+ * a listing, a table), each holding exactly one element. A streamed reply
+ * only ever grows at its end, so a caller that keeps the blocks it already
+ * drew only has to redraw from the first one that changed.
+ */
+export function mdBlocks(src: string): string[] {
+  return blocks(src)
+}
+
+/* The one block scanner: an answer with no context, a document with one. A
+   context is what addresses what it draws -- a heading's id and label, a
+   footnote reference's link, a local `#anchor` kept rather than dropped. */
+function blocks(src: string, doc?: DocContext): string[] {
+  const inl = makeInline(doc)
   const L = src.split('\n')
   const o: string[] = []
   let i = 0
@@ -382,11 +600,25 @@ export function mdBlocks(src: string): string[] {
     }
     /* Heading depth caps at two visual levels: chat answers are short, and a
        six-deep outline in a message column reads as noise. # and ## share the
-       section size; everything deeper shares the subsection size. */
+       section size; everything deeper shares the subsection size.
+       A document keeps the level it was written at, and is given the address
+       its outline and its own `#links` point at. */
     const h = /^(#{1,6})\s+(.*)/.exec(l)
     if (h) {
-      const tag = h[1]!.length <= 2 ? 'h2' : 'h3'
-      o.push(`<${tag}>${inl(h[2]!)}</${tag}>`)
+      const level = h[1]!.length
+      if (doc) {
+        const label = plainText(h[2]!)
+        const key = slugOf(label)
+        const id = `${doc.prefix}-${uniqueId(doc, key)}`
+        doc.targets.set(key, id)
+        if (label) doc.targets.set(label.toLowerCase(), id)
+        if (label) doc.headings.push({ id, label, level })
+        o.push(`<h${level} id="${id}"${label ? ` data-mh="${esc(label)}"` : ''} tabindex="-1">`
+          + `${inl(h[2]!)}</h${level}>`)
+      } else {
+        const tag = level <= 2 ? 'h2' : 'h3'
+        o.push(`<${tag}>${inl(h[2]!)}</${tag}>`)
+      }
       i++
       continue
     }

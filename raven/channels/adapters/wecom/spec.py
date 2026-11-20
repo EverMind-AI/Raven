@@ -15,7 +15,7 @@ def _make(config):
 SPEC = ChannelSpec(
     display_name="WeCom",
     factory=_make,
-    capabilities=Capabilities(),
+    capabilities=Capabilities(file_attachments=True),
     # Cargo declaration (config-with-cargo): the fields only this adapter
     # consumes, with their defaults, secrecy and nesting -- the declaration
     # is the only truth. Socket fields (enabled / allow_from / workspace)

@@ -242,8 +242,9 @@ def send_max_tokens(generation: Any, model: str | None, *, pinned: int | None = 
     down: the first pin that is not would be a rejected request, and nothing
     about the call site would say why.
 
-    ``pinned`` is the per-call argument (``judge`` asks for 64, the curator for
-    2048); the settings object carries the per-provider one. The argument has
+    ``pinned`` is the per-call argument (``judge`` asks for 64, a summarising
+    compaction for its configured ceiling); the settings object carries the
+    per-provider one. The argument has
     to arrive here rather than bypass the function, or the two ways of asking
     for a short answer are bounded by different rules and only one of them is
     the number truncation is judged against.

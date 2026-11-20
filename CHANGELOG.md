@@ -50,6 +50,17 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
+- The `curator` history strategy is retired; `compacting` is the only one.
+  A config that still sets `context.history.strategy: "curator"` is rewritten
+  to `"compacting"` on its next load and told once, and a `dropSegments`
+  entry naming `curator` becomes `compacting`. The flat keys only the curator
+  read (`context.curatorModel`, `curatorProvider`, `fastPathThreshold`,
+  `protectFirstN`, `archiveDir`, `curatorTimeoutSeconds`, `relevanceDecay`,
+  `relevanceReferenceBoost`) are removed from the file with the same notice.
+  The settings page's curator model row goes with them; a summarising
+  compaction runs on the turn's model unless
+  `context.history.compacting.summary.model` names one.
+
 - Sandboxed commands run in NVIDIA OpenShell, on its Docker driver, instead of
   boxlite micro-VMs. `tools.sandbox.backend` takes `"openshell"` or `"none"`;
   the first load rewrites a config that still says `"auto"` or `"boxlite"` to

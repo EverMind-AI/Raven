@@ -110,9 +110,6 @@
       "browser_type"
     ]
   },
-  "context": {
-    "curator_model": ""
-  },
   "memory": {
     "backend": "everos",
     "userId": "raven-design",

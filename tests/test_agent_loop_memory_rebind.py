@@ -184,6 +184,27 @@ async def test_rebind_out_of_memory_off_adds_the_backend_source(tmp_path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_rebind_mounts_no_source_when_the_router_master_switch_is_off() -> None:
+    """The master switch leaves the engine with no router, and a memory switch
+    thrown on live afterwards must not grow one behind its back."""
+    new = _Backend()
+    memory = MemorySegmentBuilder(None, None)
+    loop = _loop(builders=[memory], router=None)
+
+    await loop.rebind_memory_backend(
+        new,
+        name="everos",
+        user_id="u1",
+        agent_id="a1",
+        memory_top_k=5,
+    )
+
+    assert loop.backend is new and new.starts == 1
+    assert memory._backend is new
+    assert loop.context_engine.skills_router is None
+
+
+@pytest.mark.asyncio
 async def test_rebind_into_memory_off_drops_the_backend_source() -> None:
     """Left in place, the detached source would call ``None.recall`` on every
     skills search -- caught and logged, but a warning per turn."""

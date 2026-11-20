@@ -146,7 +146,7 @@ channel-matrix = [
     "nh3>=0.2.17,<1.0.0",
 ]
 channel-feishu = ["lark-oapi>=1.5.0,<2.0.0"]
-channel-wecom = ["wecom-aibot-sdk-python>=0.1.5"]
+channel-wecom = ["wecom-aibot-sdk-python>=0.1.7"]
 channel-mochat = [
     "python-socketio>=5.16.3,<6.0.0",
     "msgpack>=1.2.1,<2.0.0",
