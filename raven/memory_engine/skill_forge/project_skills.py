@@ -75,6 +75,8 @@ def project_skill_roots(
     chain = [start, *start.parents]
     excluded = {home_r, agent_home_r, *agent_home_r.parents}
     if start.is_relative_to(home_r):
+        # Both bounds stay on purpose: each one alone closes the ceiling, so a
+        # future relaxation of either still leaves the other in place.
         excluded |= set(home_r.parents)
         chain = chain[: chain.index(home_r) + 1]
     git_root = next((d for d in chain if (d / ".git").exists()), None)
