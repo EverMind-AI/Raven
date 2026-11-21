@@ -232,6 +232,9 @@ const afterSkillWrite = async (): Promise<SettingsSnapshot> => {
   const failure = settings.status === 'rejected' ? settings.reason
     : ext.status === 'rejected' ? ext.reason : null
   if (failure) toast(t('gui.settings.skills.saved_no_refresh', { detail: settingsErr(failure) }))
+  /* Every settings load is followed by this push, which is how the chip keeps
+     mirroring the gate; the gate `permission-chip` counts the pair. */
+  void pushPermMode()
   return settingsSnapshot()
 }
 /* Both scopes, because a provider write changes what both of them answer. The
