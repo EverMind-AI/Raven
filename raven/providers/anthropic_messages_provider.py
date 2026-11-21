@@ -32,6 +32,7 @@ from raven.providers.base import (
     format_llm_error,
     send_max_tokens,
 )
+from raven.providers.call_timeout import bounded_stream
 from raven.providers.first_byte import (
     BOUND_NAME,
     FirstByteTimeoutError,
@@ -1106,6 +1107,7 @@ class AnthropicMessagesProvider(LLMProvider):
                 failed.error_classification = forced_tool_choice.already_relaxed(failed.error_classification)
             return failed
 
+    @bounded_stream
     async def chat_stream(
         self,
         messages: list[dict[str, Any]],

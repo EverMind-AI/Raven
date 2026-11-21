@@ -222,6 +222,7 @@ def _chain(exc: BaseException) -> list[BaseException]:
 def encode_exception(exc: BaseException, *, status: int | None) -> dict[str, Any]:
     """The facts the agent's classification and call record read off ``exc``."""
     from raven.providers import call_record
+    from raven.providers.call_timeout import CallTimeoutError
     from raven.providers.first_byte import FirstByteTimeoutError, StreamIdleTimeoutError
 
     names: list[str] = []
@@ -246,6 +247,9 @@ def encode_exception(exc: BaseException, *, status: int | None) -> dict[str, Any
     elif isinstance(exc, StreamIdleTimeoutError):
         data["kind"] = "stream_idle"
         data["timeout"] = {"idle": getattr(exc, "idle", None)}
+    elif isinstance(exc, CallTimeoutError):
+        data["kind"] = "call_timeout"
+        data["timeout"] = {"budget": getattr(exc, "budget", None)}
     elif isinstance(exc, TimeoutError):
         data["kind"] = "timeout"
     else:
@@ -274,6 +278,7 @@ def _carrier(names: tuple[str, ...], timeout: bool) -> type[BaseException]:
 
 def decode_exception(data: dict[str, Any]) -> BaseException:
     """An exception that answers the agent's reads the way the host's original did."""
+    from raven.providers.call_timeout import CallTimeoutError
     from raven.providers.first_byte import FirstByteTimeoutError, StreamIdleTimeoutError
 
     kind = data.get("kind")
@@ -289,6 +294,8 @@ def decode_exception(data: dict[str, Any]) -> BaseException:
             )
         elif kind == "stream_idle":
             bound = StreamIdleTimeoutError(idle=float(timeout.get("idle") or 0.0))
+        elif kind == "call_timeout":
+            bound = CallTimeoutError(float(timeout.get("budget") or 0.0))
     except (TypeError, ValueError):
         bound = None
     if bound is not None:
@@ -296,7 +303,7 @@ def decode_exception(data: dict[str, Any]) -> BaseException:
         bound.args = (message,)
         return bound
     names = tuple(str(n) for n in data.get("names") or () if isinstance(n, str))
-    exc = _carrier(names, kind in {"timeout", "first_byte", "stream_idle"})(message)
+    exc = _carrier(names, kind in {"timeout", "first_byte", "stream_idle", "call_timeout"})(message)
     status = data.get("status")
     if isinstance(status, int):
         exc.status_code = status  # type: ignore[attr-defined]

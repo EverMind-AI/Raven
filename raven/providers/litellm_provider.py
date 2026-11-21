@@ -24,6 +24,7 @@ from raven.providers.base import (
     format_llm_error,
     send_max_tokens,
 )
+from raven.providers.call_timeout import bounded_stream
 from raven.providers.first_byte import (
     BOUND_NAME,
     FirstByteTimeoutError,
@@ -488,6 +489,7 @@ class LiteLLMProvider(LiteLLMShape):
                 call_record=call_record.from_exception(e, status=self._extract_status_code(e)),
             )
 
+    @bounded_stream
     async def chat_stream(
         self,
         messages: list[dict[str, Any]],
