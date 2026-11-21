@@ -62,11 +62,23 @@ def _load_ledger():
     return PackageLedger.load(_ledger_path())
 
 
-def _mcp_report(package):
+def _mcp_report(package, *, reserved=()):
     """What the package's ``mcp.json`` yields, read without starting anything."""
     from raven.agent_plugins.mcp import package_mcp_report
 
-    return package_mcp_report(package, plugin_data=_package_data_dir(package.name))
+    return package_mcp_report(
+        package,
+        plugin_data=_package_data_dir(package.name),
+        reserved_names=reserved,
+    )
+
+
+def _host_mcp_servers(config_path: str | None) -> tuple[str, ...]:
+    """The host's own MCP server names, from the config this command reads."""
+    from raven.agent_plugins.mcp import host_mcp_server_names
+    from raven.config.loader import load_config
+
+    return host_mcp_server_names(load_config(Path(config_path) if config_path else None).tools.mcp_servers)
 
 
 def _package_data_dir(name: str) -> Path:
@@ -95,7 +107,8 @@ def list_packages(
     )
     workspace = _workspace_path()
     ledger = _load_ledger()
-    running = set(config.agent_plugins.mcp_packages)
+    allowed = set(config.agent_plugins.mcp_packages)
+    host_servers = _host_mcp_servers(config_path)
 
     def install_state(name: str) -> tuple[bool, str]:
         """Whether a verified install stands here, and what the record says.
@@ -122,8 +135,8 @@ def list_packages(
                             "imported": states[package.name][0],
                             "install": states[package.name][1],
                             "mcp": {
-                                "servers": list(_mcp_report(package).servers),
-                                "running": package.name in running,
+                                "servers": list(_mcp_report(package, reserved=host_servers).servers),
+                                "allowed": package.name in allowed,
                             },
                         }
                         for package in packages
@@ -157,11 +170,11 @@ def list_packages(
     table.add_column("MCP")
     for package in packages:
         status = status_labels[states[package.name][1]]
-        mcp_servers = len(_mcp_report(package).servers)
+        mcp_servers = len(_mcp_report(package, reserved=host_servers).servers)
         if not mcp_servers:
             mcp = "[dim]none[/dim]"
-        elif package.name in running:
-            mcp = f"[green]{mcp_servers} running[/green]"
+        elif package.name in allowed:
+            mcp = f"[green]{mcp_servers} enabled[/green]"
         else:
             mcp = f"[yellow]{mcp_servers} not enabled[/yellow]"
         table.add_row(package.name, package.version or "(none)", str(package.root), status, mcp)
@@ -192,7 +205,7 @@ def inspect_package(
             console.print(f"[red]{escape(item['path'])}[/red]: {escape(item['reason'])}", highlight=False)
     for package in packages:
         skills, skill_problems = discover_skills(package)
-        mcp_report = _mcp_report(package)
+        mcp_report = _mcp_report(package, reserved=_host_mcp_servers(config_path))
         reports.append(
             {
                 "name": package.name,
