@@ -134,10 +134,61 @@ def test_a_tail_preview_keeps_the_end_of_a_shell_result(tmp_path: Path) -> None:
 def test_the_legacy_char_cap_still_applies(tmp_path: Path) -> None:
     limits = ToolOutputLimits(max_lines=0, max_bytes=0, max_chars=100)
 
-    bounded = bound_tool_result("x" * 500, tmp_path, limits=limits)
+    bounded = bound_tool_result(wrap_untrusted("x" * 500, source="exec"), tmp_path, limits=limits)
 
-    assert "500 characters omitted" in bounded
+    preview = _body(bounded).removesuffix(TOOL_RESULT_TRUNCATION_MARKER)
+    assert preview == "x" * 100
+    assert "400 characters omitted" in bounded
     assert is_truncated(bounded)
+
+
+def test_a_single_line_over_the_byte_budget_keeps_its_head(tmp_path: Path) -> None:
+    body = "x" * (60 * 1024)
+    limits = ToolOutputLimits(max_lines=2_000, max_bytes=50 * 1024, max_chars=0)
+
+    bounded = bound_tool_result(wrap_untrusted(body, source="exec"), tmp_path, limits=limits)
+
+    preview = _body(bounded).removesuffix(TOOL_RESULT_TRUNCATION_MARKER)
+    assert preview
+    assert len(preview.encode("utf-8")) <= 50 * 1024
+    assert preview.startswith("x")
+    assert "bytes omitted" in bounded
+
+
+def test_a_single_line_over_the_byte_budget_keeps_its_tail_for_exec(tmp_path: Path) -> None:
+    body = "y" * (60 * 1024)
+    limits = ToolOutputLimits(max_lines=2_000, max_bytes=50 * 1024, max_chars=0)
+
+    bounded = bound_tool_result(wrap_untrusted(body, source="exec"), tmp_path, limits=limits, direction="tail")
+
+    visible = _body(bounded)
+    assert visible.startswith(TOOL_RESULT_TRUNCATION_MARKER)
+    preview = visible.removeprefix(TOOL_RESULT_TRUNCATION_MARKER).lstrip("\n")
+    assert preview
+    assert len(preview.encode("utf-8")) <= 50 * 1024
+    assert preview.endswith("y")
+    assert "the preview shows the end" in bounded
+
+
+def test_a_single_cjk_line_is_cut_on_a_utf8_boundary(tmp_path: Path) -> None:
+    body = "汉" * 20_000
+    limits = ToolOutputLimits(max_lines=0, max_bytes=1_000, max_chars=0)
+
+    bounded = bound_tool_result(wrap_untrusted(body, source="exec"), tmp_path, limits=limits)
+
+    preview = _body(bounded).removesuffix(TOOL_RESULT_TRUNCATION_MARKER)
+    assert preview
+    assert len(preview.encode("utf-8")) <= 1_000
+    assert "�" not in preview
+
+
+def test_the_filed_body_preserves_its_line_endings(tmp_path: Path) -> None:
+    body = "\r\n".join(["x" * 100] * 50)
+    limits = ToolOutputLimits(max_lines=2_000, max_bytes=1_000, max_chars=0)
+
+    bound_tool_result(wrap_untrusted(body, source="exec"), tmp_path, limits=limits)
+
+    assert _files(tmp_path)[0].read_bytes() == body.encode("utf-8")
 
 
 def test_the_hint_names_only_the_reader_tools_that_exist(tmp_path: Path) -> None:
