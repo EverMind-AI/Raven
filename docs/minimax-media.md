@@ -31,8 +31,13 @@ not read for these tools, and the OpenRouter key is never sent to MiniMax. An em
 Set the image model to `MiniMax-H3-Image` or `MiniMax-H3-Image-Highspeed` for
 text-to-image generation. Both use `POST /v1/images/generations` on the global
 (`api.minimax.io`) or China (`api.minimax.cn`) endpoint. They accept an optional
-`aspect_ratio` and require a text-only prompt. Generation may take ten minutes.
-A timed-out request can still finish and incur a charge, so avoid resubmitting it.
+`aspect_ratio` (`auto`, or `W:H` with sides between 1 and 300 and a ratio from
+1:3 to 3:1) and take a text prompt. They ignore reference images: the endpoint
+drops an unknown reference field without an error, so the tool refuses a call
+that carries one before sending it, which also keeps the ignored call from being
+billed. A picture normally returns in about ten to twenty seconds; the request
+is given a 600-second window, and a timed-out request can still finish and incur
+a charge, so avoid resubmitting it.
 
 The legacy image models keep their existing behavior:
 
@@ -90,6 +95,11 @@ A route that hands a deck to Raven-PPT opens only when the deck can draw, and it
 these settings the way the launcher does: a deck on a provider of its own is ready with
 `PPT_IMAGE_API_KEY` or the host's key for that provider, never with the host's image
 key for another one.
+
+On an H3 image role the deck inherits both H3 limits: a picture asked for with
+`references` is refused per picture, because H3 ignores reference images, and the deck
+takes its deadline from the host image tool, so a batch gets one H3 window per four
+pictures in flight instead of the deck's own six minutes.
 
 ## References
 

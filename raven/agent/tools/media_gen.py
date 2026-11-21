@@ -724,18 +724,20 @@ class ImageGenerateTool(_OpenRouterMediaTool):
     }
 
     # MiniMax keeps the character an input image shows rather than editing it, and
-    # takes one per request.
+    # takes one per request. H3 ignores references on its side, so what a reference
+    # does depends on the model the section names, not on the provider alone.
     _MINIMAX_DESCRIPTION = _DESCRIPTION.replace(
         "(optionally editing/varying input images)",
-        "(H3 takes text only; other MiniMax image models can keep a reference character)",
+        "(reference images depend on the selected model: H3 ignores them, the legacy models keep a reference character)",
     )
     _MINIMAX_PARAMETERS = copy.deepcopy(_PARAMETERS)
     _MINIMAX_PARAMETERS["properties"]["images"]["description"] = (
-        "H3 takes text only. Other MiniMax image models keep the character from the first reference: "
-        "a local file path, http(s) URL, or data: URI"
+        "Model-dependent: H3 ignores reference images, and this tool refuses them before sending so the call "
+        "is not billed; the legacy models keep the character from the first reference. A local file path, "
+        "http(s) URL, or data: URI"
     )
     _MINIMAX_PARAMETERS["properties"]["prompts"]["items"]["properties"]["images"]["description"] = (
-        "Reference image for this picture only, unavailable on H3."
+        "Reference image for this picture only: H3 ignores references, so this tool refuses the call before sending"
     )
 
     description = _ByProvider("_DESCRIPTION", "_MINIMAX_DESCRIPTION")
@@ -1031,7 +1033,8 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         output_dir: str | None,
         stem: str,
     ) -> str:
-        """Generate a text-only H3 picture or a legacy image with an optional character reference."""
+        """Generate an H3 picture, which ignores reference images, or a legacy image
+        with an optional character reference."""
         h3 = model_id in _MINIMAX_H3_IMAGE_MODELS
         root = _minimax_root(self.api_base)
         if h3 and root == "https://api.minimaxi.com":
@@ -1040,6 +1043,8 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         body: dict[str, Any] = {
             "model": model_id,
             "prompt": prompt,
+            # One spec is one picture; `n` would answer this same prompt with
+            # variants, which `prompts` (a distinct picture per item) never asks for.
             "n": 1,
             "response_format": "b64_json" if h3 else "base64",
         }
@@ -1047,7 +1052,12 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             body["aspect_ratio"] = aspect_ratio
         if images:
             if h3:
-                return json.dumps({"error": "H3 image generation takes only a text prompt", "model": model_id})
+                return json.dumps(
+                    {
+                        "error": "H3 image generation ignores reference images, so this call was refused before sending",
+                        "model": model_id,
+                    }
+                )
             try:
                 ref = self._image_part(images[0])["image_url"]["url"]
             except OSError as e:

@@ -18,6 +18,7 @@ import base64
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -82,6 +83,24 @@ def _images_api(png: bytes):
 def _tool(tmp_path: Path, config: MediaToolConfig | None = None, **kwargs) -> PptGenerateImageTool:
     config = config or MediaToolConfig(api_key="test", api_base=OPENROUTER, model="openai/gpt-image-2")
     return PptGenerateImageTool(tmp_path, config=config, **kwargs)
+
+
+def _h3_tool(tmp_path: Path) -> PptGenerateImageTool:
+    section = SimpleNamespace(
+        provider="minimax", api_base="https://api.minimax.io/v1", api_key="mm-key", model="MiniMax-H3-Image"
+    )
+    return PptGenerateImageTool(tmp_path, config=section)
+
+
+def test_the_deck_deadline_follows_an_h3_host_once_per_wave(tmp_path: Path) -> None:
+    """A deck makes one host image request per picture and keeps four in flight, so
+    an H3 batch needs the host's H3 window once per wave; the fixed six minutes
+    would kill the second wave of a slow one."""
+    tool = _h3_tool(tmp_path)
+    assert tool.timeout_for({"prompt": "a lantern", "filename": "lantern"}) == 660
+    pictures = [{"prompt": f"p{i}", "filename": f"f{i}"} for i in range(9)]
+    assert tool.timeout_for({"prompts": pictures}) == 660 * 3
+    assert _tool(tmp_path).timeout_for({"prompt": "a lantern", "filename": "lantern"}) is None
 
 
 @pytest.mark.asyncio

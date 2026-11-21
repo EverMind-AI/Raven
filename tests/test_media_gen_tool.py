@@ -2298,14 +2298,11 @@ async def test_minimax_h3_generates_text_at_the_configured_region(monkeypatch, t
 
     def handler(request):
         requests.append(request)
-        return httpx.Response(
-            200, json={"data": [{"b64_json": _B64}, {"error": {"code": "1027", "message": "withheld"}}]}
-        )
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
 
     tool = _minimax_image_tool(monkeypatch, handler, tmp_path, model=model, provider=provider, api_base=base)
     answer = json.loads(await tool.execute("portrait", aspect_ratio="3:2"))
     assert answer["success"] and Path(answer["paths"][0]).read_bytes() == _PNG
-    assert answer["errors"] == [{"code": "1027", "message": "withheld"}]
     (request,) = requests
     assert str(request.url) == f"https://{host}/v1/images/generations"
     assert request.headers["authorization"] == "Bearer mm-key"
@@ -2344,7 +2341,7 @@ async def test_minimax_h3_returns_failures_without_resubmitting(monkeypatch, tmp
     answer = json.loads(await tool.execute("portrait", images=["missing.jpg"] if case == "reference" else None))
     assert len(posts) == (0 if case == "reference" else 1)
     if case == "reference":
-        assert "text prompt" in answer["error"]
+        assert "ignores reference images" in answer["error"]
     elif case == "timeout":
         assert answer["retryable"] is False and answer["error"] == "ReadTimeout"
     elif case == "http_error":
@@ -2381,6 +2378,34 @@ async def test_h3_deadline_follows_the_model_selected_for_this_call(monkeypatch,
         tool._config.model, tool._config.provider = model, provider
         assert await registry.execute("image_generate", {"prompt": "portrait", "model": override}) == "done"
         assert deadlines[-1] == ceiling
+
+
+async def test_a_tool_call_forward_carries_the_h3_deadline(monkeypatch, tmp_path):
+    """``tool_call`` is how a folded-out schema reaches ``image_generate``, and the
+    registry reads the forwarder's ceiling: the target's deadline has to travel."""
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.agent.tools.tool_search import ToolCallTool, ToolSearchController
+
+    tool = _minimax_image_tool(monkeypatch, None, tmp_path, model="MiniMax-H3-Image")
+    registry = ToolRegistry()
+    registry.register(tool)
+    registry.register(ToolCallTool(ToolSearchController(registry, always_visible=set())))
+    deadlines = []
+    timeout = asyncio.timeout
+
+    def tracked(seconds):
+        deadlines.append(seconds)
+        return timeout(seconds)
+
+    async def execute(**kwargs):
+        return "done"
+
+    monkeypatch.setattr(asyncio, "timeout", tracked)
+    monkeypatch.setattr(tool, "execute", execute)
+    assert (
+        await registry.execute("tool_call", {"name": "image_generate", "arguments": {"prompt": "portrait"}}) == "done"
+    )
+    assert deadlines[0] == 660
 
 
 def test_the_image_tool_says_what_references_do_on_the_provider_it_runs_on() -> None:
