@@ -39,6 +39,7 @@ from raven.acp_client.client import AcpClient
 from raven.acp_client.permissions import auto_approver
 from raven.acp_client.protocol import (
     MENU_UNREAD_META,
+    REPORT_NOW_CAPABILITY,
     RESIDENT_WORK_CAPABILITY,
     SESSION_MCP_CAPABILITY,
     STEER_CAPABILITY,
@@ -874,6 +875,12 @@ def steer_offered(initialize: Any) -> bool:
     is about to answer the prompt.
     """
     return _read_initialize(initialize).can_steer
+
+
+def report_now_offered(initialize: Any) -> bool:
+    """Whether the live ACP process can finish a specific active prompt."""
+    caps = _dict(_dict(initialize).get("agentCapabilities"))
+    return _dict(caps.get("_meta")).get(REPORT_NOW_CAPABILITY) is True
 
 
 def _read_session_models(result: Any) -> tuple[str, ...]:

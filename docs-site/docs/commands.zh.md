@@ -72,5 +72,5 @@
 rg -n 'ACP|A2A|run_subagent_dag' docs-site/docs raven tests
 ```
 
-`run_subagent_dag`、`dag_status`、`cancel_dag` 和 `a2a_send` 是模型工具，不是 Shell
+`run_subagent_dag`、`dag_status`、`cancel_subagent` 和 `a2a_send` 是模型工具，不是 Shell
 子命令。参数与行为请查对应指南。

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.agent import turn_clock
 from raven.agent.subagent import activity
 from raven.agent.subagent import charter as charter_mod
 from raven.agent.subagent.attachments import with_attachment_note
@@ -29,12 +30,14 @@ from raven.agent.subagent.mcp_grant import (
 )
 from raven.agent.subagent.tool_vocabulary import RAVEN_NAME
 from raven.agent.tools import snapshot
+from raven.agent.tools.background_exec import reap_execution
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry, call_failed
 from raven.agent.tools.removals import RemovalWatch
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.snapshot import take as take_snapshot
 from raven.agent.tools.web import ImageSearchTool, WebFetchTool, WebSearchTool, image_search_vendor, resolve_vendor_key
+from raven.agent.turn_report import REPORT_INSTRUCTION
 from raven.config.held_secrets import scrub_tool_output
 from raven.config.live import LiveConfig, exec_extra_deny_patterns, live_vendor_key, skill_blocklist
 from raven.config.schema import LLM_ERROR_RETRY_DELAYS_DEFAULT, ExecToolConfig
@@ -47,6 +50,7 @@ from raven.providers.streaming import generation_kwargs, stream_llm_call
 from raven.providers.tool_calls import openai_tool_call
 from raven.security.trust import wrap_untrusted
 from raven.spine.message import Media
+from raven.spine.turn import TurnReport
 from raven.utils.messages import build_assistant_message
 
 if TYPE_CHECKING:
@@ -344,8 +348,23 @@ class RavenLoopBackend:
                 len(charter.checks),
                 ", judge" if charter.code else "",
             )
+        run = activity.current()
+        control = run.control if run is not None else None
+        report = TurnReport(run.uid) if control is not None and run is not None else None
+        run_session = session_key or task_id
+        if control is not None and report is not None:
+
+            async def request_report() -> str:
+                report.requested.set()
+                return "report_requested"
+
+            control.report_now = request_report
         try:
-            with annotate_mcp_failure(grant), charter_mod.charter_scope(charter):
+            with (
+                annotate_mcp_failure(grant),
+                charter_mod.charter_scope(charter),
+                turn_clock.execution_scope(run_session, report.execution_id if report else None),
+            ):
                 return await self._run(
                     task,
                     task_id=task_id,
@@ -360,8 +379,18 @@ class RavenLoopBackend:
                     on_messages=on_messages,
                     on_delta=on_delta,
                     media=media,
+                    report=report,
                 )
+        except asyncio.CancelledError:
+            if report is not None:
+                try:
+                    await reap_execution(run_session, report.execution_id)
+                except TimeoutError:
+                    logger.error("Subagent {} could not stop all its background commands", task_id)
+            raise
         finally:
+            if control is not None:
+                control.report_now = None
             IN_SUBAGENT_RUN.reset(token)
 
     async def _run(  # noqa: C901 -- this is the bounded in-process worker loop
@@ -380,6 +409,7 @@ class RavenLoopBackend:
         on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         media: Sequence[Media] = (),
+        report: TurnReport | None = None,
     ) -> str:
         # The spawn's snapshot wins over the pair this backend was built with;
         # see ``SubagentBackend.run``. The constructor pair remains the fallback
@@ -629,6 +659,8 @@ class RavenLoopBackend:
         # backend object is shared and other runs write beside this one.
         removal_watch = RemovalWatch()
         while iteration < self._MAX_ITERATIONS:
+            if report and report.requested.is_set():
+                break
             iteration += 1
             if participants:
                 advice = await participant_answer("advise", participant_step("iteration"))
@@ -755,6 +787,17 @@ class RavenLoopBackend:
                     )
                 )
                 for call_index, tool_call in enumerate(response.tool_calls):
+                    if report and report.requested.is_set():
+                        for skipped in response.tool_calls[call_index:]:
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": skipped.id,
+                                    "name": skipped.name,
+                                    "content": "Skipped because the host requested a final reply.",
+                                }
+                            )
+                        break
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.debug("Subagent [{}] executing: {} with arguments: {}", task_id, tool_call.name, args_str)
                     # Before the call, not after: a tool that raises is still
@@ -893,8 +936,13 @@ class RavenLoopBackend:
             # another, it answers from what it has. Observed need -- a research
             # node spent all fifteen rounds on web_fetch and wrote nothing, and
             # the run's whole output was the placeholder that used to sit here.
-            ran_out = not answered_blank
-            if answered_blank:
+            reporting = report is not None and report.requested.is_set()
+            ran_out = not answered_blank and not reporting
+            if reporting and report is not None:
+                reason = REPORT_INSTRUCTION
+                if tails := await reap_execution(session_key or task_id, report.execution_id):
+                    reason += "\n\nOutput from stopped background commands:\n" + wrap_untrusted(tails, source="tool")
+            elif answered_blank:
                 logger.warning("Subagent [{}] ended its turn with an empty reply; asking once with no tools", task_id)
                 reason = "Your reply was empty."
             else:
@@ -927,6 +975,8 @@ class RavenLoopBackend:
                 )
                 raise SubagentNoAnswerError("sub-agent's wrap-up model call failed: " + (wrap_up.content or "")[:200])
             final_result = (wrap_up.content or "").strip() or None
+            if final_result is not None and reporting and (run := activity.current()) is not None:
+                run.reported_early = True
             await activity.note_provider_usage(
                 wrap_up.usage,
                 model=str(model or ""),

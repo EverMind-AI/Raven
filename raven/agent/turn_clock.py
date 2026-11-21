@@ -15,10 +15,13 @@ inherits another's clock.
 from __future__ import annotations
 
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 
 _DEADLINE: ContextVar[float | None] = ContextVar("raven_turn_deadline", default=None)
 _SESSION: ContextVar[str] = ContextVar("raven_turn_session", default="")
+_EXECUTION: ContextVar[str | None] = ContextVar("raven_turn_execution", default=None)
 
 
 def set_deadline(deadline: float | None) -> None:
@@ -34,6 +37,28 @@ def set_session(session_key: str) -> None:
 def session_key() -> str:
     """The session this turn serves, or "" outside a turn."""
     return _SESSION.get()
+
+
+def execution_id() -> str | None:
+    """The delegation whose commands this turn owns, when it has one."""
+    return _EXECUTION.get()
+
+
+def set_execution_id(value: str | None) -> None:
+    """Bind this turn's delegated execution for background command custody."""
+    _EXECUTION.set(value)
+
+
+@contextmanager
+def execution_scope(session: str, value: str | None) -> Iterator[None]:
+    """Bind a nested backend's command ownership until its own call returns."""
+    session_token = _SESSION.set(session)
+    execution_token = _EXECUTION.set(value)
+    try:
+        yield
+    finally:
+        _EXECUTION.reset(execution_token)
+        _SESSION.reset(session_token)
 
 
 def remaining() -> float | None:

@@ -13,7 +13,10 @@ import asyncio
 
 import pytest
 
-from raven.agent.subagent.dag_adjudication import Final, Outbox, Report, Stopped
+from raven.agent.subagent import activity
+from raven.agent.subagent.dag_adjudication import Final, Notice, Outbox, Report, Stopped
+from raven.agent.subagent.live_control import LiveDelegation, controlling
+from raven.config.schema import SubagentsConfig
 
 
 class _Announced:
@@ -936,6 +939,28 @@ async def test_a_bound_outbox_drops_a_stall_notice_like_any_notification() -> No
     assert announced.reports == []
     await box.release(flush=True)
     assert announced.reports == [], "a dropped notice is not owed after release either"
+
+
+async def test_a_long_run_notice_returns_control_to_the_foreground_host() -> None:
+    assert SubagentsConfig().long_run_notice_seconds == 3600
+    assert SubagentsConfig.model_validate({"longRunNoticeSeconds": 0}).long_run_notice_seconds == 0
+    box, announced = _outbox()
+    control = LiveDelegation("c1", "coder", "draft", lambda: pytest.fail("a notice interrupted the execution"))
+
+    async def notify(elapsed: int) -> None:
+        box.put_notice(Notice(control, control.notice(elapsed, controls=True, run_id="r1", node_id="a")))
+
+    with activity.collecting() as running, controlling(running, control, interval=0.01, announce=notify):
+        event = await asyncio.wait_for(box.take(), 1)
+        assert isinstance(event, Notice) and event.live
+        assert '"call_id": "c1"' in event.text and "still active" in event.text
+        box.put_notice(Notice(control, "older notice"))
+        box.put_notice(Notice(control, "newer notice"))
+        await box.put_report("a", "need a decision", awaiting_decision=True)
+        assert isinstance(await box.take(), Report)
+        box.answered("a")
+        assert (await box.take()).text == "newer notice"
+        assert announced.reports == [] and announced.finals == []
 
 
 def _empty_carry_plan():

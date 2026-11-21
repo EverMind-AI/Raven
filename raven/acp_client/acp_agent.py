@@ -49,12 +49,15 @@ from raven.acp_client.capabilities import (
     read_session_effort,
     relearn_session_menus,
     reopens_sessions,
+    report_now_offered,
     steer_offered,
 )
 from raven.acp_client.elicitor import Elicitor
 from raven.acp_client.permissions import PERMISSION_METHOD
 from raven.acp_client.pool import get_pool, set_session_state_forget
 from raven.acp_client.protocol import (
+    REPORT_NOW_PROMPT_KEY,
+    REPORTED_EARLY_KEY,
     SESSION_MCP_CAPABILITY,
     STEER_METHOD,
     AcpBusyError,
@@ -82,6 +85,7 @@ from raven.agent.subagent.mcp_grant import McpDispatchError, McpGrant, McpSource
 from raven.agent.subagent.mirasim_presets import MIRASIM_SHIM_PRESETS
 from raven.agent.tools.removals import RemovalWatch
 from raven.agent.tools.snapshot import take as take_snapshot
+from raven.agent.turn_report import REPORT_INSTRUCTION
 from raven.contracts.subagent_backend import SubagentActionAbortedError
 from raven.contracts.tool import FileChange
 from raven.home import subagent_role_env
@@ -1942,6 +1946,31 @@ class AcpAgentBackend:
                     # did has no step to record, and a prompt step would say the
                     # agent was asked what it never received.
                     prompt_out: list[int] = []
+                    control = collector._run.control if collector._run is not None else None
+                    prompt_meta = _prompt_meta(skey)
+                    if control is not None and report_now_offered(connection.initialize):
+                        from uuid import uuid4
+
+                        prompt_token = uuid4().hex
+                        prompt_meta[REPORT_NOW_PROMPT_KEY] = prompt_token
+
+                        async def request_report() -> str:
+                            if not prompt_out:
+                                return "not_running"
+                            answer = await client.request(
+                                STEER_METHOD,
+                                {
+                                    "sessionId": session_id,
+                                    "intent": "report_now",
+                                    "promptId": prompt_token,
+                                    "text": REPORT_INSTRUCTION,
+                                },
+                                timeout=15,
+                            )
+                            status = answer.get("status") if isinstance(answer, dict) else None
+                            return status if status in ("report_requested", "not_running") else "request_failed"
+
+                        control.report_now = request_report
 
                     def heard_sent(request_id: int) -> None:
                         prompt_out.append(request_id)
@@ -1953,7 +1982,7 @@ class AcpAgentBackend:
                             "session/prompt",
                             {
                                 "sessionId": session_id,
-                                "_meta": _prompt_meta(skey),
+                                "_meta": prompt_meta,
                                 # The attachments ride as resource links beside the
                                 # text, the block an editor sends for an @-mentioned
                                 # file; see raven.agent.subagent.attachments.
@@ -2053,6 +2082,8 @@ class AcpAgentBackend:
                                 or (reported_by_caller and (answered or tracker.run.prompt_id > 0)),
                             )
                         activity.offer_steer(collector._run, None)
+                        if control is not None:
+                            control.report_now = None
                         connection.router.detach(session_id, collector)
                         # Detached, the collector hears nothing more; whatever is
                         # left is settled by `_write_steps`, not by a timer firing
@@ -2077,7 +2108,15 @@ class AcpAgentBackend:
                 stop_reason = (result or {}).get("stopReason") if isinstance(result, dict) else None
                 # The agent's own metadata on the response, kept for the run
                 # record as sent; the host reads none of it.
-                activity.note_response_meta(result.get("_meta") if isinstance(result, dict) else None)
+                result_meta = result.get("_meta") if isinstance(result, dict) else None
+                activity.note_response_meta(result_meta)
+                if (
+                    collector._run is not None
+                    and REPORT_NOW_PROMPT_KEY in prompt_meta
+                    and isinstance(result_meta, dict)
+                    and result_meta.get(REPORTED_EARLY_KEY) is True
+                ):
+                    collector._run.reported_early = True
                 # The ceiling, from the protocol's own field rather than from the
                 # agent's metadata table: every conforming agent reports it here,
                 # and the stop reason is a value this design already acts on --

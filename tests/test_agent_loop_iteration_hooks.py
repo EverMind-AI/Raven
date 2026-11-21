@@ -11,7 +11,9 @@ and that the terminal seam sees an answerless exit.
 
 from __future__ import annotations
 
+import asyncio
 import time
+from dataclasses import replace
 
 import pytest
 
@@ -21,6 +23,7 @@ from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
 from raven.agent.loop.turn_path import _stamp_turn_observers
 from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
 from raven.spine import ChatType, Origin, Source, TurnRequest
+from raven.spine.turn import TurnReport
 
 
 class _ScriptedProvider:
@@ -76,6 +79,48 @@ def _loop(tmp_path, provider, hooks, max_iterations: int = 6) -> AgentLoop:
     loop._start_executor = _noop
     loop._connect_mcp = _noop
     return loop
+
+
+async def test_a_report_request_skips_a_new_tool_and_synthesizes_from_existing_work(tmp_path, monkeypatch) -> None:
+    from raven.agent.tools import background_exec
+
+    entered = asyncio.Event()
+    let_model_return = asyncio.Event()
+    cleanup = []
+    report = TurnReport("execution-1")
+
+    class Provider(_ScriptedProvider):
+        async def chat_with_retry(self, **kwargs):
+            if not self.calls:
+                entered.set()
+                await let_model_return.wait()
+            return await super().chat_with_retry(**kwargs)
+
+    async def reap(session_key, execution_id):
+        cleanup.append((session_key, execution_id))
+        return "last completed log line"
+
+    monkeypatch.setattr(background_exec, "reap_execution", reap)
+    provider = Provider([_tool_call("read_file", {"path": "new-work"}), _text("Final progress summary")])
+    loop = _loop(tmp_path, provider, hooks=[])
+    req = replace(_req(), report=report)
+    turn = asyncio.create_task(loop._process_message(req))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        report.requested.set()
+        let_model_return.set()
+        outcome = await asyncio.wait_for(turn, 2)
+    finally:
+        let_model_return.set()
+        if not turn.done():
+            turn.cancel()
+            await asyncio.gather(turn, return_exceptions=True)
+    assert outcome[0] == "Final progress summary"
+    assert report.applied and cleanup == [("cli:c", "execution-1")]
+    assert len(provider.calls) == 2 and provider.calls[1]["tools"] == []
+    synthesis = provider.calls[1]["messages"]
+    assert any("Skipped because the host requested" in m.get("content", "") for m in synthesis)
+    assert any("last completed log line" in m.get("content", "") for m in synthesis)
 
 
 @pytest.mark.asyncio

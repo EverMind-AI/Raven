@@ -538,6 +538,7 @@ async def judge(
     routes: Mapping[str, str] | None = None,
     select: str = "one",
     follow_ups: Sequence[str] = (),
+    reported_early: bool = False,
 ) -> Verdict:
     """Whether a node that returned actually accomplished its task.
 
@@ -562,6 +563,8 @@ async def judge(
     instruction = (
         _JUDGE_INSTRUCTION + (_OUTPUT_LIMIT_RULE if output_limited else "") + (_FOLLOW_UP_RULE if follow_ups else "")
     )
+    if reported_early:
+        instruction += "\nThe host requested this answer early. Judge the original task against the work returned."
     if routes:
         instruction += _route_rule(select)
     messages = _messages(
@@ -585,18 +588,23 @@ async def judge(
             timeout_s=timeout_s,
             evidence_complete=evidence_complete,
         )
+    fallback = (
+        Verdict(accomplished=False, what_is_missing="The early reply could not be verified.")
+        if reported_early
+        else Verdict(accomplished=True)
+    )
     try:
         response = await _call(provider, messages, model, timeout_s)
     except TimeoutError:
-        logger.debug("node verdict: judge call timed out after {}s; treating as accomplished", timeout_s)
-        return Verdict(accomplished=True)
+        logger.debug("node verdict: judge call timed out after {}s", timeout_s)
+        return fallback
     except Exception as exc:  # noqa: BLE001 - a judgement is never worth failing a node over
-        logger.debug("node verdict: judge call failed ({}); treating as accomplished", exc)
-        return Verdict(accomplished=True)
+        logger.debug("node verdict: judge call failed ({})", exc)
+        return fallback
     verdict = extract_verdict(response)
     if verdict is None:
-        logger.debug("node verdict: model answered without calling the tool; treating as accomplished")
-        return Verdict(accomplished=True)
+        logger.debug("node verdict: model answered without calling the tool")
+        return fallback
     # An ordinary node asked for no route, so one its judge volunteers is dropped here
     # and cannot reach whatever reads the verdict.
     return replace(verdict, routes=None, route_evidence=None, evidence_complete=evidence_complete)
