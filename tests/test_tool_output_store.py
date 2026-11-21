@@ -171,7 +171,8 @@ def test_a_single_line_over_the_byte_budget_keeps_its_tail_for_exec(tmp_path: Pa
 
 
 def test_a_single_cjk_line_is_cut_on_a_utf8_boundary(tmp_path: Path) -> None:
-    body = "汉" * 20_000
+    # U+6C49 is a 3-byte CJK character; the source stays ASCII for the gate.
+    body = chr(0x6C49) * 20_000
     limits = ToolOutputLimits(max_lines=0, max_bytes=1_000, max_chars=0)
 
     bounded = bound_tool_result(wrap_untrusted(body, source="exec"), tmp_path, limits=limits)
