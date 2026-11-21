@@ -256,6 +256,30 @@ def test_a_turn_meta_restates_a_row_by_its_identifier(tmp_path):
     assert "_row_id" not in filed[0], "the filing key is not handed to readers"
 
 
+def test_a_turn_meta_starts_on_a_fresh_line_after_a_crashed_append(tmp_path):
+    """A patch filed after a partial last line still applies on the way in."""
+    from raven.session.manager import append_turn_meta, read_session_file
+
+    path = tmp_path / "s.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps({"_type": "metadata", "key": "cli:c", "created_at": "2026-01-01T00:00:00", "metadata": {}}),
+                json.dumps({"role": "assistant", "content": "done", "_row_id": "abc123"}),
+            ]
+        )
+        + '\n{"role": "assistant", "content": "half-writ',
+        encoding="utf-8",
+    )
+
+    append_turn_meta(path, [{"row_id": "abc123", "keys": {"replied_via_tool": True}}])
+
+    session = read_session_file(path, "cli:c")
+    assert session is not None
+    filed = [m for m in session.messages if m.get("content") == "done"]
+    assert filed and filed[0]["replied_via_tool"] is True
+
+
 def test_an_incremental_write_stops_before_a_picture():
     """A picture row waits for the window, which is what names it in the file."""
     from raven.agent.loop.turn_path import _incremental_upto
