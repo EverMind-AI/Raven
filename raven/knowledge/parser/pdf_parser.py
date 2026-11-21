@@ -13,7 +13,7 @@ a caption set in the body size reads as prose, a running header as a paragraph.
 The other way asks deepdoc's models, in :mod:`.deepdoc._pipeline`: one says
 what each region of the page is, one reads a page that carries no text at all,
 and one rebuilds a table's rows from a picture of it. That is the half a PDF
-genuinely does not state, and `make fetch-resources` is what turns it on.
+genuinely does not state, and `raven resources` is what turns it on.
 
 A page neither of them can read -- a scan, with the recogniser not installed --
 is rendered and handed to the vision model (see :mod:`raven.knowledge._vision`),
@@ -203,14 +203,14 @@ class PdfParser(ParserBase):
                 # came out the way it did.
                 note(
                     "the deepdoc layout model is not installed, so this file was read geometrically; "
-                    "run `make fetch-resources` to install it."
+                    "run `raven resources` to install it."
                 )
             return None
         read = False if self._ocr is False else _pipeline.readable()
         if self._ocr and not read:
             note(
                 "the deepdoc text recognizer is not installed, so pages with no text layer were not read here; "
-                "run `make fetch-resources` to install it."
+                "run `raven resources` to install it."
             )
 
         def elements(page: Any, number: int) -> "list[Element] | None":

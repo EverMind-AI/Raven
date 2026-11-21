@@ -5,8 +5,8 @@
 #
 # A piped run always installs the published release wheel, even from inside a
 # clone. Set RAVEN_LOCAL_SRC=<dir> to force an editable install of a checkout.
-# Set RAVEN_MINIMAL=1 to skip the chromium download and the LibreOffice offer;
-# the wheel install itself is unchanged. Set RAVEN_NO_LAUNCH=1 to skip the
+# Set RAVEN_MINIMAL=1 to skip the resource download, the chromium download and
+# the LibreOffice offer; the wheel install itself is unchanged. Set RAVEN_NO_LAUNCH=1 to skip the
 # closing `raven web` (CI), so the script returns. A download whose host cannot
 # be reached at all is fetched from a mirror in mainland China instead; set
 # RAVEN_NO_MIRROR=1 to keep every download on its default host.
@@ -17,8 +17,9 @@
 #   1. uv            (Python toolchain + package manager)
 #   2. Node.js >= 22 (TUI runtime; installed privately if the system lacks it)
 #   3. raven         (installed as a global uv tool)
-#   4. chromium      (browser-tool runtime; downloaded by playwright)
-#   5. LibreOffice   (deck preview; offered via winget)
+#   4. resources     (knowledge reader's models and word dictionary)
+#   5. chromium      (browser-tool runtime; downloaded by playwright)
+#   6. LibreOffice   (deck preview; offered via winget)
 #
 # It then ends in the product: `raven web` opens the page in a browser and holds
 # this session, so the install finishes on something running rather than on a
@@ -968,9 +969,31 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
     Write-Ok "Raven installed"
 }
 
-# Both optional installs are best-effort: raven itself is already installed by
-# the time they run, so a failed download or a declined offer must never abort
-# a completed install. RAVEN_MINIMAL skips both.
+# The knowledge reader's layout and table-structure models and the word
+# dictionary, under the same contract install.sh's install_resources runs them:
+# `--optional` is the whole contract, every step reports its own failure and
+# exits 0, so an unreachable host leaves a working raven that says what is
+# absent when asked rather than an install that stopped halfway.
+function Install-Resources([string]$UvPath) {
+    # The module lives in the installed raven, so this must be the tool venv's
+    # python -- the system python knows nothing about this install.
+    $toolDir = ""
+    try { $toolDir = [string](& $UvPath tool dir 2>$null) } catch { $toolDir = "" }
+    $py = if ($toolDir) { Join-Path $toolDir "raven\Scripts\python.exe" } else { $null }
+    if (-not $py -or -not (Test-Path $py)) {
+        Write-Warn "raven tool venv python not found; skipping the resource download."
+        return
+    }
+    Write-Info "Downloading the word dictionary and parser models..."
+    & $py -m raven.resources --optional | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "Resource download failed; raven still runs. Retry later with: raven resources"
+    }
+}
+
+# The optional installs are all best-effort: raven itself is already installed
+# by the time they run, so a failed download or a declined offer must never
+# abort a completed install. RAVEN_MINIMAL skips them.
 function Install-Browser([string]$UvPath) {
     # The browser tool drives chromium through the playwright library inside
     # the raven tool venv, so both the probe and the download must use that
@@ -1112,6 +1135,7 @@ function Main {
         $node = Ensure-Node
         Install-Raven $uv $node
 
+        if (-not $env:RAVEN_MINIMAL) { Install-Resources $uv }
         if (-not $env:RAVEN_MINIMAL) { Install-Browser $uv }
         if (-not $env:RAVEN_MINIMAL) { Install-Office }
     } finally {
