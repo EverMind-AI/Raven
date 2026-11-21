@@ -17,7 +17,7 @@ import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.recovery import RecoveryLimits
-from raven.providers.base import ChatDelta, ErrorClassification, LLMProvider, LLMResponse
+from raven.providers.base import CallRecord, ChatDelta, ErrorClassification, LLMProvider, LLMResponse
 from raven.providers.rates import DEFAULT_MAX_OUTPUT_TOKENS, resolve_max_output_tokens
 from raven.providers.streaming import STREAM_CUT
 
@@ -790,6 +790,63 @@ async def test_a_stream_cut_before_its_terminal_chunk_is_a_transport_failure() -
     assert "cut off by the connection" in (response.content or "")
     assert response.tool_calls == []
     assert any("without the upstream's terminal chunk" in line and "20 chars of reasoning" in line for line in logged)
+
+
+@pytest.mark.parametrize("header_name", ["llm_provider-content-type", "Content-Type"])
+async def test_a_cut_stream_answered_by_a_json_document_is_a_protocol_mismatch(header_name: str) -> None:
+    """A stream request that a JSON document answered was never treated as a
+    stream: the endpoint does not speak the provider's protocol, and the account
+    says so instead of blaming the connection -- the fact the person holding the
+    config can act on. The verdict keeps the cut's recovery flags, so what the
+    loop does with it is unchanged."""
+    provider = _FakeProvider(
+        [
+            ChatDelta(
+                content=None,
+                finish_reason="stop",
+                finish_synthesized=True,
+                call_record=CallRecord(headers={header_name: "application/json"}),
+            )
+        ]
+    )
+    call = _bind_helper(provider)
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=None)
+
+    assert response.finish_reason == "error"
+    assert response.error_classification is not None
+    assert response.error_classification.category == "protocol_mismatch"
+    assert response.error_classification.retryable is True
+    assert response.error_classification.should_fallback is True
+    assert "instead of an event stream" in (response.content or "")
+    assert "cut off by the connection" not in (response.content or "")
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [{"llm_provider-content-type": "text/event-stream; charset=utf-8"}, {"llm_provider-server": "nginx"}, {}],
+)
+async def test_a_cut_stream_no_document_answered_stays_a_transport_failure(headers: dict[str, str]) -> None:
+    """The boundary of the mismatch verdict: only a document answer names the
+    protocol. A stream that came back as an event stream and still delivered
+    nothing, or one whose headers were not recorded, was cut by the connection."""
+    provider = _FakeProvider(
+        [
+            ChatDelta(
+                content=None,
+                finish_reason="stop",
+                finish_synthesized=True,
+                call_record=CallRecord(headers=headers),
+            )
+        ]
+    )
+    call = _bind_helper(provider)
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=None)
+
+    assert response.error_classification is not None
+    assert response.error_classification.category == "network"
+    assert "cut off by the connection" in (response.content or "")
 
 
 async def test_a_cut_stream_that_showed_its_reasoning_is_not_asked_again() -> None:

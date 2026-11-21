@@ -141,6 +141,19 @@ Raven 优先采用服务商模型列表里声明的类型；没有声明时回�
 这个模型时，按目录中同名家族的归类处理。你自己选择的类型优先级最高。能读图、但只
 输出文字的聊天模型仍归在**文本**下。
 
+### 智谱 GLM Coding Plan 密钥 { #zhipu-glm-coding-plan-keys }
+
+GLM Coding Plan 订阅只在智谱的 Anthropic 兼容端点上计费：Z.ai 是
+`https://api.z.ai/api/anthropic`，国内 BigModel 是
+`https://open.bigmodel.cn/api/anthropic`。上面列表中的 **Z.ai** 和 **BigModel**
+两个条目走的是按量付费的 chat API，而 `glm` 模型名不会隐含 Anthropic 协议，把
+Coding Plan 的密钥填进去买不到任何调用：chat API 会回答账户余额不足，而把条目的
+base URL 改指向 Anthropic 兼容端点也不会切换它的协议——每个请求都会收到一段该条
+目读不懂的 JSON 文档，Raven 会将其报告为协议不匹配。要使用 Coding Plan，请新增
+一个 `protocol: anthropic`、`apiBase` 指向上述地址的服务商，可以在**设置 >
+模型服务商（Settings > Model providers）**中添加，也可以在
+`~/.raven/config.json` 里加一节。
+
 ### 公司代理或私有 CA { #behind-a-corporate-proxy-or-private-ca }
 
 Raven 用操作系统的证书库校验 HTTPS 证书，IT 部门装进系统的根证书无需额外设置即可
