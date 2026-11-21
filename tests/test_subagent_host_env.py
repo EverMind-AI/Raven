@@ -426,6 +426,9 @@ def test_windows_capture_takes_path_from_the_stores_and_every_other_value_from_r
     machine's own ``USERNAME`` -- so copied over raven's they would hand a child a
     ``ComSpec`` that ``Popen(shell=True)`` cannot start, a ``TEMP`` that is no
     directory, and a second spelling of names raven already has.
+    An entry the live PATH repeats is not carried twice: the doubled tail has
+    measured past what npm's bin spawn carries, leaving the child cmd unable to
+    resolve its own shims.
     """
     windows_host.user["Path"] += r";C:\Users\me\.local\bin"
 
@@ -433,8 +436,7 @@ def test_windows_capture_takes_path_from_the_stores_and_every_other_value_from_r
 
     assert captured is not None
     assert captured["PATH"] == (
-        r"C:\Windows\system32;C:\Windows;C:\Users\me\AppData\Local\Microsoft\WindowsApps;C:\Users\me\.local\bin;"
-        r"C:\Windows\system32;C:\Windows;C:\Users\me\AppData\Local\Microsoft\WindowsApps"
+        r"C:\Windows\system32;C:\Windows;C:\Users\me\AppData\Local\Microsoft\WindowsApps;C:\Users\me\.local\bin"
     )
     assert {name: value for name, value in captured.items() if name != "PATH"} == {
         name: value for name, value in os.environ.items() if name != "PATH"
@@ -467,7 +469,7 @@ def test_windows_capture_keeps_the_users_store_when_the_machines_refuses(windows
     captured = backend_env._capture_windows(consequence="subagents inherit raven's environment")
 
     assert captured is not None
-    assert captured["PATH"] == r"C:\Users\me\AppData\Local\Microsoft\WindowsApps;" + _LOGON["PATH"]
+    assert captured["PATH"] == r"C:\Users\me\AppData\Local\Microsoft\WindowsApps;C:\Windows\system32;C:\Windows"
 
 
 def test_windows_capture_reports_failure_when_no_store_reads(windows_host: _FakeWinreg) -> None:
