@@ -7204,8 +7204,8 @@
       "zh": "内容过长，这里只显示了前一部分"
     },
     "gui.confirm.ev.net_shared": {
-      "en": "What you allow here for the session or always is opened in the sandbox every conversation shares. A session answer lasts until Raven restarts; an always answer saves a permissions.network rule that survives a restart.",
-      "zh": "你在这里为本次会话或永久允许的连接，会开放到所有会话共用的那个沙箱。本次会话的允许在 Raven 重启后失效；永久允许会记入 permissions.network 规则，重启后依然有效。"
+      "en": "What you allow here for the session or always is opened in the sandbox every conversation shares. A session answer lasts until Raven restarts; an always answer saves a permissions.network rule that survives a restart when the rule can be written. If it cannot be written, the permission lasts only until Raven restarts.",
+      "zh": "你在这里为本次会话或永久允许的连接，会开放到所有会话共用的那个沙箱。本次会话的允许在 Raven 重启后失效；永久允许会记入 permissions.network 规则，重启后依然有效；规则写不进去时，这条允许只在 Raven 重启前有效。"
     },
     "gui.confirm.land.always": {
       "en": "Won't ask again for: {pattern}, in every working directory",

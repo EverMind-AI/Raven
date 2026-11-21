@@ -229,7 +229,8 @@ async def test_another_sandbox_that_did_not_sync_leaves_the_approval_told_as_ope
 SHARED_NOTE = (
     "What you allow here for the session or always is opened in the sandbox every conversation shares. "
     "A session answer lasts until Raven restarts; an always answer saves a permissions.network rule "
-    "that survives a restart."
+    "that survives a restart when the rule can be written. If it cannot be written, the permission "
+    "lasts only until Raven restarts."
 )
 
 
