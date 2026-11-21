@@ -100,7 +100,56 @@ def test_the_deck_deadline_follows_an_h3_host_once_per_wave(tmp_path: Path) -> N
     assert tool.timeout_for({"prompt": "a lantern", "filename": "lantern"}) == 660
     pictures = [{"prompt": f"p{i}", "filename": f"f{i}"} for i in range(9)]
     assert tool.timeout_for({"prompts": pictures}) == 660 * 3
+    # A top-level prompt rides beside the batch as its first picture, so four
+    # items plus the prompt are five pictures and two waves, not one.
+    mixed = [{"prompt": f"p{i}", "filename": f"f{i}"} for i in range(4)]
+    assert tool.timeout_for({"prompt": "a cover", "prompts": mixed}) == 660 * 2
     assert _tool(tmp_path).timeout_for({"prompt": "a lantern", "filename": "lantern"}) is None
+
+
+@pytest.mark.asyncio
+async def test_the_registered_deck_tool_carries_the_h3_deadline(monkeypatch, tmp_path: Path) -> None:
+    """The registered face is a ``SessionTool``, and the registry reads the deadline
+    off that face. Forwarding the prototype alone leaves the wrapper on its fixed
+    360 seconds, so this drives the factory's own tool through a real registry."""
+    import asyncio
+
+    from raven.agent import workdir
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.plugins.context import PluginContext, ServiceLocator
+    from raven_ppt import plugin as plugin_module
+
+    section = SimpleNamespace(
+        provider="minimax", api_base="https://api.minimax.io/v1", api_key="mm-key", model="MiniMax-H3-Image"
+    )
+    ctx = PluginContext(
+        config={"enabled": True, "profile": "script_author"},
+        services=ServiceLocator(
+            workspace=tmp_path, user_id="u", agent_id="a", media_config=lambda kind: section, media_proxy=None
+        ),
+    )
+    tool = plugin_module.make_ppt_generate_image(ctx)
+    assert tool is not None, "the deck route is available in this environment"
+    registry = ToolRegistry()
+    registry.register(tool)
+    deadlines: list[float] = []
+    timeout = asyncio.timeout
+
+    def tracked(seconds):
+        deadlines.append(seconds)
+        return timeout(seconds)
+
+    async def execute(**kwargs):
+        return "done"
+
+    monkeypatch.setattr(asyncio, "timeout", tracked)
+    monkeypatch.setattr(tool, "execute", execute)
+    with workdir.bind(tmp_path):
+        assert (
+            await registry.execute("ppt_generate_image", {"project": "talk", "prompt": "a lantern", "filename": "x"})
+            == "done"
+        )
+    assert deadlines == [660.0], "the host H3 window reached the registry through SessionTool"
 
 
 @pytest.mark.asyncio

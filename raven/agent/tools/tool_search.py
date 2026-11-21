@@ -457,7 +457,11 @@ class ToolCallTool(Tool):
         if target is None or target is self:
             return None
         timeout_for = getattr(target, "timeout_for", None)
-        return timeout_for(self.forwarded_params(params)) if timeout_for else None
+        if timeout_for is not None:
+            deadline = timeout_for(self.forwarded_params(params))
+            if deadline is not None:
+                return deadline
+        return target.timeout_seconds
 
     def blocking_for(self, params: dict[str, Any]) -> bool:
         return self._ctrl.target_is_blocking(params.get("name"), params.get("arguments"))

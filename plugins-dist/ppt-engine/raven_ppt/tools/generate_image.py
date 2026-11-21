@@ -222,7 +222,9 @@ class PptGenerateImageTool(Tool):
         if ceiling is None:
             return None
         pictures = len(params.get("prompts") or []) + (1 if params.get("prompt") else 0)
-        return ceiling * max(1, -(-pictures // _CONCURRENCY))
+        if pictures == 0:
+            return None
+        return ceiling * -(-pictures // _CONCURRENCY)
 
     async def execute(
         self,

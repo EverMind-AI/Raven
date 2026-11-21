@@ -2317,6 +2317,15 @@ async def test_minimax_h3_generates_text_at_the_configured_region(monkeypatch, t
     }
 
 
+def test_the_h3_deadline_covers_a_batch_of_prompts(monkeypatch, tmp_path):
+    """The batch is the slow path -- one request per picture, four in flight -- so
+    a `prompts` call must carry the H3 window exactly like a single picture does."""
+    tool = _minimax_image_tool(monkeypatch, None, tmp_path, model="MiniMax-H3-Image")
+    assert tool.timeout_for({"prompt": "a lantern"}) == 660.0
+    assert tool.timeout_for({"prompts": [{"prompt": f"p{i}"} for i in range(5)]}) == 660.0
+    assert tool.timeout_for({"prompt": "a cover", "prompts": [{"prompt": f"p{i}"} for i in range(3)]}) == 660.0
+
+
 @pytest.mark.parametrize("case", ["reference", "timeout", "http_error", "item_error", "url"])
 async def test_minimax_h3_returns_failures_without_resubmitting(monkeypatch, tmp_path, case):
     posts = []
@@ -2424,6 +2433,64 @@ def test_the_image_tool_says_what_references_do_on_the_provider_it_runs_on() -> 
     section.provider, section.api_base = "minimax", "https://api.minimax.io/v1"
     assert "character" in offered()["parameters"]["properties"]["images"]["description"]
     assert "edit" not in offered()["description"].split(".")[0]
+
+
+def test_the_h3_schema_takes_any_ratio_while_a_legacy_section_keeps_the_eight() -> None:
+    """H3's endpoint takes `auto` or any `W:H`; the legacy models take the eight
+    fixed ratios. Offering the H3 shape to a legacy section would let the registry
+    pass a value the legacy endpoint refuses, so the variant follows the model."""
+    from raven.agent.tools.registry import ToolRegistry
+
+    section = SimpleNamespace(
+        provider="minimax", api_base="https://api.minimax.io/v1", api_key="k", model="MiniMax-H3-Image"
+    )
+    registry = ToolRegistry()
+    registry.register(ImageGenerateTool(lambda: section, workspace=None))
+
+    def offered() -> dict:
+        definition = next(
+            d["function"] for d in registry.get_definitions() if d["function"]["name"] == "image_generate"
+        )
+        return definition["parameters"]
+
+    h3 = offered()
+    assert "enum" not in h3["properties"]["aspect_ratio"]
+    assert "auto" in h3["properties"]["aspect_ratio"]["description"]
+    assert "enum" not in h3["properties"]["prompts"]["items"]["properties"]["aspect_ratio"]
+
+    section.model = "image-01"
+    legacy = offered()
+    assert legacy["properties"]["aspect_ratio"]["enum"] == list(media_gen._SIZES)
+    assert legacy["properties"]["prompts"]["items"]["properties"]["aspect_ratio"]["enum"] == list(media_gen._SIZES)
+
+    section.provider, section.api_base, section.model = "", "", "openai/gpt-image-2"
+    assert offered()["properties"]["aspect_ratio"]["enum"] == list(media_gen._SIZES)
+
+
+async def test_an_h3_ratio_outside_the_eight_reaches_the_endpoint(monkeypatch, tmp_path) -> None:
+    """`5:4` is inside H3's own acceptance and outside the fixed enum, so it is the
+    value the registry used to refuse before any request was sent. The legacy route
+    keeps the enum and still refuses it."""
+    from raven.agent.tools.registry import ToolRegistry
+
+    seen: list[dict] = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+
+    h3 = _minimax_image_tool(monkeypatch, handler, tmp_path, model="MiniMax-H3-Image")
+    registry = ToolRegistry()
+    registry.register(h3)
+    out = json.loads(await registry.execute("image_generate", {"prompt": "portrait", "aspect_ratio": "5:4"}))
+    assert out["success"]
+    assert seen[0]["aspect_ratio"] == "5:4"
+
+    legacy = _minimax_image_tool(monkeypatch, handler, tmp_path, model="image-01")
+    legacy_registry = ToolRegistry()
+    legacy_registry.register(legacy)
+    refusal = await legacy_registry.execute("image_generate", {"prompt": "portrait", "aspect_ratio": "5:4"})
+    assert refusal.startswith("Error: Invalid parameters")
 
 
 @pytest.mark.parametrize("tool_class", [ImageGenerateTool, VideoGenerateTool])

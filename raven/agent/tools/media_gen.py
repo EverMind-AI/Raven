@@ -109,13 +109,21 @@ def _picture_mime(item: Any, fallback: str = "image/png") -> str:
 
 class _ByProvider:
     """A schema field read per provider: the MiniMax one where the tool runs on
-    MiniMax, the default elsewhere and on the class, which has no section to ask."""
+    MiniMax, the default elsewhere and on the class, which has no section to ask.
 
-    def __init__(self, default: str, minimax: str) -> None:
+    A third variant answers for the H3 image models alone. Their endpoint takes
+    ``auto`` or any ``W:H``, which the fixed eight-value enum would refuse
+    before the request; the legacy models keep that enum.
+    """
+
+    def __init__(self, default: str, minimax: str, h3: str | None = None) -> None:
         self._default = default
         self._minimax = minimax
+        self._h3 = h3
 
     def __get__(self, tool: _OpenRouterMediaTool | None, owner: type) -> Any:
+        if tool is not None and self._h3 is not None and tool._runs_on_h3_image():
+            return getattr(owner, self._h3)
         on_minimax = tool is not None and tool._runs_on_minimax()
         return getattr(owner, self._minimax if on_minimax else self._default)
 
@@ -242,6 +250,15 @@ class _OpenRouterMediaTool(Tool):
         from raven.config.schema import media_provider
 
         return media_provider(self._config) in _MINIMAX_PROVIDERS
+
+    def _runs_on_h3_image(self) -> bool:
+        from raven.config.schema import media_provider
+
+        provider = media_provider(self._config)
+        if provider not in _MINIMAX_PROVIDERS:
+            return False
+        model = getattr(self._config, "model", "") or ""
+        return wire_model(model, client_provider=provider) in _MINIMAX_H3_IMAGE_MODELS
 
     def _output_path(self, ext: str, output_dir: str | None = None, stem: str | None = None) -> Path:
         base = workdir.current() or self._workspace
@@ -739,9 +756,25 @@ class ImageGenerateTool(_OpenRouterMediaTool):
     _MINIMAX_PARAMETERS["properties"]["prompts"]["items"]["properties"]["images"]["description"] = (
         "Reference image for this picture only: H3 ignores references, so this tool refuses the call before sending"
     )
+    # H3's endpoint takes `auto` or any `W:H` whose sides run 1 to 300 and whose
+    # ratio sits between 1:3 and 3:1, which the fixed enum above cannot spell:
+    # those values were refused by the registry before the request was sent. The
+    # legacy models take the eight fixed ratios, so the variant is chosen by model.
+    _H3_ASPECT_RATIO_DESCRIPTION = (
+        "the shape of the picture: 'auto', or W:H with sides from 1 to 300 and a ratio between 1:3 and 3:1"
+    )
+    _H3_PARAMETERS = copy.deepcopy(_MINIMAX_PARAMETERS)
+    _H3_PARAMETERS["properties"]["aspect_ratio"] = {
+        "type": "string",
+        "description": _H3_ASPECT_RATIO_DESCRIPTION,
+    }
+    _H3_PARAMETERS["properties"]["prompts"]["items"]["properties"]["aspect_ratio"] = {
+        "type": "string",
+        "description": _H3_ASPECT_RATIO_DESCRIPTION,
+    }
 
     description = _ByProvider("_DESCRIPTION", "_MINIMAX_DESCRIPTION")
-    parameters = _ByProvider("_PARAMETERS", "_MINIMAX_PARAMETERS")
+    parameters = _ByProvider("_PARAMETERS", "_MINIMAX_PARAMETERS", "_H3_PARAMETERS")
 
     def to_schema(self) -> dict[str, Any]:
         # Authored, so the registry serves it live: the provider the section runs
