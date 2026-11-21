@@ -49,9 +49,11 @@ and restarts.
 
 Model request timeouts live under `agents.defaults` in `config.json`:
 
-- `llmCallTimeout` (default 600 seconds) bounds one model request, including
-  a streaming response that keeps producing chunks. Increase it if a legitimate
-  generation needs longer; receiving another chunk does not reset this budget.
+- `llmCallTimeout` (default 600 seconds) is the wall-clock budget for one
+  model request, including a streaming response that keeps producing chunks
+  and the time the consumer spends handling each chunk between pulls. It is
+  not only model generation time. Increase it if a legitimate generation needs
+  longer; receiving another chunk does not reset this budget.
 - `llmFirstByteTimeout` (default 120 seconds) limits the wait for the first
   response, and `streamIdleTimeout` (default 180 seconds) limits silence after
   streaming starts. These may end a request before its total budget expires.
