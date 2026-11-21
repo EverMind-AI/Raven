@@ -448,28 +448,50 @@ class ContextConfig(_Base):
     headroom: ContextHeadroomConfig = Field(default_factory=ContextHeadroomConfig)
     """The window share held back for the reply; shared by every strategy."""
 
-    tool_result_max_chars: int = Field(default=1_000_000, ge=0)
-    """Longest ``role="tool"`` text the loop's ``_save_turn`` writes to the
-    session log; ``0`` removes the cap entirely.
+    tool_result_max_lines: int = Field(default=2_000, ge=0)
+    """Longest ``role="tool"`` body in lines before it is bounded; ``0`` removes
+    the line limit. The byte and legacy character limits are checked alongside
+    it; whichever is reached first decides the preview. A shell result keeps the
+    tail of the output; every other tool keeps the head.
+    """
 
-    Here rather than beside the other persistence settings because of what it
-    is for. A ref promises the verbatim original is one retrieval away, and the
-    log is where that original lives -- so a cap that cuts the write makes the
-    promise unkeepable for anything above it. It was 16000 and hard-coded,
-    which meant no large tool result had ever been stored whole.
+    tool_result_max_bytes: int = Field(default=50 * 1024, ge=0)
+    """Longest ``role="tool"`` body in UTF-8 bytes before it is bounded; ``0``
+    removes the byte limit. Whichever of this, ``toolResultMaxLines`` and the
+    legacy ``toolResultMaxChars`` is reached first decides the preview.
 
-    A million characters is roughly 250K tokens, larger than any window we
-    target, so it never cuts an output that could have been read in context. It
-    stays non-zero as a runaway guard: one ``cat`` of a binary would otherwise
-    be written to the JSONL in full and re-read on every session load. Inline
+    The cut is applied when the result enters the conversation, not only on the
+    way to disk: the model reads the bounded preview, the log files the same
+    bytes, and the next turn's replay matches what was sent. A cap applied only
+    at the write left the model holding the full result and the replay holding
+    the cut one, so the provider's prefix cache broke at the cut. The untrusted
+    fence around the result stays whole: the cut lands inside it, before the
+    genuine END marker and any trusted note after it.
+
+    When the cut fires, the full body is written to
+    ``<workspace>/tool-output/tool_<id>.txt`` (owner-only on POSIX; Windows
+    inherits the workspace directory's ACL; pruned once it is seven days old).
+    The model-visible content becomes a bounded preview
+    followed by a trusted hint naming that file. The preview is what the
+    session files and replays; the file is a retrieval aid, not part of the
+    prompt. This is the opencode split: a bounded Model Tool Output is the
+    durable record, a Managed Tool Output File holds the rest.
+
+    These limits are also the runaway guard: one ``cat`` of a binary cannot be
+    written to the JSONL in full and re-read on every session load. Inline
     images are handled separately, before this.
 
-    Raising it does not grow the prompt -- what enters the window is decided by
-    the history strategy -- but it does grow the file: a session of thirty
-    large tool results goes from roughly 480KB to 1.8MB.
+    Raising them does not grow the prompt -- what enters the window is decided
+    by the history strategy -- but it does grow the files. History written
+    under an older cap cannot be recovered; retrieval reports those spans as
+    truncated rather than passing off a prefix as the whole.
+    """
 
-    History written under the old cap cannot be recovered; retrieval reports
-    those spans as truncated rather than passing off a prefix as the whole.
+    tool_result_max_chars: int = Field(default=1_000_000, ge=0)
+    """Legacy extra character cap, kept for configs written before the line and
+    byte limits; ``0`` disables it. New configs should use
+    ``toolResultMaxLines`` / ``toolResultMaxBytes``. The session-write fallback
+    still uses this value for a tool result no ingestion path bounded.
     """
 
 

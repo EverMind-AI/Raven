@@ -230,6 +230,16 @@ async def test_normalize_masks_only_fence_nonces_and_the_clock_line() -> None:
     assert _normalize_text("run at 09:15:22") != _normalize_text("run at 23:59:59")
 
 
+async def test_normalize_masks_the_managed_tool_output_filename() -> None:
+    """The managed file name is regenerated per run; only its id is masked."""
+    first = "Full output saved to: /ws/tool-output/tool_0123456789abcdef0123456789abcdef.txt\nUse read_file"
+    second = "Full output saved to: /ws/tool-output/tool_fedcba9876543210fedcba9876543210.txt\nUse read_file"
+
+    assert _normalize_text(first) == _normalize_text(second)
+    assert "tool_<id>.txt" in _normalize_text(first)
+    assert _normalize_text(first) != _normalize_text(first + "\n" + first)
+
+
 async def test_compare_ignores_system_content_cache_control_and_nonces() -> None:
     recorded = {
         "model": "stub",
