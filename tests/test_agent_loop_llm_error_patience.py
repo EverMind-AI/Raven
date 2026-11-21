@@ -857,9 +857,10 @@ def test_a_picture_without_provenance_is_still_accounted_for() -> None:
     assert notes[0].endswith("To see it again, ask for it again]")
 
 
-def test_the_current_questions_picture_is_never_withdrawn() -> None:
-    """The picture on this turn's question is the subject of the turn: it stays even
-    when the window is closed, while the pictures from the tool exchange go."""
+def test_the_current_questions_picture_is_kept_until_the_last_resort() -> None:
+    """The picture on this turn's question is the subject of the turn: it stays
+    while any tool or earlier-turn picture can go. The refusal ladder's last pass
+    can take it, because a text answer beats a failed turn."""
     sketch = {"role": "user", "content": [text_block("make it look like this"), _picture("SKETCH")]}
     messages = [sketch, *_with_pictures()[1:]]
 
@@ -870,6 +871,10 @@ def test_the_current_questions_picture_is_never_withdrawn() -> None:
     assert _pictures_in(messages[0]) == 1
     assert shrink.window_images(messages, 0, reason="refused") == (0, 0), "nothing else is left to withdraw"
     assert _pictures_in(messages[0]) == 1
+
+    assert shrink.window_images(messages, 0, reason="refused", last_resort=True) == (1, 1)
+    assert _pictures_in(messages[0]) == 0
+    assert "refused this request's pictures" in messages[0]["content"][1]["text"]
 
 
 def test_the_window_withdraws_a_post_question_picture() -> None:
@@ -937,7 +942,10 @@ def test_the_overflow_path_sheds_earlier_pictures_and_keeps_the_current_question
     mixed = [*_with_pictures(), {"role": "user", "content": [_picture("U9")]}]
     first, freed = shrink.emergency_shrink(mixed)
     assert freed == 2 and _pictures_in(first[-1]) == 1, "result pictures go first, the current question stays"
-    assert shrink.emergency_shrink(first) == (first, 0), "the newest result picture is kept by the window"
+    again, freed_again = shrink.emergency_shrink(first)
+    assert freed_again == 1 and _pictures_in(again[5]) == 0, "the last-resort pass takes the newest result picture"
+    assert _pictures_in(again[-1]) == 1, "the current question is the newest, and stays"
+    assert shrink.emergency_shrink(again) == (again, 0)
 
 
 class _PageRender(Tool):

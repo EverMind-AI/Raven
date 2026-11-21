@@ -63,6 +63,7 @@ from raven.agent.loop._shared import (
     _stamp_context_used,
     _stamp_reasoning_ms,
     _stamp_replied_via_tool,
+    _strip_inline_images,
     append_hook_note,
     asyncio,
     autofill_resolver,
@@ -155,7 +156,6 @@ from raven.spine.turn import AnswerlessTurnError
 from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
 from raven.tracing import config as tracing_config
-from raven.utils.images import is_inline_image
 from raven.utils.tokens import estimate_message_tokens, estimate_prompt_tokens
 
 if TYPE_CHECKING:
@@ -348,6 +348,35 @@ def _content_digest(content: Any) -> str:
     transforms a save makes on its own (a truncated body, a stripped envelope)."""
     payload = json.dumps(content, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _is_runtime_context_block(part: Any) -> bool:
+    """Whether a content block is the runtime-context prefix assembly prepended."""
+    return (
+        isinstance(part, dict)
+        and part.get("type") == "text"
+        and isinstance(part.get("text"), str)
+        and part["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG)
+    )
+
+
+def _archive_tool_images(entry: dict[str, Any], content: Any) -> Any:
+    """Archive a multimodal tool result's pictures, leaving placeholders in the display content.
+
+    Returns the content the row stores. The save path calls this before the
+    character cap, which passes a list through unchanged; a cap that ever learns
+    to cut a list must cut this placeholder form, never the data URI a replay
+    depends on.
+    """
+    from raven.utils.image_store import IMAGE_REFS_KEY, capture_images
+
+    if not isinstance(content, list):
+        return content
+    content, image_refs = capture_images(content)
+    entry["content"] = content
+    if image_refs:
+        entry[IMAGE_REFS_KEY] = image_refs
+    return content
 
 
 def _incremental_upto(messages: list[dict[str, Any]], start: int) -> int | None:
@@ -4633,16 +4662,13 @@ class TurnPathMixin:
                 # not file the memo or the reminder over what the user sent.
                 content = entry["content"] = restored
                 entry.pop(ATTACHMENT_NOTES_KEY, None)
-            if (
-                role not in ("tool", "user")
-                and isinstance(content, list)
-                and any(is_inline_image(part) for part in content)
-            ):
-                # A multimodal row outside the two paths below, which archive
-                # the bytes instead. Inline images must never reach the display
-                # content: a single one adds megabytes that are then replayed on
-                # every resume and re-fed to the model, and unlike a code bug
-                # that is not revertible once written.
+            if role not in ("tool", "user") and isinstance(content, list):
+                # The two paths below archive a picture's bytes; a row of any
+                # other role keeps no refs, so it gets the placeholder-only
+                # projection. Inline images must never reach the display
+                # content: a single one adds megabytes that are then replayed
+                # on every resume and re-fed to the model, and unlike a code
+                # bug that is not revertible once written.
                 content = entry["content"] = _strip_inline_images(content)
             if first_user_pending and role == "user":
                 entry.setdefault("timestamp", received_at)
@@ -4742,20 +4768,12 @@ class TurnPathMixin:
                 # count of the stored log, can only ever guess.
                 if (took := entry.pop(private_key, None)) is not None:
                     entry[stored_key] = took
-            if role == "tool" and isinstance(content, list):
-                # A multimodal tool result. Its bytes are archived in the
-                # message's private refs; the display content keeps a
-                # placeholder. The char cap below guards `str` content only, so
-                # pictures are the part of a list it cannot see. Archiving runs
-                # first: a cap that ever learns to cut a list must cut the
-                # placeholder form, never the data URI a replay depends on.
-                content, image_refs = capture_images(content)
-                entry["content"] = content
-                if image_refs:
-                    entry[IMAGE_REFS_KEY] = image_refs
             if role == "tool":
-                # The loop already bounded what the model read; this is the
-                # fallback for a body that never passed through it.
+                # A multimodal result is archived before the cap, which passes
+                # a list through unchanged; the loop already bounded what the
+                # model read, and the cap is the fallback for a body that never
+                # passed through it.
+                content = _archive_tool_images(entry, content)
                 entry["content"] = cap_tool_result(content, self._TOOL_RESULT_MAX_CHARS)
             elif role == "user":
                 if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
@@ -4777,15 +4795,7 @@ class TurnPathMixin:
                         entry["content"] = inbound_original
                         entry.pop(ATTACHMENT_NOTES_KEY, None)
                 if isinstance(content, list):
-                    filtered, image_refs = capture_images(
-                        content,
-                        drop=lambda part: (
-                            isinstance(part, dict)
-                            and part.get("type") == "text"
-                            and isinstance(part.get("text"), str)
-                            and part["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG)
-                        ),
-                    )
+                    filtered, image_refs = capture_images(content, drop=_is_runtime_context_block)
                     if not filtered:
                         continue
                     entry["content"] = filtered
