@@ -1,13 +1,12 @@
-"""Model-facing controls for an in-flight ``run_subagent_dag`` run.
+"""Model-facing controls for live DAG runs and delegated instances.
 
-``cancel_dag`` stops a run the model already submitted; ``dag_status`` reports
+``cancel_subagent`` stops a run or controls a live instance. ``cancel_dag`` is
+the compatibility entry point for stopping a whole run. ``dag_status`` reports
 one run's live per-node progress, or lists the runs in flight; ``resolve_dag_node``
-answers a node suspended on an exception verdict. All three are kept out of the
+answers a node suspended on an exception verdict. The tools stay out of the
 provider's tool schema on purpose (``ToolRegistry.hide_from_schema``): the only
-place that tells the model these exist is ``run_subagent_dag``'s own acceptance
-text -- and, for ``resolve_dag_node``, the exception report -- so the per-turn
-tool list carries nothing a conversation that never starts a DAG has any use
-for. The model reaches them by naming them through ``tool_call``, which is
+entry points that tell the model about them are dispatch receipts, notices, and
+exception reports. The model reaches them by naming them through ``tool_call``, which is
 registered whether or not progressive disclosure is on for exactly this reason;
 the registry resolves either way, as its dispatch never consults the schema.
 """
@@ -19,6 +18,7 @@ import json
 from contextvars import ContextVar
 from typing import Any
 
+from raven.agent.subagent import activity
 from raven.agent.subagent.dag_adjudication import ABANDON, CONTINUE, DECISIONS, REASSIGN, REPLAN
 from raven.agent.subagent.dag_live import awaiting_decision, cancel_run, live_run_ids, owning_tool, resolve_node
 from raven.agent.subagent.dag_reader import DagReadError
@@ -207,16 +207,41 @@ class CancelDagTool(_ControlTool):
             "required": ["run_id"],
         }
 
-    async def execute(self, run_id: str) -> str:
+    async def execute(self, run_id: str) -> str | ToolResult:
+        return await self._stop_dag(run_id)
+
+    def _receipt(self, status: str, text: str) -> str:
+        return f"{status}: {text}" if self.name == "cancel_subagent" else text
+
+    async def _check_other_dag_name(self, run_id: str) -> str | ToolResult | None:
+        from raven.permissions.rules import user_tier
+        from raven.permissions.runtime import current_gate, deadline_stopped
+
+        other = "cancel_dag" if self.name == "cancel_subagent" else "cancel_subagent"
+        tools = getattr(self._loop, "tools", None)
+        offers = getattr(tools, "offers_by_name", None)
+        if offers is not None and tools.get(other) is not None and not offers(other):
+            return f"Error: DAG cancellation is disabled by the {other} tool policy."
+        gate = current_gate()
+        params = {"run_id": run_id}
+        if gate is not None and user_tier(other, params, gate.permissions().tools) is not None:
+            with deadline_stopped():
+                return await gate.enforce(other, params)
+        return None
+
+    async def _stop_dag(self, run_id: str) -> str | ToolResult:
+        if (refusal := await self._check_other_dag_name(run_id)) is not None:
+            return refusal
         tool = _registered_tool(self._loop)
         if tool is None:
             # Fail closed: without the session-scoped reader there is no way
             # to prove the run belongs to this conversation, and an unproven
             # cancel could stop another chat's run -- silently, since a
             # cancelled run announces nothing.
-            return (
+            return self._receipt(
+                "not_running",
                 f"Cannot cancel DAG run {run_id}: run ownership cannot be resolved here (no "
-                "run_subagent_dag tool is registered), so nothing was signalled."
+                "run_subagent_dag tool is registered), so nothing was signalled.",
             )
         # Ownership first: a run id must resolve under this conversation's run
         # history before the cancel is signalled, or one chat's model could
@@ -225,29 +250,107 @@ class CancelDagTool(_ControlTool):
         try:
             await tool.read_run(run_id, self._session.get())
         except DagReadError:
-            return (
+            return self._receipt(
+                "not_running",
                 f"No DAG run {run_id} in this conversation: a run id must resolve under "
                 'this conversation\'s run history to be cancelled. tool_call name "dag_status" '
-                "with no run_id lists the runs this conversation has in flight."
+                "with no run_id lists the runs this conversation has in flight.",
             )
         if (sealed := await _sealed_line(tool, run_id, self._session.get())) is not None:
             # A sealed run has nothing left to stop, and its successor is a run
             # of its own: stopping that is a decision about that run, by its id.
-            return sealed + ". Nothing was stopped; cancel the successor by its own run id to stop it."
-        if not cancel_run(self._loop, run_id):
-            return (
-                f"No in-flight DAG run {run_id} to cancel: it is not running, or the id is wrong. "
-                'tool_call name "dag_status" with no run_id lists the runs currently in flight.'
+            return self._receipt(
+                "not_running", sealed + ". Nothing was stopped; cancel the successor by its own run id to stop it."
             )
-        head = (
+        if not cancel_run(self._loop, run_id):
+            return self._receipt(
+                "not_running",
+                f"No in-flight DAG run {run_id} to cancel: it is not running, or the id is wrong. "
+                'tool_call name "dag_status" with no run_id lists the runs currently in flight.',
+            )
+        head = self._receipt(
+            "interrupt_requested",
             f"Cancellation requested for DAG run {run_id}: running nodes are cancelled "
-            "immediately, pending nodes are skipped, and nothing further is announced for this run."
+            "immediately, pending nodes are skipped, and nothing further is announced for this run.",
         )
         try:
             run = await self._read_live(run_id)
         except DagReadError:
             return head
         return head + "\n\n" + _render_run(run)
+
+
+class CancelSubagentTool(CancelDagTool):
+    """Stop a DAG or act on the current execution of a delegated instance."""
+
+    @property
+    def name(self) -> str:
+        return "cancel_subagent"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Use run_id to interrupt a DAG, or agent and instance to interrupt a live delegation. "
+            "For an instance, mode report_now requests a final reply from its existing work. "
+            "Pass call_id from a run notice to address that exact execution."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "run_id": {"type": "string", "description": "The DAG run id."},
+                "agent": {"type": "string", "description": "Agent serving the instance."},
+                "instance": {"type": "string", "description": "The instance from the delegation."},
+                "call_id": {"type": "string", "description": "Optional id of this execution from a run notice."},
+                "mode": {"type": "string", "enum": ["interrupt", "report_now"], "default": "interrupt"},
+            },
+            "additionalProperties": False,
+        }
+
+    def validate_params(self, params: dict[str, Any]) -> list[str]:
+        if any(not isinstance(value, str) or not value.strip() for value in params.values()):
+            return ["Target fields and mode must be non-empty strings."]
+        if "run_id" in params:
+            if params.keys() - {"run_id", "mode"}:
+                return ["Use run_id alone or select an instance with agent and instance."]
+            if params.get("mode", "interrupt") != "interrupt":
+                return ["A DAG run supports interruption only."]
+        elif not {"agent", "instance"} <= params.keys():
+            return ["An instance requires both agent and instance."]
+        return []
+
+    async def execute(
+        self,
+        run_id: str | None = None,
+        agent: str | None = None,
+        instance: str | None = None,
+        mode: str = "interrupt",
+        call_id: str | None = None,
+    ) -> str | ToolResult:
+        session = self._session.get()
+        if not session:
+            return self._receipt("not_running", "No matching live delegation in this conversation.")
+        if run_id is not None:
+            return await self._stop_dag(run_id)
+
+        run = activity.live_instance(session, agent, instance) if agent and instance else None
+        control = run.control if run is not None else None
+        if control is None or (call_id is not None and control.call_id != call_id):
+            return self._receipt("not_running", "No matching live delegation in this conversation.")
+        try:
+            status = await control.request(mode)
+        except Exception:  # noqa: BLE001 - the backend may disconnect during delivery
+            status = "request_failed"
+        messages = {
+            "interrupt_requested": "The selected execution is stopping.",
+            "report_requested": "The final reply will arrive through the original delegation.",
+            "not_running": "No matching live delegation in this conversation.",
+            "unsupported": "This backend cannot finish an active turn on request. Use interrupt to stop it.",
+            "request_failed": "The request could not be delivered. Check the delegation's status.",
+        }
+        return self._receipt(status, messages[status])
 
 
 class ResolveDagNodeTool(_ControlTool):
@@ -303,7 +406,7 @@ class ResolveDagNodeTool(_ControlTool):
                         "graph. 'replan' replaces the plan: a new run starts from the `nodes` "
                         "you supply, and the work in progress your plan lists or depends on is "
                         "carried into it without stopping. Everything else that has not finished "
-                        'stops with this run. To stop everything instead, use tool_call name "cancel_dag".'
+                        'stops with this run. To stop the whole run, use tool_call name "cancel_subagent" with its run_id.'
                     ),
                 },
                 "agent": agent,
@@ -568,7 +671,7 @@ class ResolveDagNodeTool(_ControlTool):
             return f"Node '{node_id}' of run {run_id} will run again with your message."
         return (
             f"Node '{node_id}' of run {run_id} is abandoned; its dependents are skipped and the "
-            'rest of the graph continues. Use tool_call name "cancel_dag" to stop the whole run.'
+            'rest of the graph continues. Use tool_call name "cancel_subagent" with the run_id to stop the whole run.'
         )
 
 
@@ -670,6 +773,8 @@ def _render_run(run: dict[str, Any]) -> str:
         lines += _field("memory_file", _raw(entry, "memory_file"))
         lines += _field("started_at", _raw(entry, "started_at"))
         lines += _field("ended_at", _raw(entry, "ended_at"))
+        if entry.get("reported_early"):
+            lines += _field("reply", "requested early by the host")
         if entry.get("error"):
             lines += _field("error", str(entry["error"]))
         if entry.get("reason"):

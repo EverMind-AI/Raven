@@ -35,13 +35,16 @@ from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from loguru import logger
 
 from raven.agent.tools import snapshot as workdir_snapshot
 from raven.config.agent_names import canonical_agent_name
+
+if TYPE_CHECKING:
+    from raven.agent.subagent.live_control import LiveDelegation
 
 # Names a provider might report token counts under. OpenAI-shaped
 # (``prompt_tokens``) is what raven's own providers normalise to; the camelCase
@@ -155,6 +158,8 @@ class RunActivity:
     # raising for a refusal. Not persisted: a live handle, not a fact about the
     # run, which is why it is absent from ``as_meta``.
     steer: Callable[[str], Awaitable[str]] | None = None
+    control: LiveDelegation | None = None
+    reported_early: bool = False
     # The run's answer *before* the reply cap cut it, when the cap did cut it.
     # `None` means nothing was discarded and what the backend returned is the
     # whole answer -- so a reader must never treat this as "the output", only as
@@ -208,6 +213,8 @@ class RunActivity:
             meta["acp_frames"] = self.frames
         if self.response_meta:
             meta["acp_response_meta"] = self.response_meta
+        if self.reported_early:
+            meta["reported_early"] = True
         if self.truncation:
             meta.update(self.truncation)
         return meta

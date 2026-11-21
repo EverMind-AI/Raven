@@ -230,9 +230,11 @@ class CodeParticipant(AgentParticipant):
         # client must not be told the turn ended while it runs, or it reads the
         # agent as finished; the ACP layer keeps the prompt open and runs a
         # closing turn once these are gone.
-        if background_exec.running(session_key=step.session_key):
-            from raven.agent import turn_clock
+        from raven.agent import turn_clock
 
+        execution = turn_clock.execution_id()
+        selection = {"execution_id": execution} if execution is not None else {}
+        if background_exec.running(session_key=step.session_key, **selection):
             left = turn_clock.remaining()
             meta[HOLD_TURN_KEY] = {
                 "why": "waiting for a background command this turn started",

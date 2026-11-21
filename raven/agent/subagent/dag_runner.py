@@ -65,6 +65,7 @@ from raven.agent.subagent.dag_store import (
 from raven.agent.subagent.dag_verdict import RouteUndeterminedError, Verdict
 from raven.agent.subagent.instance_log import message_rows
 from raven.agent.subagent.instances import get_registry, hold_handle
+from raven.agent.subagent.live_control import LiveDelegation, controlling
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent_memory import (
     TRACE_BUDGET_S,
@@ -561,6 +562,8 @@ async def run_dag(
     judge_node: "Callable[..., Awaitable[Any]] | None" = None,
     on_node_start: "Callable[[str], Awaitable[None]] | None" = None,
     announce_exception: ExceptionAnnouncer | None = None,
+    long_run_notice_seconds: float = 0,
+    announce_long_run: "Callable[[LiveDelegation, int, str, str], Awaitable[None]] | None" = None,
     max_continuations: int = 2,
     origin: dict | None = None,
     control_reachable: "Callable[[], bool] | None" = None,
@@ -1064,6 +1067,8 @@ async def run_dag(
                         judge_node=judge_node,
                         on_node_start=on_node_start,
                         announce_exception=announce_exception,
+                        long_run_notice_seconds=long_run_notice_seconds,
+                        announce_long_run=announce_long_run,
                         max_continuations=max_continuations,
                         origin=origin,
                         dependents=dependents,
@@ -2182,6 +2187,7 @@ async def _apply_verdict(
     control_reachable: "Callable[[], bool] | None" = None,
     control_advert: "Callable[[str], str | None] | None" = None,
     output_limited: bool = False,
+    reported_early: bool = False,
     reassignment_state: ReassignmentState | None = None,
 ) -> str | None:
     """Turn a finished node's verdict into a status, and report a bad one.
@@ -2212,6 +2218,7 @@ async def _apply_verdict(
             error=errors.get(node.id, ""),
             crashed=crashed,
             output_limited=output_limited,
+            **(optional_keyword(judge_node, "reported_early", True) if reported_early else {}),
         )
     except RouteUndeterminedError as exc:
         # Ahead of the fail-open below, which is an ordinary node's: there is no route
@@ -2261,8 +2268,14 @@ async def _apply_verdict(
                     output_paths=output_paths,
                 )
             return None
-        logger.opt(exception=True).warning("DAG node {} verdict call raised, judging it accomplished: {}", node.id, exc)
-        verdict = Verdict(accomplished=True)
+        if reported_early:
+            logger.opt(exception=True).warning("DAG node {} early reply could not be verified: {}", node.id, exc)
+            verdict = Verdict(accomplished=False, what_is_missing="The early reply could not be verified.")
+        else:
+            logger.opt(exception=True).warning(
+                "DAG node {} verdict call raised, judging it accomplished: {}", node.id, exc
+            )
+            verdict = Verdict(accomplished=True)
     if verdict.accomplished:
         # A crashed node keeps the failure it has: no route is read from a node that did
         # not finish. `()` is a selection; only a missing one fails the node.
@@ -2289,7 +2302,7 @@ async def _apply_verdict(
     # input, whatever happens next.
     output_paths.pop(node.id, None)
     remaining = max_continuations - (attempt - 1)
-    if verdict.follow_up and remaining > 0:
+    if verdict.follow_up and remaining > 0 and not reported_early:
         # The judge already knows what to say, so there is nobody to ask. A
         # command's judge holds the failing output; relaying that through a
         # person, or through the main agent, would be asking them to read it
@@ -2338,6 +2351,10 @@ async def _apply_verdict(
         in_progress=in_progress,
         not_started=not_started,
     )
+    if reported_early:
+        report = "The host requested an early reply for this node.\n\n" + report
+        if said:
+            report += "\n\nThe node's early reply:\n" + said[:_MAX_OUTPUT_CHARS]
     # `origin` is part of this predicate because whoever is going to be asked is
     # reached through it: a node suspended on a report that cannot be delivered
     # waits out its whole timeout and then blames the answerer for not answering a
@@ -2431,7 +2448,7 @@ def _mark_stopped(status: dict[str, str]) -> None:
 
 
 def _cascade_failures(deps: dict[str, list[str]], status: dict[str, str]) -> None:
-    """Mark pending nodes with a failed/skipped dependency as skipped."""
+    """Skip pending nodes whose dependencies cannot produce their outputs."""
     changed = True
     while changed:
         changed = False
@@ -2440,7 +2457,7 @@ def _cascade_failures(deps: dict[str, list[str]], status: dict[str, str]) -> Non
                 continue
             # `exception` is deliberately absent: a suspended node's dependents
             # must stay pending, because the adjudication may yet continue it.
-            if any(status[d] in ("failed", "skipped") for d in in_graph):
+            if any(status[d] in ("cancelled", "failed", "skipped") for d in in_graph):
                 status[nid] = "skipped"
                 changed = True
 
@@ -3452,6 +3469,8 @@ async def _run_group(
     judge_node: "Callable[..., Awaitable[Any]] | None" = None,
     on_node_start: "Callable[[str], Awaitable[None]] | None" = None,
     announce_exception: ExceptionAnnouncer | None = None,
+    long_run_notice_seconds: float = 0,
+    announce_long_run: "Callable[[LiveDelegation, int, str, str], Awaitable[None]] | None" = None,
     max_continuations: int = 2,
     origin: dict | None = None,
     dependents: dict[str, list[str]] | None = None,
@@ -3508,6 +3527,8 @@ async def _run_group(
                 judge_node=judge_node,
                 on_node_start=on_node_start,
                 announce_exception=announce_exception,
+                long_run_notice_seconds=long_run_notice_seconds,
+                announce_long_run=announce_long_run,
                 max_continuations=max_continuations,
                 origin=origin,
                 dependents=dependents,
@@ -3685,6 +3706,8 @@ async def _run_node(
     judge_node: "Callable[..., Awaitable[Any]] | None" = None,
     on_node_start: "Callable[[str], Awaitable[None]] | None" = None,
     announce_exception: ExceptionAnnouncer | None = None,
+    long_run_notice_seconds: float = 0,
+    announce_long_run: "Callable[[LiveDelegation, int, str, str], Awaitable[None]] | None" = None,
     max_continuations: int = 2,
     origin: dict | None = None,
     dependents: dict[str, list[str]] | None = None,
@@ -3789,6 +3812,8 @@ async def _run_node(
                     judge_node=judge_node,
                     on_node_start=on_node_start,
                     announce_exception=announce_exception,
+                    long_run_notice_seconds=long_run_notice_seconds,
+                    announce_long_run=announce_long_run,
                     max_continuations=max_continuations,
                     origin=origin,
                     dependents=dependents,
@@ -3807,7 +3832,7 @@ async def _run_node(
     # node's slot is released the moment its own work is done -- not held for
     # however long the recorder's poll budget takes.
     scope = memory_for(node.subagent) if memory_for is not None else None
-    if scope is not None and ended is not None:
+    if scope is not None and ended is not None and ended.outcome != "cancelled":
         _schedule_node_memory(
             node, store=store, scope=scope, session_key=session_key, record_tasks=record_tasks, turn=ended.turn
         )
@@ -3859,6 +3884,8 @@ def _attempt_outcome(
     state = status[node_id]
     if state == "completed":
         return "completed", None
+    if state == "cancelled":
+        return "cancelled", errors.get(node_id) or "The host interrupted this node."
     if state == "pending":
         return "continued", shortfall or errors.get(node_id) or _NO_REASON
     outcome = "exception" if state == "exception" else "failed"
@@ -3917,6 +3944,8 @@ async def _attempt_node(
     judge_node: "Callable[..., Awaitable[Any]] | None" = None,
     on_node_start: "Callable[[str], Awaitable[None]] | None" = None,
     announce_exception: ExceptionAnnouncer | None = None,
+    long_run_notice_seconds: float = 0,
+    announce_long_run: "Callable[[LiveDelegation, int, str, str], Awaitable[None]] | None" = None,
     max_continuations: int = 2,
     origin: dict | None = None,
     dependents: dict[str, list[str]] | None = None,
@@ -3972,6 +4001,7 @@ async def _attempt_node(
     claimed_seed: _PendingHandover | None = None
     dispatched = False
     keep_turn_out = False
+    interrupt = asyncio.timeout(None)
     try:
         rendered_prompt = await render_prompt(
             node,
@@ -4116,6 +4146,16 @@ async def _attempt_node(
                 instance=(session_key or "", node.subagent, node.instance or node.id),
                 prompt=prompt,
             ) as did:
+                loop = asyncio.get_running_loop()
+                control = LiveDelegation(
+                    did.uid, node.subagent, node.instance or node.id, lambda: interrupt.reschedule(loop.time())
+                )
+
+                async def notify_long_run(elapsed: int) -> None:
+                    if announce_long_run is not None:
+                        current_run = did.live_key.split(":", 2)[1] if did.live_key else store.run_id
+                        await announce_long_run(control, elapsed, current_run, node.id)
+
                 stall_watch = asyncio.create_task(
                     _watch_stall(
                         did,
@@ -4134,7 +4174,13 @@ async def _attempt_node(
                 # left behind would report a stall that is not one.
                 try:
                     executor = sandbox_factory(Path(workdir)) if sandbox_factory is not None else None
-                    async with executor if executor is not None else contextlib.nullcontext():
+                    async with contextlib.AsyncExitStack() as stack:
+                        stack.enter_context(
+                            controlling(did, control, interval=long_run_notice_seconds, announce=notify_long_run)
+                        )
+                        await stack.enter_async_context(interrupt)
+                        if executor is not None:
+                            await stack.enter_async_context(executor)
                         dispatched = True
                         result = await agent_backend.run(
                             # The graph's own dispatch route: `spawn` goes
@@ -4166,6 +4212,8 @@ async def _attempt_node(
                             **optional_keyword(agent_backend, "session_effort", node_session_effort),
                             **state_kwargs,
                         )
+                        if interrupt.expired():
+                            raise TimeoutError
                         if (failure := llm_error_reply(result)) is not None:
                             # The same rule as a spawn's (manager.py): a reply
                             # that is nothing but the provider's error is not
@@ -4209,16 +4257,21 @@ async def _attempt_node(
                 state.release_handover(claimed_seed)
                 claimed_seed = None
             keep_turn_out = True
-        logger.opt(exception=True).warning("DAG node {} failed: {}", node.id, exc)
-        status[node.id] = "failed"
-        errors[node.id] = str(exc)
+        if interrupt.expired():
+            status[node.id] = "cancelled"
+            errors[node.id] = "The host interrupted this node."
+        else:
+            logger.opt(exception=True).warning("DAG node {} failed: {}", node.id, exc)
+            status[node.id] = "failed"
+            errors[node.id] = str(exc)
     # Written before the verdict, not after: the production judge reads this
     # file back through `store.transcript_path` to build its evidence, so
     # writing it later meant a first attempt was always judged with no
     # transcript, and a continuation's judge read the previous attempt's.
     await _write_node_transcript(store, node.id, did, attempt)
     shortfall = None
-    if judge_node is not None:
+    reported_early = bool(did is not None and did.reported_early)
+    if judge_node is not None and status[node.id] != "cancelled":
         shortfall = await _apply_verdict(
             node,
             store=store,
@@ -4243,8 +4296,13 @@ async def _attempt_node(
             # looks merely empty, and the cut is the difference between "it
             # produced nothing" and "it was stopped before it could".
             output_limited=bool(getattr(did, "output_limited", False)),
+            reported_early=reported_early,
             reassignment_state=state,
         )
+    elif reported_early:
+        status[node.id] = "failed"
+        errors[node.id] = "The host requested an early reply, and no verdict confirmed the node's output."
+        output_paths.pop(node.id, None)
     elif node.routes and status[node.id] == "completed":
         # Nobody to select a route, and none to default to. The tool refuses such a
         # graph on a host with no judge; `run_dag` called directly does not.
@@ -4456,6 +4514,7 @@ def _node_records(
                 "error": error,
                 **branched,
                 **history,
+                **({"reported_early": True} if node_activity.get(nid, {}).get("reported_early") else {}),
             },
         )
         manifest[nid] = {

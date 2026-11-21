@@ -74,5 +74,5 @@ From the repository root, search the documentation and implementation together:
 rg -n 'ACP|A2A|run_subagent_dag' docs-site/docs raven tests
 ```
 
-`run_subagent_dag`, `dag_status`, `cancel_dag`, and `a2a_send` are model tools,
+`run_subagent_dag`, `dag_status`, `cancel_subagent`, and `a2a_send` are model tools,
 not shell subcommands. Use their guides for arguments and behaviour.

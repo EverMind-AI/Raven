@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from raven.agent import turn_clock
 from raven.agent.tools import background_exec
 from raven.agent.tools.shell import ExecTool
 
@@ -73,6 +74,22 @@ def test_status_reports_liveness_and_reap_ends_the_group(home):
 def test_an_unknown_task_is_none_not_a_traceback(home):
     assert background_exec.status("bg-nope") is None
     assert background_exec.tail("bg-nope") == ""
+
+
+async def test_reap_execution_only_stops_its_own_tasks(home):
+    with turn_clock.execution_scope("same-session", "earlier"):
+        unrelated = background_exec.start("sleep 30")
+    with turn_clock.execution_scope("same-session", "current"):
+        current = background_exec.start("sleep 30")
+    try:
+        assert current.task_id != unrelated.task_id
+        assert background_exec.status(current.task_id)["session_key"] == "same-session"
+        await background_exec.reap_execution("same-session", "current")
+        assert not background_exec.status(current.task_id)["running"]
+        assert background_exec.status(unrelated.task_id)["running"]
+    finally:
+        background_exec.reap(current.task_id)
+        background_exec.reap(unrelated.task_id)
 
 
 def test_the_start_note_hands_over_the_handle_and_the_log(home):

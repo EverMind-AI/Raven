@@ -69,6 +69,7 @@ WITHHELD_FROM_SUBAGENT = frozenset(
         "load_playbook",
         "create_playbook",
         "cancel_dag",
+        "cancel_subagent",
         "dag_status",
         "resolve_dag_node",
         "a2a_send",

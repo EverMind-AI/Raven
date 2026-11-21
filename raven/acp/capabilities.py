@@ -87,6 +87,7 @@ def agent_capabilities() -> dict[str, Any]:
         "_meta": {
             protocol.SESSION_MCP_CAPABILITY: {},
             protocol.STEER_CAPABILITY: True,
+            protocol.REPORT_NOW_CAPABILITY: True,
             protocol.RESIDENT_WORK_CAPABILITY: True,
         },
         # ``list``, ``resume``, ``close`` and ``delete``, and an empty object is

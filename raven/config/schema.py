@@ -2717,6 +2717,9 @@ class SubagentRuntimeConfig(Base):
     way. Has no effect on other systems."""
 
 
+DEFAULT_LONG_RUN_NOTICE_SECONDS = 3600
+
+
 class SubagentsConfig(Base):
     """The one table of agents raven can dispatch to.
 
@@ -2735,6 +2738,8 @@ class SubagentsConfig(Base):
         validation_alias=AliasChoices("agents", "thirdParty", "third_party"),
     )
     runtime: SubagentRuntimeConfig = Field(default_factory=SubagentRuntimeConfig)
+    long_run_notice_seconds: float = Field(default=DEFAULT_LONG_RUN_NOTICE_SECONDS, ge=0, allow_inf_nan=False)
+    """Elapsed seconds before notifying the delegating host. Zero disables notices."""
 
     @model_validator(mode="after")
     def _dedupe_names(self) -> "SubagentsConfig":
