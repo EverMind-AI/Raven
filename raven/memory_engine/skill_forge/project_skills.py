@@ -56,18 +56,27 @@ def project_skill_roots(
     """Resolve the project's skill directories for one working directory.
 
     ``boundary`` is the git root, or the working directory when there is no
-    git ancestor or the nearest one is home, an ancestor of home, agent home, or an
-    ancestor of agent home. Paths resolving into the user-level ``.agents`` tree or agent
-    home are never collected. Returns ``None`` when no directory qualifies.
+    git root at or below a ceiling. The user's home and agent home are ceilings
+    only while the working directory is under them: the git root is then
+    searched no higher than that root, so a git-less work directory under home
+    cannot reach an outer repository's skills. Outside both, a shared ancestor
+    is the work directory's own git root. A git root at home or agent home is
+    never the boundary. Paths resolving into the user-level ``.agents`` tree or
+    agent home are never collected. Returns ``None`` when no directory
+    qualifies.
     """
     home_r = (home or Path.home()).resolve()
     agent_home_r = agent_home.resolve()
     guarded = (home_r / ".agents", agent_home_r)
-    excluded = {home_r, agent_home_r, *agent_home_r.parents}
     start = workdir.resolve()
     chain = [start, *start.parents]
+    excluded = {home_r, agent_home_r}
+    for ceiling in (home_r, agent_home_r):
+        if start.is_relative_to(ceiling):
+            excluded |= set(ceiling.parents)
+            chain = chain[: chain.index(ceiling) + 1]
     git_root = next((d for d in chain if (d / ".git").exists()), None)
-    if git_root in {*excluded, *home_r.parents}:
+    if git_root in excluded:
         git_root = None
     walk = chain[: chain.index(git_root) + 1] if git_root is not None else [start]
     boundary = git_root or start

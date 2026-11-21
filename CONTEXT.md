@@ -1948,8 +1948,10 @@ ancestor holding a `.git` entry, inclusive (the working directory alone when it 
 the nearest directory winning a name collision. The `project` router source offers each as
 `project/<name>`, and `read_skill` / `use_skill` resolve that id against the turn's own
 project at read time — never from the router's held hits, which may belong to another
-session's project. Neither the user's home nor agent home nor any ancestor of agent home
-is a project directory; a symlink counts only when its resolved target stays inside the
+session's project. Neither the user's home nor agent home is a project directory, and a
+working directory under either stops at that root: it reaches no git root and no
+`.agents/skills` above it, while a working directory outside both keeps a shared ancestor
+as its own git root; a symlink counts only when its resolved target stays inside the
 git root; a deeper `SKILL.md` is not a project skill. Project skills are never
 `always`-injected: `always` and `inject` frontmatter are ignored, and the system prefix
 carries none of them. The index is per project — a process-wide cache keyed by the resolved
