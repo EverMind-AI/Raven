@@ -425,6 +425,82 @@ def test_save_writes_the_file_when_the_parent_directory_is_missing(tmp_path: Pat
     assert PackageLedger.load(path).entry(PACKAGE_NAME, workspace=workspace) is not None
 
 
+def test_a_write_that_dies_leaves_the_ledger_that_was_on_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A save that fails must not cost the operator the ledger they had.
+
+    The ledger is what proves what a workspace installed, so a file left
+    half written would read as a broken install rather than as a failed
+    write. The new ledger is written beside the old one and moved into
+    place, so the ledger on disk stays whole when the write dies.
+    """
+    path = tmp_path / "ledger.json"
+    ledger = PackageLedger(path)
+    _record_install(ledger, tmp_path)
+    ledger.save()
+    before = path.read_text(encoding="utf-8")
+
+    original_write_text = Path.write_text
+
+    def dying_write_text(self: Path, data: str, *args: object, **kwargs: object) -> int:
+        original_write_text(self, data[: len(data) // 2], *args, **kwargs)
+        raise OSError("the disk is full")
+
+    monkeypatch.setattr(Path, "write_text", dying_write_text)
+
+    with pytest.raises(OSError):
+        ledger.save()
+
+    assert path.read_text(encoding="utf-8") == before
+    assert PackageLedger.load(path).entry(PACKAGE_NAME, workspace=tmp_path) is not None
+
+
+def test_the_ledger_file_is_replaced_in_one_step(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A reader that opens the ledger while a save runs sees one whole ledger.
+
+    The file on disk is always the previous ledger or the next one -- never
+    one a write is still filling in. A reader that caught it mid-write
+    would read a file that is neither, and take it for a ledger whose
+    packages are lost.
+    """
+    path = tmp_path / "ledger.json"
+    ledger = PackageLedger(path)
+    _record_install(ledger, tmp_path)
+    ledger.save()
+    before = path.read_text(encoding="utf-8")
+
+    seen: list[str] = []
+    original_write_text = Path.write_text
+
+    def reading_write_text(self: Path, data: str, *args: object, **kwargs: object) -> int:
+        original_write_text(self, data[: len(data) // 2], *args, **kwargs)
+        seen.append(path.read_text(encoding="utf-8"))
+        return original_write_text(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", reading_write_text)
+
+    ledger.forget(PACKAGE_NAME, workspace=tmp_path)
+    ledger.save()
+
+    assert seen == [before]
+    assert json.loads(path.read_text(encoding="utf-8"))["workspaces"] == {}
+
+
+def test_a_save_leaves_no_file_beside_the_ledger(tmp_path: Path) -> None:
+    """The file the write filled in is moved into place, not left next to it.
+
+    A stray file beside the ledger is a second thing to read, and a reader
+    that finds one cannot tell a ledger the write abandoned from a ledger
+    of its own.
+    """
+    path = tmp_path / "ledger.json"
+    ledger = PackageLedger(path)
+    _record_install(ledger, tmp_path)
+
+    ledger.save()
+
+    assert sorted(entry.name for entry in tmp_path.iterdir() if entry.is_file()) == ["ledger.json"]
+
+
 def test_a_damaged_v2_entry_loads_as_an_unverified_record(tmp_path: Path) -> None:
     path = tmp_path / "ledger.json"
     key = workspace_key(tmp_path / "workspace")
