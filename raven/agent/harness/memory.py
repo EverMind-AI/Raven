@@ -410,14 +410,16 @@ class DefaultMemory:
         it alone is over the cap the second notch takes it too. The closed window
         then stands for the rest of the turn, so the refusal cannot recur.
 
-        At zero the model sees no picture for the rest of the turn, and the notes
-        say so. Accepted rather than papered over with a per-batch byte budget:
-        reaching zero takes a single batch over the cap on its own, which at the
-        measured render sizes means a build of thirty-odd pages returned in one
-        call, and the four measured refusals were all accumulation (75-80 pictures
-        over 14-19 messages; the window's replay peak on those same runs is 6.87
-        MB against a cap measured at ~26.3 MB decoded). Add the budget when a run
-        actually gets here.
+        At zero every picture goes, the current question's included: the endpoint
+        has refused the request's pictures, and a text answer beats a failed turn.
+        The standing window still keeps the current question's picture; this
+        ladder is the last resort. Accepted rather than papered over with a
+        per-batch byte budget: reaching zero takes a single batch over the cap on
+        its own, which at the measured render sizes means a build of thirty-odd
+        pages returned in one call, and the four measured refusals were all
+        accumulation (75-80 pictures over 14-19 messages; the window's replay
+        peak on those same runs is 6.87 MB against a cap measured at ~26.3 MB
+        decoded). Add the budget when a run actually gets here.
         """
         if state.image_strip_retries >= shrink.MAX_IMAGE_STRIP_RETRIES:
             return ShrinkResult(messages, False)
@@ -429,7 +431,10 @@ class DefaultMemory:
             else:
                 state.image_window = 0
             _, withdrawn = shrink.window_images(
-                messages, state.image_window, reason="refused", any_role=state.image_window == 0
+                messages,
+                state.image_window,
+                reason="refused",
+                last_resort=state.image_window == 0,
             )
         if withdrawn == 0:
             return ShrinkResult(messages, False)

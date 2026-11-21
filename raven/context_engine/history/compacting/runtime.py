@@ -86,6 +86,7 @@ from raven.context_engine.runtime_context import retell_notices
 from raven.contracts.context import AssemblyContext, OverflowOutcome, Segment
 from raven.providers import prompt_cache
 from raven.providers.binding import ModelBinding, active_window, resolve
+from raven.providers.capabilities import replay_gates
 from raven.session.refs import session_ref
 from raven.utils.tokens import estimate_message_tokens, estimate_prompt_tokens
 
@@ -799,6 +800,10 @@ class CompactingHistoryBuilder:
             )
         return None
 
+    def _summary_gates(self) -> tuple[bool, bool]:
+        """The replay verdicts for the summary request's own model."""
+        return replay_gates(self.provider, self.writer.summary_model(self.model))
+
     def _summary_input(
         self,
         prefix: "AssembledPrefix",
@@ -825,7 +830,13 @@ class CompactingHistoryBuilder:
         """
         end = ledger.align_forward(through + 1, self.cfg.boundary)
         ordinals = [index for index in range(end) if index not in retired]
-        messages = HistoryTrimmer.history_from_ids(session, ordinals)
+        can_see_images, tool_images_ok = self._summary_gates()
+        messages = HistoryTrimmer.history_from_ids(
+            session,
+            ordinals,
+            can_see_images=can_see_images,
+            tool_images_ok=tool_images_ok,
+        )
         if len(messages) != len(ordinals):
             return ((), ())
         keys: list[MessageKey] = [session_message_key(index) for index in ordinals]

@@ -15,6 +15,7 @@ from typing import Any
 
 import tiktoken
 
+from raven.utils.image_store import image_tokens
 from raven.utils.images import estimate_content_part_tokens
 
 # A cl100k regex piece cannot cross a newline followed by non-whitespace.
@@ -180,7 +181,7 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
     """Estimate prompt tokens contributed by one persisted message."""
     content = message.get("content")
     parts: list[str] = []
-    extra_tokens = 0
+    extra_tokens = image_tokens(message)
     if isinstance(content, str):
         parts.append(content)
     elif isinstance(content, list):
@@ -189,8 +190,8 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
                 text = part.get("text", "")
                 if text:
                     parts.append(text)
-            elif (image_tokens := estimate_content_part_tokens(part)) is not None:
-                extra_tokens += image_tokens
+            elif (part_tokens := estimate_content_part_tokens(part)) is not None:
+                extra_tokens += part_tokens
             else:
                 parts.append(json.dumps(part, ensure_ascii=False))
     elif content is not None:
