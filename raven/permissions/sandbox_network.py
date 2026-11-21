@@ -57,8 +57,9 @@ _MIN_PROGRAM = 24
 _MAX_EVIDENCE_PROGRAM = 300
 _MAX_REASON = 80
 _SHARED_NOTE = (
-    "What you allow here for the session or always is opened in the sandbox every conversation shares, "
-    "so it stays allowed for all of them until Raven restarts."
+    "What you allow here for the session or always is opened in the sandbox every conversation shares. "
+    "A session answer lasts until Raven restarts; an always answer saves a permissions.network rule "
+    "that survives a restart."
 )
 
 

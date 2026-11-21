@@ -227,8 +227,9 @@ async def test_another_sandbox_that_did_not_sync_leaves_the_approval_told_as_ope
 
 
 SHARED_NOTE = (
-    "What you allow here for the session or always is opened in the sandbox every conversation shares, "
-    "so it stays allowed for all of them until Raven restarts."
+    "What you allow here for the session or always is opened in the sandbox every conversation shares. "
+    "A session answer lasts until Raven restarts; an always answer saves a permissions.network rule "
+    "that survives a restart."
 )
 
 
@@ -244,16 +245,19 @@ async def test_a_prompt_about_the_shared_sandbox_says_so_in_its_description(gran
     assert call["evidence"]["shared"] is True
 
 
-async def test_a_conversations_own_looser_mode_does_not_open_the_shared_sandbox(grants, monkeypatch):
-    """One conversation switched to full speaks for its own sandboxes only: the approval
-    reaches the sandbox every conversation shares as well, so the gate holds it to the
-    mode they all run at and the prompt says what it reaches."""
+@pytest.mark.parametrize("registered", [None, "conv-own"], ids=["shared", "own"])
+async def test_a_conversations_own_looser_mode_does_not_open_the_shared_sandbox(grants, monkeypatch, registered):
+    """A conversation switched to full gets no automatic grant: a session or always
+    answer here also reaches the sandbox every conversation shares, so the gate holds
+    the prompt to the configured mode whether that sandbox is the one refused or only
+    the one the answer reaches."""
     monkeypatch.setattr(session_module, "_MODES", {"conv-own": "full"})
     shared, own = FakeSandbox(), FakeSandbox()
     grants.register(shared, None)
     grants.register(own, "conv-own")
+    refused = shared if registered is None else own
     responder = Responder(ApprovalChoice.DENY)
-    await _handle(responder, [CURL], own, config=PermissionsConfig(mode="ask"), conversation="conv-own")
+    await _handle(responder, [CURL], refused, config=PermissionsConfig(mode="ask"), conversation="conv-own")
     (call,) = responder.calls
     assert SHARED_NOTE in call["description"], "the person deciding is told what a session answer reaches"
     assert call["evidence"]["shared"] is True
