@@ -91,7 +91,7 @@ class FlowConfig(_Base):
     project_files: list[str] = Field(default_factory=list)
     # The turn's own deadline. A launcher running this product against a task
     # budget writes the budget minus its wrap-up margin here; zero or absent
-    # means the turn has no clock and is bounded by the tool-iteration cap.
+    # means the turn has no clock.
     wall_clock_seconds: int | None = Field(default=None, ge=0)
 
     @classmethod
