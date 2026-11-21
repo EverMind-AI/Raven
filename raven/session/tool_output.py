@@ -173,6 +173,21 @@ def _bounded_preview(body: str, limits: ToolOutputLimits, direction: str) -> tup
         kept_bytes += line_bytes
         kept_chars += line_chars
 
+    if not kept and ordered and unit in ("bytes", "characters"):
+        # A single line that is itself over budget has no whole line to keep.
+        # Keep the head or tail of that line, applying the character cap first
+        # and then the byte cap so a UTF-8 cut never splits a character.
+        first = ordered[0]
+        if limits.max_chars:
+            first = first[: limits.max_chars] if direction == "head" else first[-limits.max_chars :]
+        if limits.max_bytes:
+            encoded = first.encode("utf-8")
+            encoded = encoded[: limits.max_bytes] if direction == "head" else encoded[-limits.max_bytes :]
+            first = encoded.decode("utf-8", "ignore")
+        kept = [first]
+        kept_bytes = len(first.encode("utf-8"))
+        kept_chars = len(first)
+
     if direction == "tail":
         kept.reverse()
     preview = "\n".join(kept)
@@ -211,9 +226,12 @@ def _file_full_output(workspace: Path, body: str, *, now: datetime | None) -> Pa
         path = directory / f"{TOOL_OUTPUT_PREFIX}{uuid.uuid4().hex}.txt"
         # O_EXCL refuses an existing path (including a symlink), and the mode is
         # applied at creation: there is no window where the file is wider than
-        # owner-only, which a create-then-chmod would leave.
+        # owner-only on POSIX, which a create-then-chmod would leave. Windows
+        # inherits the workspace directory's ACL.
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        # newline="" keeps the body's own line endings; text mode on Windows
+        # would turn every \n into \r\n and double an existing \r\n.
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
             handle.write(body)
     except (OSError, UnicodeError) as exc:
         logger.warning("Could not file a large tool result under {}: {}", directory, exc)
