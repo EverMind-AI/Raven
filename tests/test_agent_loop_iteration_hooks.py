@@ -625,6 +625,23 @@ def test_the_loop_wires_this_sessions_tier_into_the_subagent_manager(tmp_path):
     assert loop.subagents._session_tier("cli:other") == "high", "and only that session's"
 
 
+@pytest.mark.asyncio
+async def test_an_unbounded_turn_keeps_working_past_the_built_in_cap(tmp_path):
+    """No cap is a real setting, not a fallback to the loop's default.
+
+    A run with a task budget hands the turn a wall clock instead; the tool
+    iteration cap it used to stop at must not fire first.
+    """
+    script = [_tool_call("list_dir", {"path": "."}) for _ in range(8)] + [_text("answered")]
+    provider = _ScriptedProvider(script)
+    loop = _loop(tmp_path, provider, None, max_iterations=None)
+
+    out = await loop._process_message(_req())
+
+    assert out is not None and "answered" in str(out)
+    assert len(provider.calls) == len(script), "the loop stopped on the answer, not on an iteration cap"
+
+
 @pytest.fixture(autouse=True)
 def _fake_model_declares_every_level(monkeypatch):
     """The turn bounds the pick by the model's levels; fake/model declares them all."""

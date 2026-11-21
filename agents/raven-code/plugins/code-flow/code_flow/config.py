@@ -89,6 +89,10 @@ class FlowConfig(_Base):
     enabled: bool = False
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     project_files: list[str] = Field(default_factory=list)
+    # The turn's own deadline. A launcher running this product against a task
+    # budget writes the budget minus its wrap-up margin here; zero or absent
+    # means the turn has no clock.
+    wall_clock_seconds: int | None = Field(default=None, ge=0)
 
     @classmethod
     def from_slice(cls, raw: dict[str, Any] | None) -> "FlowConfig":

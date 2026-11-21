@@ -1674,3 +1674,43 @@ def test_rendered_guidance_conditions_product_only_tools_on_the_actual_tool_list
     assert "You have access to the todo tool" not in system
     assert "Only use tools and parameters exposed in the current function schemas" in system
     assert "otherwise use find" in system
+
+
+def test_a_task_deadline_reaches_the_code_flow_as_a_turn_clock(grounded, tmp_path):
+    """``--timeout`` becomes the loop's own wall clock, with the wrap-up kept.
+
+    Harbor kills the process at the task budget. Handing the loop that budget
+    minus a wrap-up margin lets it stop on its own terms -- finish the step,
+    synthesize the answer -- instead of being killed mid-call with nothing
+    committed. ``0`` means no deadline and leaves the config alone.
+    """
+    rendered = json.loads(
+        grounded.render_config(
+            RUN_PY.parent / "config.json",
+            tmp_path / "deadline",
+            unattended=True,
+            timeout=900,
+        ).read_text()
+    )
+    slice_ = rendered["plugins"]["config"]["code-flow"]
+    assert slice_["wallClockSeconds"] == 900 - grounded.WRAPUP_MARGIN_SECONDS
+
+    rendered = json.loads(
+        grounded.render_config(
+            RUN_PY.parent / "config.json",
+            tmp_path / "no-deadline",
+            unattended=True,
+            timeout=0,
+        ).read_text()
+    )
+    assert "wallClockSeconds" not in rendered["plugins"]["config"]["code-flow"]
+
+    short = json.loads(
+        grounded.render_config(
+            RUN_PY.parent / "config.json",
+            tmp_path / "short",
+            unattended=True,
+            timeout=30,
+        ).read_text()
+    )
+    assert short["plugins"]["config"]["code-flow"]["wallClockSeconds"] >= 10, "never a negative clock"

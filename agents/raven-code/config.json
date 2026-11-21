@@ -15,7 +15,7 @@
       "temperature": 1.0,
       "maxTokens": 32768,
       "contextWindowTokens": 400000,
-      "maxToolIterations": 150,
+      "maxToolIterations": null,
       "llmCallTimeout": 1800,
       "compaction": {
         "enabled": true

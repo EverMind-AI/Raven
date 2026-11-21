@@ -250,7 +250,12 @@ class AgentDefaults(Base):
     # transport phases, and no bound at all on the loop's pre-request awaits,
     # which is the state a turn that never issued a request went unnoticed in.
     llm_first_byte_timeout: int = 120
-    max_tool_iterations: int = 40
+    max_tool_iterations: int | None = 40
+    """ReAct iterations one turn may run. ``None`` or ``0`` means unbounded.
+
+    A product with a wall clock of its own (``wallClockSeconds``) leaves this
+    alone and is bounded by that instead; a cap is for a turn with no deadline.
+    """
     # Cap on subagent sandboxes running at once, counting spawns and DAG nodes
     # together (excess queues). ge=1: a 0/negative cap would deadlock every
     # subagent (Semaphore(0)).

@@ -98,7 +98,7 @@ def test_the_manifest_contributes_the_seven_tools_beside_the_flows_own_seats():
     mf = PluginManifest.from_toml_path(MANIFEST_PATH)
     assert mf.id == "code-flow"
     assert [t.name for t in mf.contributes.tools] == list(FACE)
-    assert [h.name for h in mf.contributes.hooks] == ["code_flow"]
+    assert [h.name for h in mf.contributes.hooks] == ["code_flow", "code_turn_budget"]
     assert mf.contributes.tool_gates == []
     assert [f.factory for f in mf.contributes.tools] == [f"code_flow.tools.plugin:make_{name}" for name in FACE]
 

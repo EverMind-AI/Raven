@@ -547,17 +547,27 @@ def context_window_tokens(live: LiveConfig) -> int | None:
 
 
 def max_tool_iterations(live: LiveConfig) -> int | None:
-    """``agents.defaults.maxToolIterations`` as the file has it, or None for "no answer".
+    """``agents.defaults.maxToolIterations`` as the file has it.
+
+    ``None`` is "no answer": keep the cap the loop was built with. ``0`` is the
+    file saying it wants no cap at all -- an explicit null reads the same way,
+    because a product that writes one means "unbounded", not "unchanged". A
+    positive int is the cap.
 
     A cap is a sentence about the next turn, not work to redo, so it belongs
     here rather than behind a reload. Both spellings, like
     :func:`disabled_tool_names`: ``settings.set`` writes whichever one the file
     already uses.
     """
+    absent = object()
     for key in ("agents.defaults.maxToolIterations", "agents.defaults.max_tool_iterations"):
-        value = live.get(key)
-        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-            return value
+        value = live.get(key, absent)
+        if value is absent or isinstance(value, bool):
+            continue
+        if value is None:
+            return 0
+        if isinstance(value, int):
+            return value if value >= 0 else None
     return None
 
 
