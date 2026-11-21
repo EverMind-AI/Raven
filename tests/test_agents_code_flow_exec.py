@@ -803,4 +803,91 @@ def test_the_published_config_carries_the_ceiling_in_the_slice_not_in_a_dead_hos
     ``maxTimeout`` there was silently ignored. It lives in this plugin's slice."""
     published = json.loads((REPO / "agents" / "raven-code" / "config.json").read_text())
     assert "maxTimeout" not in published["tools"]["exec"]
-    assert published["plugins"]["config"]["code-flow"]["tools"]["exec"] == {"maxTimeout": 1200}
+    assert published["plugins"]["config"]["code-flow"]["tools"]["exec"] == {"maxTimeout": 600}
+
+
+def test_the_default_timeout_leaves_room_for_the_turn_to_finish(tmp_path):
+    """120 s default, 600 s ceiling: a command must not eat a task budget."""
+    from code_flow.tools.exec import DEFAULT_MAX_TIMEOUT, DEFAULT_TIMEOUT
+
+    assert (DEFAULT_TIMEOUT, DEFAULT_MAX_TIMEOUT) == (120, 600)
+    tool = _tool(tmp_path, max_timeout=DEFAULT_MAX_TIMEOUT)
+    assert tool._bounded_timeout(None) == DEFAULT_TIMEOUT, "an unstated timeout is the default, not the ceiling"
+
+
+def test_a_turn_deadline_shortens_the_command_and_says_so(tmp_path):
+    """Clamped to the time the turn has left, minus its wrap-up.
+
+    The loop stops between iterations, so a command that runs to the ceiling
+    can outlive the deadline it was meant to fit inside.
+    """
+    from raven.agent import turn_clock
+
+    tool = _tool(tmp_path, max_timeout=600)
+    started = time.monotonic()
+    turn_clock.set_deadline(started + 40)
+    try:
+        out = _run(tool.execute(command="sleep 2", timeout=600))
+    finally:
+        turn_clock.set_deadline(None)
+
+    text = out if isinstance(out, str) else out.model_text
+    assert "Exit code: 0" in text, "the command ran to completion inside the shortened limit"
+    assert time.monotonic() - started < 5, "the 600 s request was cut to the turn's remaining time"
+    assert "deadline" in text.lower(), "the note says why the request was shortened"
+
+
+def test_without_a_deadline_the_request_is_only_capped_by_the_ceiling(tmp_path):
+    from raven.agent import turn_clock
+
+    turn_clock.set_deadline(None)
+    tool = _tool(tmp_path, max_timeout=600)
+    assert tool._bounded_timeout(600) == 600
+    assert tool._bounded_timeout(5000) == 600
+
+
+@pytest.mark.slow
+def test_a_timed_out_command_is_adopted_instead_of_killed(tmp_path, monkeypatch):
+    """The work is still the session's: it keeps running, its log grows, and
+    the result says where to look rather than pretending it died."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    import re
+
+    from raven.agent.tools import background_exec
+
+    tool = _tool(tmp_path)
+
+    async def main() -> str:
+        result = await tool.execute(command="echo first; sleep 1.2; echo second", timeout=1)
+        # The pipes are ours, so the pumping lives on this loop: keep it running
+        # past the call the way a live turn does.
+        await asyncio.sleep(1.0)
+        return str(result)
+
+    text = _run(main())
+
+    found = re.search(r"background as (bg-[0-9a-f-]+)", text)
+    assert found, f"the result names the task: {text[:200]}"
+    task_id = found.group(1)
+    assert "first" in text, "what it printed before the limit is still the result"
+    data = background_exec.status(task_id) or {}
+    assert data.get("log_path"), "the record outlives the call while the process does"
+    assert "second" in Path(data["log_path"]).read_text(encoding="utf-8")
+    background_exec.reap(task_id)
+
+
+@pytest.mark.slow
+def test_no_time_left_kills_instead_of_adopting(tmp_path, monkeypatch):
+    """There is nothing to hand over when the turn's own clock has run out."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    from raven.agent import turn_clock
+    from raven.agent.tools import background_exec
+
+    tool = _tool(tmp_path)
+    turn_clock.set_deadline(time.monotonic() - 1)
+    try:
+        _run(tool.execute(command="sleep 30", timeout=1))
+    finally:
+        turn_clock.set_deadline(None)
+
+    assert not [t for t in background_exec.running() if "sleep 30" in t["command"]]

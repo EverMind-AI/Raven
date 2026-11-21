@@ -75,6 +75,7 @@ class BackgroundTask:
     pid: int
     log_path: str
     started_at: float
+    session_key: str | None = None
 
 
 def _meta_path(task_id: str) -> Path:
@@ -126,7 +127,13 @@ def _reap_own() -> None:
         reap(task_id)
 
 
-def start(command: str, *, cwd: str | None = None, env: dict[str, str] | None = None) -> BackgroundTask:
+def start(
+    command: str,
+    *,
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+    session_key: str | None = None,
+) -> BackgroundTask:
     """Spawn ``command`` detached, logging to a managed file, and record it.
 
     ``start_new_session`` puts the child in its own process group, so a stray
@@ -154,19 +161,48 @@ def start(command: str, *, cwd: str | None = None, env: dict[str, str] | None = 
         handle.close()
     _OWN.append(task_id)
     _PROCS[task_id] = proc
-    task = BackgroundTask(task_id, command, proc.pid, str(log), time.time())
-    _meta_path(task_id).write_text(
+    task = BackgroundTask(task_id, command, proc.pid, str(log), time.time(), session_key)
+    _record(task)
+    return task
+
+
+def _record(task: BackgroundTask) -> None:
+    _meta_path(task.task_id).write_text(
         json.dumps(
             {
-                "task_id": task_id,
-                "command": command,
-                "pid": proc.pid,
-                "log_path": str(log),
+                "task_id": task.task_id,
+                "command": task.command,
+                "pid": task.pid,
+                "log_path": task.log_path,
                 "started_at": task.started_at,
+                "session_key": task.session_key,
             }
         ),
         encoding="utf-8",
     )
+
+
+def adopt(
+    command: str,
+    pid: int,
+    *,
+    log_path: str | None = None,
+    session_key: str | None = None,
+    started_at: float | None = None,
+) -> BackgroundTask:
+    """Take custody of a process that is already running.
+
+    A command that outlived its call is still this session's work. Whoever
+    adopted it keeps writing its output to ``log_path``; this only records it,
+    so ``running``/``status``/``tail``/``reap`` see it like any other task.
+    """
+    _register_reaper()
+    task_id = f"bg-{int(time.time() * 1000):x}-{os.getpid():x}"
+    task = BackgroundTask(
+        task_id, command, pid, log_path or str(_log_path(task_id)), started_at or time.time(), session_key
+    )
+    _OWN.append(task_id)
+    _record(task)
     return task
 
 
@@ -223,16 +259,21 @@ def status(task_id: str) -> dict | None:
 
 
 def tail(task_id: str, *, max_bytes: int = 20000) -> str:
-    """The end of a task's log, or "" when there is none yet."""
-    log = _log_path(task_id)
+    """The end of a task's log, or "" when there is none yet.
+
+    Read from the record rather than derived from the id: an adopted task's
+    output goes to the file its original caller was already writing.
+    """
+    data = status(task_id) or {}
+    log = Path(str(data.get("log_path") or _log_path(task_id)))
     if not log.exists():
         return ""
     text = log.read_text(encoding="utf-8", errors="replace")
     return text if len(text) <= max_bytes else text[-max_bytes:]
 
 
-def running() -> list[dict]:
-    """Every recorded task whose process is still alive.
+def running(session_key: str | None = None) -> list[dict]:
+    """Every recorded task whose process is still alive, optionally one session's.
 
     A record whose process is gone is retired here, so the set this globs
     does not grow for the life of the install and a stale record never gets
@@ -246,6 +287,8 @@ def running() -> list[dict]:
         except (OSError, ValueError):
             continue
         task_id = str(data.get("task_id") or "")
+        if session_key is not None and data.get("session_key") != session_key:
+            continue
         if _alive(task_id, int(data.get("pid") or -1)):
             out.append(data)
         elif task_id not in _PROCS:

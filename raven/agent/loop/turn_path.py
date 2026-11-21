@@ -8,6 +8,7 @@ import contextlib
 import functools
 from typing import TYPE_CHECKING
 
+from raven.agent import turn_clock
 from raven.agent.context.silence import is_silence, reads_loose_silence, teaches_silence
 from raven.agent.loop._shared import (
     _ABORTED_ACTION_REPLY,
@@ -1260,6 +1261,10 @@ class TurnPathMixin:
         # same start to every attempt, so one budget covers the turn instead of
         # each attempt receiving a fresh copy of it.
         turn_t0 = turn_started_at if turn_started_at is not None else monotonic()
+        # Every turn sets it, including the unbounded one: a value left by an
+        # earlier turn in this task must not shorten this turn's commands.
+        turn_clock.set_deadline(None if budgets.wall_clock_seconds is None else turn_t0 + budgets.wall_clock_seconds)
+        turn_clock.set_session(session_key or "")
         stopped_by: str | None = None
         # The session's effort rides every model call of the turn as an explicit
         # argument. Omitted, not None, when the policy names none: an explicit

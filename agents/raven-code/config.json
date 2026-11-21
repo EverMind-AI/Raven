@@ -31,7 +31,7 @@
       "backend": "none"
     },
     "exec": {
-      "timeout": 600
+      "timeout": 120
     },
     "connectionAdd": true,
     "web": {
@@ -83,7 +83,7 @@
           "enabled": true,
           "restrictToWorkspace": false,
           "exec": {
-            "maxTimeout": 1200
+            "maxTimeout": 600
           }
         },
         "projectFiles": [

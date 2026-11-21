@@ -11,6 +11,7 @@ cache are attributes that die with the turn.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -26,6 +27,7 @@ from code_flow.tools.todo import STORES, TodoStore
 from raven.agent import workdir
 from raven.agent.hook.participant import ParticipantHook
 from raven.agent.loop import TURN_BUDGETS_KEY
+from raven.agent.tools import background_exec
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 from raven.contracts.participant import AgentParticipant, Answer, StepView
 
@@ -34,6 +36,8 @@ if TYPE_CHECKING:
 
 #: The observer entry the ACP layer relays as the prompt response's ``_meta``.
 ACP_META_OBSERVER = "acp_meta"
+#: The ACP layer reads this off ``acp_meta`` and keeps ``session/prompt`` open.
+HOLD_TURN_KEY = "raven.holdTurn"
 #: The ``_meta`` namespace this product's workspace report travels under.
 MANIFEST_META_KEY = "raven.harnessManifest"
 
@@ -221,7 +225,21 @@ class CodeParticipant(AgentParticipant):
             shared_with=len(record.peers) if record is not None else 0,
         )
         self._ledger.end_turn(step.session_key)
-        return {ACP_META_OBSERVER: {MANIFEST_META_KEY: report}}
+        meta: dict[str, Any] = {MANIFEST_META_KEY: report}
+        # A command that outlived its call is still this session's work. The
+        # client must not be told the turn ended while it runs, or it reads the
+        # agent as finished; the ACP layer keeps the prompt open and runs a
+        # closing turn once these are gone.
+        if background_exec.running(session_key=step.session_key):
+            from raven.agent import turn_clock
+
+            left = turn_clock.remaining()
+            meta[HOLD_TURN_KEY] = {
+                "why": "waiting for a background command this turn started",
+                "untilMs": None if left is None else int((time.time() + left) * 1000),
+                "background": True,
+            }
+        return {ACP_META_OBSERVER: meta}
 
 
 class CodeFlowHook(ParticipantHook):

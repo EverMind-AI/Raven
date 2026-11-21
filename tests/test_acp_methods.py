@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -2650,3 +2651,115 @@ class TestPlaybookCharter:
         _, _, result = await self._staged(rig, {"raven.playbook": {"prompt": "only A"}}, bind=False)
 
         assert result["result"] == {"stopReason": "cancelled"}
+
+
+@pytest.mark.asyncio
+async def test_the_closing_turn_runs_after_background_work(rig, monkeypatch):
+    """A held prompt must end by itself: nothing else runs a turn there."""
+    from types import SimpleNamespace
+
+    from raven.agent.tools import background_exec
+
+    snapshots = iter(
+        [
+            [{"task_id": "bg-1", "command": "make all", "log_path": "/tmp/bg-1.log"}],
+            [],
+            [],
+        ]
+    )
+    monkeypatch.setattr(background_exec, "running", lambda session_key=None: next(snapshots, []))
+
+    monkeypatch.setattr("raven.acp.methods.BACKGROUND_POLL_S", 0)
+    session = SimpleNamespace(session_id="s1", session_key="cli:c")
+
+    await rig.methods._resume_after_background(session, {"background": True, "untilMs": None})
+
+    params = rig.stack.params_for("turn.send")
+    assert params["session_key"] == "cli:c"
+    assert "bg-1" in params["content"] and "make all" in params["content"]
+    assert "have finished" in params["content"]
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_hold_reaps_what_it_was_waiting_on(rig, monkeypatch):
+    """Cancelling the prompt must not leave the command running unseen."""
+    from types import SimpleNamespace
+
+    from raven.agent.tools import background_exec
+
+    reaped: list[str] = []
+    monkeypatch.setattr(
+        background_exec,
+        "running",
+        lambda session_key=None: [{"task_id": "bg-9", "command": "sleep 99", "log_path": "/tmp/l"}],
+    )
+    monkeypatch.setattr(background_exec, "reap", lambda task_id: reaped.append(task_id) or True)
+
+    rig.methods._reap_background(SimpleNamespace(session_id="s1", session_key="cli:c"))
+    assert reaped == ["bg-9"]
+
+
+@pytest.mark.asyncio
+async def test_a_hold_at_its_deadline_reaps_and_still_runs_the_closing_turn(rig, monkeypatch):
+    """The prompt must answer even when the work did not finish in time."""
+    from types import SimpleNamespace
+
+    from raven.agent.tools import background_exec
+
+    reaped: list[str] = []
+    monkeypatch.setattr(
+        background_exec,
+        "running",
+        lambda session_key=None: [{"task_id": "bg-7", "command": "long build", "log_path": "/tmp/l"}],
+    )
+    monkeypatch.setattr(background_exec, "reap", lambda task_id: reaped.append(task_id) or True)
+    monkeypatch.setattr("raven.acp.methods.BACKGROUND_POLL_S", 0)
+    session = SimpleNamespace(session_id="s1", session_key="cli:c")
+
+    past = (time.time() - 1) * 1000
+    await rig.methods._resume_after_background(session, {"background": True, "untilMs": past})
+
+    assert reaped == ["bg-7"], "what is left at the deadline is killed"
+    content = rig.stack.params_for("turn.send")["content"]
+    assert "long build" in content
+    assert "were stopped" in content
+    assert "have finished" not in content, "a killed command did not finish"
+
+
+@pytest.mark.asyncio
+async def test_the_deadline_text_names_the_windows_leftover(rig, monkeypatch):
+    """The reap kills the shell; on Windows a child process can be left running."""
+    from types import SimpleNamespace
+
+    from raven.agent.tools import background_exec
+
+    monkeypatch.setattr(
+        background_exec,
+        "running",
+        lambda session_key=None: [{"task_id": "bg-7", "command": "long build", "log_path": "/tmp/l"}],
+    )
+    monkeypatch.setattr(background_exec, "reap", lambda task_id: True)
+    monkeypatch.setattr("raven.acp.methods.BACKGROUND_POLL_S", 0)
+    monkeypatch.setattr("raven.acp.methods.os", SimpleNamespace(name="nt"))
+    session = SimpleNamespace(session_id="s1", session_key="cli:c")
+
+    past = (time.time() - 1) * 1000
+    await rig.methods._resume_after_background(session, {"background": True, "untilMs": past})
+
+    content = rig.stack.params_for("turn.send")["content"]
+    assert "were stopped" in content
+    assert "may still be running on Windows" in content
+
+
+@pytest.mark.asyncio
+async def test_a_closing_turn_that_fails_is_logged_not_raised(rig, monkeypatch):
+    """The watcher runs detached; an exception there would be swallowed anyway."""
+    from types import SimpleNamespace
+
+    from raven.agent.tools import background_exec
+
+    monkeypatch.setattr(background_exec, "running", lambda session_key=None: [])
+    rig.stack.send_result = RuntimeError("scheduler draining")
+    session = SimpleNamespace(session_id="s1", session_key="cli:c")
+
+    await rig.methods._resume_after_background(session, {"background": True, "untilMs": None})

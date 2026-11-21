@@ -1024,3 +1024,45 @@ def test_a_one_shot_with_nothing_refused_prints_no_report(
     r, _ = _invoke_agent_capturing_session(monkeypatch, ws, [])
     assert r.exit_code == 0, r.stdout
     assert "were refused" not in r.stdout
+
+
+@pytest.mark.asyncio
+async def test_a_one_shot_run_waits_for_its_background_commands(monkeypatch):
+    """A command adopted past its limit is still the session's work.
+
+    Exiting while it runs would hand the caller a task id for output that never
+    gets written; the launcher waits, the way it already waits for sub-agents.
+    """
+    from raven.agent.tools import background_exec
+    from raven.cli import agent_commands
+
+    calls = iter([[{"task_id": "bg-1"}], [{"task_id": "bg-1"}], []])
+    monkeypatch.setattr(background_exec, "running", lambda session_key=None: next(calls, []))
+    monkeypatch.setattr(agent_commands, "_BACKGROUND_SETTLE_S", 0)
+
+    class Scheduler:
+        def has_inflight(self, lane):
+            return False
+
+    class Loop:
+        subagents = None
+
+    await agent_commands._wait_for_background_work(Loop(), Scheduler(), "cli:c")
+
+
+@pytest.mark.asyncio
+async def test_a_run_with_nothing_to_wait_for_returns_at_once(monkeypatch):
+    """No sub-agents and no background command is the common one-shot case."""
+    from raven.agent.tools import background_exec
+    from raven.cli import agent_commands
+
+    monkeypatch.setattr(background_exec, "running", lambda session_key=None: [])
+
+    class Scheduler:
+        def has_inflight(self, lane):
+            raise AssertionError("nothing to wait for; the scheduler must not be polled")
+
+    class Loop:
+        subagents = None
+
+    await agent_commands._wait_for_background_work(Loop(), Scheduler(), "cli:c")

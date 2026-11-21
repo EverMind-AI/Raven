@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import time
 from pathlib import Path
 
@@ -334,3 +335,27 @@ def test_the_schema_advertises_the_lane(home, tmp_path):
     assert prop["type"] == "boolean"
     assert "ops_submit" in prop["description"], "the boundary is taught where the parameter is read"
     assert "timeout" in prop["description"], "that the lane reads no timeout is said where the model can see it"
+
+
+def test_adopted_work_is_listed_under_its_session(monkeypatch, tmp_path):
+    """A command that outlived its call is still that session's work.
+
+    Nothing about adopting it starts a process: the adopter keeps writing the
+    log, and this registry only has to see it, cap it and reap it like the rest.
+    """
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        log = tmp_path / "adopted.log"
+        log.write_text("started\n", encoding="utf-8")
+        task = background_exec.adopt("sleep 30", proc.pid, log_path=str(log), session_key="cli:a")
+
+        mine = background_exec.running(session_key="cli:a")
+        assert [t["task_id"] for t in mine] == [task.task_id]
+        assert background_exec.running(session_key="cli:b") == []
+        assert "started" in background_exec.tail(task.task_id)
+        assert background_exec.reap(task.task_id) is True
+        proc.wait(timeout=5)
+    finally:
+        if proc.poll() is None:
+            proc.kill()

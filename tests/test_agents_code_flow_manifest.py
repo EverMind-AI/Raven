@@ -9,6 +9,7 @@ as the prompt response's ``_meta["raven.harnessManifest"]``.
 
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -191,6 +192,56 @@ async def test_the_send_leaves_other_observers_stashes_alone(outside_any_repo):
     assert metadata["observers"]["oncall_flow"] == {"tokens": 3}
     assert metadata["observers"]["acp_meta"]["vendor.other"] == {"k": 1}
     assert metadata["observers"]["acp_meta"][MANIFEST_META_KEY]["workspaceKind"] == "plain"
+
+
+@pytest.mark.asyncio
+async def test_the_send_holds_the_turn_for_an_adopted_command(tmp_path, monkeypatch):
+    """A command the turn adopted keeps the client's prompt open until it is gone."""
+    from raven.agent import turn_clock
+    from raven.agent.tools import background_exec
+
+    repo = tmp_path / "repo"
+    make_repo(repo)
+    hook = CodeFlowHook(ledger=SessionLedger())
+    turn_clock.set_session("acp:s1")
+    turn_clock.set_deadline(time.monotonic() + 30)
+    monkeypatch.setattr(
+        background_exec,
+        "running",
+        lambda session_key=None: [{"task_id": "bg-1", "session_key": session_key}] if session_key else [],
+    )
+    metadata: dict = {}
+    try:
+        with workdir.bind(repo):
+            await hook.before_user_inbound(AgentHookContext(session_key="acp:s1", inbound_content="build"))
+            await hook.after_send(AgentHookContext(session_key="acp:s1", outbound_content="done", metadata=metadata))
+        hold = metadata["observers"]["acp_meta"]["raven.holdTurn"]
+        assert hold["background"] is True
+        assert hold["untilMs"] is not None
+        assert abs(hold["untilMs"] - (time.time() + turn_clock.remaining()) * 1000) < 2000
+    finally:
+        turn_clock.set_deadline(None)
+        turn_clock.set_session("")
+
+
+@pytest.mark.asyncio
+async def test_the_send_leaves_an_explicit_background_command_out_of_the_hold(tmp_path, monkeypatch):
+    """The detached lane keeps its own contract: it runs on after the turn answers."""
+    from raven.agent.tools import background_exec
+
+    repo = tmp_path / "repo"
+    make_repo(repo)
+    hook = CodeFlowHook(ledger=SessionLedger())
+    monkeypatch.setattr(
+        background_exec,
+        "running",
+        lambda session_key=None: [] if session_key else [{"task_id": "bg-2", "session_key": None}],
+    )
+    metadata: dict = {}
+    with workdir.bind(repo):
+        await hook.before_user_inbound(AgentHookContext(session_key="acp:s1", inbound_content="build"))
+        await hook.after_send(AgentHookContext(session_key="acp:s1", outbound_content="done", metadata=metadata))
+    assert "raven.holdTurn" not in metadata["observers"]["acp_meta"]
 
 
 class _AnswerProvider(LLMProvider):
