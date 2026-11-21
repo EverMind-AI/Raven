@@ -99,7 +99,8 @@ def emergency_shrink(messages: list[dict]) -> tuple[list[dict], int]:
 
     Three passes, cheapest loss first: the pictures tools showed, then older
     tool bodies, then -- only when those two freed nothing -- the pictures from
-    earlier turns, all of them. The picture on the current question stays.
+    earlier turns. That last pass can take the current question's picture too,
+    keeping only the newest ``SHRINK_KEEP_RECENT_IMAGES``.
     """
     messages, elided = elide_older_images(messages)
 
@@ -134,9 +135,9 @@ def emergency_shrink(messages: list[dict]) -> tuple[list[dict], int]:
     # from earlier turns go last: a turn that is nothing but pasted screenshots
     # overflows on them alone, and this path could reach them before the
     # standing window narrowed the first pass to results. The current question's
-    # picture is not a candidate; answering without it is worse than the refusal.
+    # picture is not a candidate until this pass, which has nothing else to give.
     out = list(shrunk)
-    changed, _ = window_images(out, SHRINK_KEEP_RECENT_IMAGES, reason="context")
+    changed, _ = window_images(out, SHRINK_KEEP_RECENT_IMAGES, reason="context", last_resort=True)
     return (out, changed) if changed else (shrunk, 0)
 
 
@@ -229,6 +230,7 @@ def window_images(
     *,
     budget: int | None = None,
     reason: str = "superseded",
+    last_resort: bool = False,
 ) -> tuple[int, int]:
     """Withdraw the pictures the request should no longer carry, in place.
 
@@ -263,9 +265,15 @@ def window_images(
     after the question, is a result like those: it counts toward the budget and
     is withdrawn with the older tool pictures when the budget is crossed. The
     picture on this turn's question is the subject of the turn: it counts toward
-    the budget but is never withdrawn. Remote references count toward ``keep``
-    but weigh nothing in the budget: their size is unknowable without fetching
-    them.
+    the budget and is not withdrawn while anything else can go. Remote
+    references count toward ``keep`` but weigh nothing in the budget: their size
+    is unknowable without fetching them.
+
+    ``last_resort`` is for what is left after everything else: the request the
+    endpoint has refused, or the overflow with no tool picture or earlier turn
+    left to give. The current question's picture is then a candidate too,
+    because a text answer beats a failed turn; ``keep`` still protects the
+    newest ``keep`` image-bearing messages, and at zero every picture goes.
 
     Returns ``(messages_changed, pictures_withdrawn)``; ``(0, 0)`` means
     nothing had to go.
@@ -282,6 +290,14 @@ def window_images(
         for i in bearing
         if messages[i].get("role") == "user" and not messages[i].get(ATTACHED_IMAGE_KEY) and i != question
     ]
+    earlier = {
+        i
+        for i in bearing
+        if messages[i].get("role") == "user"
+        and not messages[i].get(ATTACHED_IMAGE_KEY)
+        and question is not None
+        and i < question
+    }
     if budget is not None:
         live = sum(wire_image_bytes(p) for i in bearing for p in messages[i]["content"])
         if live <= budget:
@@ -289,8 +305,10 @@ def window_images(
     # ``max`` because a negative keep would slice from the other end and
     # withdraw the newest pictures instead of the oldest.
     keep = max(0, keep)
-    stale = (tools[:-keep] if keep else tools) + user_pictures
-    earlier = {i for i in user_pictures if question is not None and i < question}
+    if last_resort:
+        stale = bearing[:-keep] if keep else bearing
+    else:
+        stale = (tools[:-keep] if keep else tools) + user_pictures
     pictures = 0
     for i in stale:
         pictures += sum(1 for p in messages[i]["content"] if is_image_part(p))
