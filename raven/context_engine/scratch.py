@@ -1,21 +1,18 @@
-"""Turn scratch — the per-turn block that reaches the model but not the log.
+"""Turn scratch — the per-turn block the user message carries to the model.
 
 Recalled memory and routed skills change with every query. Rendered into the
 system prompt they sit ahead of the whole conversation in every provider's
 cache prefix, so each turn discards everything cached behind them. Rendered at
 the end of the turn's user message instead, they leave the system prompt
 byte-identical across turns, so its cache entry and the tools' are read back on
-the next turn. The history behind them does not get the same: the envelope is
-filed without the scratch, so the next turn's prefix through it was never sent
-in that form, and an earlier mark is read back only where the provider looks
-back over previous breakpoints.
+the next turn.
 
-The block must not be written back to ``session.messages``. Persisting it would
-turn the log from append-only into rewritten -- next turn's prefix would differ
-from this turn's, losing the cache anyway, and the recalled text would
-accumulate in history forever. The assembler records on the envelope exactly
-what it appended (``TURN_SCRATCH_KEY``), and the loop's ``_save_turn`` removes
-that text and the mark on the way in.
+The history behind them has to carry the same bytes, or the turn boundary
+breaks the provider's cache just the same: the envelope is filed with the
+scratch beside the user's words, and the replay puts it back where it was
+appended. The stored ``content`` stays the user's words alone, so the session
+log and everything that reads it (the transcript, the novelty window) see the
+question and not the recall.
 """
 
 from __future__ import annotations
@@ -24,15 +21,27 @@ from collections.abc import Sequence
 from typing import Any
 
 # Same bracketed-sentence shape as ContextBuilder._RUNTIME_CONTEXT_TAG: it tells
-# the model what it is reading. What is cut on the way to disk is the recorded
-# text (TURN_SCRATCH_KEY), not this literal.
-TURN_SCRATCH_TAG = "[Turn Scratch — recalled for this turn only, not conversation history]"
+# the model what it is reading. The scratch is filed with the message and
+# replayed, so the tag says what the block is: the recall of the turn it was
+# asked in.
+TURN_SCRATCH_TAG = "[Turn Scratch — recalled for the turn it was asked in]"
 
 TURN_SCRATCH_KEY = "_turn_scratch"
 """Set on the envelope the scratch was appended to, holding the appended text.
 
 Underscored so no provider payload carries it (every transport sends an
-allowlist of keys). ``_save_turn`` pops it, so it never reaches the session.
+allowlist of keys). ``_save_turn`` pops it and files the text as
+``TURN_SCRATCH_FIELD``.
+"""
+
+TURN_SCRATCH_FIELD = "turn_scratch"
+"""The scratch as the session entry stores it, beside the user's words."""
+
+TURN_SCRATCH_AT_FIELD = "turn_scratch_at"
+"""Where the scratch stood in the message it was cut from.
+
+A hook note lands on the message after the scratch was appended, so the
+scratch is not always last, and the replay puts it back where it stood.
 """
 
 
@@ -118,6 +127,67 @@ def strip_turn_scratch(message: dict[str, Any] | Any) -> Any | None:
     if not isinstance(message, dict):
         return None
     return cut_turn_scratch(message.get("content"), message.get(TURN_SCRATCH_KEY))
+
+
+def split_turn_scratch(content: Any, scratch: str | None) -> tuple[Any, int | None]:
+    """``content`` without the ``scratch``, and where the scratch stood.
+
+    The scratch is not always last: a hook note lands on the message after
+    the scratch was appended. The offset says where it stood, so the replay
+    puts it back in the same place rather than at the end.
+
+    Only that exact text is removed: its last occurrence after a blank line in
+    a string (a hook note appended after it stays), or the text block that is
+    exactly it. A string marked for caching on the way out arrives as one text
+    block, so a block carrying the string-shaped suffix is cut the same way.
+    ``None`` for the content is the caller's cue to skip the message rather
+    than record an empty one.
+    """
+    if not scratch:
+        return content, None
+    suffix = f"\n\n{scratch}"
+    if isinstance(content, str):
+        head, sep, tail = content.rpartition(suffix)
+        if not sep:
+            return content, None
+        rest = head + tail
+        return (rest if rest.strip() else None), len(head)
+    if isinstance(content, list):
+        kept: list[Any] = []
+        at: int | None = None
+        for block in content:
+            text = block.get("text") if isinstance(block, dict) else None
+            if text == scratch:
+                at = len(kept)
+            elif isinstance(text, str) and suffix in text:
+                at = len(kept)
+                rest = _cut_text(text, scratch, suffix)
+                if rest is not None:
+                    kept.append({**block, "text": rest})
+            else:
+                kept.append(block)
+        if at is None:
+            return content, None
+        return (kept or None), at
+    return content, None
+
+
+def replayed_scratch(message: dict[str, Any], content: Any) -> Any:
+    """``content`` with the scratch filed on ``message`` put back where it was.
+
+    The scratch is found by the text that identifies it, never by a position:
+    a hook note lands on the message after the scratch was appended, so the
+    scratch is not always last.
+    """
+    scratch = message.get(TURN_SCRATCH_FIELD)
+    if not isinstance(scratch, str) or not scratch:
+        return content
+    at = message.get(TURN_SCRATCH_AT_FIELD)
+    if isinstance(content, str) and isinstance(at, int):
+        return f"{content[:at]}\n\n{scratch}{content[at:]}"
+    if isinstance(content, list) and isinstance(at, int):
+        return [*content[:at], {"type": "text", "text": scratch}, *content[at:]]
+    return append_turn_scratch(content, scratch)
 
 
 def strip_turn_scratch_by_tag(content: Any) -> Any | None:

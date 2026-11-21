@@ -21,6 +21,7 @@ from raven.agent.context import ContextBuilder
 from raven.agent.window.parts import ATTACHMENT_NOTES_KEY, CONVERSATION, FILES, measure_parts
 from raven.context_engine import ContextAssembler, TurnContext
 from raven.context_engine.scratch import (
+    TURN_SCRATCH_FIELD,
     TURN_SCRATCH_KEY,
     TURN_SCRATCH_TAG,
     append_turn_scratch,
@@ -387,7 +388,7 @@ def _loop_stub():
     return loop
 
 
-class TestSessionNeverRecordsTheScratch:
+class TestSessionFilesTheScratchBesideTheWords:
     def _save(self, tmp_path: Path, messages: list[dict], **kw) -> tuple[list[dict], str]:
         from raven.agent.loop.main import AgentLoop
         from raven.session.manager import SessionManager
@@ -398,16 +399,16 @@ class TestSessionNeverRecordsTheScratch:
         manager.save(session)
         return session.messages, manager.session_path("cli:x").read_text(encoding="utf-8")
 
-    def test_both_shapes_reach_disk_without_the_block_or_the_mark(self, tmp_path: Path) -> None:
+    def test_both_shapes_reach_disk_with_the_words_alone_and_the_scratch_filed(self, tmp_path: Path) -> None:
         plain = _envelope(f"{_RUNTIME}\n\nwhat did I say?")
         blocks = _envelope([{"type": "text", "text": _RUNTIME}, {"type": "text", "text": "and this?"}])
 
         stored, on_disk = self._save(tmp_path, [plain, blocks, {"role": "assistant", "content": "answer"}])
 
-        assert TURN_SCRATCH_TAG not in on_disk
         assert TURN_SCRATCH_KEY not in on_disk
-        assert "recalled: espresso" not in on_disk
         assert [m["content"] for m in stored] == ["what did I say?", [{"type": "text", "text": "and this?"}], "answer"]
+        assert stored[0][TURN_SCRATCH_FIELD] == _SCRATCH
+        assert stored[1][TURN_SCRATCH_FIELD] == _SCRATCH
 
     def test_the_inbound_original_path_records_the_words_sent(self, tmp_path: Path) -> None:
         stored, on_disk = self._save(
@@ -417,7 +418,6 @@ class TestSessionNeverRecordsTheScratch:
             received_at="2026-10-20T11:59:00",
         )
 
-        assert TURN_SCRATCH_TAG not in on_disk
         assert TURN_SCRATCH_KEY not in on_disk
         assert stored[0]["content"] == "hello"
 
@@ -464,8 +464,7 @@ class TestSessionNeverRecordsTheScratch:
 
         stored, on_disk = self._save(tmp_path, [_envelope(content)], inbound_original="look")
 
-        assert TURN_SCRATCH_TAG not in on_disk
-        assert "recalled: espresso" not in on_disk
+        assert TURN_SCRATCH_KEY not in on_disk
         texts = [b.get("text") for b in stored[0]["content"] if b.get("type") == "text"]
         assert "look" in texts
 
@@ -804,17 +803,20 @@ def _on_disk(agent) -> str:
 
 
 def _assert_clean(text: str) -> None:
-    assert TURN_SCRATCH_TAG not in text
+    """The stored transcript carries the user's words: the recall rides in its
+    own field, never in the content the transcript and the novelty window read."""
     assert TURN_SCRATCH_KEY not in text
-    assert "RECALL<" not in text
+    for entry in (json.loads(line) for line in text.splitlines() if line.startswith("{")):
+        if entry.get("role") == "user":
+            assert "RECALL<" not in str(entry.get("content", ""))
 
 
 async def _collect(_event) -> None:
     return None
 
 
-class TestTheLoopNeverFilesTheScratch:
-    async def test_two_turns_share_a_system_prompt_and_the_store_sees_no_scratch(self, tmp_path: Path) -> None:
+class TestTheLoopFilesTheScratchBesideTheWords:
+    async def test_two_turns_share_a_system_prompt_and_the_store_sees_the_words_alone(self, tmp_path: Path) -> None:
         backend = _EchoBackend()
         agent = _agent(tmp_path, backend=backend)
 
@@ -827,12 +829,14 @@ class TestTheLoopNeverFilesTheScratch:
         assert first[0] == second[0]
         for request, query in ((first, "espresso"), (second, "tea")):
             assert not _MEMORY_HEADING.search(_whole_prompt(request[:1]))
-            assert len(_MEMORY_HEADING.findall(_whole_prompt(request))) == 1
             tail = _whole_prompt(request[-1:])
             assert len(_MEMORY_HEADING.findall(tail)) == 1
-            assert "RECALL<" not in _whole_prompt(request[:-1])
             assert query in tail[tail.index(TURN_SCRATCH_TAG) :]
-        assert TURN_SCRATCH_TAG not in _whole_prompt(second[:-1])
+        # The second turn replays the first turn's message as it was sent, so the
+        # first turn's recall rides along with it, and the second turn's own
+        # recall is the only one it adds.
+        assert "RECALL<first question about espresso>" in _whole_prompt(second[:-1])
+        assert "RECALL<second question about tea>" in _whole_prompt(second[-1:])
 
         await agent.drain_backend_stores(timeout=5.0)
         _assert_clean(_on_disk(agent))
@@ -852,7 +856,6 @@ class TestTheLoopNeverFilesTheScratch:
         second = agent.provider.requests[1]
         assert any(_PASTED in t for m in second if m.get("role") == "user" for t in _texts(m.get("content")))
         on_disk = _on_disk(agent)
-        assert "RECALL<" not in on_disk
         assert TURN_SCRATCH_KEY not in on_disk
         users = [
             json.loads(line) for line in on_disk.splitlines() if '"role": "user"' in line or '"role":"user"' in line
@@ -860,6 +863,9 @@ class TestTheLoopNeverFilesTheScratch:
         contents = [u.get("content") for u in users]
         assert "start the job" in contents
         assert any(isinstance(c, str) and c.endswith(_PASTED) for c in contents), contents
+        # The recall is filed with the message, in its own field, so the replay
+        # can put back the bytes the provider saw.
+        assert any(u.get(TURN_SCRATCH_FIELD) for u in users), users
 
     async def test_a_broken_turn_files_its_work_without_the_scratch(self, tmp_path: Path) -> None:
         import asyncio

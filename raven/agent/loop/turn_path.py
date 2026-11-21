@@ -4249,7 +4249,12 @@ class TurnPathMixin:
             RUNTIME_CONTEXT_KEY,
             carries_runtime_context,
         )
-        from raven.context_engine.scratch import TURN_SCRATCH_KEY, cut_turn_scratch
+        from raven.context_engine.scratch import (
+            TURN_SCRATCH_AT_FIELD,
+            TURN_SCRATCH_FIELD,
+            TURN_SCRATCH_KEY,
+            split_turn_scratch,
+        )
 
         # Both exits that persist a turn come through here, so a question noted
         # on the turn is filed once whichever exit runs. The early inbound write
@@ -4276,17 +4281,7 @@ class TurnPathMixin:
             entry.pop(TURN_LOG_KEY, None)
             entry.pop(OPENING_KEY, None)
             runtime_lines = entry.pop(RUNTIME_CONTEXT_KEY, None)
-            if (scratch := entry.pop(TURN_SCRATCH_KEY, None)) and role == "user":
-                # The turn scratch (recalled memory, routed skills) is rebuilt
-                # from the query every turn. Recording it would turn the log
-                # from append-only into rewritten -- next turn's request would
-                # carry this turn's recall in its history -- and the recalled
-                # text would pile up in history forever. Cut before the rewrites
-                # below, which compare against the exact text that was appended.
-                content = cut_turn_scratch(content, scratch)
-                if content is None:
-                    continue
-                entry["content"] = content
+            scratch = entry.pop(TURN_SCRATCH_KEY, None) if role == "user" else None
             if entry.get("_recovery_synthetic"):
                 continue  # #1a synthetic recovery nudge — never persist scaffolding
             if entry.get(ATTACHED_IMAGE_KEY):
@@ -4411,6 +4406,25 @@ class TurnPathMixin:
                     if not filtered:
                         continue
                     entry["content"] = filtered
+                if scratch:
+                    # The turn scratch (recalled memory, routed skills) is
+                    # rebuilt from the query every turn, so it cannot be
+                    # re-derived on the next turn: the recall answered this
+                    # turn's question. It is filed with the message so the
+                    # replay puts back the same bytes the provider saw, and the
+                    # stored ``content`` keeps the user's words alone so the
+                    # transcript and the novelty window read the question, not
+                    # the recall.
+                    #
+                    # Cut after the block was stripped, so where it stood is an
+                    # offset into the words the replay starts from.
+                    content, at = split_turn_scratch(entry.get("content"), scratch)
+                    if content is None:
+                        continue
+                    entry["content"] = content
+                    entry[TURN_SCRATCH_FIELD] = scratch
+                    if at is not None:
+                        entry[TURN_SCRATCH_AT_FIELD] = at
             if role == "user" and runtime_lines and not carries_runtime_context(entry.get("content"), runtime_lines):
                 # Filed beside the user's words, which ``content`` keeps alone, so
                 # the history projection replays the block this turn sent. Lines

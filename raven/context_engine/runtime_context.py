@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from raven.context_engine.scratch import replayed_scratch
 from raven.context_engine.segments.render import RUNTIME_CONTEXT_TAG
 
 RUNTIME_CONTEXT_KEY = "_runtime_context"
@@ -38,6 +39,15 @@ def with_runtime_context(lines: str, content: Any) -> Any:
     return f"{lines}\n\n{content}"
 
 
+def block_with_menu(lines: str, menu: str | None) -> str:
+    """The block the envelope opens with: the runtime-context lines, then the menu.
+
+    The assembler sends this and the replay rebuilds it, so the two cannot
+    drift apart. The menu rides inside the block, after the lines.
+    """
+    return f"{lines}\n{menu}" if menu else lines
+
+
 def carries_runtime_context(content: Any, lines: str) -> bool:
     """Whether ``content`` still holds ``lines``, in a string or in one of its text blocks."""
     if isinstance(content, str):
@@ -45,6 +55,22 @@ def carries_runtime_context(content: Any, lines: str) -> bool:
     if isinstance(content, list):
         return _block_holding(content, lines) is not None
     return False
+
+
+def locate(content: Any, text: str) -> tuple[str, int] | None:
+    """Where ``text`` sits in ``content``: ``("string", offset)`` or ``("block", index)``.
+
+    A recorded text is found by what identifies it, never by where it sits: a
+    recovery notice put in front of a message after assembly moves the block
+    off the content's start, and the recorded text still names it.
+    """
+    if isinstance(content, str):
+        at = content.find(text)
+        return ("string", at) if at >= 0 else None
+    if isinstance(content, list):
+        at = _block_holding(content, text)
+        return ("block", at) if at is not None else None
+    return None
 
 
 def _block_holding(content: list[Any], lines: str) -> int | None:
@@ -59,16 +85,32 @@ def _block_holding(content: list[Any], lines: str) -> int | None:
 
 
 def replayed_content(message: dict[str, Any]) -> Any:
-    """The content ``message`` was sent with, as far as its filed lines go.
+    """The content ``message`` was sent with, as far as its filed records go.
 
-    A user entry filed before the field existed, and every other entry, comes
+    The runtime-context block goes back at the head and the turn scratch at the
+    end, the two places they were sent, so the replay is byte for byte what
+    the provider saw.
+
+    A block the session write left in the content (a notice put in front of
+    the message after assembly moved it off the start) is not joined again.
+
+    A user entry filed before the fields existed, and every other entry, comes
     back as it is.
     """
     content = message.get("content")
-    lines = message.get(RUNTIME_CONTEXT_FIELD)
-    if message.get("role") != "user" or not isinstance(lines, str) or not lines:
+    if message.get("role") != "user":
         return content
-    return with_runtime_context(lines, content)
+    # The scratch goes back first: where it stood is an offset into the
+    # message's own words, and the block would shift it.
+    content = replayed_scratch(message, content)
+    lines = message.get(RUNTIME_CONTEXT_FIELD)
+    if not isinstance(lines, str) or not lines:
+        # A message filed with no block: recovery injection left it in the
+        # content, so the session write filed none. The scratch is still filed.
+        return content
+    if not carries_runtime_context(content, lines):
+        content = with_runtime_context(lines, content)
+    return content
 
 
 MCP_NOTICE_HEADER = "MCP plugin changes since the last note (an earlier note stands until one here replaces it):"
