@@ -139,11 +139,21 @@ class ProjectSkillIndex:
         """Return the skill whose frontmatter name matches exactly."""
         return self._by_name.get(name)
 
-    def search(self, query: str, top_k: int) -> list[tuple[SkillMeta, float]]:
-        """Return the best BM25 matches with a positive score, best first."""
+    def search(
+        self,
+        query: str,
+        top_k: int,
+        *,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> list[tuple[SkillMeta, float]]:
+        """Return the best BM25 matches with a positive score, best first.
+
+        ``should_stop`` is handed to the scorer; once it fires there are no
+        scores to rank, so the answer is no matches rather than partial ones.
+        """
         if not self.metas:
             return []
-        scores = self._bm25.get_scores(tokenize(query))
+        scores = self._bm25.get_scores(tokenize(query), should_stop=should_stop)
         ranked = sorted(
             ((meta, score) for meta, score in zip(self.metas, scores) if score > 0.0),
             key=lambda hit: hit[1],
