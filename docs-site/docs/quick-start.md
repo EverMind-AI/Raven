@@ -167,6 +167,31 @@ treats a model neither names as the rest of its family in that catalogue. A
 kind you pick yourself wins over all of them. A chat model that reads images
 and answers in text stays under **Text**.
 
+### Keys kept in an environment variable
+
+A deployment that keeps its keys in a secret manager need not write them
+into `config.json`. Name the variable instead of the value: set `apiKeyEnv`
+on the provider section, and Raven resolves it in memory when the provider
+is built.
+
+```json
+{
+  "providers": {
+    "anthropic": { "apiKeyEnv": "ANTHROPIC_API_KEY" }
+  }
+}
+```
+
+Export the variable where Raven runs -- your shell profile, or the service
+unit -- so every process Raven starts receives it. A section holds either
+`apiKey` or `apiKeyEnv`, not both. If the variable is unset or empty, Raven
+refuses to start and names it, rather than sending an empty key to the API.
+
+Spell the variable exactly as you export it. Windows reads environment names
+case-insensitively, so a name spelled in the wrong case resolves there and
+fails on a Linux or macOS host. A config that travels between hosts must match
+the exported spelling exactly.
+
 ### Behind a corporate proxy or private CA
 
 Raven checks HTTPS certificates against your operating system's certificate

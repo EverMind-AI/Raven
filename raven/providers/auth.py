@@ -210,9 +210,11 @@ def _SIGN_IN(provider: str) -> Requirement:  # noqa: N802 - a constructor, named
     return Requirement((), "a sign-in", f"a sign-in -- run `raven provider login {public}`")
 
 
-_KEY = Requirement(("api_key",), "an API key", "an API key -- run `raven provider set {public} --api-key <key>`")
+_KEY = Requirement(
+    ("api_key", "api_key_env"), "an API key", "an API key -- run `raven provider set {public} --api-key <key>`"
+)
 _KEY_OR_LIST = Requirement(
-    ("api_key", "api_key_list"),
+    ("api_key", "api_key_env", "api_key_list"),
     "an API key",
     "an API key -- run `raven provider set {public} --api-key <key>` (or --api-key-list k1,k2)",
 )

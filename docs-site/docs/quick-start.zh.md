@@ -141,6 +141,29 @@ Raven 优先采用服务商模型列表里声明的类型；没有声明时回�
 这个模型时，按目录中同名家族的归类处理。你自己选择的类型优先级最高。能读图、但只
 输出文字的聊天模型仍归在**文本**下。
 
+### 密钥放在环境变量里 { #keys-kept-in-an-environment-variable }
+
+把密钥放在秘密管理服务里的部署，不必再把密钥本身写进 `config.json`：在服务商
+配置段写变量名而不是值——设置 `apiKeyEnv`，Raven 在构建该服务商时于内存中
+解析它。
+
+```json
+{
+  "providers": {
+    "anthropic": { "apiKeyEnv": "ANTHROPIC_API_KEY" }
+  }
+}
+```
+
+在 Raven 运行的地方导出该变量（写进 shell 配置文件或服务单元），让 Raven 启动
+的每个进程都能收到。一个配置段只能写 `apiKey` 或 `apiKeyEnv` 之一，不能两者
+都写。变量未设置或为空时，Raven 会拒绝启动并点名该变量，而不是把空密钥发给
+API。
+
+变量名要与导出的写法完全一致。Windows 读取环境变量名时不区分大小写，拼写错误
+的名称在该系统上仍能取到值，在 Linux 或 macOS 上却取不到；需要跨主机使用的配置
+必须与导出时的拼写完全相同。
+
 ### 公司代理或私有 CA { #behind-a-corporate-proxy-or-private-ca }
 
 Raven 用操作系统的证书库校验 HTTPS 证书，IT 部门装进系统的根证书无需额外设置即可
