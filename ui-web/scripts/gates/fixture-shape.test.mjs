@@ -329,7 +329,7 @@ describe('the offline fixture library', () => {
        the list -- the one action that carries none of the switch's fields. The
        settings page calls both writes, so the fixture's answers to them are
        part of the library and are held to the contract here too. */
-    for (const action of ['block', 'unblock']) await walk('skills.manage', { action, query: 'SQL 规范' })
+    for (const action of ['block', 'unblock']) await walk('skills.manage', { action, query: 'SQL style guide' })
     const unsent = [...declared].filter((at) => !sent.has(at)).sort()
     expect(unsent.filter((at) => !UNSENT.has(at)), 'send the field, or add it to UNSENT under its method')
       .toEqual([])
