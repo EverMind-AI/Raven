@@ -191,6 +191,32 @@ class _FinishingStream:
         yield ChatDelta(content=None, finish_reason=self.finish_reason)
 
 
+class _TrailingStream:
+    """A settled reply whose iterator keeps handing deltas over."""
+
+    def __init__(self, trail: int):
+        self.trail = trail
+        self.generation = GenerationSettings(timeout=0.3, stream_idle_timeout=0.1)
+
+    @bounded_stream
+    async def chat_stream(self):
+        yield ChatDelta(content="x", finish_reason="stop")
+        for _ in range(self.trail):
+            await asyncio.sleep(0.04)
+            yield ChatDelta(content=None, usage={"prompt_tokens": 1})
+
+
+class _BufferedStream:
+    """Deltas that need no await, so only the precheck can refuse one."""
+
+    generation = GenerationSettings(timeout=0.05)
+
+    @bounded_stream
+    async def chat_stream(self):
+        yield ChatDelta(content="a")
+        yield ChatDelta(content="b")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("finish_reason", ["stop", "tool_calls", "length", "refusal"])
 async def test_delivered_final_delta_is_not_reported_as_a_timeout(finish_reason):
@@ -205,6 +231,76 @@ async def test_delivered_final_delta_is_not_reported_as_a_timeout(finish_reason)
     await stream.aclose()
 
 
+@pytest.mark.asyncio
+async def test_settled_stream_delivers_its_cleanup_pull():
+    """The usage snapshot a provider sends after its terminal delta still arrives."""
+    stream = _TrailingStream(trail=1).chat_stream()
+    deltas = [delta async for delta in stream]
+    assert [delta.content for delta in deltas] == ["x", None]
+    assert deltas[0].finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_settled_stream_stops_a_trailing_dribble():
+    """A reply that keeps trickling after its terminal delta is still bounded."""
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    stream = _TrailingStream(trail=50).chat_stream()
+    deltas = [delta async for delta in stream]
+    elapsed = loop.time() - started
+
+    assert deltas[0].finish_reason == "stop"
+    # Unbounded, the 50 pulls would take two seconds, twenty times the idle
+    # window this stream is configured with.
+    assert len(deltas) < 10
+    assert elapsed < 1.0
+    assert asyncio.current_task().cancelling() == 0
+
+
+@pytest.mark.asyncio
+async def test_settled_stream_closes_once_the_tail_window_has_gone():
+    """The tail window opens once, so a consumer that then lingers gets the end."""
+    stream = _TrailingStream(trail=50).chat_stream()
+    assert (await anext(stream)).finish_reason == "stop"
+    assert (await anext(stream)).content is None
+    await asyncio.sleep(0.15)
+    with pytest.raises(StopAsyncIteration):
+        await anext(stream)
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_settled_stream_keeps_an_inner_timeout_identity():
+    """The tail window is ours; a timeout the upstream raises is still its own."""
+    inner = TimeoutError("upstream-specific timeout")
+
+    class _RaisingTail:
+        generation = GenerationSettings(timeout=0.3, stream_idle_timeout=0.1)
+
+        @bounded_stream
+        async def chat_stream(self):
+            yield ChatDelta(content="x", finish_reason="stop")
+            raise inner
+
+    stream = _RaisingTail().chat_stream()
+    assert (await anext(stream)).finish_reason == "stop"
+    with pytest.raises(TimeoutError) as caught:
+        await anext(stream)
+    assert caught.value is inner
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_budget_already_spent_refuses_a_buffered_delta():
+    """A pull that needs no await is refused once the budget is gone."""
+    stream = _BufferedStream().chat_stream()
+    assert (await anext(stream)).content == "a"
+    await asyncio.sleep(0.08)
+    with pytest.raises(CallTimeoutError):
+        await anext(stream)
+    await stream.aclose()
+
+
 @pytest.mark.parametrize("budget", [429, 500, 600])
 def test_timeout_budget_is_not_misread_as_an_http_status(budget):
     verdict = LLMProvider.classify_error(CallTimeoutError(budget))
@@ -214,10 +310,27 @@ def test_timeout_budget_is_not_misread_as_an_http_status(budget):
 
 @pytest.mark.parametrize("budget", [429, 500, 600])
 def test_relayed_timeout_budget_is_not_misread_as_an_http_status(budget):
-    """The relay rebuilds the failure as a carrier class, not CallTimeoutError."""
-    carrier = decode_exception(encode_exception(CallTimeoutError(budget), status=None))
+    """A host from before the call-timeout kind is still read by its class name."""
+    data = encode_exception(CallTimeoutError(budget), status=None)
+    # What such a host sends: the opaque carrier, no call-timeout kind.
+    data["kind"] = "timeout"
+    data.pop("timeout", None)
+    carrier = decode_exception(data)
     assert not isinstance(carrier, CallTimeoutError)
     verdict = LLMProvider.classify_error(carrier)
+    assert verdict.category == "network"
+    assert verdict.retryable and verdict.should_fallback
+
+
+@pytest.mark.parametrize("budget", [429.0, 500.0, 600.0])
+def test_relayed_timeout_is_rebuilt_as_its_own_class(budget):
+    """A current host sends the call-timeout kind, so the class itself comes back."""
+    data = encode_exception(CallTimeoutError(budget), status=None)
+    assert data["kind"] == "call_timeout"
+    rebuilt = decode_exception(data)
+    assert isinstance(rebuilt, CallTimeoutError)
+    assert rebuilt.budget == budget
+    verdict = LLMProvider.classify_error(rebuilt)
     assert verdict.category == "network"
     assert verdict.retryable and verdict.should_fallback
 

@@ -526,6 +526,10 @@ class LLMProvider(_LLMProviderPaper):
         if isinstance(exc, StreamIdleTimeoutError):
             return ErrorClassification("stream_idle_timeout", retryable=True, should_fallback=True)
         if isinstance(exc, CallTimeoutError) or "calltimeouterror" in names:
+            # The class name is the backward-compatible reading: a host that
+            # predates the call-timeout relay kind sends an opaque carrier whose
+            # MRO still spells it. A current host's payload rebuilds the real
+            # class above, so this clause is only ever the older wire.
             return ErrorClassification("network", retryable=True, should_fallback=True)
 
         # Context-window overflow → compress and retry, NOT fallback (a smaller
