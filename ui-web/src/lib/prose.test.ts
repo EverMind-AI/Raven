@@ -5,7 +5,7 @@ import { resetTranslator, setTranslator } from '../i18n/t'
 import * as confirmStore from '../state/confirm'
 import * as pageStore from '../state/page'
 import { resetSources, setSources } from '../state/sources'
-import { md, mdBlocks } from './prose'
+import { md, mdBlocks, mdDocument } from './prose'
 
 import type { ProseSource } from './prose'
 
@@ -369,5 +369,84 @@ describe('prose renderer, one block at a time', () => {
     wire()
     expect(mdBlocks('')).toEqual([])
     expect(mdBlocks('\n\n')).toEqual([])
+  })
+})
+
+describe('prose renderer, a markdown file as a document', () => {
+  it('keeps the written heading levels and gives each one an address', () => {
+    wire()
+    const doc = mdDocument('# Guide\n\ntext\n\n## Install\n\n### From source\n\n## Usage')
+    expect(doc.headings).toEqual([
+      { id: 'mdoc-guide', label: 'Guide', level: 1 },
+      { id: 'mdoc-install', label: 'Install', level: 2 },
+      { id: 'mdoc-from-source', label: 'From source', level: 3 },
+      { id: 'mdoc-usage', label: 'Usage', level: 2 },
+    ])
+    expect(doc.html).toContain('<h3 id="mdoc-from-source" data-mh="From source" tabindex="-1">')
+    /* The answer renderer still caps at two visual levels: this is a
+       document's behaviour, not the chat body's. */
+    expect(md('### From source')).toBe('<h3>From source</h3>')
+  })
+
+  it('makes duplicate labels distinct addresses', () => {
+    wire()
+    const doc = mdDocument('# Notes\n\n## Notes\n\n## Notes')
+    expect(doc.headings.map((h) => h.id)).toEqual(['mdoc-notes', 'mdoc-notes-1', 'mdoc-notes-2'])
+  })
+
+  it('wraps the title and its lead paragraph, then groups the body by top-level heading', () => {
+    wire()
+    const html = mdDocument('# Title\n\nlead\n\n## One\n\nfirst\n\n## Two\n\nsecond').html
+    expect(html.startsWith('<header class="workspace-md-intro"><h1 id="mdoc-title"')).toBe(true)
+    expect(html).toContain('<p>lead</p></header>')
+    expect(html).toContain('<section class="workspace-md-section"><h2 id="mdoc-one"')
+    expect(html).toContain('<div class="workspace-md-paper"><p>first</p></div></section>')
+    expect(html).toContain('<div class="workspace-md-paper"><p>second</p></div></section>')
+  })
+
+  it('numbers footnotes by their first reference and links each one back', () => {
+    wire()
+    const doc = mdDocument('one[^b] two[^a] again[^b]\n\n[^a]: the a note\n[^b]: the b note')
+    expect(doc.html).toContain('<a class="workspace-md-ref" id="mdoc-fnref-1"'
+      + ' href="#mdoc-fn-1" role="doc-noteref">1</a>')
+    expect(doc.html).toContain('<a class="workspace-md-ref" id="mdoc-fnref-2"'
+      + ' href="#mdoc-fn-2" role="doc-noteref">2</a>')
+    /* The repeated reference keeps the number and carries no second id: the
+       backlink returns to the first one. */
+    const refs = doc.html.match(/<a class="workspace-md-ref"[^>]*>/g) ?? []
+    expect(refs).toHaveLength(3)
+    expect(refs.filter((ref) => ref.includes('id="mdoc-fnref-1"'))).toHaveLength(1)
+    expect(doc.html).toContain('<li id="mdoc-fn-1">the b note '
+      + '<a class="workspace-md-back" href="#mdoc-fnref-1" role="doc-backlink">↩</a></li>')
+    expect(doc.html).toContain('<li id="mdoc-fn-2">the a note ')
+    expect(doc.headings.at(-1)).toMatchObject({ label: 'Footnotes', level: 2 })
+    /* The definition lines are notes, not paragraphs where they were written. */
+    expect(doc.html).not.toContain('[^a]:')
+  })
+
+  it('leaves a reference with no definition as the text it is', () => {
+    wire()
+    expect(mdDocument('see[^gone]').html).toContain('<p>see[^gone]</p>')
+  })
+
+  it('leaves a definition inside a code fence to the listing', () => {
+    wire()
+    const doc = mdDocument('see[^a]\n\n```md\n[^a]: not a note\n```\n\n[^a]: the note')
+    expect(doc.html).toContain('<li id="mdoc-fn-1">the note ')
+    /* The sample in the fence is still the sample, not a second note. */
+    expect(doc.html).toContain('not a note')
+    expect(doc.html.match(/role="doc-backlink"/g)).toHaveLength(1)
+  })
+
+  it('resolves a local anchor to the id the heading was given', () => {
+    wire()
+    const html = mdDocument('[jump](#Usage) and [same](#mdoc-usage)\n\n## Usage').html
+    expect(html).toContain('<a href="#mdoc-usage">jump</a>')
+    expect(html).toContain('<a href="#mdoc-usage">same</a>')
+  })
+
+  it('leaves an anchor no heading answers as the author wrote it', () => {
+    wire()
+    expect(mdDocument('[jump](#nowhere)').html).toContain('<a href="#nowhere">jump</a>')
   })
 })

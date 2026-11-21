@@ -481,6 +481,10 @@ export interface ExtSkillRow {
    */
   hub: boolean;
   hub_id: string;
+  /**
+   * On skillForge.blocklist, so retrieval and injection skip it. The row is still listed here because this is the surface a person turns it back on from.
+   */
+  blocked: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -1953,6 +1957,10 @@ export interface ErrorEvent {
      * The failure's long account beside the bounded detail, for a reader who expands the row: the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the bounded text already is the whole account.
      */
     full_detail?: string;
+    /**
+     * What the reader can do about the failure, in the words this surface can act on. Absent when the failure has no category to advise about.
+     */
+    hint?: string;
     usage?: TurnUsage1;
     target?: DirectTarget;
   };
@@ -8587,7 +8595,7 @@ export interface ShellExecResult {
  */
 export interface SkillsManageParams {
   /**
-   * One of list, inspect, search, browse, install, open.
+   * One of list, inspect, search, browse, install, open, block, unblock.
    */
   action: string;
   query?: string;
@@ -8638,6 +8646,14 @@ export interface SkillsManageResult {
    * `open`.
    */
   opened?: boolean | null;
+  /**
+   * `block`/`unblock`: the state that was written.
+   */
+  blocked?: boolean | null;
+  /**
+   * `block`/`unblock`: the list after the write.
+   */
+  blocklist?: string[] | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

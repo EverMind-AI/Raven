@@ -272,6 +272,12 @@
      and composer all read from this one token, so the column and the field it
      is typed into always share an edge. */
   --col: 1112px;
+  /* The gap under the composer card. The desk's right column ends on the same
+     edge (`.desk-ready .ws`), so a pane resting there reads level with the box
+     the reader types in -- the placement `deskBottomLimit` measures for the
+     floating palette, which has no CSS box to read it from. One number for
+     both, so the two cannot drift apart. */
+  --dock-gutter: 22px;
 
   /* Ink and surface roles hoisted from rule-level hex literals. Rules that
      keep literal colors on purpose (theme-preview swatches, mask gradients,
@@ -2993,7 +2999,7 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
    mask on .scroll, which spends the same --lift that is measured from here.
    Only the card takes pointer events; the gutter around it still belongs to
    the page. */
-.dock { position: absolute; left: 0; right: 0; bottom: 22px; padding: 0 36px 0 36px;
+.dock { position: absolute; left: 0; right: 0; bottom: var(--dock-gutter); padding: 0 36px 0 36px;
   z-index: 5; pointer-events: none; }
 /* Below the card, not inside it: a legal-ish caption printed on the glass
    would read as part of the reader's own draft.
@@ -5603,8 +5609,33 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 .two-pane-side > .hubpage > :first-child { justify-self: start; }
 .two-pane-side > .hubpage > :last-child { justify-self: end; }
 .two-pane-side > .hubpage .pnote { font-variant-numeric: tabular-nums; }
-.mmeter { display: inline-block; width: 76px; height: 4px; border-radius: 999px; background: var(--raised); overflow: hidden; flex: none; }
-.mmeter i { display: block; height: 100%; background: var(--amber); border-radius: 999px; }
+/* The scores a memory carries, in a block of their own: the label, the
+   number, and the word that bands it. Numbers rather than meters -- a meter
+   says "more", a number says "how much", and only the second can be quoted
+   back or read against the row above it. */
+.memstrip {
+  display: grid; gap: 0 22px; margin: 16px 0 2px; padding: 13px 16px 14px;
+  background: var(--surface); border: 1px solid var(--line-soft); border-radius: 12px;
+}
+.memstrip .memscore + .memscore { border-left: 1px solid var(--line-soft); padding-left: 22px; }
+.memstrip .memcap {
+  font-family: var(--mono); font-size: 10.5px; color: var(--faint);
+  text-transform: uppercase; letter-spacing: .12em;
+}
+.memstrip .memnum {
+  font-family: var(--mono); font-size: 25px; font-weight: 600; line-height: 1.25;
+  letter-spacing: -.02em; color: var(--text); font-variant-numeric: tabular-nums; margin-top: 3px;
+}
+/* The band is a word with a dot, never a colour alone: the colour says which
+   band, the word says what it is called. */
+.memstrip .memband {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 12px;
+  color: var(--muted); margin-top: 3px;
+}
+.memstrip .memband::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.memstrip .memband[data-band="hi"] { color: var(--moss); }
+.memstrip .memband[data-band="mid"] { color: var(--gold); }
+.memstrip .memband[data-band="lo"] { color: var(--clay); }
 .memkv {
   border: 1px solid var(--line); border-radius: 12px; background: var(--ink);
   box-shadow: var(--elev); padding: 4px 16px;
@@ -6421,8 +6452,12 @@ body:has(#onb:not([hidden])) .mpick { z-index: calc(var(--z-onboarding) + 1); }
 .desk-ready .ws > .ws-body { display: none; }
 .desk-ready .split { position: relative; }
 .desk-ready .chat { height: 100%; }
+/* The bottom margin is the composer's own gutter, not the 8px the other three
+   sides keep: a pane hanging in this column has to end on the card's bottom
+   edge. Measured on the running page at 1920x989, the two sat 14px apart -- the
+   desk 14px lower -- because one side read 8 and the card sat at 22. */
 .desk-ready .ws { position: relative; z-index: 5; width: auto; min-width: 0; overflow: visible;
-  margin: 8px 8px 8px 0; pointer-events: none; background: transparent; border: 0;
+  margin: 8px 8px var(--dock-gutter) 0; pointer-events: none; background: transparent; border: 0;
   border-radius: 0; box-shadow: none; }
 .desk-ready .ws:has(.desk-grid[data-solo="true"]) { position: fixed; inset: 0; width: auto; margin: 0;
   z-index: var(--z-desk-full); }

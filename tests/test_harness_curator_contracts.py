@@ -308,13 +308,13 @@ def test_one_native_type_can_have_distinct_field_grants_without_schema_leakage()
     first = Target(
         "memory.first", ContextConfig, "first", ContextConfig, ("model_input",), "first", fields=("drop_segments",)
     )
-    second = replace(first, name="memory.second", binding="second", fields=("fast_path_threshold",))
+    second = replace(first, name="memory.second", binding="second", fields=("tool_result_max_chars",))
     scope = Declaration("same-type", (first, second))
     plan = plan_for(first.name, second.name)
-    good = {"values": {"memory.first": {"drop_segments": []}, "memory.second": {"fast_path_threshold": 0.5}}}
+    good = {"values": {"memory.first": {"drop_segments": []}, "memory.second": {"tool_result_max_chars": 1000}}}
     validator(scope.artifact_schema(plan)).validate(good)
     assert scope.accept(plan, good).artifact.values == good["values"]
-    bad = {"values": {"memory.first": {"fast_path_threshold": 0.5}, "memory.second": {}}}
+    bad = {"values": {"memory.first": {"tool_result_max_chars": 1000}, "memory.second": {}}}
     assert not validator(scope.artifact_schema(plan)).is_valid(bad)
     with pytest.raises(ValueError, match="fields not granted"):
         scope.accept(plan, bad)

@@ -7,6 +7,7 @@ still answer from the local half when the hub is unreachable.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -271,6 +272,54 @@ async def test_open_launches_a_file_inside_the_skill_and_refuses_outside(
     with pytest.raises(ConfigValidationError):
         await skills_manage({"action": "open", "query": "codeword", "file": "missing.txt"}, agent_loop_factory=factory)
     assert len(opened) == 1
+
+
+async def test_block_and_unblock_hand_the_fold_to_the_config_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The web page sends the name the row is drawn for. The match is
+    ``set_skill_blocked``'s casefold, not JS ``toLowerCase``: ``Straße`` and a
+    stored ``STRASSE`` are one entry, so the unblock removes it and the runtime
+    reader agrees the skill is no longer hidden."""
+    from raven.config import update as config_update
+    from raven.config.live import LiveConfig, skill_blocklist
+    from raven.rpc.models import SkillsManageResult
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"skillForge": {"blocklist": ["STRASSE"]}}), encoding="utf-8")
+    monkeypatch.setattr(config_update, "get_config_path", lambda: cfg)
+
+    unblocked = await skills_manage({"action": "unblock", "query": "Straße"})
+    assert unblocked == {"name": "Straße", "blocked": False, "blocklist": []}
+    assert skill_blocklist(LiveConfig(cfg)) == frozenset()
+    SkillsManageResult.model_validate(unblocked)
+
+    blocked = await skills_manage({"action": "block", "query": "Straße"})
+    assert blocked["blocked"] is True
+    assert blocked["blocklist"] == ["Straße"]
+    assert skill_blocklist(LiveConfig(cfg)) == frozenset({"strasse"})
+    SkillsManageResult.model_validate(blocked)
+
+
+async def test_block_without_a_name_is_a_typed_error() -> None:
+    from raven.rpc.errors import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError, match="skill name"):
+        await skills_manage({"action": "block"})
+
+
+async def test_block_surfaces_an_unwritable_config_as_a_typed_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.config import update as config_update
+    from raven.rpc.errors import ConfigValidationError
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"skillForge": []}), encoding="utf-8")
+    monkeypatch.setattr(config_update, "get_config_path", lambda: cfg)
+
+    with pytest.raises(ConfigValidationError, match="object or null"):
+        await skills_manage({"action": "block", "query": "x"})
 
 
 def test_hub_marker_and_install_meta_tolerate_a_corrupt_stamp(tmp_path: Path) -> None:

@@ -2,7 +2,7 @@
 
 One engine — :class:`ContextAssembler` — assembled by
 :func:`build_context_engine` from a flat list of :class:`SegmentBuilder`
-(seg1–5 + the Curator).
+(seg1–5 plus the history strategy's builder).
 """
 
 from raven.context_engine.assembler import ContextAssembler

@@ -249,7 +249,7 @@ def _first_line(text: str) -> str:
 # NOTE: ``raven.context_engine`` is intentionally imported lazily (inside
 # ``__init__`` and ``_assemble_context_messages``) to break a runtime
 # import cycle: ``raven.agent.__init__`` eagerly loads AgentLoop,
-# while ``raven.context_engine.curator`` imports ``ContextBuilder`` from
+# while ``raven.context_engine.factory`` imports ``ContextBuilder`` from
 # ``raven.agent.context`` — a module-level top-down ``from
 # raven.context_engine import ...`` here re-enters a partially-initialized
 # package and raises ImportError on ``TurnContext``.

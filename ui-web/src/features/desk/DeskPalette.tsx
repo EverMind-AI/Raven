@@ -508,6 +508,14 @@ export function DeskPalette(): JSX.Element | null {
     const pointerId = event.pointerId
     const controller = new AbortController()
     let moved = false
+    /* Whether the hand has pulled the HEIGHT, not only the width. The corner is
+       the one handle an anchored palette can be widened from, so a width-only
+       gesture must leave the height alone: it used to write the clamped height
+       back and clear `fill`, and a desk that had been filling to the stop above
+       a composer card stopped following the card. Once the card slid away --
+       the reserve retreating the input, the window growing -- the desk stayed
+       short with a blank below it, and no reopen brought it back. */
+    let pulled = false
     target.setPointerCapture(pointerId)
     /* The reserve follows the width on every frame of this, and the slide the
        stylesheet gives it restarts from where it stands each time, so the card
@@ -523,6 +531,7 @@ export function DeskPalette(): JSX.Element | null {
         if (Math.abs(dx) + Math.abs(dy) < DESK_DRAG_THRESHOLD) return
         moved = true
       }
+      if (Math.abs(dy) >= DESK_DRAG_THRESHOLD) pulled = true
       setGeom((now) => clampGeometry({
         ...now,
         /* Anchored, the right edge is pinned (styles/page.css's `right: calc(...)`
@@ -530,8 +539,8 @@ export function DeskPalette(): JSX.Element | null {
            a rightward drag has to shrink it instead. Detached has no pinned
            edge, so the hand's own direction is the width's. */
         w: start.w + (start.detached ? 1 : -1) * dx,
-        h: Math.min(start.h + dy, room),
-        fill: false,
+        h: pulled ? Math.min(start.h + dy, room) : now.h,
+        ...(pulled ? { fill: false } : {}),
       }))
     }
     const finish = (e?: globalThis.PointerEvent): void => {
@@ -547,11 +556,13 @@ export function DeskPalette(): JSX.Element | null {
          measured from the palette's box and the reach from its anchor's, and
          the two can disagree by a fraction.
 
-         Only a press that became a gesture writes. A filled desk keeps its
-         fallback height in `now.h` while the height on screen comes from
-         `reach`, so settling a click would collapse the panel and clear
-         `fill` in storage. */
-      if (moved) {
+         Only a press that became a gesture writes, and only one that moved the
+         height: a width-only pull leaves `fill` and `h` where they were, so a
+         desk that was reaching the limit keeps reaching it after the card
+         moves away. A filled desk keeps its fallback height in `now.h` while
+         the height on screen comes from `reach`, so settling a click would
+         collapse the panel and clear `fill` in storage. */
+      if (moved && pulled) {
         setGeom((now) => {
           const h = Math.max(DESK_MIN_SIZE, Math.min(now.h, reachRef.current))
           return { ...now, h, fill: h >= room - 1 }

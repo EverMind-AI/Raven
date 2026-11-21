@@ -261,6 +261,11 @@ TRUNK_DROPPED_SLICE = {"renderConcurrency": 2}
 # copy here could only ever be a second answer going stale.
 TRUNK_DROPPED_MEMORY_SLICE = {"base_url": "http://localhost:18791"}
 
+# The fork spelled the retired curator strategy's model pin. The trunk stops
+# spelling it with the strategy itself: the field is gone from the schema, so a
+# copy here would be a key no reader knows rather than a setting.
+TRUNK_DROPPED_CONTEXT_SLICE = {"curator_model": ""}
+
 
 def test_the_config_is_the_forks_modulo_the_swap_ledger():
     """Every delta against the sealed fork wrapper's config is a ledgered row:
@@ -302,6 +307,8 @@ def test_the_config_is_the_forks_modulo_the_swap_ledger():
     assert theirs["providers"]["ppt"].pop("models") == [FORK_MODEL]
     assert theirs["plugins"]["config"].pop("everos-memory") == TRUNK_DROPPED_MEMORY_SLICE
     assert "everos-memory" not in ours["plugins"]["config"]
+    assert theirs.pop("context") == TRUNK_DROPPED_CONTEXT_SLICE
+    assert "context" not in ours, "the retired pin is spelled again; the ledger row is stale"
     # The merged product's one identity; see the manifest test above.
     assert ours["memory"].pop("userId") == ours["memory"].pop("agentId") == "raven-design"
     assert theirs["memory"].pop("userId") == theirs["memory"].pop("agentId") == "raven-ppt"

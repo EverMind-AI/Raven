@@ -63,8 +63,8 @@ happens only here.
 
 **Subsystem pin**:
 A model configured for one subsystem rather than for the conversation, as a
-model and the provider serving it (`context.curator_model` +
-`curator_provider`). Both
+model and the provider serving it (`sessionTitle.model` +
+`sessionTitle.provider`). Both
 halves because an id alone is ambiguous the moment a gateway is configured:
 `openrouter` + `anthropic/claude-haiku-4-5` and `anthropic` +
 `claude-haiku-4-5` are both valid and name different credentials. With the
@@ -141,7 +141,7 @@ decision plus behavior requirements stated in observable terms, never a mechanis
 is the generic loop: `Trial`s run the worker (a conversation, a dataset, a simulation), `Evaluator`s
 measure the sessions into `Signal`s (text, per-item results, metrics, their own satisfied verdict), the
 analyst decides, and only a `curate` decision reaches `workflow.improve`.
-_Avoid_: conflating this experiment with the Context Engine's Curator; calling the analyst an
+_Avoid_: conflating this experiment with the context engine's history strategy; calling the analyst an
 evaluator, which names the source of a `Signal`.
 
 **Window Shrink** (`agent/window/`, paper `contracts/harness.py:MemoryModule.shrink`):
@@ -1477,7 +1477,7 @@ _Avoid_: the turn-end wire payload is `TurnUsage` (rpc/models.py), not UsageSnap
 
 **Provider**:
 An LLM vendor adapter (`providers/`: Anthropic, OpenAI, Gemini, …), shared by the
-agent loop and the Curator.
+agent loop and the subsystems it runs on the side.
 _Avoid_: conflating provider (vendor) with model (a model name a provider serves)
 
 A Provider is described along four independent axes -- identity, connection, routing,
@@ -1639,8 +1639,8 @@ SegmentBuilders in two phases: Phase A builds the system prefix in parallel, Pha
 budgets history serially against that fixed overhead. The historical
 `legacy` / `curator` / `default` engine split was collapsed into this one engine;
 which builder fills the history slot is the History Strategy.
-_Avoid_: describing "compacting" and "Curator" as two engines — there is one
-engine, and they are two History Strategies for its Segment 6.
+_Avoid_: calling the history strategy an engine — it is one builder inside the
+one engine, and it is the only scheme registered for Segment 6.
 
 **SegmentBuilder**:
 A pluggable contributor to the prompt; each builder produces one Segment for a fixed
@@ -1655,10 +1655,12 @@ History Strategy's builder sets this), and metadata merged into the assembled co
 The scheme that fills the history slot, named by `context.history.strategy` and
 resolved through the registry in `context_engine/history/__init__.py`, which is
 the only importer of a strategy and refuses an unknown name at startup.
-`compacting` (default) hands history over verbatim until the window nears its
+`compacting` hands history over verbatim until the window nears its
 trigger, then prunes large tool results to a one-line record and a Source Ref,
-drops whole groups behind a fold, and past that writes a History Checkpoint;
-`curator` is the Curator. Each registry entry declares `owns_compaction` and
+drops whole groups behind a fold, and past that writes a History Checkpoint.
+It is the only registered strategy; a config still naming the retired
+`curator` is migrated to `compacting` once and told so. Each registry entry
+declares `owns_compaction` and
 `mints_source_refs`, which the host reads before any turn.
 _Avoid_: calling it an engine; it is one builder inside the one engine.
 
@@ -1685,8 +1687,8 @@ chat id stays in the block. A conversation that moves (the heartbeat session pic
 channel per run, a linked chat runs as its own channel inside a page session, two surfaces
 can share a session) gets a new prompt at the move. The assembler records the lines on the
 message, the session write keeps the user's words in `content` and files the lines beside
-them as `runtime_context`, and both history projections, `HistoryTrimmer.history_from_ids`
-and the curator's fast path, join them back through `replayed_content` the way they were
+them as `runtime_context`, and the history projection, `HistoryTrimmer.history_from_ids`,
+joins them back through `replayed_content` the way they were
 sent, so a later turn replays the block byte for byte and the provider's cached prefix
 still matches through it. The scent menu rides in the same paragraph when the message is
 sent but is not filed. Tool notices are sent as changes: a plugin's line goes out when it
@@ -1731,8 +1733,9 @@ whatever the builders declared too volatile for the system prompt.
 **Prompt Segments**:
 The ordered blocks `ContextAssembler` renders into the system prompt, one per
 SegmentBuilder: `# Raven` (identity), the Bootstrap Files block, `# Active Skills`
-(always-on), `# Memory` (host `user.md` ⊕ EverOS recall), and `# Curator Working State`
-(Segment 6). Under Turn Scratch, `# Memory` rides in the user message instead.
+(always-on), and `# Memory` (host `user.md` ⊕ EverOS recall). The history
+strategy may append a segment 6 block of its own; the compacting strategy does
+not. Under Turn Scratch, `# Memory` rides in the user message instead.
 Retrieved skills have no segment: they reach the model as the Scent Menu (see
 Skill Discovery). `context.dropSegments` names, by builder name, the host segments an agent does
 without — an agent whose bootstrap files carry its own identity drops `identity`.
@@ -1756,25 +1759,6 @@ registered or hot-applied at runtime) and is enforced per turn by `ActiveSkillsS
 actually being sent. Every sub-key is optional and every malformed shape
 degrades to "nothing declared" — see `requires_list`.
 _Avoid_: checking `requires.tools` in the registry — it has no view of the live ToolRegistry.
-
-**Curator**:
-An internal, bounded agent loop whose only job is to build the main agent's next
-context window; wired in as Segment 6 (`CuratorSegmentBuilder`). It never answers the
-user and never runs user-facing tools.
-_Avoid_: calling legacy's lossy summarization "curating"
-
-**Fast Path**:
-Curator's zero-LLM route, taken when history is under the pressure threshold:
-full history passes through unchanged.
-
-**Slow Path**:
-Curator's small-model agent loop, run under context pressure: inspects the Manifest,
-archives/retrieves, and submits a ContextPlan that a deterministic assembler validates.
-
-**ContextPlan**:
-The Curator's structured output that the deterministic assembler validates and applies:
-which message ids and archive refs to include, which to drop, plus memory sections and
-the Working State injection.
 
 **Context parts**:
 The window divided: one request's prompt by part — the system prompt, the tool
@@ -1803,22 +1787,14 @@ did not measure.
 _Avoid_: "segments" for these — a Segment is a piece the context engine assembles
 the prompt from, not a share of the window.
 
-**Fail-Safe**:
-The deterministic fallback when the Slow Path errors or produces no valid plan:
-protected + most relevant + most recent messages, no LLM involved.
-
-**Archive**:
-Curator's lossless eviction: messages written verbatim to disk with a reference,
-retrievable word-for-word later.
-_Avoid_: archive vs Consolidation confusion — Archive loses nothing
-
 **Consolidation**:
 The legacy path's lossy distillation: when the prompt outgrows the window, old
 messages are summarized into memory notes and leave the live history view; the
 originals never return to context.
-_Avoid_: summarize, compact -- three neighbours split this ground: Archive evicts
-losslessly to disk, Consolidation distills across turns into memory notes, Compaction
-(below) squeezes the live prompt inside one turn.
+_Avoid_: summarize, compact -- three neighbours split this ground: a Source Ref
+names verbatim messages the window no longer carries, Consolidation distills
+across turns into memory notes, Compaction (below) squeezes the live prompt
+inside one turn.
 
 **Compaction** (`agents.defaults.compaction`, `config/schema.py:CompactionConfig`):
 In-turn transcript compaction for long agentic turns, off by default: without it the
@@ -1834,25 +1810,19 @@ summary while a recent tail stays verbatim; and a reactive completion that lets 
 overflow retry with nothing left to elide take the summary path instead of surfacing a
 fatal error. Summaries always run on the turn's own model and provider. Compaction
 squeezes the live prompt inside one turn and writes no memory notes.
-_Avoid_: compact for Consolidation or Archive -- those are cross-turn; this is not.
-
-**Manifest**:
-Curator's per-message metadata index for one session (tokens, snippet, relevance,
-protected, pinned, archived) — what the Slow Path reads instead of full history.
+_Avoid_: compact for Consolidation -- that is cross-turn; this is not. Nor
+conflate this switch with the always-on compacting History Strategy (above):
+this is an opt-in layer inside one turn.
 
 **Pinned**:
-A Manifest flag on the messages that fetched a skill body the agent cannot
-re-derive (`context.pinnedSkillIds`, default the sub-agent DAG guide): the whole
-tool exchange is added to every later ContextPlan whether or not the plan names
-it, refused by Archive, and trimmed last. Set on the latest fetch per skill id
-only, so a re-read moves the pin instead of adding a second copy.
-_Avoid_: using "protected" for this — Protected means the head-of-session
-exchanges, and it only shields an id from budget trimming, not from a
-ContextPlan that never mentioned it.
-
-**Working State**:
-The distilled session notes (goals, open threads, decisions) the Curator maintains
-and injects into the main agent's system prompt so evicted facts stay present.
+A flag on the messages that fetched a skill body the agent cannot re-derive
+(`context.pinnedSkillIds`, default the sub-agent DAG guide): the whole tool
+exchange is held out of compaction and dropped last by budget trimming. It is
+set on the latest fetch per skill id only, so a re-read moves the pin instead of
+adding a second copy.
+_Avoid_: using "protected" for this -- protected messages are the head of the
+session, which ages out after the first compaction; a pinned body survives until
+it is fetched again.
 
 ### Memory
 
@@ -2150,8 +2120,8 @@ under session-token pressure it annotates evicted message chunks into Episodes,
 refreshes hot Profile sections, and (opt-in) emits Foresight. The single context
 engine declares `owns_compaction`, so a turn does not call it for token pressure;
 `/new` still archives an unconsolidated session through it.
-_Avoid_: conflating with the Curator -- the Curator builds the context window
-losslessly and archives history itself; the Consolidator is what writes long-term
+_Avoid_: conflating with the history strategy -- the strategy builds and
+compacts the context window itself; the Consolidator is what writes long-term
 memory.
 
 ### Knowledge

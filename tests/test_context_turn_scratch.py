@@ -108,8 +108,8 @@ class _EchoBackend:
         return [Memory(text=f"RECALL<{query}>", score=1.0)]
 
 
-class _HistoryCurator:
-    name = "curator"
+class _HistoryReplayer:
+    name = "compacting"
     order = 6
     needs_prefix = True
     stable = False
@@ -140,7 +140,7 @@ def _builders(builder: ContextBuilder, history_text: str = "") -> list[Any]:
         BootstrapSegmentBuilder(builder.workspace),
         MemorySegmentBuilder(builder.memory, _EchoBackend()),
         ActiveSkillsSegmentBuilder(builder.skills),
-        _HistoryCurator(history_text),
+        _HistoryReplayer(history_text),
     ]
 
 

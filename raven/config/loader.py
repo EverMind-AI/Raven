@@ -23,7 +23,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 19
+CURRENT_CONFIG_VERSION = 20
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -57,6 +57,7 @@ _RETIRED_SANDBOX_BACKEND_MIGRATION = 16
 _SANDBOX_NETWORK_MIGRATION = 17
 _RETIRED_PUSH_DISCOVERY_MIGRATION = 18
 _SHIM_PIN_REFRESH_2_MIGRATION = 19
+_RETIRED_CURATOR_MIGRATION = 20
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -436,6 +437,8 @@ def _persist_migrations(path: Path, from_version: int = 0, *, refresh_interprete
                 changed = (
                     _migrate_retired_shim_pins(raw, _RETIRED_SHIM_COMMANDS[_SHIM_PIN_REFRESH_2_MIGRATION]) or changed
                 )
+            if from_version < _RETIRED_CURATOR_MIGRATION:
+                changed = _migrate_retired_curator(raw) or changed
             if refresh_interpreters:
                 changed = _refresh_bundled_shim_interpreters(raw) or changed
         if not changed:
@@ -873,6 +876,93 @@ def _migrate_retired_push_discovery(data: dict[str, Any], *, notify: bool = Fals
     if notify and notice not in _migration_notices:
         _migration_notices.append(notice)
     return True
+
+
+# The flat ``context.*`` knobs the curator strategy read, in both spellings the
+# config accepts. The compacting strategy has its own block under
+# ``context.history.compacting``; none of these has a reader left.
+_RETIRED_CURATOR_CONTEXT_KEYS = (
+    "fastPathThreshold",
+    "fast_path_threshold",
+    "curatorModel",
+    "curator_model",
+    "curatorProvider",
+    "curator_provider",
+    "curatorTimeoutSeconds",
+    "curator_timeout_seconds",
+    "relevanceDecay",
+    "relevance_decay",
+    "relevanceReferenceBoost",
+    "relevance_reference_boost",
+    "protectFirstN",
+    "protect_first_n",
+    "archiveDir",
+    "archive_dir",
+)
+
+
+def _migrate_retired_curator(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Retire the curator history strategy and the keys only it read.
+
+    ``context.history.strategy`` moves to ``compacting`` when it still names
+    ``curator``, and ``dropSegments`` follows the builder rename so a product
+    that dropped the history slot keeps dropping it. The flat ``context.*``
+    knobs go because ``ContextConfig`` forbids unknown keys: a file that kept
+    them would fail the whole load rather than run without the strategy they
+    configured.
+    """
+    context = data.get("context")
+    if not isinstance(context, dict):
+        return False
+    changed = False
+    notices: list[str] = []
+
+    history = context.get("history")
+    if isinstance(history, dict):
+        was = history.get("strategy")
+        if isinstance(was, str) and was.strip().lower() == "curator":
+            history["strategy"] = "compacting"
+            changed = True
+            notices.append(
+                'Changed `context.history.strategy` from "curator" to "compacting" in your config: '
+                "the curator history strategy is retired, and compacting has been the default since 0.2.6."
+            )
+
+    dropped: list[str] = []
+    for spelling in _RETIRED_CURATOR_CONTEXT_KEYS:
+        if spelling in context:
+            context.pop(spelling)
+            changed = True
+            dropped.append(f"context.{spelling}")
+    if dropped:
+        notices.append(
+            "Removed "
+            + ", ".join(f"`{key}`" for key in dropped)
+            + " from your config. The curator history strategy that read these keys is retired; the "
+            "compacting strategy summarises on the turn's model unless `context.history.compacting.summary.model` names one."
+        )
+
+    for spelling in ("dropSegments", "drop_segments"):
+        names = context.get(spelling)
+        if not isinstance(names, list) or "curator" not in names:
+            continue
+        renamed: list[str] = []
+        for name in names:
+            name = "compacting" if name == "curator" else name
+            if name not in renamed:
+                renamed.append(name)
+        context[spelling] = renamed
+        changed = True
+        notices.append(
+            f'Renamed the "curator" entry in `context.{spelling}` to "compacting": the history slot\'s '
+            "builder is named for its strategy."
+        )
+
+    if notify:
+        for notice in notices:
+            if notice not in _migration_notices:
+                _migration_notices.append(notice)
+    return changed
 
 
 # A path token that reaches into the retired vendored tree, on either separator.
@@ -1777,6 +1867,14 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
         # floor reads the stamp as current and accepts the keys, so a rollback or
         # a second install sharing the home can write them back.
         _log.info("Migrated: dropped the retired skill push settings again")
+    if from_version < _RETIRED_CURATOR_MIGRATION:
+        _migrate_retired_curator(data, notify=True)
+    elif _migrate_retired_curator(data):
+        # Same return path: a pre-retirement build reads the stamp as current,
+        # keeps ``strategy: curator`` and the flat keys, and ``ContextConfig``
+        # would then refuse the whole load. Strip them on every load; the user
+        # was told once, when the floor ran.
+        _log.info("Migrated: dropped the retired curator history strategy settings again")
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts

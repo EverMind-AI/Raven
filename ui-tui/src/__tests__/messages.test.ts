@@ -1008,4 +1008,31 @@ describe('turnErrorLine', () => {
       'error: session_locked (code=-32001): boom'
     )
   })
+
+  it('closes the line with the advice the runtime sent, when it sent one', () => {
+    expect(
+      turnErrorLine({
+        code: -32099,
+        detail: 'Error calling LLM (auth@openrouter): boom',
+        message: 'turn_failed',
+        hint: 'Run /model to check the provider key (disconnect first if it is already saved).'
+      })
+    ).toBe(
+      'Turn failed - Error calling LLM (auth@openrouter): boom Run /model to check the provider key (disconnect first if it is already saved).'
+    )
+
+    expect(
+      turnErrorLine({
+        code: -32001,
+        message: 'session_locked',
+        hint: 'Run /model to check the provider key (disconnect first if it is already saved).'
+      })
+    ).toBe(
+      'error: session_locked (code=-32001) Run /model to check the provider key (disconnect first if it is already saved).'
+    )
+  })
+
+  it('leaves the line alone when the runtime sent no advice', () => {
+    expect(turnErrorLine({ code: -32099, detail: 'boom', message: 'turn_failed', hint: '' })).toBe('Turn failed - boom')
+  })
 })

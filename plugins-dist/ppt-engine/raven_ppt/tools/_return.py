@@ -13,7 +13,7 @@ than remembered:
 
 `model_text` stands alone. Blocks are additive, and only providers that can
 carry an image inside a `role="tool"` message ever see them -- everything else
-(the sentinel, subagents, the curator, session export, any Chat Completions
+(the sentinel, subagents, session export, any Chat Completions
 transport) gets the text. So the text names the file paths and the numbers, and
 never says "see the image above".
 

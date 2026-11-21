@@ -504,7 +504,7 @@ describe('workspace island', () => {
      markup the domain's rule selects and the browser shows the spacing. */
   const GROUPED: Array<[string, string[]]> = [
     ['/repo/out/paper.pdf', ['gui.ws.file_newtab', 'gui.ws.reveal_finder']],
-    ['/repo/report.html', ['gui.ws.file_newtab', 'gui.ws.reveal_finder']],
+    ['/repo/report.html', ['gui.ws.file_newtab', 'gui.ws.file_window', 'gui.ws.reveal_finder']],
     ['/repo/out/shot.png', ['gui.ws.reveal_finder']],
   ]
   it.each(GROUPED)('keeps the file actions on %s in one group', async (path, labels) => {
@@ -850,10 +850,10 @@ describe('workspace island', () => {
     }, { tab: 'file', open: true, picked: true })
     await mount()
     const prose = document.querySelector('.prose')!
-    /* Real prose.ts output, so the heading cap and the emphasis are its own:
-       nothing between the panel and the renderer can stub the markdown, which
-       is the point of the test. */
-    expect(prose.querySelector('h2')?.textContent).toBe('Title')
+    /* Real prose.ts output, so the document's own heading level and the
+       emphasis are its own: nothing between the panel and the renderer can
+       stub the markdown, which is the point of the test. */
+    expect(prose.querySelector('h1')?.textContent).toBe('Title')
     expect(prose.querySelector('strong')?.textContent).toBe('this')
   })
 
@@ -892,7 +892,7 @@ describe('workspace island', () => {
     await mount()
     const rendered = screen.getByRole('tab', { name: 'gui.ws.file_rendered' })
     const source = screen.getByRole('tab', { name: 'gui.ws.file_source' })
-    expect(document.querySelector('.fview .prose h2')?.textContent).toBe('Title')
+    expect(document.querySelector('.fview .prose h1')?.textContent).toBe('Title')
 
     await act(async () => { source.click() })
     expect(source.getAttribute('aria-selected')).toBe('true')
@@ -901,7 +901,7 @@ describe('workspace island', () => {
 
     await act(async () => { rendered.click() })
     expect(rendered.getAttribute('aria-selected')).toBe('true')
-    expect(document.querySelector('.fview .prose h2')?.textContent).toBe('Title')
+    expect(document.querySelector('.fview .prose h1')?.textContent).toBe('Title')
   })
 
   it('shows the viewer error when the file read failed', async () => {
@@ -912,6 +912,95 @@ describe('workspace island', () => {
     }, { tab: 'file', open: true, picked: true })
     await mount()
     expect(await screen.findByText('gone for good')).toBeTruthy()
+  })
+
+  it('draws a markdown document an outline that addresses its own headings', async () => {
+    install(emptyWs({
+      file: {
+        path: '/repo/docs/README.md', kind: 'md', raw: false,
+        text: '# Guide\n\nlead\n\n## Install\n\nbody\n\n## Usage\n\nmore', err: null, size: null, loading: false, seq: 5,
+      },
+    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    const outline = document.querySelector('.workspace-md-outline')!
+    expect([...outline.querySelectorAll('a')].map((a) => a.getAttribute('href')))
+      .toEqual(['#mdoc-guide', '#mdoc-install', '#mdoc-usage'])
+    const installHeading = document.getElementById('mdoc-install')!
+    expect(installHeading.tagName).toBe('H2')
+    expect(installHeading.textContent).toBe('Install')
+    /* Narrow panes read the same list out of the fold-away copy the bar
+       carries. The harness draws the bar, not a pane header, so the copy is
+       mounted into that bar's slot. */
+    expect(document.querySelector('.fbar .workspace-md-menu')).not.toBeNull()
+  })
+
+  it('reads a markdown file full screen until Escape leaves it', async () => {
+    install(emptyWs({
+      file: {
+        path: '/repo/docs/README.md', kind: 'md', raw: false,
+        text: '# Title\n\nbody', err: null, size: null, loading: false, seq: 6,
+      },
+    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    await act(async () => { screen.getByLabelText('gui.ws.expand_reader').click() })
+    expect(document.querySelector('.fwrap')?.getAttribute('data-reader')).toBe('1')
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    })
+    expect(document.querySelector('.fwrap')?.getAttribute('data-reader')).toBeNull()
+  })
+
+  it('offers no full-screen reading for a file that is not markdown', async () => {
+    install(emptyWs({
+      file: {
+        path: '/repo/report.html', kind: 'html', raw: false,
+        text: '<p>x</p>', err: null, size: null, loading: false, seq: 7,
+      },
+    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    expect(screen.queryByLabelText('gui.ws.expand_reader')).toBeNull()
+  })
+
+  it('opens a text file in a window named after it', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    install(emptyWs({
+      file: {
+        path: '/repo/docs/README.md', kind: 'md', raw: false,
+        text: '# Title', err: null, size: null, loading: false, seq: 8,
+      },
+    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    await act(async () => { screen.getByLabelText('gui.ws.file_window').click() })
+    expect(open).toHaveBeenCalledWith(
+      `${location.pathname}?preview=1&path=%2Frepo%2Fdocs%2FREADME.md`,
+      'raven-file:/repo/docs/README.md',
+      'popup,width=1040,height=800',
+    )
+    /* A blocker is not an error: the pane the reader is already reading stays. */
+    expect(document.querySelector('.fview .prose h1')?.textContent).toBe('Title')
+  })
+
+  it('collapses the rendered and source pair to one button in a narrow bar', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 420 })
+    try {
+      install(emptyWs({
+        file: {
+          path: '/repo/docs/README.md', kind: 'md', raw: false,
+          text: '# Title\n\nbody', err: null, size: null, loading: false, seq: 9,
+        },
+      }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+      await mount()
+      /* The pair is gone; one button says what the click would show. */
+      expect(document.querySelector('.fbar .pane-head-seg')).toBeNull()
+      await act(async () => { screen.getByLabelText('gui.ws.show_source').click() })
+      expect(screen.getByLabelText('gui.ws.show_rendered')).toBeTruthy()
+      expect(document.querySelector('.fview .prose')).toBeNull()
+      expect(screen.getByText('# Title').closest('.code')).not.toBeNull()
+    } finally {
+      if (descriptor) Object.defineProperty(HTMLElement.prototype, 'clientWidth', descriptor)
+      else Reflect.deleteProperty(HTMLElement.prototype, 'clientWidth')
+    }
   })
 
   it('keeps its rendered shape', async () => {

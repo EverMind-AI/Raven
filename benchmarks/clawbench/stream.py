@@ -93,14 +93,12 @@ class RavenSession:
         config_path: Path | None,
         max_iterations: int,
         context_window: int | None,
-        context_engine: str,
-        curator_model: str | None,
         restrict_to_workspace: bool,
     ) -> None:
         from raven.agent.loop import AgentLoop
-        from raven.cli._helpers import make_provider as _make_provider
+        from raven.agent.loop.bundles import EngineWiring, HostWiring, ToolWiring, TurnPolicy
         from raven.config.loader import load_config, set_config_path
-        from raven.config.raven import ContextConfig
+        from raven.providers.factory import make_provider as _make_provider
         from raven.providers.rates import effective_context_window
         from raven.session.manager import SessionManager
 
@@ -130,34 +128,31 @@ class RavenSession:
         self.context_window = effective_context_window(
             self.model, context_window or self.config.agents.defaults.context_window_tokens
         )
-        self.curator_model = curator_model or self.model
         self.session_id = session_id
         self.previous_totals = dict(self.provider.accumulated)
         self.previous_call_count = 0
 
-        context_config = ContextConfig(engine=context_engine, curator_model=self.curator_model)
         session_manager = SessionManager(workspace)
         self.agent = AgentLoop(
             provider=self.provider,
             workspace=workspace,
             model=self.model,
-            max_iterations=max_iterations,
-            context_window_tokens=self.context_window,
-            brave_api_key=self.config.tools.web.search.api_key or None,
-            jina_api_key=self.config.tools.web.jina_api_key or None,
-            web_proxy=self.config.tools.web.proxy or None,
-            exec_config=self.config.tools.exec,
-            restrict_to_workspace=restrict_to_workspace,
             session_manager=session_manager,
             mcp_servers={},
             sandbox_config=self.config.tools.sandbox,
-            channels_config=self.config.channels,
-            everos_config=self.config.agents.defaults.everos,
-            context_config=context_config,
-            # Benchmarks are non-interactive batch runs — opt out of the
+            tools=ToolWiring(
+                search_api_key=self.config.tools.web.search.api_key or None,
+                jina_api_key=self.config.tools.web.jina_api_key or None,
+                web_proxy=self.config.tools.web.proxy or None,
+                exec_config=self.config.tools.exec,
+                restrict_to_workspace=restrict_to_workspace,
+            ),
+            engine=EngineWiring(context_window_tokens=self.context_window),
+            # Benchmarks are non-interactive batch runs -- opt out of the
             # per-turn shadow-git checkpoint (no recovery channel to inject
             # into, and we don't want ``.raven/shadow.git`` in task workspaces).
-            interactive=False,
+            policy=TurnPolicy(max_iterations=max_iterations, interactive=False),
+            host=HostWiring(channels_config=self.config.channels),
         )
 
     @staticmethod
@@ -203,8 +198,7 @@ class RavenSession:
             "context_remaining": self.context_window - context_used,
             "context_used_pct": round(context_used / self.context_window, 4) if self.context_window else None,
             "models_used": [call.get("model") for call in calls],
-            "context_engine": self.agent.context_engine.name,
-            "curator_model": self.curator_model if self.agent.context_engine.name == "curator" else None,
+            "context_engine": "compacting",
             "note": (
                 "context_used is final call prompt_tokens plus completion_tokens; "
                 "session_usage_total is cumulative across the streaming session"
@@ -481,8 +475,7 @@ def write_markdown(
         "- Runner: `benchmarks/clawbench/stream.py`",
         f"- Model: `{model}`",
         f"- Session: `{args.session_id}`",
-        f"- Context engine: `{args.context_engine}`",
-        f"- Curator model: `{args.curator_model}`" if args.context_engine == "curator" else "- Curator model: n/a",
+        "- Context engine: `compacting`",
         f"- Max iterations: `{args.max_iterations}`",
         f"- Summary JSON: `{summary_path}`" if summary_path else "- Summary JSON: pending",
         f"- Tasks completed: {total}",
@@ -532,8 +525,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-key", default=os.environ.get("OPENROUTER_API_KEY", ""))
     parser.add_argument("--api-base", default=os.environ.get("OPENROUTER_API_BASE", ""))
     parser.add_argument("--context-window", type=int, default=0)
-    parser.add_argument("--context-engine", choices=["legacy", "curator"], default="legacy")
-    parser.add_argument("--curator-model", default="deepseek-v4-flash")
     parser.add_argument("--max-iterations", type=int, default=40)
     parser.add_argument("--timeout", type=int, default=0)
     parser.add_argument("--no-grade", dest="grade", action="store_false")
@@ -570,8 +561,6 @@ async def amain() -> int:
         config_path=config_path,
         max_iterations=args.max_iterations,
         context_window=args.context_window or None,
-        context_engine=args.context_engine,
-        curator_model=args.curator_model,
         restrict_to_workspace=True,
     )
 
@@ -612,8 +601,7 @@ async def amain() -> int:
         "runner": "benchmarks/clawbench/stream.py",
         "model": raven.model,
         "session_id": args.session_id,
-        "context_engine": args.context_engine,
-        "curator_model": args.curator_model if args.context_engine == "curator" else None,
+        "context_engine": "compacting",
         "trace_run_dir": str(run_dir),
         "tasks_total": len(results),
         "tasks_passed": sum(1 for r in results if r.get("passed")),

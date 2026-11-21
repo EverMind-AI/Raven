@@ -274,8 +274,10 @@ const LEGACY_LOCAL = {
      row classes and the shared drawer's head went with the two-pane frame
      (src/components/TwoPane.tsx owns those names now), and 8 to 7 when its
      failure moved from an inline `.errline-lite` into the frame's own empty
-     state. */
-  memory: 7,
+     state. Down to 5 with the scores: the detail's meters went, and with them
+     `.mmeter` and the `.meta` wrapper they were written in -- the strip that
+     replaces them carries the `mem` prefix. */
+  memory: 5,
   /* `.empty` and the row's `.ct`, `.nm`, `.tick`: the picker's own list
      vocabulary, shared with the popovers beside it. */
   model: 4,

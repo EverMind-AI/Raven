@@ -59,13 +59,14 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
     # Command-line flags that take a credential.
     ("cli-flag", re.compile(r"(--(?:token|password|api-key|secret|with-token)[= ])([^\s\"']{6,})", re.IGNORECASE)),
-    # A URL with an inline password: scheme://user:secret@host.
-    ("url-userinfo", re.compile(r"(://[^\s/:@]+:)([^\s/@]{3,})(?=@)")),
+    # A URL with an inline password: scheme://user:secret@host. The user may be
+    # empty, as in redis://:secret@host.
+    ("url-userinfo", re.compile(r"(://[^\s/:@]*:)([^\s/@]{3,})(?=@)")),
     # Vendor-shaped keys, recognisable without a label because their prefix is
     # the label. The one class worth matching bare: a leaked key is a leaked key
     # whether or not somebody wrote "api_key" next to it.
     ("openai", re.compile(r"()(sk-(?:proj-|ant-|or-)?[A-Za-z0-9_-]{16,})")),
-    ("github", re.compile(r"()(gh[pousr]_[A-Za-z0-9]{16,})")),
+    ("github", re.compile(r"()(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{22,})")),
     ("gitlab", re.compile(r"()(glpat-[A-Za-z0-9_-]{16,})")),
     ("slack", re.compile(r"()(xox[abposr]-[A-Za-z0-9-]{10,})")),
     ("google", re.compile(r"()(AIza[0-9A-Za-z_-]{30,})")),
@@ -101,12 +102,13 @@ MAX_SCAN_CHARS = 256 * 1024
 _TRUNCATED_SECRETS: tuple[tuple[re.Pattern[str], re.Pattern[str]], ...] = (
     (
         re.compile(
-            r"()(?<![A-Za-z0-9_-])((?:sk-|gh[pousr]_|glpat-|xox[abposr]-|AIza|A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA|eyJ)"
+            r"()(?<![A-Za-z0-9_-])((?:sk-|gh[pousr]_|github_pat_|glpat-|xox[abposr]-|AIza"
+            r"|A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA|eyJ)"
             r"[A-Za-z0-9_.-]*+)\Z"
         ),
         re.compile(r"[A-Za-z0-9_.-]*+"),
     ),
-    (re.compile(r"(://[^\s/:@]++:)([^\s/@]++)\Z"), re.compile(r"[^\s/@]*+")),
+    (re.compile(r"(://[^\s/:@]*+:)([^\s/@]++)\Z"), re.compile(r"[^\s/@]*+")),
     (
         re.compile(
             r"((?:api[_-]?key|secret|token|password|passwd|pwd|credential|private[_-]?key|access[_-]?key|auth)"

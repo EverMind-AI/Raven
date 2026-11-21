@@ -556,9 +556,9 @@ def test_the_persist_stamp_never_crosses_the_turn_base_into_filed_history():
     """The stamp's bound: the paper files observers on THE TURN'S message.
 
     An answerless turn has no seat, and the assembled window can share dict
-    objects with the session record (the curator candidate view), so an
-    unbounded search would rewrite a previous turn's filed message in
-    place -- this turn's measurements stamped onto last turn's answer."""
+    objects with the session record, so an unbounded search would rewrite a
+    previous turn's filed message in place -- this turn's measurements stamped
+    onto last turn's answer."""
 
     prior_assistant = {"role": "assistant", "content": "earlier answer"}
     messages = [

@@ -1,5 +1,5 @@
 /* The model roles: which model each job runs on, and the picker that changes
-   it. Ten rows; each knows where its pair is written and which providers
+   it. Nine rows; each knows where its pair is written and which providers
    may serve it. The media tools' rows on the Tools page draw the same pill. */
 import { useRef } from 'react'
 
@@ -15,7 +15,7 @@ import type { ProviderRow, SettingsSnapshot } from '../types'
 import type { JSX } from 'react'
 
 export type RoleId =
-  | 'chat' | 'curator' | 'title' | 'memllm'
+  | 'chat' | 'title' | 'memllm'
   | 'embedding' | 'rerank' | 'multimodal' | 'image' | 'speech' | 'video'
 
 /* What each slot may be filled with. The one consumer of a model's kind: an
@@ -25,7 +25,7 @@ export type RoleId =
    a model that also reads pictures is text, and the multimodal slot -- which
    wants exactly that -- takes text too. */
 export const ROLE_KIND: Record<RoleId, Kind> = {
-  chat: 'text', curator: 'text', title: 'text', memllm: 'text', multimodal: 'text',
+  chat: 'text', title: 'text', memllm: 'text', multimodal: 'text',
   embedding: 'embedding', rerank: 'reranker', image: 'image', speech: 'audio', video: 'video',
 }
 
@@ -43,7 +43,6 @@ export interface Role {
 
 export const ROLES: Role[] = [
   { id: 'chat' },
-  { id: 'curator', keys: ['context.curatorModel', 'context.curatorProvider'] },
   { id: 'title', keys: ['sessionTitle.model', 'sessionTitle.provider'] },
   { id: 'memllm', everos: 'llm' },
   { id: 'embedding', everos: 'embedding', optional: true },
@@ -56,13 +55,13 @@ export const ROLES: Role[] = [
 
 /* Literal keys, for the i18n gate. */
 const NAME: Record<RoleId, string> = {
-  chat: 'gui.settings.roles.chat', curator: 'gui.settings.roles.curator', title: 'gui.settings.roles.title',
+  chat: 'gui.settings.roles.chat', title: 'gui.settings.roles.title',
   memllm: 'gui.settings.roles.memllm', embedding: 'gui.settings.roles.embedding',
   rerank: 'gui.settings.roles.rerank', multimodal: 'gui.settings.roles.multimodal', image: 'gui.settings.roles.image',
   speech: 'gui.settings.roles.speech', video: 'gui.settings.roles.video',
 }
 const USE: Record<RoleId, string> = {
-  chat: 'gui.settings.roles.chat_use', curator: 'gui.settings.roles.curator_use', title: 'gui.settings.roles.title_use',
+  chat: 'gui.settings.roles.chat_use', title: 'gui.settings.roles.title_use',
   memllm: 'gui.settings.roles.memllm_use', embedding: 'gui.settings.roles.embedding_use',
   rerank: 'gui.settings.roles.rerank_use', multimodal: 'gui.settings.roles.multimodal_use', image: 'gui.settings.roles.image_use',
   speech: 'gui.settings.roles.speech_use', video: 'gui.settings.roles.video_use',

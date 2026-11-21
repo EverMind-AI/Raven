@@ -237,7 +237,8 @@ class LiteLLMProvider(LiteLLMShape):
         """Strip non-standard keys and ensure assistant messages have a content key.
 
         With ``require_reasoning_key`` every tool-call message also carries
-        ``reasoning_content``, empty where the model did not think.
+        ``reasoning_content``, a non-empty placeholder where the model did not
+        think.
         """
         allowed = _ALLOWED_MSG_KEYS | extra_keys
         sanitized = LLMProvider._sanitize_request_messages(messages, allowed)
@@ -265,9 +266,11 @@ class LiteLLMProvider(LiteLLMShape):
             # DeepSeek's thinking mode refuses (400) a request that continues
             # from a tool result unless each tool-call message carries this key.
             # A step taken without thinking has none, and the ids rewritten above
-            # keep DeepSeek from recovering it on its own. Empty is accepted.
+            # keep DeepSeek from recovering it on its own. OpenRouter drops an
+            # empty value before DeepSeek sees it, so the placeholder is a space;
+            # direct DeepSeek accepts the same value.
             if require_reasoning_key and clean.get("tool_calls") and clean.get("reasoning_content") is None:
-                clean["reasoning_content"] = ""
+                clean["reasoning_content"] = " "
 
             if "tool_call_id" in clean and clean["tool_call_id"]:
                 clean["tool_call_id"] = map_id(clean["tool_call_id"])
@@ -385,7 +388,7 @@ class LiteLLMProvider(LiteLLMShape):
         if self._supports_cache_control(original_model):
             # Asked of this request, not of the process. A strategy that placed
             # marks upstream stamps them; every other caller in this process --
-            # the Curator, a subagent, Sentinel, the session titler -- reaches
+            # a subagent, Sentinel, the session titler -- reaches
             # here without a strategy in front of it and still wants its own.
             if not self.disable_auto_cache_control and not prompt_cache.marks_already_placed(messages):
                 messages, tools = self._apply_cache_control(messages, tools)
@@ -526,7 +529,7 @@ class LiteLLMProvider(LiteLLMShape):
         if self._supports_cache_control(original_model):
             # Asked of this request, not of the process. A strategy that placed
             # marks upstream stamps them; every other caller in this process --
-            # the Curator, a subagent, Sentinel, the session titler -- reaches
+            # a subagent, Sentinel, the session titler -- reaches
             # here without a strategy in front of it and still wants its own.
             if not self.disable_auto_cache_control and not prompt_cache.marks_already_placed(messages):
                 messages, tools = self._apply_cache_control(messages, tools)

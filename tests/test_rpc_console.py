@@ -8,6 +8,7 @@ those, so the property it pins is one somebody already proved was unguarded.
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import subprocess
 import sys
@@ -114,15 +115,11 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         # chip and /perm) since the gate landed; this lets the settings panel
         # write the default a new conversation starts on.
         "permissions.mode",
-        # The settings page's model page. One more pin of the sessionTitle
-        # shape (curator) with its pair keys, the speech and video
-        # selections in the image selection's shape, and three integers: the
-        # tool-iteration cap, the context window override and the auto-archive
-        # age. None names an address or carries a key; the pins reach only
-        # providers the deployment has already credentialed.
-        "context.curatorModel",
-        "context.curatorProvider",
-        "context",
+        # The settings page's media page: the speech and video selections in
+        # the image selection's shape, and three integers: the tool-iteration
+        # cap, the context window override and the auto-archive age. None names
+        # an address or carries a key; the pins reach only providers the
+        # deployment has already credentialed.
         "tools.media.speech",
         "tools.media.video",
         "agents.defaults.maxToolIterations",
@@ -190,6 +187,8 @@ async def test_ext_list_still_reports_skills_without_the_market(
             self.path = tmp_path / name / "SKILL.md"
 
     class _Catalog:
+        blocklist = frozenset()
+
         def gather_all_skills(self):
             return [_Skill("alpha"), _Skill("beta")]
 
@@ -252,6 +251,8 @@ async def test_ext_list_calls_a_skill_hub_installed_whichever_installer_stamped_
     (bundle.path.parent / ".install-meta.json").write_text('{"slug": "acme_bundle", "version": "v0"}')
 
     class _Catalog:
+        blocklist = frozenset()
+
         def gather_all_skills(self):
             return [market, bundle, local]
 
@@ -280,6 +281,120 @@ async def test_ext_list_calls_a_skill_hub_installed_whichever_installer_stamped_
     assert (by_name["from-market"]["hub"], by_name["from-market"]["hub_id"]) == (True, "uuid-market")
     assert (by_name["from-bundle"]["hub"], by_name["from-bundle"]["hub_id"]) == (True, "")
     assert (by_name["by-hand"]["hub"], by_name["by-hand"]["hub_id"]) == (False, "")
+
+
+async def test_ext_list_says_which_rows_the_runtime_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """This listing keeps blocked skills on purpose -- the page is where a
+    person turns one back on -- so each row has to say whether retrieval
+    skipped it. Read from the catalog's live reader, which is the list the
+    runtime applied: a re-read of the config file disagrees with it on case and
+    whitespace, and the row would then be marked the wrong way."""
+    from raven.memory_engine.skill_forge import LocalSkillCatalog
+    from raven.rpc.models import ExtSkillRow
+
+    workspace = tmp_path / "workspace"
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+    for name in ("hidden", "kept"):
+        skill_dir = workspace / "skills" / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"---\nname: {name}\ndescription: d\n---\n\nBody text.\n")
+
+    catalog = LocalSkillCatalog(
+        workspace,
+        builtin_skills_dir=builtin,
+        start_watcher=False,
+        blocklist_reader=lambda: frozenset({"hidden"}),
+    )
+
+    from raven.config import loader as config_loader
+    from raven.config import raven as raven_config
+
+    monkeypatch.setattr(config_loader, "load_config", lambda: SimpleNamespace(tools=SimpleNamespace(mcp_servers={})))
+    monkeypatch.setattr(
+        raven_config,
+        "load_raven_config",
+        lambda: SimpleNamespace(skill_forge=None, plugins=SimpleNamespace(disabled=[])),
+    )
+    monkeypatch.setattr(console_module, "_hub_marker_name", lambda: None)
+    loop = SimpleNamespace(
+        context=SimpleNamespace(skills=catalog),
+        tools=SimpleNamespace(tool_names=[], get=lambda _name: None),
+    )
+
+    result = await console_module.ext_list({}, agent_loop_factory=lambda: loop)
+
+    rows = {s["name"]: s for s in result["skills"]}
+    assert set(rows) == {"hidden", "kept"}, "the listing keeps blocked skills, so both rows must be here"
+    assert rows["hidden"]["blocked"] is True
+    assert rows["kept"]["blocked"] is False
+    for row in rows.values():
+        ExtSkillRow.model_validate(row)
+
+
+@pytest.mark.parametrize(
+    ("stored", "name"),
+    [(" HIDDEN ", "Hidden"), ("STRASSE", "Straße")],
+    ids=["padding-and-case", "sharp-s-casefold"],
+)
+async def test_ext_list_blocks_a_row_whose_config_spelling_differs_in_case_and_padding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stored: str, name: str
+) -> None:
+    """The page writes whatever a person typed, and the runtime trims and folds
+    the blocklist before hiding a skill. A row marked from the file's spelling,
+    or from a set the caller folded itself, marks the wrong one -- two
+    mutations over the exact-match path stayed green before this test. It goes
+    through the real reader: ``LiveConfig`` holds the stored spelling and the
+    skill is named otherwise, and the row must still report blocked.
+
+    The second pair is why the fold cannot be reimplemented as JS
+    ``toLowerCase``: Python casefolds ``Straße`` to ``strasse``, so ``STRASSE``
+    blocks it, while ``"Straße".toLowerCase()`` is ``"straße"``."""
+    from raven.config.live import LiveConfig, skill_blocklist
+    from raven.memory_engine.skill_forge import LocalSkillCatalog
+    from raven.rpc.models import ExtSkillRow
+
+    workspace = tmp_path / "workspace"
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+    for skill_name in (name, "kept"):
+        skill_dir = workspace / "skills" / skill_name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"---\nname: {skill_name}\ndescription: d\n---\n\nBody text.\n")
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"skillForge": {"blocklist": [stored]}}), encoding="utf-8")
+    live = LiveConfig(config_path)
+    catalog = LocalSkillCatalog(
+        workspace,
+        builtin_skills_dir=builtin,
+        start_watcher=False,
+        blocklist_reader=lambda: skill_blocklist(live),
+    )
+
+    from raven.config import loader as config_loader
+    from raven.config import raven as raven_config
+
+    monkeypatch.setattr(config_loader, "load_config", lambda: SimpleNamespace(tools=SimpleNamespace(mcp_servers={})))
+    monkeypatch.setattr(
+        raven_config,
+        "load_raven_config",
+        lambda: SimpleNamespace(skill_forge=None, plugins=SimpleNamespace(disabled=[])),
+    )
+    monkeypatch.setattr(console_module, "_hub_marker_name", lambda: None)
+    loop = SimpleNamespace(
+        context=SimpleNamespace(skills=catalog),
+        tools=SimpleNamespace(tool_names=[], get=lambda _name: None),
+    )
+
+    result = await console_module.ext_list({}, agent_loop_factory=lambda: loop)
+
+    rows = {s["name"]: s for s in result["skills"]}
+    assert set(rows) == {name, "kept"}
+    assert rows[name]["blocked"] is True
+    assert rows["kept"]["blocked"] is False
+    for row in rows.values():
+        ExtSkillRow.model_validate(row)
 
 
 # ---------------------------------------------------------------------------
@@ -697,6 +812,8 @@ async def test_ext_list_reports_a_server_by_the_tools_it_registered(
     monkeypatch.setattr(console_module, "_hub_marker_name", lambda: None)
 
     class _Catalog:
+        blocklist = frozenset()
+
         def gather_all_skills(self):
             return []
 
@@ -2045,6 +2162,8 @@ async def test_ext_list_carries_the_manager_state_and_the_authorization_url(
     )
 
     class _Catalog:
+        blocklist = frozenset()
+
         def gather_all_skills(self):
             return []
 
@@ -2810,6 +2929,8 @@ async def test_ext_list_reports_how_each_server_authenticates_and_whether_it_can
     monkeypatch.setattr(oauth_module, "has_stored_tokens", lambda name, scope=None: name == "oauthed")
 
     class _Catalog:
+        blocklist = frozenset()
+
         def gather_all_skills(self):
             return []
 

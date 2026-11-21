@@ -223,6 +223,20 @@ async function run<T>(work: Promise<T>): Promise<T> {
    provider write reloads the config too: the display names and the Azure
    fields are read from the provider's own section, not from model.options. */
 const afterExt = async (): Promise<SettingsSnapshot> => { await loadExt(); return settingsSnapshot() }
+/* A blocklist write already landed. The reads after it can still fail, and
+   reporting that as a failed save sends the reader to retry a write that
+   happened; the lighter message says the save stands and only the list is
+   stale. Both reads run: a failed config read must not also lose the rows. */
+const afterSkillWrite = async (): Promise<SettingsSnapshot> => {
+  const [settings, ext] = await Promise.allSettled([loadSettings(), loadExt()])
+  const failure = settings.status === 'rejected' ? settings.reason
+    : ext.status === 'rejected' ? ext.reason : null
+  if (failure) toast(t('gui.settings.skills.saved_no_refresh', { detail: settingsErr(failure) }))
+  /* Every settings load is followed by this push, which is how the chip keeps
+     mirroring the gate; the gate `permission-chip` counts the pair. */
+  void pushPermMode()
+  return settingsSnapshot()
+}
 /* Both scopes, because a provider write changes what both of them answer. The
    settings page reads the default-scoped rows and the picker reads the
    session-scoped ones (features/model/source.ts), and only the first was
@@ -270,6 +284,20 @@ export const settingsSource: SettingsSource = {
   set: (key, value) => run((async () => {
     const r = await gateway().call('settings.set', { key, value: value as ParamsOf<'settings.set'>['value'] })
     await loadSettings()
+    /* A blocklist write made through this generic writer still changes what
+       `ext.list` answers, and the skills page draws each row's switch from
+       that answer. The skills page's own switch uses `blockSkill`; this keeps
+       any other caller of `set` from leaving the rows stale. Both spellings: a
+       caller writes one, a hand-written config may carry the other. */
+    if (key === 'skillForge.blocklist' || key === 'skill_forge.blocklist') {
+      /* The write above succeeded; a refresh that fails is not the save's
+         failure. */
+      try {
+        await loadExt()
+      } catch (e) {
+        toast(t('gui.settings.skills.saved_no_refresh', { detail: settingsErr(e) }))
+      }
+    }
     if (key.startsWith('plugins.config.everos-cloud-memory.')) { cloudProbe = loadEverosCloud(); await cloudProbe }
     void pushPermMode()
     /* Only when the server says a save costs something -- a reload-only key,
@@ -337,6 +365,12 @@ export const settingsSource: SettingsSource = {
     .then(() => undefined)),
   revealPlace: (place) => run(gateway().call('fs.reveal', { place }).then(() => undefined)),
   uninstallSkill: (name) => run(gateway().call('skillhub.remove', { name }).then(afterExt)),
+  /* The name goes over as the registry spells it; the gateway's writer trims
+     and casefolds, so the page holds no second opinion about what matches. */
+  blockSkill: (name, blocked) => run((async () => {
+    await gateway().call('skills.manage', { action: blocked ? 'block' : 'unblock', query: name })
+    return afterSkillWrite()
+  })()),
   serverDetail: (name) => gateway().call('plughub.detail', { id: name })
     .then((r) => {
       const entry = r.item as unknown as { contributes?: AuthContribution[] }

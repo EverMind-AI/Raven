@@ -8,7 +8,7 @@ import { resetSources, setSources } from '../../../state/sources'
 import { install, modelSource, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import { askInChat } from '../../composer/startTaskWith'
 import * as store from '../store'
-import { blocklist, stripFrontmatter } from './Skills'
+import { stripFrontmatter } from './Skills'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -41,14 +41,14 @@ describe('skills page', () => {
     expect(screen.getByText('sql-style')).toBeTruthy()
   })
 
-  it('a switch writes the whole blocklist with the name added or removed', async () => {
+  it('a switch asks the gateway to block or unblock the row by its wire name', async () => {
     const { calls } = install()
     await mount('skills')
     await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'git-flow' })) })
     await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'sql-style' })) })
     expect(calls).toEqual([
-      ['set', { key: 'skillForge.blocklist', value: ['sql-style', 'git-flow'] }],
-      ['set', { key: 'skillForge.blocklist', value: [] }],
+      ['blockSkill', { name: 'git-flow', blocked: true }],
+      ['blockSkill', { name: 'sql-style', blocked: false }],
     ])
   })
 
@@ -113,26 +113,49 @@ describe('skills page', () => {
     expect(screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' })).toBe(hub)
   })
 
-  it('reads the blocklist from a snake_case skill_forge block', async () => {
-    /* A null camel block is dropped by the loader, so the snake one is what
-       runs; the page has to read the first non-null spelling, not truthiness. */
-    expect(blocklist({ skillForge: null, skill_forge: { blocklist: ['git-flow'] } })).toEqual(['git-flow'])
+  it('draws each row from the wire answer, not from the config file', async () => {
+    /* The runtime normalises the file's list before hiding a skill, and it
+       hides on a name that may differ in case or padding from the stored
+       entry. The rows carry the answer that was applied, so the page reads
+       them rather than re-deriving the set from the file. */
     const data = snap()
-    delete data.raw.skillForge
-    data.raw.skill_forge = { blocklist: ['git-flow', 'notes'] }
-    expect(blocklist(data.raw)).toEqual(['git-flow', 'notes'])
-    const { calls } = install(data)
+    data.raw.skillForge = { blocklist: ['git-flow'] }
+    data.skills = data.skills.map((r) => ({ ...r, blocked: r.name === 'notes' }))
+    install(data)
     await mount('skills')
+    expect(screen.getByRole('switch', { name: 'git-flow' }).getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByRole('switch', { name: 'notes' }).getAttribute('aria-checked')).toBe('false')
     const cards = [...document.querySelectorAll('.settings-card .settings-t')].map((el) => el.textContent)
     expect(cards).toEqual([
       'gui.settings.skills.hub_card',
-      'gui.settings.skills.builtin · gui.settings.skills.on_of {"on":0,"total":1}',
+      'gui.settings.skills.builtin · 1',
       'gui.settings.skills.workspace · gui.settings.skills.on_of {"on":1,"total":2}',
     ])
-    expect(screen.getByRole('switch', { name: 'git-flow' }).getAttribute('aria-checked')).toBe('false')
-    /* The write carries the list the page read, not [] beside the real one. */
-    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'git-flow' })) })
-    expect(calls).toEqual([['set', { key: 'skillForge.blocklist', value: ['notes'] }]])
+  })
+
+  it('an unblock of a name Python casefolds is decided by the gateway, not by JS', async () => {
+    /* Python casefolds `Straße` to `strasse`, so a stored `STRASSE` blocks it;
+       JS `toLowerCase` answers `straße` and would keep the entry, leaving the
+       switch on while the skill stayed hidden. The row draws the gateway's
+       answer, the click hands the name back as the row spells it, and the
+       redraw follows the gateway's next answer -- the page never folds. The
+       two sides agree because tests/test_rpc_console.py and
+       tests/test_config_update.py run the real `casefold` on this pair. */
+    const data = snap()
+    data.raw.skillForge = { blocklist: ['STRASSE'] }
+    data.skills = data.skills.map((r) => (r.name === 'notes' ? { ...r, name: 'Straße', blocked: true } : r))
+    const { calls } = install(data, {
+      blockSkill: async (name, blocked) => {
+        calls.push(['blockSkill', { name, blocked }])
+        data.skills = data.skills.map((r) => (r.name === name ? { ...r, blocked } : r))
+        return data
+      },
+    })
+    await mount('skills')
+    expect(screen.getByRole('switch', { name: 'Straße' }).getAttribute('aria-checked')).toBe('false')
+    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'Straße' })) })
+    expect(calls).toEqual([['blockSkill', { name: 'Straße', blocked: false }]])
+    expect(screen.getByRole('switch', { name: 'Straße' }).getAttribute('aria-checked')).toBe('true')
   })
 
   it('the detail inspects the skill, renders its body, lists its files and opens one on the host', async () => {

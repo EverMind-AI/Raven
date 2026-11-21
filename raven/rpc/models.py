@@ -933,6 +933,13 @@ class ErrorEventPayload(_Strict):
         ),
     )
     target: DirectTarget | None = None
+    hint: str | None = Field(
+        None,
+        description=(
+            "What the reader can do about the failure, in the words this surface can act on. "
+            "Absent when the failure has no category to advise about."
+        ),
+    )
 
 
 class ErrorEvent(_Strict):
@@ -4725,6 +4732,13 @@ class ExtSkillRow(_Strict):
     always: bool
     hub: bool = Field(..., description="Installed from the skill hub, so skillhub.remove can uninstall it.")
     hub_id: str
+    blocked: bool = Field(
+        ...,
+        description=(
+            "On skillForge.blocklist, so retrieval and injection skip it. The row is still listed here "
+            "because this is the surface a person turns it back on from."
+        ),
+    )
 
 
 class ExtPluginRow(_Strict):
@@ -7222,7 +7236,7 @@ class ShellExecResult(_Strict):
 
 
 class SkillsManageParams(_Strict):
-    action: str = Field(..., description="One of list, inspect, search, browse, install, open.")
+    action: str = Field(..., description="One of list, inspect, search, browse, install, open, block, unblock.")
     query: str | None = None
     page: int | None = None
     file: str | None = Field(default=None, description="`open`: a file name relative to the skill's directory.")
@@ -7241,6 +7255,8 @@ class SkillsManageResult(_Strict):
     installed: bool | None = Field(default=None, description="`install`.")
     opened: bool | None = Field(default=None, description="`open`.")
     name: str | None = None
+    blocked: bool | None = Field(default=None, description="`block`/`unblock`: the state that was written.")
+    blocklist: list[str] | None = Field(default=None, description="`block`/`unblock`: the list after the write.")
 
 
 class SubagentInterruptParams(_Strict):

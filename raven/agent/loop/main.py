@@ -416,6 +416,10 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # Read again when a live switch changes which backend's skill source
         # carries what weight; the router was built from this at boot.
         self._skill_forge_router_config = skill_forge_router_config
+        # The router's master switch, read at boot like the rest of the block:
+        # off means this host mounts no router source, so the project source
+        # the tools would otherwise carry goes with it.
+        self._skill_router_enabled = bool(getattr(skill_forge_router_config, "enabled", True))
         self._TOOL_RESULT_MAX_CHARS = max(0, int(context_config.tool_result_max_chars))
 
         # Skill Hub client — built once and shared by the HubSkillSource
@@ -472,7 +476,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 skill_forge_router_config=skill_forge_router_config,
                 skill_forge_config=skill_forge_config,
                 skill_hub_client=self._skill_hub_client,
-                provider_pool=provider_pool,
                 # The same reader the catalog gets: the pool drop and the
                 # scent menu screen against the list on disk now, so a skill
                 # switched off -- or back on -- reaches the next turn.

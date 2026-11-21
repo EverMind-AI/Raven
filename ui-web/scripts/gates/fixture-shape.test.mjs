@@ -251,8 +251,8 @@ const UNSENT = new Set([
   'plug.configure.mcp.auth_url', 'plug.configure.mcp.error',
   'plug.retry.mcp.auth_url', 'plug.retry.mcp.error',
   'plug.revoke.mcp.auth_url', 'plug.revoke.mcp.error',
-  // skills.manage: 9 -- the gate asks for the list; inspect, open, search, browse and install answer the rest
-  'skills.manage.info', 'skills.manage.installed', 'skills.manage.items', 'skills.manage.name', 'skills.manage.opened', 'skills.manage.page', 'skills.manage.results', 'skills.manage.total', 'skills.manage.total_pages',
+  // skills.manage: 8 -- the gate asks for the list, then walks the switch's two writes; inspect, open, search, browse and install answer the rest
+  'skills.manage.info', 'skills.manage.installed', 'skills.manage.items', 'skills.manage.opened', 'skills.manage.page', 'skills.manage.results', 'skills.manage.total', 'skills.manage.total_pages',
   // session.compress: 11 -- the fixture transcripts predate the stored breakdown
   'session.compress.info.config_notices', 'session.compress.info.harness', 'session.compress.info.endpoint', 'session.compress.info.running_ms', 'session.compress.info.update_available', 'session.compress.info.update_command', 'session.compress.info.usage.context_estimated', 'session.compress.info.usage.context_parts', 'session.compress.messages', 'session.compress.summary.note', 'session.compress.summary.token_line', 'session.compress.usage',
   // session.create: 7 -- nothing is ever in flight on this canvas, so the age of a running turn has nothing to report
@@ -325,6 +325,11 @@ describe('the offline fixture library', () => {
        the only place it sends `read_only`. */
     const { IMPORTED_DEMO } = await import('../../src/rpc/fixtures/sessions.ts')
     for (const session_id of ['a', 'b', 'g', 'k1', 'k2', 'k3', IMPORTED_DEMO]) await walk('session.resume', { session_id })
+    /* `skills.manage` answers one action per call, and the walk above asks for
+       the list -- the one action that carries none of the switch's fields. The
+       settings page calls both writes, so the fixture's answers to them are
+       part of the library and are held to the contract here too. */
+    for (const action of ['block', 'unblock']) await walk('skills.manage', { action, query: 'SQL style guide' })
     const unsent = [...declared].filter((at) => !sent.has(at)).sort()
     expect(unsent.filter((at) => !UNSENT.has(at)), 'send the field, or add it to UNSENT under its method')
       .toEqual([])

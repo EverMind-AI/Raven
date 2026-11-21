@@ -2217,6 +2217,36 @@ async def test_outlet_emit_error_includes_the_long_account_when_present():
     assert "full_detail" not in emitter.emitted[1][1]["payload"]
 
 
+async def test_outlet_emit_error_includes_the_advice_when_present():
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.emit_error("tui:c1", -32099, "turn_failed", "internal", "short", hint="Try again in a moment.")
+    await outlet.emit_error("tui:c1", -32099, "turn_failed", "internal", "short")
+    assert emitter.emitted[0][1]["payload"]["hint"] == "Try again in a moment."
+    assert "hint" not in emitter.emitted[1][1]["payload"]
+
+
+async def test_a_failed_model_call_tells_the_screen_what_to_do_about_it():
+    """The TUI sets the provider's key through `/model`, so a rejected key
+    reaches it as a line pointing at that picker rather than at a command
+    nobody there can run."""
+
+    class _RefusedKeyLoop:
+        async def run_turn(self, req, emit, drain, *, stream, usage_sink=None) -> TurnOutcome:
+            raise AnswerlessTurnError("Error calling LLM (auth@openrouter): Incorrect API key sk-proj-AbCd****xyz9")
+
+    emitter = FakeEmitter()
+    scheduler, hub, turn_ids, teardown = build_rpc_spine(_RefusedKeyLoop(), emitter)
+    try:
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
+        await handle.result()
+    finally:
+        await teardown()
+
+    payload = emitter.emitted[-1][1]["payload"]
+    assert payload["hint"] == "Run /model to check the provider key (disconnect first if it is already saved)."
+
+
 async def test_a_failed_turn_sends_the_runners_long_account():
     class _BoomLoop:
         async def run_turn(self, req, emit, drain, *, stream, usage_sink=None) -> TurnOutcome:
@@ -2235,6 +2265,8 @@ async def test_a_failed_turn_sends_the_runners_long_account():
     payload = emitter.emitted[-1][1]["payload"]
     assert payload["detail"] == "RuntimeError: boom"
     assert payload["full_detail"] == "RuntimeError: boom, at length"
+    # A crash has no category, so it gets no advice rather than a guessed one.
+    assert "hint" not in payload
 
 
 # --- a failed turn's usage reaches the page on its error event ---

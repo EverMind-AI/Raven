@@ -32,6 +32,7 @@ from raven.rpc.files import UPLOAD_DIR as _UPLOAD_DIR
 from raven.rpc.files import viewer_root as _viewer_root_from
 from raven.rpc.files import workspace_root as _workspace_root
 from raven.rpc.folder_dialog import pick_dir_argv
+from raven.skill_hub.policy import is_blocked
 from raven.utils.atomic_io import atomic_update
 
 if TYPE_CHECKING:
@@ -152,6 +153,15 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
         marker_name = _hub_marker_name()
         meta_name = _install_meta_name()
         try:
+            # This listing keeps blocked skills on purpose -- the page is how a
+            # person finds one and turns it back on -- so it has to say which
+            # they are. Asked of the catalog, not of the config file: the
+            # catalog's reader is the list the runtime enforced, so a raw copy
+            # that differs in case or whitespace cannot mark the wrong row.
+            # Read as an attribute, not through a default: a catalog that cannot
+            # answer this cannot be described, and defaulting to empty would
+            # report every row as active.
+            blocked_now = catalog.blocklist
             for m in catalog.gather_all_skills():
                 path = getattr(m, "path", None)
                 hub_id = ""
@@ -174,6 +184,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
                         "always": bool(getattr(m, "always", False)),
                         "hub": from_market or from_bundle,
                         "hub_id": hub_id,
+                        "blocked": is_blocked(blocked_now, m.name),
                     }
                 )
         except Exception:
@@ -951,7 +962,6 @@ _MERGED_KEYS = frozenset(
         "tools.media.speech",
         "tools.media.video",
         "sessionTitle",
-        "context",
         "translate",
         "knowledge",
     }
@@ -1259,11 +1269,6 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "permissions.mode": _chk_enum("permissions.mode", "ask", "smart", "full"),
     "agents.defaults.maxToolIterations": _chk_int("agents.defaults.maxToolIterations", 1, 200),
     "agents.defaults.contextWindowTokens": _chk_int_or_null("agents.defaults.contextWindowTokens", 1024, 100_000_000),
-    "context.curatorModel": _chk_pin_model("context.curatorModel"),
-    "context.curatorProvider": _chk_pin_provider("context.curatorProvider"),
-    # The pin as one write, the way sessionTitle already is: a pair written a
-    # key at a time can be left half-changed by a dropped connection.
-    "context": _chk_pin_pair("context", "curatorModel", "curatorProvider"),
     # The three media tools share one config shape; speech's has no provider,
     # because only the image and video tools run elsewhere.
     "tools.media.speech": _chk_media_selection,

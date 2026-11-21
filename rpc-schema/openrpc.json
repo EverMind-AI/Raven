@@ -10829,14 +10829,14 @@
     },
     {
       "name": "skills.manage",
-      "summary": "List, inspect, search, browse or install skills; the result carries the fields of the action taken.",
+      "summary": "List, inspect, search, browse, install, block or unblock skills; the result carries the fields of the action taken.",
       "params": [
         {
           "name": "action",
           "required": true,
           "schema": {
             "type": "string",
-            "description": "One of list, inspect, search, browse, install, open."
+            "description": "One of list, inspect, search, browse, install, open, block, unblock."
           }
         },
         {
@@ -10929,6 +10929,23 @@
                 "null"
               ],
               "description": "`open`."
+            },
+            "blocked": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "`block`/`unblock`: the state that was written."
+            },
+            "blocklist": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "description": "`block`/`unblock`: the list after the write."
             }
           },
           "required": [],
@@ -13562,6 +13579,10 @@
           },
           "hub_id": {
             "type": "string"
+          },
+          "blocked": {
+            "description": "On skillForge.blocklist, so retrieval and injection skip it. The row is still listed here because this is the surface a person turns it back on from.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -13570,7 +13591,8 @@
           "source",
           "always",
           "hub",
-          "hub_id"
+          "hub_id",
+          "blocked"
         ],
         "type": "object"
       },
@@ -16320,6 +16342,10 @@
               "full_detail": {
                 "type": "string",
                 "description": "The failure's long account beside the bounded detail, for a reader who expands the row: the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the bounded text already is the whole account."
+              },
+              "hint": {
+                "type": "string",
+                "description": "What the reader can do about the failure, in the words this surface can act on. Absent when the failure has no category to advise about."
               },
               "usage": {
                 "$ref": "#/components/schemas/TurnUsage",

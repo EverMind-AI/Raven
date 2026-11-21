@@ -139,9 +139,10 @@ SkillForge 候选。希望连接的会话应保持预期 `userId` 和 `agentId` 
 
 ## 上下文压力不等于长期学习 { #context-pressure-is-not-long-term-learning }
 
-Curator 为下一上下文窗口选择历史。压力较低时走不调用模型的 fast path；
-slow path 可消耗有限模型调用生成计划，无有效计划时使用确定性 fallback。
-归档消息可在磁盘原样保存、后续取回，但不一定出现在每个 prompt 中。
+历史策略在上下文窗口接近触发线前逐字保留对话。超过后先把大工具结果压缩成
+一行记录加 `[[ref ...]]` 指针（模型可回读），再把整组消息折叠，仍不够时写入
+八段式摘要 checkpoint。被移除的消息可在磁盘原样保存、后续取回，
+但不一定出现在每个 prompt 中。
 
 轮内 **Compaction** 是另一机制：可以裁剪旧工具结果正文、总结 transcript 头部，
 保留最近消息。默认关闭，不写长期记忆笔记。显式启用示例：
@@ -159,7 +160,7 @@ slow path 可消耗有限模型调用生成计划，无有效计划时使用确�
 ```
 
 请合并而不是覆盖其他 Agent 配置。Compaction 可调用本轮模型并产生费用，
-不会扩大 provider 的真实上下文上限。Curator 和 compaction 都不能替代明确任务说明
+不会扩大 provider 的真实上下文上限。历史策略和轮内 compaction 都不能替代明确任务说明
 或可重新读取的来源文件。
 
 ## 排查缺少召回或技能 { #diagnose-missing-recall-or-skills }
@@ -170,7 +171,7 @@ slow path 可消耗有限模型调用生成计划，无有效计划时使用确�
 | Skill 已列出但未使用 | 正文是否读取、所需工具、blocklist 和当前 Agent |
 | 任务完成后没有新技能 | 后端实际提炼支持；`skillForge.extraction` 本身不启动宿主管线 |
 | 长任务丢失细节 | 归档与当前窗口的区别、compaction、可重新读取的来源 |
-| 模型成本增加 | 后端提炼、embedding 和 Curator slow path |
+| 模型成本增加 | 后端提炼、embedding 和历史策略的摘要调用 |
 
 记忆视图可能暴露私有会话和推断偏好。应另行检查后端的删除与保留控制；
 删除宿主 session 或屏蔽 skill 不证明所有后端记录也已删除。

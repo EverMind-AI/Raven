@@ -520,6 +520,19 @@ async def test_a_tool_with_no_router_names_no_search_on_a_miss(tool_cls, tmp_pat
     assert "find_skill" not in out
 
 
+@pytest.mark.parametrize("tool_cls", [ReadSkillTool, UseSkillTool])
+async def test_a_switch_off_tool_names_no_search_it_cannot_run(tool_cls, tmp_path: Path) -> None:
+    """The master switch leaves the router absent while the tool keeps the
+    held-hit wiring, so a miss must not send the model to a find_skill that
+    answers "not available"."""
+    tool = tool_cls(registry=_registry_with(tmp_path), held_hit=router_held_hit(lambda: None))
+
+    out = await tool.execute(skill_id="everos/sk_42")
+
+    assert out.startswith("Error: no everos skill 'sk_42' found")
+    assert "find_skill" not in out
+
+
 class TestUseSkill:
     async def test_missing_skill_id_errors(self) -> None:
         assert (await UseSkillTool().execute(skill_id=None)).startswith("Error")

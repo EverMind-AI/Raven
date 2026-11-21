@@ -48,8 +48,9 @@
  * the page's own imperative behaviours. App.tsx portals into the body,
  * chrome/MoreFly.tsx reads the focused element to give focus back to the row
  * that opened its panel, the two popovers write into a list the page was served
- * with, main.tsx mounts the island roots in the boxes that root committed, and
- * chrome/behaviour/ is two modules that say in their own headers that they are
+ * with, main.tsx mounts the island roots in the boxes that root committed,
+ * chrome/previewBoot.tsx builds the one host a preview window's component
+ * renders into, and chrome/behaviour/ is two modules that say in their own headers that they are
  * behaviour rather than rendering: a grip drag writing one CSS variable, and
  * scrollbar thumbs parked in a fixed layer over elements other layers drew.
  * Counting them is what keeps a third such module from appearing unnoticed --
@@ -130,6 +131,7 @@ const PINNED = {
 const FRAME = {
   'App.tsx': 3,
   'main.tsx': 5,
+  'chrome/previewBoot.tsx': 2,
   'chrome/FailureBar.tsx': 1,
   'chrome/Lightbox.tsx': 1,
   'chrome/MoreFly.tsx': 1,

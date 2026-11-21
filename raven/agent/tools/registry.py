@@ -315,9 +315,9 @@ class ToolRegistry:
         # built without a harness (a test rig, a tool-only surface), which
         # reads as "no judgement" -- the answer this question had before the
         # role existed -- which is the right answer for every registry that is
-        # not a turn's: the MCP connection managers and the curator's own
-        # lookup table build one to hold tool definitions, never to dispatch a
-        # turn's calls, so there is no dispatch for a Charter to judge.
+        # not a turn's: the MCP connection managers build one to hold tool
+        # definitions, never to dispatch a turn's calls, so there is no
+        # dispatch for a Charter to judge.
         #
         # A provider rather than the role itself: the registry is built before
         # the loop assembles its harness, so there is no role to hand over yet.
@@ -389,7 +389,7 @@ class ToolRegistry:
         # label, and admitting it by name would swap the served schema between
         # two model calls of one turn. A ContextVar for the reason ``_channel``
         # gives; ``None`` (no turn scope) advertises everything, which is what
-        # registries that never enter one -- a sub-agent's, the curator's -- get.
+        # registries that never enter one -- a sub-agent's -- get.
         self._turn_names: ContextVar[dict[str, Tool] | None] = ContextVar("tool_registry_turn_names", default=None)
         # The off switches as they stood at turn entry. Unioned into
         # ``withheld_names`` so a switch that turns a tool ON mid-turn lands on
@@ -436,12 +436,11 @@ class ToolRegistry:
         cost its own judgement rather than the turn, which is the same bargain
         the plugin gates beside it are held to.
 
-        A registry nobody handed a role to still asks one. Most of the ten
-        registries this tree builds take no provider -- the curator's own tool
-        set among them, and it dispatches inside the turn's ``charter_scope``
-        -- so an absent provider means "nobody chose a role here", not "this
-        dispatch carries no Charter". The default role is what the module-level
-        helper this method replaced already was.
+        A registry nobody handed a role to still asks one. Most of the
+        registries this tree builds take no provider -- so an absent provider
+        means "nobody chose a role here", not "this dispatch carries no
+        Charter". The default role is what the module-level helper this method
+        replaced already was.
         """
         try:
             # Imported in the call, and not for style: ``raven.agent.subagent``
@@ -510,7 +509,7 @@ class ToolRegistry:
         Set alongside the per-tool contexts, before the schema is assembled, so
         ``offers_on_this_channel`` can withhold a channel-bound tool. Left unset
         the registry advertises everything, which is what a surface with a
-        single channel (the sub-agent and curator registries) wants.
+        single channel (a sub-agent's registry) wants.
         """
         self._channel.set(channel)
 

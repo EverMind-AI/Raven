@@ -178,11 +178,13 @@ class OrganGlueMixin:
     def _uses_default_engine(self) -> bool:
         """Whether the active engine owns skill selection via SkillForgeRouter.
 
-        Always ``True`` now — there is a single
-        :class:`ContextAssembler` whose scent menu offers skills and
-        populates ``injected_skill_ids`` in the assembled metadata. Kept as a
-        method (rather than inlined) because several callsites still gate on
-        it; it no longer branches on engine name.
+        Always ``True`` now -- there is a single
+        :class:`ContextAssembler`, whose scent menu offers skills and
+        populates ``injected_skill_ids`` in the assembled metadata whenever
+        ``skillForge.router.enabled`` mounts a router; with the switch off
+        there is no menu, so the metadata carries no injected ids. Kept as a
+        method (rather than inlined) because tests pin it; it no longer
+        branches on engine name.
         """
         return True
 

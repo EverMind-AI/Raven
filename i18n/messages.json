@@ -3009,6 +3009,18 @@
       "en": "Local EverOS is not running",
       "zh": "本地 EverOS 没有运行"
     },
+    "gui.mem.band_hi": {
+      "zh": "高",
+      "en": "High"
+    },
+    "gui.mem.band_mid": {
+      "zh": "中",
+      "en": "Medium"
+    },
+    "gui.mem.band_lo": {
+      "zh": "低",
+      "en": "Low"
+    },
     "gui.mem.meta_confidence": {
       "zh": "信心",
       "en": "Confidence"
@@ -5113,6 +5125,14 @@
       "en": "Expand to full window",
       "zh": "展开全屏"
     },
+    "gui.ws.expand_reader": {
+      "en": "Read full screen",
+      "zh": "全屏阅读"
+    },
+    "gui.ws.exit_reader": {
+      "en": "Leave full screen",
+      "zh": "退出全屏"
+    },
     "gui.ws.file_big": {
       "en": "Too large to render here.",
       "zh": "太大了，没法在这里渲染。"
@@ -5172,6 +5192,26 @@
     "gui.ws.file_source": {
       "en": "Source",
       "zh": "源码"
+    },
+    "gui.ws.file_window": {
+      "en": "Open in a window",
+      "zh": "在新窗口打开"
+    },
+    "gui.ws.show_rendered": {
+      "en": "Show rendered",
+      "zh": "显示渲染结果"
+    },
+    "gui.ws.show_source": {
+      "en": "Show source",
+      "zh": "显示源码"
+    },
+    "gui.ws.footnotes": {
+      "en": "Footnotes",
+      "zh": "脚注"
+    },
+    "gui.ws.outline": {
+      "en": "Outline",
+      "zh": "大纲"
     },
     "gui.ws.unseen_tab": {
       "en": "{n} new",
@@ -8923,14 +8963,6 @@
       "en": "The default model configuration a new session starts on",
       "zh": "新开会话时的默认模型配置"
     },
-    "gui.settings.roles.curator": {
-      "en": "Context compaction",
-      "zh": "上下文压缩"
-    },
-    "gui.settings.roles.curator_use": {
-      "en": "Tidies the history when a session outgrows its budget; a small model does",
-      "zh": "会话超出预算时整理历史，适合小模型"
-    },
     "gui.settings.roles.title": {
       "en": "Session naming",
       "zh": "会话命名"
@@ -9142,6 +9174,10 @@
     "gui.settings.skills.open_file": {
       "en": "Open {file}",
       "zh": "打开 {file}"
+    },
+    "gui.settings.skills.saved_no_refresh": {
+      "en": "Saved, but the skill list could not be refreshed - {detail}",
+      "zh": "已保存，但技能列表刷新失败：{detail}"
     },
     "gui.settings.skills.safety": {
       "en": "Safety {n}",

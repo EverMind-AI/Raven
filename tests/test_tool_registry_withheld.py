@@ -310,8 +310,8 @@ class TestOneAnswerPerScan:
 
 class TestNothingInstalledIsNotEverythingWithheld:
     def test_no_source_offers_everything(self) -> None:
-        """The sub-agent and curator registries install none, and a registry that
-        withheld everything by default would offer them nothing at all."""
+        """A sub-agent registry installs none, and a registry that withheld
+        everything by default would offer it nothing at all."""
         reg = _registry("exec", "grep")
 
         assert _offered(reg) == {"exec", "grep"}

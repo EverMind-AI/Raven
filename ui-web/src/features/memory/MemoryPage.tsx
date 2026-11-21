@@ -33,16 +33,26 @@ function memWhen(iso?: string): string {
     : `${d.toLocaleString('en-US', { month: 'short' })} ${d.getDate()} ${two(d.getHours())}:${two(d.getMinutes())}`
 }
 
-const memPct = (v: number | null | undefined): string =>
-  v == null ? '' : v <= 1 ? `${Math.round(v * 100)}%` : String(v)
+/* A score reads as a fraction of one, whichever scale it arrives on: 0.86 and
+   86 are the same score, and the number and the band under it have to agree
+   about that. */
+const scoreFrac = (v: number): number => (v > 1 ? v / 100 : v)
 
-function Meter({ v }: { v: number | null | undefined }): JSX.Element {
-  const width = `${Math.round(Math.min(1, Math.max(0, Number(v) || 0)) * 100)}%`
-  return (
-    <span className="mmeter">
-      <i style={{ width }} />
-    </span>
-  )
+const scorePct = (v: number): string => `${Math.round(scoreFrac(v) * 100)}%`
+
+/* Where a score lands, on one scale every score on the page shares: the word
+   beside a confidence means the same as the word beside the next maturity, so
+   the two can be read against each other. Two tables of thresholds would say
+   two different things about the same number. */
+const BANDS = [
+  { min: 0.8, key: 'hi', word: 'gui.mem.band_hi' },
+  { min: 0.5, key: 'mid', word: 'gui.mem.band_mid' },
+  { min: 0, key: 'lo', word: 'gui.mem.band_lo' },
+] as const
+
+function bandOf(v: number): { key: string; word: string } {
+  const b = BANDS.find((x) => scoreFrac(v) >= x.min) ?? BANDS[BANDS.length - 1]!
+  return { key: b.key, word: b.word }
 }
 
 const MEM_GLYPH = (
@@ -438,6 +448,37 @@ function Section({ label, text }: { label: string; text: string }): JSX.Element 
   )
 }
 
+/* One score and the label that names it. */
+interface ScoreRow {
+  label: string
+  value: number
+}
+
+/* The scores a memory carries, in a block of their own: the label, the
+   number, and the word that bands it. Numbers rather than meters -- a meter
+   says "more", a number says "how much", and only the second can be quoted
+   back or read against the row above it. */
+function ScoreStrip({ rows }: { rows: ScoreRow[] }): JSX.Element | null {
+  if (!rows.length) return null
+  return (
+    <div
+      className="memstrip"
+      style={{ gridTemplateColumns: `repeat(${rows.length}, minmax(0, 1fr))` }}
+    >
+      {rows.map((r) => {
+        const band = bandOf(r.value)
+        return (
+          <div className="memscore" key={r.label}>
+            <div className="memcap">{r.label}</div>
+            <div className="memnum">{scorePct(r.value)}</div>
+            <div className="memband" data-band={band.key}>{t(band.word)}</div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 /* The picked memory, in the right column. It used to be the shared drawer the
    plugin and skill pages also open; inside the settings dialog a drawer is a
    layer over a layer, and the list it covered is what a reader comparing two
@@ -447,12 +488,14 @@ function MemDetail({ it }: { it: MemItem }): JSX.Element {
   const name = it.subject || t(kindDef.tab)
   const metaRows: Array<[string, string]> = []
   if (it.session_id) metaRows.push([t('gui.mem.meta_session'), it.session_id])
-  if (it.quality_score != null) metaRows.push([t('gui.mem.meta_quality'), memPct(it.quality_score)])
-  /* Confidence and maturity are the two a reader compares between skills, so
-     they are bars rather than two more numbers in the meta line. */
-  const bars: Array<[string, number | null | undefined]> = []
-  if (it.confidence != null) bars.push([t('gui.mem.meta_confidence'), it.confidence])
-  if (it.maturity_score != null) bars.push([t('gui.mem.meta_maturity'), it.maturity_score])
+  /* The head says what the memory is; the strip under it says how good it is.
+     Every score the memory carries is in that one place, so a reader compares
+     the two numbers of a skill the way they compare the two words of a
+     heading. */
+  const scores: ScoreRow[] = []
+  if (it.confidence != null) scores.push({ label: t('gui.mem.meta_confidence'), value: it.confidence })
+  if (it.maturity_score != null) scores.push({ label: t('gui.mem.meta_maturity'), value: it.maturity_score })
+  if (it.quality_score != null) scores.push({ label: t('gui.mem.meta_quality'), value: it.quality_score })
   return (
     <>
       <TwoPaneHead
@@ -466,16 +509,7 @@ function MemDetail({ it }: { it: MemItem }): JSX.Element {
           </>
         }
       />
-      {bars.length ? (
-        <div className="meta">
-          {bars.map(([k, v]) => (
-            <span key={k}>
-              <span className="pmcnt">{k}</span>
-              <Meter v={v} />
-            </span>
-          ))}
-        </div>
-      ) : null}
+      <ScoreStrip rows={scores} />
       {it.kind === 'agent_case' ? (
         <>
           {it.body ? <Section label={t('gui.mem.sec_approach')} text={it.body} /> : null}

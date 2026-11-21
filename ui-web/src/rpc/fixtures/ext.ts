@@ -52,9 +52,9 @@ const TOOLS: ExtTool[] = [
    two came from -- see ./skillhub.ts, whose rows they are matched against. */
 const SKILLS: ExtSkill[] = [
   { name: '代码审查清单', description: '按你团队的规矩审代码，而不是通用建议',
-    source: 'skillhub', always: false, hub: true, hub_id: 'sh-code-review' },
+    source: 'skillhub', always: false, hub: true, hub_id: 'sh-code-review', blocked: false },
   { name: 'SQL 规范', description: '命名、缩进、禁用写法按你们的库来',
-    source: 'skillhub', always: false, hub: true, hub_id: 'sh-sql-style' },
+    source: 'skillhub', always: false, hub: true, hub_id: 'sh-sql-style', blocked: false },
 ]
 
 const PLUGINS: ExtPlugin[] = [

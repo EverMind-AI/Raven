@@ -396,6 +396,7 @@ async def execute_task(
         usage, cost_usd, models_used
     """
     from raven.agent.loop import AgentLoop
+    from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
     from raven.config.schema import ExecToolConfig
     from raven.session.manager import SessionManager
 
@@ -431,18 +432,21 @@ async def execute_task(
         provider=tracked_provider,  # wrapped provider — transparent to AgentLoop
         workspace=task_workspace,
         model=model,
-        max_iterations=40,
-        context_window_tokens=65_536,
-        exec_config=ExecToolConfig(),
-        restrict_to_workspace=True,  # sandbox for benchmark safety
         session_manager=session_mgr,
         router=router,
-        skill_forge_config=skill_forge_cfg,
-        runtime_config=getattr(_ec_cfg, "runtime", None),
+        tools=ToolWiring(
+            exec_config=ExecToolConfig(),
+            restrict_to_workspace=True,  # sandbox for benchmark safety
+        ),
+        engine=EngineWiring(
+            context_window_tokens=65_536,
+            skill_forge_config=skill_forge_cfg,
+            runtime_config=getattr(_ec_cfg, "runtime", None),
+        ),
         # Benchmarks are non-interactive batch runs — opt out of the
         # per-turn shadow-git checkpoint (no recovery channel to inject
         # into, and we don't want ``.raven/shadow.git`` in task workspaces).
-        interactive=False,
+        policy=TurnPolicy(max_iterations=40, interactive=False),
     )
 
     timeout_seconds = task.timeout_seconds * timeout_multiplier

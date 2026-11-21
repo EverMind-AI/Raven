@@ -369,15 +369,6 @@
   padding: 1px 4px;
 }
 
-/* The room between two steps of a group's thread on the Task Board
-   (BoardList.tsx); the rest of a step's own geometry is further down. */
-.tkstep {
-  margin: 10px 0;
-}
-.tkstep + .tkstep {
-  margin-top: 12px;
-}
-
 /* `BoardCard`'s box -- the prototype's own `.pbnode` (proto.css:1485-1490),
    filling the `foreignObject` `DagGraph` sizes to the node's box when this
    domain hands it `renderNode`. Position and size come from that box, not
@@ -758,20 +749,34 @@
 }
 .tkqtext { flex: 1; min-width: 0; color: var(--text); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
 .tkqtext::before { content: counter(tkq) ". "; color: var(--muted); }
-.tkqignore {
+.tkqignore,
+.tkaskbtn[data-kind="ignore"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: none;
-  padding: 1px 8px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--paper);
   color: var(--muted);
   font: inherit;
-  font-size: 11.5px;
-  white-space: nowrap;
   cursor: pointer;
+  transition: background .14s ease, border-color .14s ease, color .14s ease;
 }
-.tkqignore:hover { border-color: var(--faint); color: var(--text); }
-.tkaskacts { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.tkqignore:hover,
+.tkaskbtn[data-kind="ignore"]:hover {
+  border-color: var(--faint);
+  background: var(--raised);
+  color: var(--text);
+}
+.tkqignore:active,
+.tkaskbtn[data-kind="ignore"]:active { background: var(--line-soft); }
+.tkqignore:focus-visible,
+.tkaskbtn[data-kind="ignore"]:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.tkaskacts { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 8px; }
 .tkaskbtn {
   padding: 3px 12px;
   white-space: nowrap;
@@ -889,14 +894,25 @@
    a moss tick when done, a clay "!" when a Task failed, a turning ring while
    one still runs. */
 .tkthread { display: flex; flex-direction: column; margin: 0 12px; padding: 10px 0; border-top: 1px solid var(--line-soft); }
-.tksteps { list-style: none; margin: 0; padding: 0; }
+/* The room between two steps, and above the first and below the last. Between
+   steps it is the step's own padding and not a margin: the rail is a pseudo
+   element of that step, so it can reach the next step's edge only if the step's
+   box itself does. The two outer shares are the list's padding, so no step's
+   rail runs past them. */
+.tksteps { list-style: none; margin: 0; padding: 10px 0; }
 .tkstep { position: relative; padding: 0 0 12px 22px; }
+.tkstep:not(:last-child) { padding-bottom: 24px; }
+/* From the mark's own lower edge (its 2px inset plus its 14px height) to the
+   next mark's upper edge: the step's last pixel is the next step's first, and
+   the 2px the mark is inset by is what the rail has to reach past it. Both
+   offsets are the mark's geometry, not a length the text can change, so the
+   line between two marks stays unbroken at any height the steps take. */
 .tkstep:not(:last-child)::after {
   content: '';
   position: absolute;
   left: 6.25px;
-  top: 19px;
-  bottom: 1px;
+  top: 16px;
+  bottom: -2px;
   width: 1.5px;
   background: var(--line);
 }
@@ -907,8 +923,8 @@
   content: '';
   position: absolute;
   left: 6.25px;
-  top: 19px;
-  bottom: 1px;
+  top: 16px;
+  bottom: -2px;
   width: 1.5px;
   background: var(--amber);
 }
@@ -1009,7 +1025,7 @@
   margin-top: 2px;
 }
 .tkthreadacts .tkgroupact:not(:only-child) { margin-right: auto; }
-.tkaskpair { display: inline-flex; gap: 6px; }
+.tkaskpair { display: inline-flex; align-items: center; gap: 6px; }
 .tkthread .tkasklist { margin-bottom: 8px; }
 .tkgroupact {
   display: inline-flex;

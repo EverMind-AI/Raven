@@ -861,7 +861,8 @@ class TestBuildSkillsSummary:
 
 class TestCatalogBlocklist:
     """skillForge.blocklist enforcement on the catalog paths that bypass
-    the router pool: BM25 index, always-skills, and prompt rendering."""
+    the router pool: BM25 index, always-skills, prompt rendering, and the
+    dict listing the session banner reads."""
 
     def _catalog(self, workspace, builtin, blocklist):
         from types import SimpleNamespace
@@ -901,6 +902,59 @@ class TestCatalogBlocklist:
     def test_gather_all_skills_keeps_blocked_for_inspection(self, tmp_workspace, tmp_builtin):
         svc = self._catalog(tmp_workspace, tmp_builtin, ["simple"])
         assert "simple" in {m.name for m in svc.gather_all_skills()}
+
+    def test_list_skills_omits_blocklisted_skills(self, tmp_workspace, tmp_builtin):
+        """The dict listing is a runtime view, so it drops blocked skills.
+
+        Built through the live reader, not the config snapshot: that is how
+        the agent loop wires it, and it is what makes a settings-page flip
+        visible on the next turn.
+        """
+        svc = LocalSkillCatalog(
+            tmp_workspace,
+            builtin_skills_dir=tmp_builtin,
+            blocklist_reader=lambda: frozenset({"simple"}),
+        )
+        items = svc.list_skills()
+        assert not any(i["name"] == "simple" for i in items)
+        assert any(i["name"] == "user_custom" for i in items)
+
+    def test_list_skills_reads_the_live_blocklist_once(self, tmp_workspace, tmp_builtin):
+        """The reader re-reads the config file on every ask. Asking once per
+        skill paid a file read per row, and a file rewritten mid-loop could
+        judge the first rows with the old list and the last with the new one."""
+        calls = 0
+
+        def reader():
+            nonlocal calls
+            calls += 1
+            return frozenset({"simple"})
+
+        svc = LocalSkillCatalog(
+            tmp_workspace,
+            builtin_skills_dir=tmp_builtin,
+            start_watcher=False,
+            blocklist_reader=reader,
+        )
+        before = calls
+        items = svc.list_skills()
+        assert calls - before == 1
+        assert not any(i["name"] == "simple" for i in items)
+
+    def test_list_skills_unfiltered_still_omits_blocklisted_skills(self, tmp_workspace, tmp_builtin):
+        """``filter_unavailable`` is about requirements, not about the blocklist.
+
+        Folding the blocklist filter into that branch would make "show me the
+        unavailable ones too" quietly mean "and the blocked ones" -- which is
+        the opposite of what the caller asked for.
+        """
+        svc = LocalSkillCatalog(
+            tmp_workspace,
+            builtin_skills_dir=tmp_builtin,
+            blocklist_reader=lambda: frozenset({"simple"}),
+        )
+        items = svc.list_skills(filter_unavailable=False)
+        assert not any(i["name"] == "simple" for i in items)
 
     def test_init_logs_one_line_skip_notice(self, tmp_workspace, tmp_builtin, caplog):
         import logging

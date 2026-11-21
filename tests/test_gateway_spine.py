@@ -334,10 +334,10 @@ async def _reply_to_a_failed_turn(
 
 
 async def test_gateway_sink_tells_the_channel_the_category_not_the_vendors_body():
-    """A model call's failure reaches a chat as its category and endpoint. The
-    vendor's own account is the operator's diagnostic: an auth body carries a
-    masked key and the account URL it was rejected for, and a group chat is not
-    where either belongs."""
+    """A model call's failure reaches a chat as its category and endpoint, plus
+    what the reader can do about it. The vendor's own account is the operator's
+    diagnostic: an auth body carries a masked key and the account URL it was
+    rejected for, and a group chat is not where either belongs."""
     vendor_body = (
         "AuthenticationError: OpenrouterException - No auth credentials found for key sk-or-v1-a1b2...ef90; "
         "see https://openrouter.ai/settings/keys"
@@ -345,10 +345,27 @@ async def test_gateway_sink_tells_the_channel_the_category_not_the_vendors_body(
     sent = await _reply_to_a_failed_turn(AnswerlessTurnError(f"Error calling LLM (auth@openrouter): {vendor_body}"))
 
     assert sent == [
-        "The provider rejected the credentials (openrouter). The runtime log has the provider's own account."
+        "The provider rejected the credentials (openrouter). The runtime log has the provider's own account. "
+        "The operator can check the provider key."
     ]
     assert "sk-or-v1" not in sent[0]
     assert "openrouter.ai/settings" not in sent[0]
+
+
+async def test_gateway_sink_hands_the_channel_an_advice_it_can_act_on():
+    """The reader of a chat is in the room, not at a terminal: the reply says
+    what to do next, and says no command, because nobody in the room can run
+    one on the operator's behalf."""
+    sent = await _reply_to_a_failed_turn(
+        AnswerlessTurnError("Error calling LLM (rate_limit@openrouter): 429 Too Many Requests")
+    )
+
+    assert sent == [
+        "The provider is rate limiting this account (openrouter). "
+        "The runtime log has the provider's own account. Try again in a moment."
+    ]
+    assert "429" not in sent[0]
+    assert "raven " not in sent[0]
 
 
 async def test_gateway_sink_quotes_a_failure_the_runner_worded_itself():
