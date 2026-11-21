@@ -10,6 +10,7 @@ import pytest
 from raven.contracts.llm_provider import ChatDelta, GenerationSettings
 from raven.providers.base import LLMProvider
 from raven.providers.call_timeout import CallTimeoutError, bounded_stream, call_timeout
+from raven.providers.relay_wire import decode_exception, encode_exception
 from raven.providers.streaming import stream_llm_call
 
 
@@ -181,19 +182,23 @@ async def test_external_cancellation_is_preserved_and_closes_the_stream(steady_p
 class _FinishingStream:
     generation = GenerationSettings(timeout=0.05)
 
+    def __init__(self, finish_reason: str = "stop"):
+        self.finish_reason = finish_reason
+
     @bounded_stream
     async def chat_stream(self):
         yield ChatDelta(content="x")
-        yield ChatDelta(content=None, finish_reason="stop")
+        yield ChatDelta(content=None, finish_reason=self.finish_reason)
 
 
 @pytest.mark.asyncio
-async def test_delivered_final_delta_is_not_reported_as_a_timeout():
+@pytest.mark.parametrize("finish_reason", ["stop", "tool_calls", "length", "refusal"])
+async def test_delivered_final_delta_is_not_reported_as_a_timeout(finish_reason):
     """A pull after the terminal delta is cleanup, not a late model request."""
-    stream = _FinishingStream().chat_stream()
+    stream = _FinishingStream(finish_reason).chat_stream()
     assert (await anext(stream)).content == "x"
     terminal = await anext(stream)
-    assert terminal.finish_reason == "stop"
+    assert terminal.finish_reason == finish_reason
     await asyncio.sleep(0.08)
     with pytest.raises(StopAsyncIteration):
         await anext(stream)
@@ -203,6 +208,16 @@ async def test_delivered_final_delta_is_not_reported_as_a_timeout():
 @pytest.mark.parametrize("budget", [429, 500, 600])
 def test_timeout_budget_is_not_misread_as_an_http_status(budget):
     verdict = LLMProvider.classify_error(CallTimeoutError(budget))
+    assert verdict.category == "network"
+    assert verdict.retryable and verdict.should_fallback
+
+
+@pytest.mark.parametrize("budget", [429, 500, 600])
+def test_relayed_timeout_budget_is_not_misread_as_an_http_status(budget):
+    """The relay rebuilds the failure as a carrier class, not CallTimeoutError."""
+    carrier = decode_exception(encode_exception(CallTimeoutError(budget), status=None))
+    assert not isinstance(carrier, CallTimeoutError)
+    verdict = LLMProvider.classify_error(carrier)
     assert verdict.category == "network"
     assert verdict.retryable and verdict.should_fallback
 

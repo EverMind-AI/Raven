@@ -525,7 +525,7 @@ class LLMProvider(_LLMProviderPaper):
         # branches below. Named here, no substring ever sees it.
         if isinstance(exc, StreamIdleTimeoutError):
             return ErrorClassification("stream_idle_timeout", retryable=True, should_fallback=True)
-        if isinstance(exc, CallTimeoutError):
+        if isinstance(exc, CallTimeoutError) or "calltimeouterror" in names:
             return ErrorClassification("network", retryable=True, should_fallback=True)
 
         # Context-window overflow → compress and retry, NOT fallback (a smaller
