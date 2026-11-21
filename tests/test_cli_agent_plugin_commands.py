@@ -613,7 +613,7 @@ def test_list_leaves_out_a_server_the_host_already_configures(env: _Env) -> None
         json.dumps(
             {
                 "agents": {"defaults": {"workspace": str(env.workspace)}},
-                "agentPlugins": {"packages": [str(env.package)]},
+                "agentPlugins": {"packages": [str(env.package)], "mcpPackages": [PACKAGE_NAME]},
                 "tools": {"mcpServers": {composed: {"command": "host-own"}}},
             }
         ),
