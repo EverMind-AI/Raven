@@ -7204,8 +7204,8 @@
       "zh": "内容过长，这里只显示了前一部分"
     },
     "gui.confirm.ev.net_shared": {
-      "en": "What you allow here for the session is opened in the sandbox every conversation shares and lasts until Raven restarts.",
-      "zh": "你在这里为本次会话允许的连接，会开放到所有会话共用的那个沙箱，并在 Raven 重启前一直有效。"
+      "en": "An answer given for the whole conversation also opens them in the sandbox every conversation shares, until Raven restarts.",
+      "zh": "为整个会话给出的答案，也会在所有会话共用的那个沙箱里放开这些连接，直到 Raven 重启。"
     },
     "gui.confirm.land.always": {
       "en": "Won't ask again for: {pattern}, in every working directory",

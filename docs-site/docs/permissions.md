@@ -180,7 +180,6 @@ hit the same address at once, you are asked once.
 | --- | --- |
 | Allow once | The sandbox that was refused, until it stops |
 | Allow for this session | Every sandbox of the conversation, until Raven restarts |
-| A rule in `permissions.network` | Every sandbox, from then on |
 
 A deny rule wins over an allow rule for the same target, and over a session
 grant in the conversation's other sandboxes; one you add later takes effect
@@ -195,8 +194,8 @@ lists none. Another program that needs one of those ports is asked about.
 The main agent's sandbox is shared by every conversation the gateway serves,
 so what is allowed in it reaches all of them until Raven restarts. The
 approval prompt says so when it applies. A conversation's own sandbox shows
-the same note when a session or always answer there would also reach that
-shared sandbox. In this sandbox a target opens without asking only at the
+the same note when a session answer there would also reach that shared
+sandbox. In this sandbox a target opens without asking only at the
 mode in `permissions.mode`, so a conversation switched to a looser mode of
 its own is asked.
 

@@ -37,9 +37,9 @@ export interface GateWords {
 }
 
 export interface NetWords {
-  /* Said when a session or always answer here also opens the sandbox every
-     conversation shares -- whether that sandbox is the one refused or just
-     the one the answer reaches. */
+  /* Said when an answer that lasts beyond the refused sandbox also opens the
+     sandbox every conversation shares -- whether that sandbox is the one
+     refused or just the one the answer reaches. */
   readonly shared: string
 }
 

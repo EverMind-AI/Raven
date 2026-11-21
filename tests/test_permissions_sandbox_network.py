@@ -255,10 +255,10 @@ async def test_a_prompt_about_the_shared_sandbox_says_so_in_its_description(gran
 
 @pytest.mark.parametrize("registered", [None, "conv-own"], ids=["shared", "own"])
 async def test_a_conversations_own_looser_mode_does_not_open_the_shared_sandbox(grants, monkeypatch, registered):
-    """A conversation switched to full gets no automatic grant: a session or always
-    answer here also reaches the sandbox every conversation shares, so the gate holds
-    the prompt to the configured mode whether that sandbox is the one refused or only
-    the one the answer reaches."""
+    """A conversation switched to full gets no automatic grant: an answer that
+    lasts beyond its sandbox also reaches the sandbox every conversation shares,
+    so the gate holds the prompt to the configured mode whether that sandbox is
+    the one refused or only the one the answer reaches."""
     monkeypatch.setattr(session_module, "_MODES", {"conv-own": "full"})
     shared, own = FakeSandbox(), FakeSandbox()
     grants.register(shared, None)
@@ -267,7 +267,7 @@ async def test_a_conversations_own_looser_mode_does_not_open_the_shared_sandbox(
     responder = Responder(ApprovalChoice.DENY)
     await _handle(responder, [CURL], refused, config=PermissionsConfig(mode="ask"), conversation="conv-own")
     (call,) = responder.calls
-    assert SHARED_NOTE in call["description"], "the person deciding is told what a session answer reaches"
+    assert SHARED_NOTE in call["description"], "the person deciding is told what a lasting answer reaches"
     assert call["evidence"]["shared"] is True
     assert own.granted == [] and shared.granted == []
     assert grants.grants_for(None) == frozenset() and grants.grants_for("conv-own") == frozenset()
@@ -280,9 +280,23 @@ async def test_the_shared_sandbox_still_opens_automatically_at_the_configured_mo
     assert responder.calls == [] and sandbox.granted
 
 
+async def test_a_conversation_switched_to_full_is_asked_when_nobody_can_answer(grants, monkeypatch):
+    """The shared gate holds a network answer to the configured mode, so a
+    conversation on full with the config on ask is refused on an unattended
+    turn rather than opening the target for everyone."""
+    conversation = "conv-full-unattended"
+    monkeypatch.setattr(session_module, "_MODES", {conversation: "full"})
+    sandbox = FakeSandbox()
+    grants.register(sandbox, conversation)
+    _, turn = await _handle(None, [CURL], sandbox, config=PermissionsConfig(mode="ask"), conversation=conversation)
+    assert [refusal.source for refusal in turn.refusals] == ["unattended"]
+    assert sandbox.granted == []
+    assert grants.grants_for(conversation) == frozenset() and grants.grants_for(None) == frozenset()
+
+
 async def test_a_conversation_sandbox_prompt_carries_the_shared_note(grants):
-    """A conversation's own sandbox says so too, because a session answer there
-    also opens the sandbox every conversation shares."""
+    """A conversation's own sandbox says so too, because an answer that lasts
+    beyond it also opens the sandbox every conversation shares."""
     conversation = f"conv-{uuid4().hex}"
     responder, sandbox = Responder(ApprovalChoice.ALLOW), FakeSandbox()
     grants.register(sandbox, conversation)
@@ -292,6 +306,18 @@ async def test_a_conversation_sandbox_prompt_carries_the_shared_note(grants):
         call["description"]
         == f"The sandbox blocked these connections while a command was running. Allow them? {SHARED_NOTE}"
     )
+    assert call["evidence"]["shared"] is True
+
+
+async def test_a_prompt_without_an_executor_still_carries_the_shared_note(grants):
+    """The grant is keyed to the conversation, not to an executor handle: a
+    refusal from outside the registry still opens the shared sandbox on a
+    lasting answer, so the note is owed."""
+    conversation = f"conv-{uuid4().hex}"
+    responder = Responder(ApprovalChoice.DENY)
+    await _handle(responder, [CURL], None, conversation=conversation)
+    (call,) = responder.calls
+    assert SHARED_NOTE in call["description"]
     assert call["evidence"]["shared"] is True
 
 
@@ -333,6 +359,10 @@ async def test_allow_once_reaches_this_sandbox_only(grants):
     assert grants.grants_for(None) == frozenset() and shared.synced == 0
 
 
+# No shipped card offers this answer: the note no longer names it, and the
+# RPC broker refuses allow_always when a request sends no suggested pattern.
+# These pin the protocol fallback ``_open`` still implements for a responder
+# that returns that choice directly.
 async def test_allow_always_writes_one_rule_per_target(grants, monkeypatch):
     written = []
     monkeypatch.setattr(
@@ -415,8 +445,8 @@ async def test_an_address_given_as_an_ip_stays_blocked_with_nobody_to_ask(grants
 
 
 async def test_every_prompt_says_what_a_session_answer_reaches(grants):
-    """However the refused sandbox is registered, a session or always answer is opened
-    in the sandbox every conversation shares, so both prompts say so."""
+    """However the refused sandbox is registered, an answer that lasts beyond it
+    is opened in the sandbox every conversation shares, so both prompts say so."""
     shared, own = FakeSandbox(), FakeSandbox()
     grants.register(shared, None)
     responder = Responder(ApprovalChoice.DENY)
