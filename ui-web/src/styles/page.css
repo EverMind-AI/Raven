@@ -5102,7 +5102,23 @@ details[open] summary { margin-bottom: 8px; }
 .two-pane-list {
   display: flex; flex-direction: column; gap: 1px; flex: 1; min-height: 0;
   overflow-y: auto; margin: 0 -5px; padding: 0 5px 2px;
+  /* A context of its own, so the card below stays inside it and does not
+     slide out behind the column it belongs to. */
+  position: relative; z-index: 0;
 }
+/* The card that marks the selected row. It is the list's, not the row's, so
+   it can slide from the row that was selected to the row that is: a selection
+   is seen to move rather than to blink. It sits under the rows -- what the
+   reader is looking at is the row's own text -- and it carries no pointer
+   events, so the row under it is still the row to click. */
+.two-pane-sel {
+  position: absolute; left: 0; right: 0; top: 0; z-index: -1;
+  border-radius: 8px; background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--line);
+  pointer-events: none;
+  transition: transform .28s ease, height .28s ease;
+}
+@media (prefers-reduced-motion: reduce) { .two-pane-sel { transition: none; } }
 .two-pane-grp {
   font-size: 11px; font-weight: 500; color: var(--faint); padding: 14px 9px 5px; letter-spacing: .04em;
 }
@@ -5128,7 +5144,15 @@ details[open] summary { margin-bottom: 8px; }
 @media (prefers-reduced-motion: reduce) { .two-pane-wbar { animation: none; } }
 .two-pane-row { display: flex; align-items: center; gap: 4px; min-width: 0; border-radius: 8px; }
 .two-pane-row:hover { background: var(--surface); }
-.two-pane-row[aria-current="true"] { background: var(--raised); }
+/* The selected row is marked by the list's card, which slides onto it -- so
+   the row itself paints nothing: a card of its own under the sliding one
+   would show as a second mark, and the selection would blink instead of
+   move. The card wears the hairline the settings rail's selected item wears
+   (the rail's accent bar stays the rail's: it says which section is open,
+   and a row in a list is not a section). */
+.two-pane-row[aria-current="true"] { background: none; }
+/* The card is the mark; a tint under it would only muddy it. */
+.two-pane-row[aria-current="true"]:hover { background: none; }
 .two-pane-hit {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px;
   font: inherit; text-align: left; padding: 8px 9px; border-radius: 8px; color: var(--text);
