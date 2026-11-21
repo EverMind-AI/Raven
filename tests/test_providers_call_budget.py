@@ -7,9 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from raven.contracts.llm_provider import GenerationSettings
+from raven.contracts.llm_provider import ChatDelta, GenerationSettings
 from raven.providers.base import LLMProvider
-from raven.providers.call_timeout import CallTimeoutError, call_timeout
+from raven.providers.call_timeout import CallTimeoutError, bounded_stream, call_timeout
 from raven.providers.streaming import stream_llm_call
 
 
@@ -103,7 +103,7 @@ def steady_provider(request, monkeypatch):
 async def test_steady_stream_cannot_outlive_call_budget(steady_provider):
     provider, state = steady_provider
     if state.kind in ("litellm", "anthropic"):
-        with pytest.raises(TimeoutError, match="llm_call_timeout") as caught:
+        with pytest.raises(TimeoutError, match="llmCallTimeout") as caught:
             async for _ in provider.chat_stream([{"role": "user", "content": "hi"}]):
                 pass
         assert provider.classify_error(caught.value).category == "network"
@@ -111,7 +111,7 @@ async def test_steady_stream_cannot_outlive_call_budget(steady_provider):
         result = await provider.chat([{"role": "user", "content": "hi"}])
         assert result.finish_reason == "error"
         assert result.error_classification.category == "network"
-        assert "llm_call_timeout" in result.content
+        assert "llmCallTimeout" in result.content
     assert state.closed
     assert state.produced < 60
 
@@ -176,6 +176,28 @@ async def test_external_cancellation_is_preserved_and_closes_the_stream(steady_p
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+class _FinishingStream:
+    generation = GenerationSettings(timeout=0.05)
+
+    @bounded_stream
+    async def chat_stream(self):
+        yield ChatDelta(content="x")
+        yield ChatDelta(content=None, finish_reason="stop")
+
+
+@pytest.mark.asyncio
+async def test_delivered_final_delta_is_not_reported_as_a_timeout():
+    """A pull after the terminal delta is cleanup, not a late model request."""
+    stream = _FinishingStream().chat_stream()
+    assert (await anext(stream)).content == "x"
+    terminal = await anext(stream)
+    assert terminal.finish_reason == "stop"
+    await asyncio.sleep(0.08)
+    with pytest.raises(StopAsyncIteration):
+        await anext(stream)
+    await stream.aclose()
 
 
 @pytest.mark.parametrize("budget", [429, 500, 600])
