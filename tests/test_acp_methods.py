@@ -2677,6 +2677,7 @@ async def test_the_closing_turn_runs_after_background_work(rig, monkeypatch):
     params = rig.stack.params_for("turn.send")
     assert params["session_key"] == "cli:c"
     assert "bg-1" in params["content"] and "make all" in params["content"]
+    assert "have finished" in params["content"]
 
 
 @pytest.mark.asyncio
@@ -2719,7 +2720,35 @@ async def test_a_hold_at_its_deadline_reaps_and_still_runs_the_closing_turn(rig,
     await rig.methods._resume_after_background(session, {"background": True, "untilMs": past})
 
     assert reaped == ["bg-7"], "what is left at the deadline is killed"
-    assert "long build" in rig.stack.params_for("turn.send")["content"]
+    content = rig.stack.params_for("turn.send")["content"]
+    assert "long build" in content
+    assert "were stopped" in content
+    assert "have finished" not in content, "a killed command did not finish"
+
+
+@pytest.mark.asyncio
+async def test_the_deadline_text_names_the_windows_leftover(rig, monkeypatch):
+    """The reap kills the shell; on Windows a child process can be left running."""
+    from types import SimpleNamespace
+
+    from raven.agent.tools import background_exec
+
+    monkeypatch.setattr(
+        background_exec,
+        "running",
+        lambda session_key=None: [{"task_id": "bg-7", "command": "long build", "log_path": "/tmp/l"}],
+    )
+    monkeypatch.setattr(background_exec, "reap", lambda task_id: True)
+    monkeypatch.setattr("raven.acp.methods.BACKGROUND_POLL_S", 0)
+    monkeypatch.setattr("raven.acp.methods.os", SimpleNamespace(name="nt"))
+    session = SimpleNamespace(session_id="s1", session_key="cli:c")
+
+    past = (time.time() - 1) * 1000
+    await rig.methods._resume_after_background(session, {"background": True, "untilMs": past})
+
+    content = rig.stack.params_for("turn.send")["content"]
+    assert "were stopped" in content
+    assert "may still be running on Windows" in content
 
 
 @pytest.mark.asyncio

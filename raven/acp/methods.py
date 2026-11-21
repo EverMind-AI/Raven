@@ -28,6 +28,7 @@ import base64
 import binascii
 import contextlib
 import mimetypes
+import os
 import time
 from collections.abc import Callable
 from itertools import count
@@ -928,10 +929,12 @@ class AcpMethods:
 
         until = hold.get("untilMs")
         deadline = (float(until) / 1000.0) if isinstance(until, (int, float)) and until > 0 else None
+        stopped = False
         done = background_exec.running(session_key=session.session_key)
         while done:
             if deadline is not None and time.time() >= deadline:
                 self._reap_background(session)
+                stopped = True
                 break
             await asyncio.sleep(BACKGROUND_POLL_S)
             seen = background_exec.running(session_key=session.session_key)
@@ -939,10 +942,19 @@ class AcpMethods:
                 break
             done = seen
         lines = [f"- {t.get('task_id')}: {t.get('command')} (log: {t.get('log_path')})" for t in done]
-        content = (
-            "[system] The background commands this session started have finished. "
-            "Read their logs and continue the task; report what they changed.\n" + "\n".join(lines)
-        )
+        if stopped:
+            lead = (
+                "[system] The turn's deadline was reached, so the background commands this session "
+                "started were stopped. Read their logs and continue the task; report what they changed."
+            )
+            if os.name == "nt":
+                lead += " A child process of a stopped command may still be running on Windows."
+        else:
+            lead = (
+                "[system] The background commands this session started have finished. "
+                "Read their logs and continue the task; report what they changed."
+            )
+        content = lead + "\n" + "\n".join(lines)
         try:
             await self._call(
                 "turn.send",
