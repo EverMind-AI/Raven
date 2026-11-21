@@ -336,7 +336,8 @@ describe('settings source', () => {
 
   it('a blocklist write whose refresh failed says the save stands, not that it failed', async () => {
     /* The write landed before the read that failed. Reporting the read as the
-       save sends the reader to retry a write that already happened. */
+       save sends the reader to retry a write that already happened. Covers both
+       the switch's own verb and the generic `set` path. */
     const mod = await load({ 'skills.manage': { name: 'x', blocked: true, blocklist: ['x'] } })
     await fakeGateway(async (method: string) => {
       if (method === 'ext.list') throw new Error('socket closed')
@@ -344,6 +345,12 @@ describe('settings source', () => {
       return {}
     })
     await expect(mod.settingsSource.blockSkill('x', true)).resolves.toBeTruthy()
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0]).toContain('gui.settings.skills.saved_no_refresh')
+    expect(toasts[0]).not.toContain('gui.plug.op_failed')
+
+    toasts.length = 0
+    await expect(mod.settingsSource.set('skillForge.blocklist', ['x'])).resolves.toBeTruthy()
     expect(toasts).toHaveLength(1)
     expect(toasts[0]).toContain('gui.settings.skills.saved_no_refresh')
     expect(toasts[0]).not.toContain('gui.plug.op_failed')

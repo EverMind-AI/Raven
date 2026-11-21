@@ -308,6 +308,20 @@ async def test_block_without_a_name_is_a_typed_error() -> None:
         await skills_manage({"action": "block"})
 
 
+async def test_block_surfaces_an_unwritable_config_as_a_typed_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.config import update as config_update
+    from raven.rpc.errors import ConfigValidationError
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"skillForge": []}), encoding="utf-8")
+    monkeypatch.setattr(config_update, "get_config_path", lambda: cfg)
+
+    with pytest.raises(ConfigValidationError, match="object or null"):
+        await skills_manage({"action": "block", "query": "x"})
+
+
 def test_hub_marker_and_install_meta_tolerate_a_corrupt_stamp(tmp_path: Path) -> None:
     from raven.rpc.methods.skills import _hub_marker, _install_meta
     from raven.skill_hub.hub import MARKER
