@@ -242,6 +242,52 @@ describe('memory island', () => {
     expect(document.querySelector('.memstrip')).toBeNull()
   })
 
+  it('renders the memory body as markdown, not as its source', async () => {
+    install({
+      list: async () => ({
+        items: [item({
+          kind: 'agent_skill',
+          subject: 'the skill',
+          body: '## Overview\n\nThe rule.\n\n- one\n- two\n\n```bash\nnpm test\n```',
+        })],
+        total: 1,
+      }),
+    })
+    await mount()
+    await act(async () => {
+      row('the skill').click()
+    })
+    const sec = document.querySelector('.pmsec') as HTMLElement
+    /* A heading is a heading, not the two characters that spell one. */
+    expect(sec.querySelector('h2')?.textContent).toBe('Overview')
+    expect(sec.querySelectorAll('li').length).toBe(2)
+    expect(sec.querySelector('pre')?.textContent).toContain('npm test')
+    /* The source of the body is not on the page as text. */
+    expect(sec.textContent).not.toContain('## Overview')
+  })
+
+  it('renders the body as text, not as markup the body brought with it', async () => {
+    install({
+      list: async () => ({
+        items: [item({
+          kind: 'agent_skill',
+          subject: 'the skill',
+          body: '<img src=x onerror=1>\n\nA line.',
+        })],
+        total: 1,
+      }),
+    })
+    await mount()
+    await act(async () => {
+      row('the skill').click()
+    })
+    const sec = document.querySelector('.pmsec') as HTMLElement
+    /* The body is a memory the engine wrote, not a document the page trusts:
+       its markup is text, the same as prose. */
+    expect(sec.querySelector('img')).toBeNull()
+    expect(sec.textContent).toContain('<img src=x onerror=1>')
+  })
+
   it('switches kind through a stat and reloads with it', async () => {
     const asked: string[] = []
     install({
