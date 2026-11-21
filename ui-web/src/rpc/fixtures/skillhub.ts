@@ -63,6 +63,11 @@ export interface SkillhubFixture {
 }
 
 export function createSkillhub(env: FixtureEnv, ext: ExtFixture): SkillhubFixture {
+  /* The settings page's switch list. Both sides hold the fixture's own names,
+     so an exact lookup is the whole match here; the live gateway trims and
+     casefolds, which this library has no reason to reproduce. */
+  const blocklist = ext.skills.filter((s) => s.blocked).map((s) => s.name)
+
   const item = (e: Entry): Item => {
     const installed = ext.skills.find((s) => s.name === e.name)
     return {
@@ -80,6 +85,19 @@ export function createSkillhub(env: FixtureEnv, ext: ExtFixture): SkillhubFixtur
          detail: a body made of the row's own words, one file, and an install
          stamp on the hub-installed ones. */
       'skills.manage': (p): Wire<ResultOf<'skills.manage'>> => {
+        /* The settings page's switch, which the live gateway answers through
+           `set_skill_blocked`. The row it draws comes from `ext.list`, so the
+           write has to land on the inventory this fixture shares, or the
+           switch would snap back on the offline canvas. */
+        if (p.action === 'block' || p.action === 'unblock') {
+          const name = p.query || ''
+          const blocked = p.action === 'block'
+          const at = blocklist.indexOf(name)
+          if (blocked && at < 0) blocklist.push(name)
+          if (!blocked && at >= 0) blocklist.splice(at, 1)
+          for (const s of ext.skills) if (s.name === name) s.blocked = blocked
+          return { name, blocked, blocklist: [...blocklist] }
+        }
         if (p.action === 'open') return { opened: true }
         if (p.action === 'inspect') {
           const s = ext.skills.find((x) => x.name === p.query)
@@ -123,7 +141,7 @@ export function createSkillhub(env: FixtureEnv, ext: ExtFixture): SkillhubFixtur
         const e = HUB_FIXTURE.find((h) => h.id === p.id)
         if (e && !ext.skills.some((s) => s.name === e.name)) {
           ext.skills.push({ name: e.name, description: e.description, source: e.source,
-            always: false, hub: true, hub_id: e.id })
+            always: false, hub: true, hub_id: e.id, blocked: false })
         }
         return {
           name: e ? e.name : '', path: `~/.raven/skills/${e ? e.name : ''}`, files: ['SKILL.md'],

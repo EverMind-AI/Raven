@@ -9175,6 +9175,10 @@
       "en": "Open {file}",
       "zh": "打开 {file}"
     },
+    "gui.settings.skills.saved_no_refresh": {
+      "en": "Saved, but the skill list could not be refreshed - {detail}",
+      "zh": "已保存，但技能列表刷新失败：{detail}"
+    },
     "gui.settings.skills.safety": {
       "en": "Safety {n}",
       "zh": "安全分 {n}"

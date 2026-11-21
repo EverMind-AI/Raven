@@ -140,9 +140,9 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
       { id: 'cancel_dag', name: 'cancel dag', group: 'collab', reach: 'local', one: 'cancels a dag', on: true, builtin: false },
     ],
     skills: [
-      { name: 'git-flow', description: 'Branch and merge the house way', source: 'builtin', always: true, hub: false, hub_id: '' },
-      { name: 'sql-style', description: 'Names and indents for the database', source: 'workspace', always: false, hub: true, hub_id: 'sh-sql-style' },
-      { name: 'notes', description: 'Personal notes', source: 'workspace', always: false, hub: false, hub_id: '' },
+      { name: 'git-flow', description: 'Branch and merge the house way', source: 'builtin', always: true, hub: false, hub_id: '', blocked: false },
+      { name: 'sql-style', description: 'Names and indents for the database', source: 'workspace', always: false, hub: true, hub_id: 'sh-sql-style', blocked: true },
+      { name: 'notes', description: 'Personal notes', source: 'workspace', always: false, hub: false, hub_id: '', blocked: false },
     ],
     mcp: [
       { name: 'github', transport: 'http', state: 'error', connected: false, tool_count: 3, enabled: true, auth: 'apikey', credentialed: true, error: 'boom' },
@@ -208,6 +208,7 @@ export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsS
     openSkillFile: async (name, file) => { calls.push(['openSkillFile', { name, file }]) },
     revealPlace: async (place) => { calls.push(['revealPlace', place]) },
     uninstallSkill: async (name) => rec('uninstallSkill', name),
+    blockSkill: async (name, blocked) => rec('blockSkill', { name, blocked }),
     /* A read the credential panel makes on its own, so it is not recorded: a
        case asserting what a row's buttons wrote would have to skip past it. */
     serverDetail: async () => ({

@@ -402,6 +402,10 @@ export interface ExtSkillRow {
    */
   hub: boolean;
   hub_id: string;
+  /**
+   * On skillForge.blocklist, so retrieval and injection skip it. The row is still listed here because this is the surface a person turns it back on from.
+   */
+  blocked: boolean;
 }
 export interface ExtToolRow {
   name: string;
@@ -6548,7 +6552,7 @@ export interface ShellExecResult {
 }
 export interface SkillsManageParams {
   /**
-   * One of list, inspect, search, browse, install, open.
+   * One of list, inspect, search, browse, install, open, block, unblock.
    */
   action: string;
   query?: string;
@@ -6595,6 +6599,14 @@ export interface SkillsManageResult {
    * `open`.
    */
   opened?: boolean | null;
+  /**
+   * `block`/`unblock`: the state that was written.
+   */
+  blocked?: boolean | null;
+  /**
+   * `block`/`unblock`: the list after the write.
+   */
+  blocklist?: string[] | null;
 }
 export interface SubagentInterruptParams {
   subagent_id: string;

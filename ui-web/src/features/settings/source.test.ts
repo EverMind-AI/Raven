@@ -308,9 +308,57 @@ describe('settings source', () => {
     expect(seen.filter(([m]) => m === 'ext.list')).toHaveLength(4)
   })
 
+  it('a blocklist write re-reads ext.list so the row it changed is redrawn', async () => {
+    /* The skills page draws each row's switch from `ext.list`; the write
+       itself only reloads the file, so without this read the switch lands on
+       the value it had and reads as a refused write. Both spellings, because a
+       hand-written config may carry the legacy one. */
+    const mod = await load()
+    await mod.settingsSource.set('skillForge.blocklist', ['git-flow'])
+    expect(seen.filter(([m]) => m === 'ext.list')).toHaveLength(1)
+    await mod.settingsSource.set('skill_forge.blocklist', [])
+    expect(seen.filter(([m]) => m === 'ext.list')).toHaveLength(2)
+    await mod.settingsSource.set('cron.defaultTimezone', 'UTC')
+    expect(seen.filter(([m]) => m === 'ext.list')).toHaveLength(2)
+  })
+
+  it('a skill switch names the row to the gateway and re-reads the rows afterwards', async () => {
+    /* The gateway's writer is where the blocklist's trim and casefold live, so
+       the page sends the name as the row spells it (`Straße`) and does not
+       compute the match itself: JS `toLowerCase` would answer `straße` for a
+       stored `STRASSE` that Python's casefold treats as a match. */
+    const mod = await load({ 'skills.manage': { name: 'Straße', blocked: false, blocklist: [] } })
+    await mod.settingsSource.blockSkill('Straße', false)
+    expect(seen).toContainEqual(['skills.manage', { action: 'unblock', query: 'Straße' }])
+    expect(seen.filter(([m]) => m === 'ext.list')).toHaveLength(1)
+    expect(toasts).toEqual([])
+  })
+
+  it('a blocklist write whose refresh failed says the save stands, not that it failed', async () => {
+    /* The write landed before the read that failed. Reporting the read as the
+       save sends the reader to retry a write that already happened. Covers both
+       the switch's own verb and the generic `set` path. */
+    const mod = await load({ 'skills.manage': { name: 'x', blocked: true, blocklist: ['x'] } })
+    await fakeGateway(async (method: string) => {
+      if (method === 'ext.list') throw new Error('socket closed')
+      if (method === 'settings.get') return { settings: {}, config_path: '/c.json' }
+      return {}
+    })
+    await expect(mod.settingsSource.blockSkill('x', true)).resolves.toBeTruthy()
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0]).toContain('gui.settings.skills.saved_no_refresh')
+    expect(toasts[0]).not.toContain('gui.plug.op_failed')
+
+    toasts.length = 0
+    await expect(mod.settingsSource.set('skillForge.blocklist', ['x'])).resolves.toBeTruthy()
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0]).toContain('gui.settings.skills.saved_no_refresh')
+    expect(toasts[0]).not.toContain('gui.plug.op_failed')
+  })
+
   it('the snapshot carries the wire rows the inventory read, untouched', async () => {
     const mod = await load({ 'ext.list': {
-      skills: [{ name: 's', description: 'd', source: 'builtin', always: true, hub: false, hub_id: '' }],
+      skills: [{ name: 's', description: 'd', source: 'builtin', always: true, hub: false, hub_id: '', blocked: false }],
       plugins: [], tools: [],
       mcp: [{ name: 'm', transport: 'http', state: 'connected', connected: true, tool_count: 1, enabled: true, auth: 'oauth', credentialed: false }],
     } })

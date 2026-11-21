@@ -262,9 +262,9 @@ def set_skill_blocked(
     list. Matching is case-insensitive; adding an already-listed name or
     removing an absent one is a no-op (the file is still not rewritten).
 
-    The blocklist is read at process start (AgentLoop / context engine
-    construction), so a change takes effect on the next agent/gateway
-    start, not on a running process.
+    A consumer wired to a live reader (the agent loop's catalog) sees the
+    change on its next read; one that snapshotted the list at construction
+    keeps that snapshot until it is rebuilt.
 
     Respects whichever key casing (camelCase / snake_case) the file already
     uses for the block itself: the loader accepts both spellings, but writing

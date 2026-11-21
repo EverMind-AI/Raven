@@ -211,6 +211,18 @@ class LocalSkillCatalog:
         return is_blocked(self._current_blocklist(), name)
 
     @property
+    def blocklist(self) -> frozenset[str]:
+        """The names this catalog currently hides, from the live reader.
+
+        The surfaces that deliberately keep blocked skills
+        (:meth:`gather_all_skills`) mark them through this rather than
+        re-reading the config file: the reader is what retrieval applied, and
+        a page-side copy of the raw list drifts from it on case, surrounding
+        whitespace and the legacy block spellings the loader normalizes.
+        """
+        return self._current_blocklist()
+
+    @property
     def registry(self) -> SkillRegistry:
         return self._registry
 
@@ -301,10 +313,21 @@ class LocalSkillCatalog:
     # ------------------------------------------------------------------
 
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
-        """All skills as ``{name, path, source}`` dicts."""
+        """All skills as ``{name, path, source}`` dicts.
+
+        Blocklisted skills are left out, like every other runtime listing
+        in this catalog; :meth:`gather_all_skills` is the deliberate
+        exception that keeps them so the CLI can mark them.
+        """
         metas = self._registry.list_all()
         if filter_unavailable:
             metas = [m for m in metas if self._registry.check_available(m.name, source=m.source)]
+        # One read for the whole listing, like ``_BlocklistRegistryView`` and
+        # ``ext_list``: the reader re-reads the file on every ask, and a list
+        # that mixed two answers would both cost N reads and hide a skill whose
+        # block was written mid-loop.
+        blocklist = self.blocklist
+        metas = [m for m in metas if not is_blocked(blocklist, m.name)]
         return [{"name": m.name, "path": str(m.path), "source": m.source} for m in metas]
 
     def load_skill(self, name: str) -> str | None:
