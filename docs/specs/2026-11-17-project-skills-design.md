@@ -118,17 +118,19 @@ skill", which is agent home's `skills/` layer.
 From the turn's working directory, walk up to the git root, inclusive, and collect each
 `<dir>/.agents/skills` that is a directory. The git root is the nearest ancestor holding
 a `.git` entry, file or directory (a linked worktree has a `.git` file). The user's home
-directory (`Path.home()`) and agent home are ceilings both for finding that root and for
-the walk: while the working directory is under either, the search stops at that root, so a
-`.git` above it is not the boundary and `.agents/skills` above it is not collected. With
-the working directory outside both, a shared ancestor is its own git root and the search
-continues through it. With no git root at or below the ceiling, only
+directory (`Path.home()`) is a ceiling both for finding that root and for the walk: while
+the working directory is under home, the search stops at home, so a `.git` above it is not
+the boundary and `.agents/skills` above it is not collected. With the working directory
+outside home, a shared ancestor is its own git root and the search continues through it.
+Agent home and its ancestors are excluded unconditionally, so a checkout that contains
+agent home is never the boundary. With no git root at or below the ceiling, only
 `<workdir>/.agents/skills` is read.
 
 - No working directory bound (`workdir.current()` is `None`): no project skills.
-- A working directory under the user's home directory or under agent home reaches neither
-  `.agents/skills` at or above that root nor anything in the user-level `~/.agents` tree.
-  A git root at home or agent home itself is never the boundary.
+- A working directory under the user's home directory reaches neither `.agents/skills` at
+  or above home nor anything in the user-level `~/.agents` tree. A git root at home itself
+  is never the boundary. Agent home and its ancestors are never the boundary either, so a
+  checkout that contains agent home does not contribute its `.agents/skills`.
 - Order is nearest first. When two collected directories hold the same skill name, the
   nearer one is the project skill of that name.
 - Layout is flat: `<root>/<name>/SKILL.md` only, the layout `gh skill`, `npx skills` and

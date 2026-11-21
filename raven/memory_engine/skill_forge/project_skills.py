@@ -4,10 +4,12 @@ A project skill is a flat ``<name>/SKILL.md`` under a ``.agents/skills``
 directory, the layout ``gh skill``, ``npx skills`` and Codex install into. The
 walk starts at the working directory and climbs to the nearest ancestor holding
 a ``.git`` entry (or stops at the working directory itself when there is none),
-collecting each ``.agents/skills`` directory on the way, nearest first. The
-user-level ``~/.agents`` tree and agent home are never read as project skills,
-and a symlink counts only when its resolved target stays inside the project
-boundary.
+collecting each ``.agents/skills`` directory on the way, nearest first. Home is
+a ceiling: while the working directory is under it the git root is searched no
+higher than home. Agent home and its ancestors are excluded unconditionally, so
+a checkout that contains agent home is never the boundary. The user-level
+``~/.agents`` tree and agent home are never read as project skills, and a
+symlink counts only when its resolved target stays inside the project boundary.
 
 Those directories are then served from a process-wide cache of BM25 indexes
 keyed by the directory tuple and its boundary, so every session in one checkout
@@ -56,11 +58,12 @@ def project_skill_roots(
     """Resolve the project's skill directories for one working directory.
 
     ``boundary`` is the git root, or the working directory when there is no
-    git root at or below a ceiling. The user's home and agent home are ceilings
-    only while the working directory is under them: the git root is then
-    searched no higher than that root, so a git-less work directory under home
-    cannot reach an outer repository's skills. Outside both, a shared ancestor
-    is the work directory's own git root. A git root at home or agent home is
+    git root at or below home. Home is a ceiling only while the working
+    directory is under it: the git root is then searched no higher than home,
+    so a git-less work directory under home cannot reach an outer repository's
+    skills. Outside home, a shared ancestor is the work directory's own git
+    root. Agent home and its ancestors are excluded unconditionally, so a
+    checkout containing agent home is never the boundary. A git root at home is
     never the boundary. Paths resolving into the user-level ``.agents`` tree or
     agent home are never collected. Returns ``None`` when no directory
     qualifies.
@@ -70,11 +73,10 @@ def project_skill_roots(
     guarded = (home_r / ".agents", agent_home_r)
     start = workdir.resolve()
     chain = [start, *start.parents]
-    excluded = {home_r, agent_home_r}
-    for ceiling in (home_r, agent_home_r):
-        if start.is_relative_to(ceiling):
-            excluded |= set(ceiling.parents)
-            chain = chain[: chain.index(ceiling) + 1]
+    excluded = {home_r, agent_home_r, *agent_home_r.parents}
+    if start.is_relative_to(home_r):
+        excluded |= set(home_r.parents)
+        chain = chain[: chain.index(home_r) + 1]
     git_root = next((d for d in chain if (d / ".git").exists()), None)
     if git_root in excluded:
         git_root = None
