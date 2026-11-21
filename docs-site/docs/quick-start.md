@@ -200,6 +200,11 @@ unit -- so every process Raven starts receives it. A section holds either
 `apiKey` or `apiKeyEnv`, not both. If the variable is unset or empty, Raven
 refuses to start and names it, rather than sending an empty key to the API.
 
+Spell the variable exactly as you export it. Windows reads environment names
+case-insensitively, so a name spelled in the wrong case resolves there and
+fails on a Linux or macOS host. A config that travels between hosts must match
+the exported spelling exactly.
+
 ### Behind a corporate proxy or private CA
 
 Raven checks HTTPS certificates against your operating system's certificate
