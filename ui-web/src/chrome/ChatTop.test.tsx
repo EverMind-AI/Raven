@@ -685,3 +685,32 @@ describe('the chat column chrome when a language is applied', () => {
     expect(el('stage').lastElementChild).toBe(live)
   })
 })
+
+/* The workspace column's free corner is its lower left. Under the desk the
+   split grip is a small corner handle there, the shape the palette's own
+   handle has, instead of the seam's full-height target -- so the right column
+   is resized by the button at its foot rather than by its whole left edge.
+   happy-dom has no layout, so the rule is pinned as written. */
+describe('the workspace split grip under the desk', () => {
+  const rule = (selector: string): string => {
+    const css = source('styles/page.css')
+    const head = css.indexOf(`${selector} {`)
+    return head < 0 ? '' : css.slice(head + selector.length + 2, css.indexOf('}', head) + 1)
+  }
+
+  it('is the workspace column lower left corner, not its whole edge', () => {
+    const grip = rule('.desk-ready .chat #wsGrip')
+    expect(grip).toMatch(/top: auto/)
+    expect(grip).toMatch(/bottom: var\(--dock-gutter\)/)
+    expect(grip).toMatch(/width: 18px/)
+    expect(grip).toMatch(/height: 18px/)
+    expect(grip).toMatch(/right: -18px/)
+  })
+
+  it('wears the palette corner glyph', () => {
+    const glyph = rule('.desk-ready .chat #wsGrip::after')
+    expect(glyph).toMatch(/width: 9px/)
+    expect(glyph).toMatch(/height: 9px/)
+    expect(glyph).toMatch(/linear-gradient\(45deg/)
+  })
+})
