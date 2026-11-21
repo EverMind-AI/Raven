@@ -933,6 +933,13 @@ class ErrorEventPayload(_Strict):
         ),
     )
     target: DirectTarget | None = None
+    hint: str | None = Field(
+        None,
+        description=(
+            "What the reader can do about the failure, in the words this surface can act on. "
+            "Absent when the failure has no category to advise about."
+        ),
+    )
 
 
 class ErrorEvent(_Strict):

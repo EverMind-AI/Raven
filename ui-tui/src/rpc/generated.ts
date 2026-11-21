@@ -1957,6 +1957,10 @@ export interface ErrorEvent {
      * The failure's long account beside the bounded detail, for a reader who expands the row: the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the bounded text already is the whole account.
      */
     full_detail?: string;
+    /**
+     * What the reader can do about the failure, in the words this surface can act on. Absent when the failure has no category to advise about.
+     */
+    hint?: string;
     usage?: TurnUsage1;
     target?: DirectTarget;
   };

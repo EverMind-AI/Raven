@@ -25,6 +25,8 @@ from raven.agent.spine_runner import AgentTurnRunner
 from raven.agent.tools.message import MessageTool
 from raven.contracts.asking import ApprovalResponder, CredentialAsker, SupportsDirectAsk
 from raven.permissions import start_permission_turn
+from raven.providers.base import parse_llm_error
+from raven.providers.error_hints import provider_error_hint
 from raven.rpc.subscriptions import SubscriptionEmitter
 from raven.spine import (
     TRANSIENT_NOTICE_KINDS,
@@ -55,6 +57,23 @@ from raven.spine.runner import Drain, Emit
 from raven.spine.turn import session_of
 
 _TURN_FAILED_CODE = -32099
+
+
+def _turn_failure_hint(error: str) -> str:
+    """What a reader of a failed turn can do about it, when the failure has a
+    category.
+
+    A crash carries none, and gets no advice rather than a guess. The wording is
+    the TUI's: the `/model` picker, where the provider's key can be set, or a
+    saved one replaced after the provider is disconnected -- not a terminal
+    where a command can be run.
+    """
+    parsed = parse_llm_error(error)
+    if parsed is None:
+        return ""
+    category, provider, _detail = parsed
+    return provider_error_hint(category, provider, surface="tui")
+
 
 # ``run_subagent_dag`` progress event -> wire event. A name missing from this map
 # is dropped rather than forwarded: the same sink shape serves the page,
@@ -579,6 +598,7 @@ class RpcOutlet:
         turn_id: str = "",
         full_detail: str = "",
         usage: dict[str, Any] | None = None,
+        hint: str = "",
     ) -> None:
         """A turn's failure, tagged with the turn it belongs to when known.
 
@@ -595,6 +615,10 @@ class RpcOutlet:
 
         ``usage`` is what the failed turn measured, in ``message.complete``'s
         shape, sent only when it read a window (``reported_usage``).
+
+        ``hint`` is what the reader can do about the failure, in the words this
+        surface can act on. Absent when the failure has no category to advise
+        about.
         """
         payload: dict[str, Any] = {"code": code, "message": message, "reason": reason}
         if turn_id:
@@ -607,6 +631,8 @@ class RpcOutlet:
             payload["usage"] = usage
         if target is not None:
             payload["target"] = target
+        if hint:
+            payload["hint"] = hint
         await self._emitter.emit(self._subscription(conversation_id, target), {"type": "error", "payload": payload})
 
 
@@ -731,6 +757,7 @@ def _make_rpc_sink(
                     turn_id=event.turn_id,
                     full_detail=event.full_detail or "",
                     usage=reported_usage(measured),
+                    hint=_turn_failure_hint(event.error or ""),
                 )
             return
         if isinstance(event, TurnStarted):
