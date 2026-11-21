@@ -67,7 +67,7 @@ _SCRATCH_DIRNAME = ".generated"
 
 class PptGenerateImageTool(Tool):
     name = "ppt_generate_image"
-    description = (
+    _DESCRIPTION = (
         "Generate a new raster visual for a page with the image model this deployment configured. Use it for "
         "an illustration, a backdrop or a decorative picture that does not exist yet; use ppt_image_search and "
         "ppt_fetch for a real logo, product screen, published plot or other existing evidence. Every call "
@@ -85,6 +85,22 @@ class PptGenerateImageTool(Tool):
         "generated PNG is added to this deck's sources, ingested immediately, and returned with its figure id so "
         "the build can place it."
     )
+    # MiniMax keeps the character an input image shows and accepts one reference per
+    # request; naming more makes MiniMax refuse the picture rather than dropping the
+    # extra. On that provider the deck's words promise one picture and put the manner
+    # in the prompt, where a reference cannot carry it. Off it, the default stands.
+    _MINIMAX_DESCRIPTION = _DESCRIPTION.replace(
+        "`references` carries pictures to match or vary: the template's own illustration for its manner, an earlier "
+        "generation for consistency, a user's photograph to restyle.",
+        "`references` carries one picture to match: the character it shows is kept, so a person or place stays "
+        "consistent across the deck. A manner goes in the prompt, not in a reference.",
+    )
+    _MINIMAX_REFERENCES = (
+        "one picture to match: a figure id of this deck, a file name under its sources, or an absolute path. "
+        "MiniMax keeps the character it shows and accepts one per call; naming more makes MiniMax refuse the "
+        "picture, with the reason on the error. A manner goes in the prompt, not here"
+    )
+    description = _DESCRIPTION
     timeout_seconds = 360.0
 
     def __init__(
@@ -210,6 +226,22 @@ class PptGenerateImageTool(Tool):
         """
         return self.media.configured()
 
+    def to_schema(self) -> dict[str, Any]:
+        # Authored so the registry serves it live -- the same reason
+        # ``image_generate`` authors its own: the provider the section runs on may
+        # change between turns, and it decides what a reference is for.
+        if not self.media._runs_on_minimax():
+            return super().to_schema()
+        schema = super().to_schema()
+        function = schema["function"]
+        function["description"] = self._MINIMAX_DESCRIPTION
+        properties = function["parameters"]["properties"]
+        # A picture asked for inside `prompts` is a request of its own, so it is
+        # held to the one reference the single-picture ask is held to.
+        for ask in (properties["references"], properties["prompts"]["items"]["properties"]["references"]):
+            ask["description"] = self._MINIMAX_REFERENCES
+        return schema
+
     async def execute(
         self,
         project: str,
@@ -281,7 +313,8 @@ class PptGenerateImageTool(Tool):
         if len(made) == 1:
             item = made[0]
             if item.get("error"):
-                return _return.failed(item["error"])
+                detail = {key: item[key] for key in ("detail",) if item.get(key) is not None}
+                return _return.failed(item["error"], **detail)
             return _return.done(
                 project=project,
                 model=model,
@@ -345,7 +378,16 @@ class PptGenerateImageTool(Tool):
         except (TypeError, ValueError):
             return {"filename": name, "error": f"image generation returned no usable answer: {answer!r}"}
         if reply.get("error") or not reply.get("paths"):
-            return {"filename": name, "error": f"image generation failed: {reply.get('error') or 'no image returned'}"}
+            refusal = {
+                "filename": name,
+                "error": f"image generation failed: {reply.get('error') or 'no image returned'}",
+            }
+            # The host splits a provider's refusal into the class and its own
+            # sentence; the deck's author corrects the ask from the sentence, so it
+            # travels too rather than stopping at the class.
+            if reply.get("detail") is not None:
+                refusal["detail"] = reply["detail"]
+            return refusal
         produced = Path(reply["paths"][0])
         try:
             payload = _as_png(produced.read_bytes())
