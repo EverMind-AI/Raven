@@ -5,9 +5,17 @@ what a category means, and the two surfaces are held apart on purpose: a
 terminal may be handed a command, a chat reader may not.
 """
 
+import re
+from pathlib import Path
+
 import pytest
 
 from raven.providers.error_hints import provider_error_hint
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_TUI_COMMANDS = _REPO_ROOT / "ui-tui" / "src" / "app" / "slash" / "commands"
+_SLASH_COMMAND = re.compile(r"/[a-z][a-z0-9-]*")
+_COMMAND_NAME = re.compile(r"\bname:\s*'([^']+)'")
 
 
 def test_the_cli_is_handed_a_command_for_a_rejected_key() -> None:
@@ -70,13 +78,30 @@ def test_an_unknown_surface_is_refused_rather_than_guessed() -> None:
 
 
 def test_the_tui_is_pointed_at_the_picker_it_owns() -> None:
-    """The TUI sets the provider's key through `/model`, so the credential case
-    names that picker rather than a command nobody there can run; every other
-    category reads as it does in a chat."""
-    assert provider_error_hint("auth", "openrouter", surface="tui") == "Run /model to check the provider key."
+    """The TUI sets the provider's key through `/model`, and a key already on
+    file has to be disconnected there before it can be replaced, so the
+    credential case names both steps rather than a command nobody there can
+    run; every other category reads as it does in a chat."""
+    assert (
+        provider_error_hint("auth", "openrouter", surface="tui")
+        == "Run /model to check the provider key (disconnect first if it is already saved)."
+    )
     for category in ("billing", "context_overflow", "model_unavailable", "network", "rate_limit", "server"):
         assert provider_error_hint(category, "openrouter", surface="tui") == provider_error_hint(
             category, "openrouter", surface="channel"
         )
 
     assert provider_error_hint("unknown", "openrouter", surface="tui") == ""
+
+
+def test_the_command_the_tui_hint_names_is_one_the_tui_registers() -> None:
+    """The hint and the TUI's slash command table are two sources with nothing
+    shared between them: renaming or removing `/model` in the TUI would leave
+    the line pointing at a command the screen no longer has, and no other test
+    would fail. This is a denotation check, not a shared definition."""
+    named = set(_SLASH_COMMAND.findall(provider_error_hint("auth", "openrouter", surface="tui")))
+    assert named, "the TUI auth hint no longer names a slash command"
+    sources = sorted(_TUI_COMMANDS.glob("*.ts"))
+    assert sources, f"no slash command sources under {_TUI_COMMANDS}"
+    registered = {f"/{name}" for path in sources for name in _COMMAND_NAME.findall(path.read_text(encoding="utf-8"))}
+    assert named <= registered, f"the hint names {sorted(named - registered)}, which the TUI does not register"

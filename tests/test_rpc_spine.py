@@ -2244,7 +2244,7 @@ async def test_a_failed_model_call_tells_the_screen_what_to_do_about_it():
         await teardown()
 
     payload = emitter.emitted[-1][1]["payload"]
-    assert payload["hint"] == "Run /model to check the provider key."
+    assert payload["hint"] == "Run /model to check the provider key (disconnect first if it is already saved)."
 
 
 async def test_a_failed_turn_sends_the_runners_long_account():
