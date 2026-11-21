@@ -294,6 +294,11 @@ export interface SettingsSource {
      gateway resolves both itself, so this reaches nothing else. */
   revealPlace(place: 'config' | 'workspace'): Promise<void>
   uninstallSkill(name: string): Promise<SettingsSnapshot>
+  /* Add or remove one name on skillForge.blocklist. The gateway does the
+     matching (trim + Unicode casefold) and writes atomically, so the page
+     hands over the registry's spelling and never reproduces the fold: JS
+     `toLowerCase` answers differently for `Straße`/`STRASSE`. */
+  blockSkill(name: string, blocked: boolean): Promise<SettingsSnapshot>
   /* The credential fields the catalogue declares for this server, empty for
      one nobody installed from the catalogue. A read, so no snapshot back. */
   serverDetail(name: string): Promise<McpDetail>

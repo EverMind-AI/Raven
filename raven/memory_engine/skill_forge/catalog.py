@@ -322,7 +322,12 @@ class LocalSkillCatalog:
         metas = self._registry.list_all()
         if filter_unavailable:
             metas = [m for m in metas if self._registry.check_available(m.name, source=m.source)]
-        metas = [m for m in metas if not self._is_blocked(m.name)]
+        # One read for the whole listing, like ``_BlocklistRegistryView`` and
+        # ``ext_list``: the reader re-reads the file on every ask, and a list
+        # that mixed two answers would both cost N reads and hide a skill whose
+        # block was written mid-loop.
+        blocklist = self.blocklist
+        metas = [m for m in metas if not is_blocked(blocklist, m.name)]
         return [{"name": m.name, "path": str(m.path), "source": m.source} for m in metas]
 
     def load_skill(self, name: str) -> str | None:

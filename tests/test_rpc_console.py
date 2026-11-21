@@ -336,15 +336,24 @@ async def test_ext_list_says_which_rows_the_runtime_blocks(tmp_path: Path, monke
         ExtSkillRow.model_validate(row)
 
 
+@pytest.mark.parametrize(
+    ("stored", "name"),
+    [(" HIDDEN ", "Hidden"), ("STRASSE", "Straße")],
+    ids=["padding-and-case", "sharp-s-casefold"],
+)
 async def test_ext_list_blocks_a_row_whose_config_spelling_differs_in_case_and_padding(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stored: str, name: str
 ) -> None:
     """The page writes whatever a person typed, and the runtime trims and folds
     the blocklist before hiding a skill. A row marked from the file's spelling,
     or from a set the caller folded itself, marks the wrong one -- two
     mutations over the exact-match path stayed green before this test. It goes
-    through the real reader: ``LiveConfig`` holds ``" HIDDEN "`` and the skill
-    is named ``Hidden``, and the row must still report blocked."""
+    through the real reader: ``LiveConfig`` holds the stored spelling and the
+    skill is named otherwise, and the row must still report blocked.
+
+    The second pair is why the fold cannot be reimplemented as JS
+    ``toLowerCase``: Python casefolds ``Straße`` to ``strasse``, so ``STRASSE``
+    blocks it, while ``"Straße".toLowerCase()`` is ``"straße"``."""
     from raven.config.live import LiveConfig, skill_blocklist
     from raven.memory_engine.skill_forge import LocalSkillCatalog
     from raven.rpc.models import ExtSkillRow
@@ -352,13 +361,13 @@ async def test_ext_list_blocks_a_row_whose_config_spelling_differs_in_case_and_p
     workspace = tmp_path / "workspace"
     builtin = tmp_path / "builtin"
     builtin.mkdir()
-    for name in ("Hidden", "kept"):
-        skill_dir = workspace / "skills" / name
+    for skill_name in (name, "kept"):
+        skill_dir = workspace / "skills" / skill_name
         skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(f"---\nname: {name}\ndescription: d\n---\n\nBody text.\n")
+        (skill_dir / "SKILL.md").write_text(f"---\nname: {skill_name}\ndescription: d\n---\n\nBody text.\n")
 
     config_path = tmp_path / "config.json"
-    config_path.write_text(json.dumps({"skillForge": {"blocklist": [" HIDDEN "]}}), encoding="utf-8")
+    config_path.write_text(json.dumps({"skillForge": {"blocklist": [stored]}}), encoding="utf-8")
     live = LiveConfig(config_path)
     catalog = LocalSkillCatalog(
         workspace,
@@ -385,8 +394,8 @@ async def test_ext_list_blocks_a_row_whose_config_spelling_differs_in_case_and_p
     result = await console_module.ext_list({}, agent_loop_factory=lambda: loop)
 
     rows = {s["name"]: s for s in result["skills"]}
-    assert set(rows) == {"Hidden", "kept"}
-    assert rows["Hidden"]["blocked"] is True
+    assert set(rows) == {name, "kept"}
+    assert rows[name]["blocked"] is True
     assert rows["kept"]["blocked"] is False
     for row in rows.values():
         ExtSkillRow.model_validate(row)

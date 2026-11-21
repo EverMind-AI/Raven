@@ -10829,14 +10829,14 @@
     },
     {
       "name": "skills.manage",
-      "summary": "List, inspect, search, browse or install skills; the result carries the fields of the action taken.",
+      "summary": "List, inspect, search, browse, install, block or unblock skills; the result carries the fields of the action taken.",
       "params": [
         {
           "name": "action",
           "required": true,
           "schema": {
             "type": "string",
-            "description": "One of list, inspect, search, browse, install, open."
+            "description": "One of list, inspect, search, browse, install, open, block, unblock."
           }
         },
         {
@@ -10929,6 +10929,23 @@
                 "null"
               ],
               "description": "`open`."
+            },
+            "blocked": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "`block`/`unblock`: the state that was written."
+            },
+            "blocklist": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "description": "`block`/`unblock`: the list after the write."
             }
           },
           "required": [],

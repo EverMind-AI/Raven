@@ -6,17 +6,10 @@ import { md } from '../../../lib/prose'
 import * as confirm from '../../../state/confirm'
 import { Card, Crumb, Empty, GLYPH, Grow, IconBtn, Row, Search, Switch, Tag } from '../Fields'
 import { SkillDetailWait } from '../Skeletons'
-import { dig } from '../source'
 import * as store from '../store'
 
 import type { SkillDetail, SkillRow } from '../types'
 import type { JSX } from 'react'
-
-/* The block as the file spells it: `dig` reads `skillForge` or `skill_forge`. */
-export function blocklist(raw: Record<string, unknown>): string[] {
-  const block = dig(raw, 'skillForge') as { blocklist?: string[] } | undefined
-  return (block && block.blocklist) || []
-}
 
 /* Hub-installed skills live under the workspace whichever route put them
    there; the hub flag only decides whether they can be removed. */
@@ -55,15 +48,15 @@ const TRIGGER: Record<string, string> = {
   rpc: 'gui.settings.skills.trig_rpc',
 }
 
-/* The write replaces the file's whole list, so it starts from the file's list;
-   the comparison is folded because the runtime matches a blocked name
-   case-insensitively, and the stored entry keeps whatever spelling was typed. */
-const fold = (name: string): string => name.trim().toLowerCase()
-
+/* The gateway owns both the write and the match: it trims and Unicode-casefolds
+   each stored entry, so the page hands over the name the row is drawn for and
+   lets that answer stand. It does not read the raw list at all -- JS
+   `toLowerCase` disagrees with Python's casefold on `Straße`/`STRASSE`, and a
+   read-modify-write of the whole list can drop a toggle made while this one is
+   still in flight. */
 function SkillSwitch({ name, off }: { name: string; off: boolean }): JSX.Element {
   const flip = (on: boolean): void => {
-    const kept = blocklist(store.get().snap.raw).filter((n) => fold(n) !== fold(name))
-    void store.write('skillForge.blocklist', on ? kept : [...kept, name], { remount: false })
+    void store.run(`block:${name}`, () => store.source().blockSkill(name, !on), { remount: false })
   }
   return <Switch on={!off} label={name} onChange={flip} />
 }

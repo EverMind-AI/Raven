@@ -708,6 +708,25 @@ def test_skill_unblock_removes_from_an_existing_snake_blocklist(cfg_path: Path) 
     assert _read(cfg_path)["skill_forge"]["blocklist"] == ["beta"]
 
 
+def test_skill_block_matches_by_casefold_not_by_lowercase(cfg_path: Path) -> None:
+    """``Straße`` casefolds to ``strasse`` while ``str.lower()`` keeps the
+    sharp s, so a stored ``STRASSE`` is the same entry. The web page hands the
+    name over rather than folding it in JS, which answers ``straße`` here and
+    would leave the skill blocked after an unblock."""
+    cfg_path.write_text(
+        json.dumps({"skillForge": {"blocklist": ["STRASSE"]}}),
+        encoding="utf-8",
+    )
+    assert set_skill_blocked("Straße", False, config_path=cfg_path) == []
+    assert _read(cfg_path)["skillForge"]["blocklist"] == []
+
+    # Blocking stores the spelling it was handed, and the read side folds it.
+    assert set_skill_blocked("Straße", True, config_path=cfg_path) == ["Straße"]
+    from raven.config.live import LiveConfig, skill_blocklist
+
+    assert skill_blocklist(LiveConfig(cfg_path)) == frozenset({"strasse"})
+
+
 # ---------------------------------------------------------------------------
 # enable_skill_hub_if_unset -- the onboarding opt-in
 # ---------------------------------------------------------------------------

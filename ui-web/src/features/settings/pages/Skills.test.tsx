@@ -8,7 +8,7 @@ import { resetSources, setSources } from '../../../state/sources'
 import { install, modelSource, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import { askInChat } from '../../composer/startTaskWith'
 import * as store from '../store'
-import { blocklist, stripFrontmatter } from './Skills'
+import { stripFrontmatter } from './Skills'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -41,14 +41,14 @@ describe('skills page', () => {
     expect(screen.getByText('sql-style')).toBeTruthy()
   })
 
-  it('a switch writes the whole blocklist with the name added or removed', async () => {
+  it('a switch asks the gateway to block or unblock the row by its wire name', async () => {
     const { calls } = install()
     await mount('skills')
     await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'git-flow' })) })
     await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'sql-style' })) })
     expect(calls).toEqual([
-      ['set', { key: 'skillForge.blocklist', value: ['sql-style', 'git-flow'] }],
-      ['set', { key: 'skillForge.blocklist', value: [] }],
+      ['blockSkill', { name: 'git-flow', blocked: true }],
+      ['blockSkill', { name: 'sql-style', blocked: false }],
     ])
   })
 
@@ -133,34 +133,29 @@ describe('skills page', () => {
     ])
   })
 
-  it('turning a row on drops the file entry whatever case or padding it was typed with', async () => {
-    /* The runtime matches a blocked name case-insensitively and trimmed. A
-       write that compared exactly would leave a typed ` SIMPLE ` in the list,
-       so the switch would say on while the skill stayed blocked. */
+  it('an unblock of a name Python casefolds is decided by the gateway, not by JS', async () => {
+    /* Python casefolds `Straße` to `strasse`, so a stored `STRASSE` blocks it;
+       JS `toLowerCase` answers `straße` and would keep the entry, leaving the
+       switch on while the skill stayed hidden. The row draws the gateway's
+       answer, the click hands the name back as the row spells it, and the
+       redraw follows the gateway's next answer -- the page never folds. The
+       two sides agree because tests/test_rpc_console.py and
+       tests/test_config_update.py run the real `casefold` on this pair. */
     const data = snap()
-    data.raw.skillForge = { blocklist: ['hidden-one', ' SIMPLE '] }
-    data.skills = data.skills.map((r) => (r.name === 'notes' ? { ...r, name: 'simple', blocked: true } : r))
-    const { calls } = install(data)
+    data.raw.skillForge = { blocklist: ['STRASSE'] }
+    data.skills = data.skills.map((r) => (r.name === 'notes' ? { ...r, name: 'Straße', blocked: true } : r))
+    const { calls } = install(data, {
+      blockSkill: async (name, blocked) => {
+        calls.push(['blockSkill', { name, blocked }])
+        data.skills = data.skills.map((r) => (r.name === name ? { ...r, blocked } : r))
+        return data
+      },
+    })
     await mount('skills')
-    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'simple' })) })
-    expect(calls).toEqual([['set', { key: 'skillForge.blocklist', value: ['hidden-one'] }]])
-  })
-
-  it('a write starts from a snake_case skill_forge block, whatever the page draws', async () => {
-    /* The page draws the rows' wire answer; a write replaces the file's own
-       list, so it still has to read the spelling the file uses. A null camel
-       block is dropped by the loader, so the snake one is what runs. */
-    expect(blocklist({ skillForge: null, skill_forge: { blocklist: ['git-flow'] } })).toEqual(['git-flow'])
-    const data = snap()
-    delete data.raw.skillForge
-    data.raw.skill_forge = { blocklist: ['git-flow', 'notes'] }
-    expect(blocklist(data.raw)).toEqual(['git-flow', 'notes'])
-    const { calls } = install(data)
-    await mount('skills')
-    /* git-flow is on in the rows, so the click turns it off and sends the
-       file's list with it added, not a bare ['git-flow'] beside the real one. */
-    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'git-flow' })) })
-    expect(calls).toEqual([['set', { key: 'skillForge.blocklist', value: ['notes', 'git-flow'] }]])
+    expect(screen.getByRole('switch', { name: 'Straße' }).getAttribute('aria-checked')).toBe('false')
+    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'Straße' })) })
+    expect(calls).toEqual([['blockSkill', { name: 'Straße', blocked: false }]])
+    expect(screen.getByRole('switch', { name: 'Straße' }).getAttribute('aria-checked')).toBe('true')
   })
 
   it('the detail inspects the skill, renders its body, lists its files and opens one on the host', async () => {

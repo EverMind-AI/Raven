@@ -6552,7 +6552,7 @@ export interface ShellExecResult {
 }
 export interface SkillsManageParams {
   /**
-   * One of list, inspect, search, browse, install, open.
+   * One of list, inspect, search, browse, install, open, block, unblock.
    */
   action: string;
   query?: string;
@@ -6599,6 +6599,14 @@ export interface SkillsManageResult {
    * `open`.
    */
   opened?: boolean | null;
+  /**
+   * `block`/`unblock`: the state that was written.
+   */
+  blocked?: boolean | null;
+  /**
+   * `block`/`unblock`: the list after the write.
+   */
+  blocklist?: string[] | null;
 }
 export interface SubagentInterruptParams {
   subagent_id: string;

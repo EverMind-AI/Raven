@@ -10,10 +10,16 @@ Two backing sources, and the split matters:
 * ``browse`` / ``install`` are Skill Hub calls, and are only available when a
   hub endpoint is configured. ``search`` spans both, because a user looking for
   a skill by name does not care which side of that line it is on yet.
+* ``block`` / ``unblock`` write the operator blocklist. They live here rather
+  than behind the generic settings writer because the match is a policy
+  decision: the config module trims and casefolds before it compares, and a
+  page that reproduced that fold in JavaScript would disagree on names such as
+  ``Straße`` and ``STRASSE``.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -171,6 +177,29 @@ async def _action_open(query: str, factory: "AgentLoopFactory | None", file: str
     return {"opened": True}
 
 
+async def _action_block(query: str, blocked: bool) -> dict:
+    """Add or remove one name on ``skillForge.blocklist``.
+
+    ``set_skill_blocked`` is the writer the CLI uses, and it is the only place
+    that compares names: it trims and casefolds each entry, so ``STRASSE``
+    blocks ``Straße`` and an unblock of ``Straße`` removes it. Handing the
+    name over as the registry spells it keeps that decision on the server,
+    where the runtime reads it, instead of asking every page to reproduce
+    Python's casefold. The write is atomic, so two switches flipped at once
+    cannot lose each other's change the way a read-modify-write of the whole
+    list from the page can.
+    """
+    if not query:
+        raise ConfigValidationError("block needs a skill name")
+    from raven.config.update import set_skill_blocked
+
+    try:
+        names = await asyncio.to_thread(set_skill_blocked, query, blocked)
+    except ValueError as exc:
+        raise ConfigValidationError(str(exc)) from exc
+    return {"name": query, "blocked": blocked, "blocklist": names}
+
+
 async def _action_search(query: str, _page: int, factory: "AgentLoopFactory | None") -> dict:
     """Name/description matches, local first, then hub hits not already installed."""
     needle = query.lower()
@@ -268,6 +297,8 @@ async def skills_manage(
         return await _action_open(
             str(params.get("query") or "").strip(), agent_loop_factory, str(params.get("file") or "")
         )
+    if action in ("block", "unblock"):
+        return await _action_block(str(params.get("query") or "").strip(), action == "block")
     handler = _ACTIONS.get(action)
     if handler is None:
         raise InternalError(f"unknown skills action: {action or '(missing)'}")

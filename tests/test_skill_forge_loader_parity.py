@@ -919,6 +919,28 @@ class TestCatalogBlocklist:
         assert not any(i["name"] == "simple" for i in items)
         assert any(i["name"] == "user_custom" for i in items)
 
+    def test_list_skills_reads_the_live_blocklist_once(self, tmp_workspace, tmp_builtin):
+        """The reader re-reads the config file on every ask. Asking once per
+        skill paid a file read per row, and a file rewritten mid-loop could
+        judge the first rows with the old list and the last with the new one."""
+        calls = 0
+
+        def reader():
+            nonlocal calls
+            calls += 1
+            return frozenset({"simple"})
+
+        svc = LocalSkillCatalog(
+            tmp_workspace,
+            builtin_skills_dir=tmp_builtin,
+            start_watcher=False,
+            blocklist_reader=reader,
+        )
+        before = calls
+        items = svc.list_skills()
+        assert calls - before == 1
+        assert not any(i["name"] == "simple" for i in items)
+
     def test_list_skills_unfiltered_still_omits_blocklisted_skills(self, tmp_workspace, tmp_builtin):
         """``filter_unavailable`` is about requirements, not about the blocklist.
 

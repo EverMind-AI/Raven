@@ -209,6 +209,7 @@ export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsS
     openSkillFile: async (name, file) => { calls.push(['openSkillFile', { name, file }]) },
     revealPlace: async (place) => { calls.push(['revealPlace', place]) },
     uninstallSkill: async (name) => rec('uninstallSkill', name),
+    blockSkill: async (name, blocked) => rec('blockSkill', { name, blocked }),
     /* A read the credential panel makes on its own, so it is not recorded: a
        case asserting what a row's buttons wrote would have to skip past it. */
     serverDetail: async () => ({

@@ -7229,7 +7229,7 @@ class ShellExecResult(_Strict):
 
 
 class SkillsManageParams(_Strict):
-    action: str = Field(..., description="One of list, inspect, search, browse, install, open.")
+    action: str = Field(..., description="One of list, inspect, search, browse, install, open, block, unblock.")
     query: str | None = None
     page: int | None = None
     file: str | None = Field(default=None, description="`open`: a file name relative to the skill's directory.")
@@ -7248,6 +7248,8 @@ class SkillsManageResult(_Strict):
     installed: bool | None = Field(default=None, description="`install`.")
     opened: bool | None = Field(default=None, description="`open`.")
     name: str | None = None
+    blocked: bool | None = Field(default=None, description="`block`/`unblock`: the state that was written.")
+    blocklist: list[str] | None = Field(default=None, description="`block`/`unblock`: the list after the write.")
 
 
 class SubagentInterruptParams(_Strict):
