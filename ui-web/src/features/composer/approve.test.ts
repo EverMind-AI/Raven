@@ -441,10 +441,11 @@ describe('the permission approval sheet', () => {
     expect(rack().querySelector('.cp-rule')).toBeNull()
   })
 
-  /* The main sandbox is every conversation's, so what is opened in it stays
-     open for all of them until Raven restarts; the card says so there and
-     only there. */
-  it('says an allowed connection lasts until Raven restarts only on the shared sandbox', () => {
+  /* An answer here can also open the sandbox every conversation shares, so
+     the card explains what a session answer and an always answer each do
+     whenever the evidence marks the request as reaching it; without that
+     mark it says nothing. */
+  it('shows the shared-sandbox note only when the request reaches the shared sandbox', () => {
     openApproval(fresh({ ...net, evidence: { ...net.evidence, shared: true } }), handlers())
     expect(document.querySelector('.csheet .cp-ev-note')!.textContent).toBe('gui.confirm.ev.net_shared')
     sheets().forEach((el) => el.remove())

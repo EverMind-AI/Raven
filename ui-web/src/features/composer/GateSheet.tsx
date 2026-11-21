@@ -37,8 +37,9 @@ export interface GateWords {
 }
 
 export interface NetWords {
-  /* Said when the sandbox is the one every conversation shares: what is
-     allowed in it stays allowed for all of them until Raven restarts. */
+  /* Said when a session or always answer here also opens the sandbox every
+     conversation shares -- whether that sandbox is the one refused or just
+     the one the answer reaches. */
   readonly shared: string
 }
 
