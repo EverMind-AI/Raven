@@ -32,7 +32,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -368,6 +368,16 @@ def _server_entry(raw: Any) -> Any:
     raise ValueError(f"the server type {kind!r} is not one the format defines")
 
 
+def host_mcp_server_names(servers: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """The host's own MCP server names: what a package entry may not compose to.
+
+    Every place that decides host-wins-on-collision reads its reservation
+    through here, so the runtime layer, the RPC list and the CLI cannot drift
+    into deciding it from different inputs.
+    """
+    return tuple(str(name) for name in (servers or {}))
+
+
 def package_mcp_report(
     package: AgentPluginPackage,
     *,
@@ -575,6 +585,7 @@ __all__ = [
     "PackageMcpReport",
     "StdioServer",
     "expand_placeholders",
+    "host_mcp_server_names",
     "package_mcp_report",
     "schema_version",
     "package_mcp_servers",

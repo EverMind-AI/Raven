@@ -49,7 +49,7 @@ def _server_row(name: str, live: frozenset[str], states: dict[str, dict]) -> dic
 
 def _collect(live: frozenset[str], states: dict[str, dict]) -> dict:
     from raven.agent_plugins import PackageLedger, discover_packages, discover_skills
-    from raven.agent_plugins.mcp import package_mcp_report
+    from raven.agent_plugins.mcp import host_mcp_server_names, package_mcp_report
     from raven.config.loader import load_config
     from raven.config.paths import get_agent_plugins_ledger_path, package_data_root_path
     from raven.config.raven import load_raven_config
@@ -60,7 +60,7 @@ def _collect(live: frozenset[str], states: dict[str, dict]) -> dict:
     workspace = Path(config.workspace_path)
     ledger = PackageLedger.load(get_agent_plugins_ledger_path())
     allowed = set(block.mcp_packages)
-    host_servers = tuple((config.tools.mcp_servers or {}).keys())
+    host_servers = host_mcp_server_names(config.tools.mcp_servers)
     data_root = package_data_root_path()
 
     rows: list[dict] = []

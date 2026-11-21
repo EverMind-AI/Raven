@@ -568,7 +568,7 @@ def test_list_marks_a_packages_mcp_servers_as_not_enabled(env: _Env) -> None:
     assert "1 not enabled" in result.stdout
 
 
-def test_list_marks_an_opted_in_packages_mcp_servers_as_running(env: _Env) -> None:
+def test_list_marks_an_opted_in_packages_mcp_servers_as_enabled(env: _Env) -> None:
     _write_mcp_config(env.package, {"demo": {"type": "stdio", "command": "npx"}})
     env.config.write_text(
         json.dumps(
@@ -583,7 +583,50 @@ def test_list_marks_an_opted_in_packages_mcp_servers_as_running(env: _Env) -> No
     result = _run(env, "list")
 
     assert result.exit_code == 0, result.stdout
-    assert "1 running" in result.stdout
+    assert "1 enabled" in result.stdout
+
+
+def test_list_json_calls_the_opt_in_allowed(env: _Env) -> None:
+    _write_mcp_config(env.package, {"demo": {"type": "stdio", "command": "npx"}})
+    env.config.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"workspace": str(env.workspace)}},
+                "agentPlugins": {"packages": [str(env.package)], "mcpPackages": [PACKAGE_NAME]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run(env, "list", "--json")
+
+    assert result.exit_code == 0, result.stdout
+    mcp = _json_payload(result)["packages"][0]["mcp"]
+    assert mcp["allowed"] is True
+    assert "running" not in mcp
+
+
+def test_list_leaves_out_a_server_the_host_already_configures(env: _Env) -> None:
+    composed = f"{PACKAGE_NAME}__demo"
+    _write_mcp_config(env.package, {"demo": {"type": "stdio", "command": "npx"}})
+    env.config.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"workspace": str(env.workspace)}},
+                "agentPlugins": {"packages": [str(env.package)], "mcpPackages": [PACKAGE_NAME]},
+                "tools": {"mcpServers": {composed: {"command": "host-own"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    table = _run(env, "list")
+    assert table.exit_code == 0, table.stdout
+    assert "1 enabled" not in table.stdout
+    assert "none" in table.stdout
+
+    payload = _json_payload(_run(env, "list", "--json"))
+    assert payload["packages"][0]["mcp"]["servers"] == []
 
 
 def test_inspect_reports_the_packages_mcp_servers(env: _Env) -> None:
