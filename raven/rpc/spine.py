@@ -64,8 +64,8 @@ def _turn_failure_hint(error: str) -> str:
     category.
 
     A crash carries none, and gets no advice rather than a guess. The wording is
-    the TUI's: a screen where the provider's key can be set, not a terminal
-    where a command can be run.
+    the TUI's: the `/model` picker, where the provider's key can be set, not a
+    terminal where a command can be run.
     """
     parsed = parse_llm_error(error)
     if parsed is None:

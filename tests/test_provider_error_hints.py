@@ -69,11 +69,11 @@ def test_an_unknown_surface_is_refused_rather_than_guessed() -> None:
         provider_error_hint("auth", "openrouter", surface="log")
 
 
-def test_the_tui_is_pointed_at_the_screen_it_owns() -> None:
-    """The TUI holds the provider's key, so the credential case names that
-    screen rather than a command nobody there can run; every other category
-    reads as it does in a chat."""
-    assert provider_error_hint("auth", "openrouter", surface="tui") == "Open Settings to check the provider key."
+def test_the_tui_is_pointed_at_the_picker_it_owns() -> None:
+    """The TUI sets the provider's key through `/model`, so the credential case
+    names that picker rather than a command nobody there can run; every other
+    category reads as it does in a chat."""
+    assert provider_error_hint("auth", "openrouter", surface="tui") == "Run /model to check the provider key."
     for category in ("billing", "context_overflow", "model_unavailable", "network", "rate_limit", "server"):
         assert provider_error_hint(category, "openrouter", surface="tui") == provider_error_hint(
             category, "openrouter", surface="channel"

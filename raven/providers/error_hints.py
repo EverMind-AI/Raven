@@ -37,12 +37,12 @@ _CHANNEL_HINTS = {
 }
 
 #: The advice a TUI reader can act on. The chat's advice, with the one
-#: difference the screen makes: the credential case points at the screen the
-#: TUI owns, where a key can be set, rather than at a command nobody there can
-#: run.
+#: difference the screen makes: the credential case points at the `/model`
+#: picker, where a key can be set, rather than at a command nobody there can
+#: run or a settings screen the TUI does not have.
 _TUI_HINTS = {
     **_CHANNEL_HINTS,
-    "auth": "Open Settings to check the provider key.",
+    "auth": "Run /model to check the provider key.",
 }
 
 

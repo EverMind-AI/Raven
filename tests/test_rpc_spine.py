@@ -2227,9 +2227,9 @@ async def test_outlet_emit_error_includes_the_advice_when_present():
 
 
 async def test_a_failed_model_call_tells_the_screen_what_to_do_about_it():
-    """The TUI is where the provider's key is set, so a rejected key reaches it
-    as a line pointing at that screen rather than at a command nobody there can
-    run."""
+    """The TUI sets the provider's key through `/model`, so a rejected key
+    reaches it as a line pointing at that picker rather than at a command
+    nobody there can run."""
 
     class _RefusedKeyLoop:
         async def run_turn(self, req, emit, drain, *, stream, usage_sink=None) -> TurnOutcome:
@@ -2244,7 +2244,7 @@ async def test_a_failed_model_call_tells_the_screen_what_to_do_about_it():
         await teardown()
 
     payload = emitter.emitted[-1][1]["payload"]
-    assert payload["hint"] == "Open Settings to check the provider key."
+    assert payload["hint"] == "Run /model to check the provider key."
 
 
 async def test_a_failed_turn_sends_the_runners_long_account():

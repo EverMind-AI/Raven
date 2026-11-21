@@ -1015,18 +1015,16 @@ describe('turnErrorLine', () => {
         code: -32099,
         detail: 'Error calling LLM (auth@openrouter): boom',
         message: 'turn_failed',
-        hint: 'Open Settings to check the provider key.'
+        hint: 'Run /model to check the provider key.'
       })
-    ).toBe('Turn failed - Error calling LLM (auth@openrouter): boom Open Settings to check the provider key.')
+    ).toBe('Turn failed - Error calling LLM (auth@openrouter): boom Run /model to check the provider key.')
 
     expect(
-      turnErrorLine({ code: -32001, message: 'session_locked', hint: 'Open Settings to check the provider key.' })
-    ).toBe('error: session_locked (code=-32001) Open Settings to check the provider key.')
+      turnErrorLine({ code: -32001, message: 'session_locked', hint: 'Run /model to check the provider key.' })
+    ).toBe('error: session_locked (code=-32001) Run /model to check the provider key.')
   })
 
   it('leaves the line alone when the runtime sent no advice', () => {
-    expect(turnErrorLine({ code: -32099, detail: 'boom', message: 'turn_failed', hint: '' })).toBe(
-      'Turn failed - boom'
-    )
+    expect(turnErrorLine({ code: -32099, detail: 'boom', message: 'turn_failed', hint: '' })).toBe('Turn failed - boom')
   })
 })
