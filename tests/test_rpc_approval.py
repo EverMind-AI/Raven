@@ -62,6 +62,51 @@ async def test_approval_respond_rejects_missing_fields() -> None:
     ) == {"ok": False}
 
 
+async def test_an_always_answer_is_refused_when_the_request_offered_no_rule() -> None:
+    """A connection's prompt sends no suggested pattern, so it has no rule to
+    save. A client that sends the answer anyway must not turn it into a
+    permissions.network write, and must leave the request open for a real
+    answer rather than resolving it with the refused one."""
+    frames: list[dict] = []
+
+    async def send(frame: dict) -> None:
+        frames.append(frame)
+
+    broker = ApprovalBroker(send)
+    waiting = asyncio.create_task(
+        broker.await_approval(
+            conversation_id="session-a",
+            turn_id="turn-a",
+            tool_call_id="call-a",
+            command="curl https://example.com",
+            description="Allow the connection?",
+            kind="sandbox.network",
+        )
+    )
+    for _ in range(20):
+        if frames:
+            break
+        await asyncio.sleep(0)
+    approval_id = frames[0]["params"]["approval_id"]
+
+    assert await approval_respond(
+        {
+            "approval_id": approval_id,
+            "session_id": "session-a",
+            "choice": "allow_always",
+            "pattern": "example.com",
+        },
+        approval_broker=broker,
+    ) == {"ok": False}
+    assert not waiting.done(), "the refused answer leaves the request open"
+
+    assert await approval_respond(
+        {"approval_id": approval_id, "session_id": "session-a", "choice": "allow_session"},
+        approval_broker=broker,
+    ) == {"ok": True}
+    assert (await waiting).approved
+
+
 def test_register_approval_methods_adds_real_handler() -> None:
     async def send(frame: dict) -> None:
         pass

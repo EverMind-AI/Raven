@@ -7,8 +7,10 @@ names is refused without asking. The rest are asked about in one prompt
 (``PermissionGate.authorize_runtime``), under the same mode, grants and
 responder as any tool call, and what the person allows is opened where it
 applies: this sandbox for "once", every sandbox of the conversation for "this
-session", every sandbox from now on for "always". The command is never run
-again here; the model is told it may run it.
+session". A saved rule ("always") is not offered for a connection: the card
+sends no pattern, and the RPC broker refuses that answer when a request
+carries none. The command is never run again here; the model is told it may
+run it.
 
 With no gate bound (a tool run outside the registry), with nobody to ask, or for
 a refusal that names no program or port to open, the targets are named to the
@@ -57,7 +59,8 @@ _MIN_PROGRAM = 24
 _MAX_EVIDENCE_PROGRAM = 300
 _MAX_REASON = 80
 _SHARED_NOTE = (
-    "Every conversation shares this sandbox, so what you allow here stays allowed for all of them until Raven restarts."
+    "An answer given for the whole conversation also opens them in the sandbox every conversation "
+    "shares, until Raven restarts."
 )
 
 
@@ -203,9 +206,13 @@ async def _prompt(
             timeout_s=config.judge_timeout_seconds,
         )
 
-    # The main sandbox is every conversation's: what is opened in it stays open
-    # for all of them until Raven restarts, and every prompt says so.
-    shared = executor is not None and GRANTS.is_shared(executor)
+    # The sandbox every conversation shares runs on the union of every scope's
+    # grants, so a session answer here opens the target there too -- and a
+    # refused sandbox registered under no scope is that one. Either way the
+    # gate holds the answer to the configured mode and this prompt says what
+    # it reaches: a conversation's own looser mode speaks for that
+    # conversation alone.
+    shared = bool(scope) or (executor is not None and GRANTS.is_shared(executor))
     description = "The sandbox blocked these connections while a command was running. Allow them?" + (
         f" {_SHARED_NOTE}" if shared else ""
     )
@@ -228,7 +235,9 @@ async def _prompt(
                 "shared": shared,
             },
             # No rule is offered to save: a card's saved rule, its undo and its
-            # editor are the exec pattern's, so the broader grant offered is the session.
+            # editor are the exec pattern's, so the broader grant offered is the
+            # session. A request with no pattern also refuses allow_always in
+            # the RPC broker, so a client cannot write a rule the card hid.
             suggested_pattern="",
             review=review,
             # A deny rule names hosts, so an address or an internal name (a
