@@ -587,6 +587,45 @@ async def test_tool_call_does_not_timer_kill_a_blocking_target() -> None:
     assert out == "ran run_subagent_dag"
 
 
+class _BudgetOnlyTarget(_FakeTool):
+    """A target like video generation: a declared budget and no ``timeout_for``."""
+
+    timeout_seconds = 660.0
+
+
+@pytest.mark.asyncio
+async def test_tool_call_carries_a_targets_declared_budget(monkeypatch) -> None:
+    """A target may state its deadline as ``timeout_seconds`` alone, with no
+    ``timeout_for`` to forward. Forwarding only the method left the outer wrapper
+    on its own 300 seconds, which cancelled the inner call before the target's
+    own budget could be used."""
+    import asyncio
+
+    target = _BudgetOnlyTarget("video_generate", "generate a video")
+    reg = ToolRegistry()
+    reg.register(target)
+    ctrl = _controller(reg)
+    forwarder = ToolCallTool(ctrl)
+    reg.register(forwarder)
+
+    assert forwarder.timeout_for({"name": "video_generate"}) == 660.0
+
+    deadlines: list[float] = []
+    timeout = asyncio.timeout
+
+    def tracked(seconds):
+        deadlines.append(seconds)
+        return timeout(seconds)
+
+    async def execute(**kwargs):
+        return "done"
+
+    monkeypatch.setattr(asyncio, "timeout", tracked)
+    monkeypatch.setattr(target, "execute", execute)
+    assert await reg.execute(TOOL_CALL_NAME, {"name": "video_generate", "arguments": {"prompt": "x"}}) == "done"
+    assert deadlines == [660.0, 660.0], "the outer wrapper forwards the target's 660 rather than its own 300"
+
+
 # ---------------------------------------------------------------------------
 # channel-bound tools: hidden from search must also mean unreachable by name
 # ---------------------------------------------------------------------------

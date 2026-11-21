@@ -74,6 +74,24 @@ class SessionTool(Tool):
         if self._on_bind is not None:
             self._on_bind(handles)
 
+    def timeout_for(self, params: dict[str, Any]) -> float | None:
+        """The deadline the engine tool resolves for this call, or none.
+
+        The prototype has no deck bound, so a per-turn answer read off it would
+        be the same for every session; the registered face resolves the engine
+        tool ``execute`` forwards to, the same way it does. A call outside a turn
+        has no directory to resolve, and the registry then falls back to
+        ``timeout_seconds``.
+        """
+        bound = workdir.current()
+        if bound is None:
+            return None
+        tool = self._engine_for(Path(bound)).get(self.name)
+        if tool is None:
+            return None
+        deadline = getattr(tool, "timeout_for", None)
+        return deadline(params) if callable(deadline) else None
+
     async def execute(self, **params: Any) -> str | ToolResult:
         bound = workdir.current()
         if bound is None:

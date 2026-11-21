@@ -210,6 +210,22 @@ class PptGenerateImageTool(Tool):
         """
         return self.media.configured()
 
+    def timeout_for(self, params: dict[str, Any]) -> float | None:
+        """The host image tool's deadline, once per wave of pictures this call makes.
+
+        A picture is one ``image_generate`` request and four are in flight, so an
+        H3 batch needs one H3 window per wave; the fixed six minutes would kill
+        the second wave of a slow one.
+        """
+        promised = getattr(self.media, "timeout_for", None)
+        ceiling = promised({}) if promised is not None else None
+        if ceiling is None:
+            return None
+        pictures = len(params.get("prompts") or []) + (1 if params.get("prompt") else 0)
+        if pictures == 0:
+            return None
+        return ceiling * -(-pictures // _CONCURRENCY)
+
     async def execute(
         self,
         project: str,
