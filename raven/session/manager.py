@@ -706,9 +706,7 @@ def append_turn_meta(session_path: Path, patches: list[dict]) -> None:
     if not patches:
         return
     payload = json.dumps({"_type": "turn_meta", "patches": patches}, ensure_ascii=False)
-    with write_transaction(session_path):
-        with open(session_path, "a", encoding="utf-8") as handle:
-            handle.write(payload + "\n")
+    locked_append(session_path, [payload])
 
 
 def _cut_since_persisted(session: Session) -> bool:
