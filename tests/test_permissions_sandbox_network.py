@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -226,12 +228,17 @@ async def test_another_sandbox_that_did_not_sync_leaves_the_approval_told_as_ope
     assert notice.text.endswith("was approved; run the command again.")
 
 
-SHARED_NOTE = (
-    "What you allow here for the session or always is opened in the sandbox every conversation shares. "
-    "A session answer lasts until Raven restarts; an always answer saves a permissions.network rule "
-    "that survives a restart when the rule can be written. If it cannot be written, the permission "
-    "lasts only until Raven restarts."
-)
+SHARED_NOTE = sandbox_network._SHARED_NOTE
+_CATALOGUE = json.loads((Path(__file__).resolve().parents[1] / "i18n" / "messages.json").read_text(encoding="utf-8"))[
+    "ui"
+]
+
+
+def test_the_shared_note_matches_the_wording_the_web_card_shows():
+    """One disclosure, two carriers: the description the prompt builds and the
+    sentence the web card renders are separate strings, so a change to one alone
+    would tell two surfaces' readers different things."""
+    assert SHARED_NOTE == _CATALOGUE["gui.confirm.ev.net_shared"]["en"]
 
 
 async def test_a_prompt_about_the_shared_sandbox_says_so_in_its_description(grants):
@@ -273,12 +280,13 @@ async def test_the_shared_sandbox_still_opens_automatically_at_the_configured_mo
     assert responder.calls == [] and sandbox.granted
 
 
-async def test_a_prompt_about_a_conversation_sandbox_says_what_the_session_reaches(grants):
-    """The approval is opened in the sandbox every conversation shares as well, so the
-    prompt says so however the answer comes."""
+async def test_a_conversation_sandbox_prompt_carries_the_shared_note(grants):
+    """A conversation's own sandbox says so too, because a session answer there
+    also opens the sandbox every conversation shares."""
+    conversation = f"conv-{uuid4().hex}"
     responder, sandbox = Responder(ApprovalChoice.ALLOW), FakeSandbox()
-    grants.register(sandbox, "conv")
-    await _handle(responder, [CURL], sandbox)
+    grants.register(sandbox, conversation)
+    await _handle(responder, [CURL], sandbox, conversation=conversation)
     (call,) = responder.calls
     assert (
         call["description"]
@@ -426,6 +434,18 @@ async def test_the_shared_sandbox_says_so_even_without_a_conversation(grants):
     _, turn = await _handle(responder, [CURL], sandbox, conversation="")
     assert responder.calls == []
     assert SHARED_NOTE in turn.refusals[-1].reason
+
+
+async def test_a_sandbox_of_no_scope_reaches_no_shared_sandbox_and_omits_the_note(grants):
+    """A conversation's own sandbox in a turn keyed to no conversation reaches
+    nothing shared: its grant is dropped by ``GrantRegistry.grant``, so the note
+    would describe an opening that never happens."""
+    responder, sandbox = Responder(ApprovalChoice.DENY), FakeSandbox()
+    grants.register(sandbox, "conv-own")
+    _, turn = await _handle(responder, [CURL], sandbox, conversation="")
+    assert responder.calls == []
+    assert SHARED_NOTE not in turn.refusals[-1].reason
+    assert grants.grants_for(None) == frozenset() and grants.grants_for("conv-own") == frozenset()
 
 
 async def test_smart_mode_lets_the_reviewer_open_what_the_command_needs(grants, monkeypatch):

@@ -2200,7 +2200,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.ev.nodiff': 'No preview of the change',
     'gui.confirm.ev.cut': 'Shortened to what fits -- the rest is not shown',
     'gui.confirm.ev.net_shared':
-      'What you allow here for the session or always is opened in the sandbox every conversation shares. A session answer lasts until Raven restarts; an always answer saves a permissions.network rule that survives a restart when the rule can be written. If it cannot be written, the permission lasts only until Raven restarts.',
+      'What you allow here for the session is opened in the sandbox every conversation shares and lasts until Raven restarts.',
     'gui.confirm.land.always': "Won't ask again for: {pattern}, in every working directory",
     'gui.confirm.land.revoke': 'Undo',
     'gui.confirm.land.revoked': 'Revoked, it will ask again',
@@ -5759,7 +5759,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.ev.nodiff': '无法预览改动',
     'gui.confirm.ev.cut': '内容过长，这里只显示了前一部分',
     'gui.confirm.ev.net_shared':
-      '你在这里为本次会话或永久允许的连接，会开放到所有会话共用的那个沙箱。本次会话的允许在 Raven 重启后失效；永久允许会记入 permissions.network 规则，重启后依然有效；规则写不进去时，这条允许只在 Raven 重启前有效。',
+      '你在这里为本次会话允许的连接，会开放到所有会话共用的那个沙箱，并在 Raven 重启前一直有效。',
     'gui.confirm.land.always': '以后不再问：{pattern}，在所有工作目录生效',
     'gui.confirm.land.revoke': '收回',
     'gui.confirm.land.revoked': '已收回，下次还会问你',
