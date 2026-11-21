@@ -615,10 +615,9 @@ async def test_a_submitted_graph_runs_its_nodes_in_the_configured_sandbox(tmp_pa
     registry.apply([])
     tool = SubAgentDagTool(workspace=tmp_path, registry=registry, sandbox_for=sandbox_for)
     tool.set_context("cli", "direct", None)
-    out = await tool.execute(
+    out = await tool.execute_to_completion(
         [{"id": "a", "subagent": "Raven", "node_summary": "one", "prompt_template": "hello"}],
         task_summary="run the graph under test",
-        background=False,
     )
     assert "completed" in str(out)
     assert len(built) == 1 and len(ran) == 1, "one node, one executor built for it"
@@ -1066,11 +1065,11 @@ def _node(node_id: str, *, depends_on: list[str] | None = None, prompt: str = "d
 
 
 def _recording_announce(sink: list) -> Any:
-    """An announcer of the shape `_final_announcer` awaits.
+    """An async announcer of the shape the tool's ``announce`` hook takes.
 
-    A plain lambda satisfies the constructor but blows up on the `await` inside
-    the announcer, so a test that means to assert "nothing was announced" fails
-    with a TypeError instead of showing what got announced.
+    A plain lambda satisfies the constructor but blows up when the run awaits
+    it, so a test that means to assert "nothing was announced" fails with a
+    TypeError instead of showing what got announced.
     """
 
     async def _announce(run_id: str, _text: str, _origin: dict) -> None:
@@ -1129,9 +1128,7 @@ async def _replannable_tool(
 
     tool._judge_node = lambda: _judge
     tool._replan_agent = agent
-    await tool.execute(
-        task_summary="the whole graph", nodes=[_node("a"), _node("b"), *extra], background=True, confirm=confirm
-    )
+    await tool.execute(task_summary="the whole graph", nodes=[_node("a"), _node("b"), *extra], confirm=confirm)
     await _wait_until(lambda: bool(tool._desks))
     run_id = next(iter(tool._desks))
     await _wait_until(
@@ -1774,14 +1771,37 @@ def test_the_instance_sentence_says_a_handle_is_not_the_agent() -> None:
     assert "A handle never stands in for the agent: every node still names its subagent." in instance_doc
 
 
-def test_the_dag_description_says_background_is_the_default(tmp_path: Path) -> None:
-    """`background: false` exists, so an unqualified "runs in the background" reads
-    as the only mode. The qualification is model-visible text and is pinned."""
+def test_the_dag_description_has_one_lane(tmp_path: Path) -> None:
+    """The tool has one mode, so the description names it without qualification."""
     from raven.agent.subagent.dag_tool import SubAgentDagTool
 
-    described = SubAgentDagTool(workspace=tmp_path).description
+    tool = SubAgentDagTool(workspace=tmp_path)
 
-    assert "By default the graph runs in the background" in described
+    assert "background" not in tool.parameters["properties"]
+    assert "The graph runs in the background" in tool.description
+    assert "By default" not in tool.description
+
+
+def test_the_foreground_lane_is_gone(tmp_path: Path) -> None:
+    import raven.agent.subagent.dag_adjudication as adjudication
+    from raven.agent.subagent.dag_control_tools import ResolveDagNodeTool
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    tool = SubAgentDagTool(workspace=tmp_path)
+    assert not hasattr(adjudication, "Outbox")
+    for name in (
+        "is_foreground",
+        "await_run",
+        "abort_run",
+        "release_turn",
+        "render_event",
+        "retire_reports",
+        "_report_announcer",
+        "_final_announcer",
+    ):
+        assert not hasattr(SubAgentDagTool, name)
+    assert not hasattr(tool, "_outboxes")
+    assert ResolveDagNodeTool(loop=object()).blocking_for({"run_id": "r1"}) is False
 
 
 def _guide_text() -> str:
@@ -1791,6 +1811,12 @@ def _guide_text() -> str:
     return (
         pathlib.Path(raven_pkg.__file__).parent / "memory_engine/skills/subagent-dag-orchestration/SKILL.md"
     ).read_text()
+
+
+def test_the_guide_no_longer_offers_a_background_false_call() -> None:
+    text = _guide_text()
+    assert "background: false" not in text
+    assert "background` (see" not in text
 
 
 def test_the_guide_gives_the_operator_precedence_the_schema_leaves_to_it() -> None:
@@ -2731,7 +2757,6 @@ async def test_an_addressed_run_is_validated_against_the_conversation_it_names(t
 
     await tool._execute(
         [{"id": "a", "subagent": "x", "prompt_template": "hi", "depends_on": []}],
-        background=True,
         task_summary="probe",
         origin=_DagOrigin(channel="web", chat_id="default", conversation="web:the-stint"),
     )
@@ -2740,7 +2765,6 @@ async def test_an_addressed_run_is_validated_against_the_conversation_it_names(t
     asked.clear()
     await tool._execute(
         [{"id": "b", "subagent": "x", "prompt_template": "hi", "depends_on": []}],
-        background=True,
         task_summary="probe",
     )
     assert asked[:1] == [None], "an unaddressed run still reads the turn's own registry"
@@ -3555,7 +3579,7 @@ async def test_a_graph_with_routes_is_refused_on_a_host_that_cannot_judge(tmp_pa
     tool = SubAgentDagTool(workspace=tmp_path)
     assert tool._judge_node() is None
 
-    out = await tool.execute(task_summary="g", nodes=[_decision()], background=True)
+    out = await tool.execute(task_summary="g", nodes=[_decision()])
 
     text = out if isinstance(out, str) else out.model_text
     assert "no provider to judge" in text
@@ -3569,7 +3593,7 @@ async def test_a_refusal_names_every_decision_node_in_graph_order(tmp_path) -> N
     tool = SubAgentDagTool(workspace=tmp_path)
     nodes = [_decision("s"), _branch_node(id="plain"), _decision("r")]
 
-    out = await tool.execute(task_summary="g", nodes=nodes, background=True)
+    out = await tool.execute(task_summary="g", nodes=nodes)
 
     text = out if isinstance(out, str) else out.model_text
     assert "nodes 's', 'r' declare routes" in text
@@ -5390,23 +5414,21 @@ async def test_rekey_moves_every_index_and_the_identity(tmp_path) -> None:
     from raven.agent.subagent.dag_tool import SubAgentDagTool, _RunIdentity
 
     tool = SubAgentDagTool(workspace=tmp_path)
-    task, cancel, desk, outbox = object(), asyncio.Event(), AdjudicationDesk(), object()
+    task, cancel, desk = object(), asyncio.Event(), AdjudicationDesk()
     admission = SimpleNamespace(run_id=_CHAIN_A)
     identity = _RunIdentity(run_id=_CHAIN_A, submitted=_CHAIN_A)
     tool._runs[_CHAIN_A] = task
     tool._cancels[_CHAIN_A] = cancel
     tool._desks[_CHAIN_A] = desk
-    tool._outboxes[_CHAIN_A] = outbox
     tool._run_contexts[_CHAIN_A] = admission
     tool._identities[_CHAIN_A] = identity
 
     tool._rekey_run(_CHAIN_A, _CHAIN_B)
 
-    assert (tool._runs, tool._cancels, tool._desks, tool._outboxes, tool._run_contexts, tool._identities) == (
+    assert (tool._runs, tool._cancels, tool._desks, tool._run_contexts, tool._identities) == (
         {_CHAIN_B: task},
         {_CHAIN_B: cancel},
         {_CHAIN_B: desk},
-        {_CHAIN_B: outbox},
         {_CHAIN_B: admission},
         {_CHAIN_B: identity},
     )
@@ -5459,15 +5481,13 @@ async def test_the_retire_callback_clears_the_successors_keys(tmp_path) -> None:
         return _done_result(_CHAIN_B)
 
     tool._run = _switching_run
-    await tool._dispatch(
-        _one_node_spec(), _CHAIN_A, _chain_dirs(tmp_path), {}, frozenset(), _chain_origin(), None, True
-    )
+    await tool._dispatch(_one_node_spec(), _CHAIN_A, _chain_dirs(tmp_path), {}, frozenset(), _chain_origin(), None)
     task = tool._runs.get(_CHAIN_A) or tool._runs[_CHAIN_B]
     await asyncio.wait_for(task, 5)
     await asyncio.sleep(0)
 
     assert tool.active_run_ids() == []
-    assert not {_CHAIN_A, _CHAIN_B} & (set(tool._runs) | set(tool._outboxes) | set(tool._identities))
+    assert not {_CHAIN_A, _CHAIN_B} & (set(tool._runs) | set(tool._identities))
 
 
 async def test_a_replanned_chain_is_not_captured(tmp_path, monkeypatch) -> None:

@@ -785,7 +785,6 @@ async def test_a_dag_result_keeps_its_provenance_through_a_downgrade_notice(tmp_
     import sys
 
     from raven.agent.subagent.dag_tool import SubAgentDagTool
-    from raven.agent.tools.registry import ToolRegistry
     from raven.config.schema import ThirdPartyCliSubagentConfig
 
     class HostConfiguredDag(SubAgentDagTool):
@@ -793,29 +792,25 @@ async def test_a_dag_result_keeps_its_provenance_through_a_downgrade_notice(tmp_
             # Playbooks supply these fields after the model-facing schema boundary.
             return await super().execute(nodes=[{**node, "mcps": ["any"]} for node in nodes], **kwargs)
 
+        async def execute_to_completion(self, nodes, **kwargs):
+            return await super().execute_to_completion(nodes=[{**node, "mcps": ["any"]} for node in nodes], **kwargs)
+
     monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
-    registry = ToolRegistry()
     # The CLI answers with its prompt, and a row with no `{mcp_file}` cannot take
     # injected servers, so the node's `mcps` list becomes a downgrade notice.
     command = f'"{sys.executable}" -c "import sys; sys.stdout.write(sys.stdin.read())"'
-    registry.register(
-        HostConfiguredDag(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="echo", command=command)])
-    )
+    tool = HostConfiguredDag(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="echo", command=command)])
 
-    out = await registry.execute(
-        "run_subagent_dag",
-        {
-            "task_summary": "relay one reply",
-            "nodes": [
-                {
-                    "id": "a",
-                    "subagent": "echo",
-                    "node_summary": "repeat the reply",
-                    "prompt_template": f"the agent answered {_HELD}",
-                }
-            ],
-            "background": False,
-        },
+    out = await tool.execute_to_completion(
+        task_summary="relay one reply",
+        nodes=[
+            {
+                "id": "a",
+                "subagent": "echo",
+                "node_summary": "repeat the reply",
+                "prompt_template": f"the agent answered {_HELD}",
+            }
+        ],
     )
 
     assert "cannot take injected mcp servers" in str(out), str(out)

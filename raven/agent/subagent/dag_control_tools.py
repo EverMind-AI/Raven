@@ -355,8 +355,7 @@ class CancelSubagentTool(CancelDagTool):
 
 class ResolveDagNodeTool(_ControlTool):
     """Answer a suspended node: continue it with a message, abandon it, reassign it to
-    another roster agent, or replan with a new graph. On a bound foreground run, then
-    wait for the next report or the final result."""
+    another roster agent, or replan with a new graph. Returns once the decision is recorded."""
 
     @property
     def name(self) -> str:
@@ -369,9 +368,7 @@ class ResolveDagNodeTool(_ControlTool):
             "task: continue it with a message, abandon it and skip its dependents, reassign "
             "it to another sub-agent on the roster, or replan -- hand over a new plan: a new run "
             "starts from it, and the work in progress it lists or depends on is carried into it. "
-            "On a run started with "
-            "background=false this call also waits, and returns the next report or the run's "
-            "final result."
+            "Returns once the decision is recorded."
         )
 
     @property
@@ -445,23 +442,6 @@ class ResolveDagNodeTool(_ControlTool):
         stood when the loop was wired.
         """
         return super().to_schema()
-
-    def blocking_for(self, params: dict[str, Any]) -> bool:
-        """Blocking only when the named run is a bound foreground run.
-
-        The registry consults this to decide whether to put a ceiling on the
-        call, and the turn stream reports it as the call's blocking flag; both
-        must say "may go silent" for exactly the calls that will wait on the
-        graph and for no others. A background replan also waits, for the runner
-        to commit it, but that wait is short by construction: posting the
-        proposal wakes the runner, which commits it at the top of its next pass.
-        If a background replan is ever observed to hang, this predicate is the
-        first thing to revisit.
-        """
-        tool = _registered_tool(self._loop)
-        is_foreground = getattr(tool, "is_foreground", None)
-        run_id = params.get("run_id")
-        return bool(is_foreground is not None and isinstance(run_id, str) and is_foreground(run_id))
 
     async def execute(
         self,
@@ -548,21 +528,6 @@ class ResolveDagNodeTool(_ControlTool):
                 named = ", ".join(f"'{nid}'" for nid in others)
                 where = f" on instance '{prepared.target_instance}'" if prepared.target_instance else ""
                 text += f"\nNodes {named} may move with it{where}."
-            # Registered before yielding, for the reason the continue path below
-            # is: the commit woke the runner, and only a taker already parked on
-            # this run's outbox can be handed the next thing it says.
-            await_run = getattr(owner, "await_run", None)
-            event = None
-            if await_run is not None:
-                try:
-                    event = await await_run(run_id)
-                except asyncio.CancelledError:
-                    abort = getattr(owner, "abort_run", None)
-                    if abort is not None:
-                        abort(run_id)
-                    raise
-            if event is not None:
-                return _with_notices(owner.render_event(run_id, event), list(prepared.notices))
             return _with_notices(text, list(prepared.notices))
         # Ownership first: a run id must resolve under this conversation's run
         # history before the node is answered, or one chat's model could
@@ -613,7 +578,6 @@ class ResolveDagNodeTool(_ControlTool):
             )
             if isinstance(proposal, str):
                 return proposal
-            was_bound = bool(getattr(owner, "is_foreground", lambda _r: False)(run_id))
             future = owner.propose_replan(run_id, proposal)
             if future is None:
                 return _not_waiting(run_id, node_id)
@@ -630,18 +594,6 @@ class ResolveDagNodeTool(_ControlTool):
             successor = outcome.successor_run_id
             running = list(getattr(owner, "running_nodes", lambda _r, _ids: [])(successor, outcome.carried))
             text = _replan_applied(run_id, node_id, outcome, running)
-            if was_bound:
-                # The run's outbox is the same object, now filed under the
-                # successor: the reports this replan answered or stopped are
-                # settled, and the call waits for what the successor says next.
-                owner.retire_reports(successor, (node_id, *outcome.stopped_suspended))
-                try:
-                    event = await owner.await_run(successor)
-                except asyncio.CancelledError:
-                    owner.abort_run(successor)
-                    raise
-                if event is not None:
-                    return _with_notices(_prefixed(text, owner.render_event(successor, event)), list(proposal.notices))
             return _with_notices(text, list(proposal.notices))
         if not resolve_node(self._loop, run_id, node_id, decision, message):
             return (
@@ -649,24 +601,6 @@ class ResolveDagNodeTool(_ControlTool):
                 'out, the run was cancelled, or the id is wrong. tool_call name "dag_status" '
                 f'arguments {{"run_id": "{run_id}"}} shows where every node stands.'
             )
-        # A bound foreground run: the turn that started it is this one, blocked
-        # on the graph by choice, so the decision is followed by the next thing
-        # the graph has to say -- another node's report, or the final result.
-        # Registered before the runner wakes: resolve_node above set the node's
-        # event, which only schedules the wake, and await_run parks its taker
-        # before yielding.
-        await_run = getattr(tool, "await_run", None)
-        event = None
-        if await_run is not None:
-            try:
-                event = await await_run(run_id)
-            except asyncio.CancelledError:
-                abort = getattr(tool, "abort_run", None)
-                if abort is not None:
-                    abort(run_id)
-                raise
-        if event is not None:
-            return tool.render_event(run_id, event)
         if decision == CONTINUE:
             return f"Node '{node_id}' of run {run_id} will run again with your message."
         return (

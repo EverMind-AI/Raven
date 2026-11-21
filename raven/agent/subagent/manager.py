@@ -2453,9 +2453,9 @@ Result:
         wired here, once per entry point -- routing the announce through the
         tool instead would mean a second late-bound hookup at every one of them.
 
-        The summary is delivered verbatim: it is the same text a foreground run
-        returns as its tool result, and a graph's deliverable is its terminal
-        node outputs. Framing it or asking for a two-sentence retelling would put
+        The summary is delivered verbatim: it is the same text the tool renders
+        for a host waiter, and a graph's deliverable is its terminal node
+        outputs. Framing it or asking for a two-sentence retelling would put
         a lossy instruction between the agent and the work product.
         The untrusted fence is not part of that text and stays: node output is
         attacker-influenceable, and unlike a tool result (which the agent knows
@@ -2516,12 +2516,12 @@ Result:
         output and transcript, which is exactly the text an attacker who reached
         the sub-agent would have written.
 
-        ``awaiting_decision`` does not gate the announce here: unlike the foreground
-        lane's route back, an injected message can carry a notification as easily as a
-        question, so the background lane announces both kinds. It picks the ask and the
-        mark's status instead -- ``exception`` for a node waiting on a decision, ``error``
-        for one that has already failed -- and it is still required: a default on a fact
-        two announcers route on is a defect waiting for the next caller.
+        ``awaiting_decision`` does not gate the announce: an injected message can
+        carry a notification as easily as a question, so both kinds announce. It
+        picks the ask and the mark's status instead -- ``exception`` for a node
+        waiting on a decision, ``error`` for one that has already failed -- and it
+        is still required: a default on a fact two announcers route on is a defect
+        waiting for the next caller.
 
         ``output`` is what the node returned on the attempt reported (``ExceptionAnnouncer``).
         It goes on the mark, not into the injected text: the model decides from the

@@ -568,7 +568,6 @@ async def run_dag(
     origin: dict | None = None,
     control_reachable: "Callable[[], bool] | None" = None,
     control_advert: "Callable[[str], str | None] | None" = None,
-    released: asyncio.Event | None = None,
     provider: Any = None,
     model: str | None = None,
     reassignment_state: ReassignmentState | None = None,
@@ -675,11 +674,6 @@ async def run_dag(
     delivers the report to the main agent through the same ``origin`` the host
     used to reach this run, the moment the node is suspended rather than only
     at the end of the run.
-
-    ``released``, when given, is the event the host sets when the turn that owns
-    this run has ended. Until it is set the adjudication wait has no deadline;
-    ``adjudication_timeout_s`` is measured from the release. ``None`` clocks the
-    wait from entry, which is what a backgrounded run wants.
 
     ``reassignment_state``, when given, is the record of which agent and handle
     every node dispatches under for this run: it starts from the submitted graph
@@ -909,7 +903,6 @@ async def run_dag(
                     continuations,
                     timeout_s=adjudication_timeout_s,
                     cancel=cancel,
-                    released=released,
                     reassignments=reassignments,
                     settled=settled,
                     failed=failed_here,
@@ -996,7 +989,6 @@ async def run_dag(
                         continuations,
                         timeout_s=adjudication_timeout_s,
                         cancel=cancel,
-                        released=released,
                         reassignments=reassignments,
                         settled=settled,
                         failed=failed_here,
@@ -2542,7 +2534,6 @@ async def _await_adjudications(
     *,
     timeout_s: float,
     cancel: asyncio.Event | None,
-    released: asyncio.Event | None = None,
     reassignments: dict[str, ReassignPlan] | None = None,
     settled: asyncio.Event | None = None,
     failed: set[str] | None = None,
@@ -2568,12 +2559,6 @@ async def _await_adjudications(
     never been asked at all. Silence is the thing worth failing on: it is what
     says nobody is coming, which one deadline for the round cannot distinguish
     from an agent steadily working through the queue.
-
-    There is no deadline at all while ``released`` is given and unset: the run
-    is bound to a turn that is still running, and that turn is the liveness
-    signal -- the agent is in a tool loop that has the report in hand, and may
-    be asking the user something only they know. The clock starts when the
-    event fires, which is the moment the turn ended without deciding.
 
     A continued node goes back to `pending` with its message parked in
     ``continuations`` -- its dependencies are still `completed`, so the next pass
@@ -2622,7 +2607,6 @@ async def _await_adjudications(
     waiters = {nid: desk.waiter(nid) for nid in open_nodes}
     node_tasks = {nid: asyncio.create_task(event.wait()) for nid, event in waiters.items()}
     stop = asyncio.create_task(cancel.wait()) if cancel is not None else None
-    unbind = asyncio.create_task(released.wait()) if released is not None and not released.is_set() else None
     # A move staged behind a running source attempt is parked here: the move
     # installs when that attempt settles, and without this the wait below would
     # hold it until an unrelated suspended node was answered or timed out. The
@@ -2631,7 +2615,7 @@ async def _await_adjudications(
     moved = asyncio.create_task(settled.wait()) if settled is not None else None
     proposal = asyncio.create_task(desk.proposed.wait())
     loop = asyncio.get_running_loop()
-    deadline: float | None = None if unbind is not None else loop.time() + timeout_s
+    deadline: float | None = loop.time() + timeout_s
     cancelled = False
     moved_on = False
     # Set when the call returns with work the scheduler must pick up: a move
@@ -2648,21 +2632,16 @@ async def _await_adjudications(
                 waiting_on.add(moved)
             if stop is not None:
                 waiting_on.add(stop)
-            if unbind is not None and not unbind.done():
-                waiting_on.add(unbind)
             done, _ = await asyncio.wait(waiting_on, timeout=budget, return_when=asyncio.FIRST_COMPLETED)
             if stop is not None and stop in done:
                 cancelled = True
                 break
-            if unbind is not None and unbind in done:
-                deadline = loop.time() + timeout_s
             decided = done & node_pending
             node_pending -= decided
             if decided:
                 # A reassign hands the node back to the scheduler immediately.
                 # Waiting for the round's other nodes would hold the move behind
-                # questions it does not depend on, and on a bound run those may
-                # never be answered at all. Every waiter already carrying an
+                # questions it does not depend on. Every waiter already carrying an
                 # answer is considered, not just the ones that woke this
                 # iteration: a sibling answered in an earlier wakeup must not be
                 # stranded until the moved node's next attempt ends.
@@ -2692,9 +2671,8 @@ async def _await_adjudications(
                 # charged a timeout it did not have.
                 moved_on = True
                 break
-            still_bound = unbind is not None and not unbind.done()
             if decided:
-                deadline = None if still_bound else loop.time() + timeout_s
+                deadline = loop.time() + timeout_s
             elif deadline is not None and loop.time() >= deadline:
                 break
         if cancelled:
@@ -2730,8 +2708,6 @@ async def _await_adjudications(
     finally:
         if stop is not None and not stop.done():
             stop.cancel()
-        if unbind is not None and not unbind.done():
-            unbind.cancel()
         if moved is not None and not moved.done():
             moved.cancel()
         if not proposal.done():
@@ -2749,7 +2725,6 @@ async def _await_adjudications(
         await asyncio.gather(
             *node_tasks.values(),
             *([stop] if stop is not None else []),
-            *([unbind] if unbind is not None else []),
             *([moved] if moved is not None else []),
             proposal,
             return_exceptions=True,

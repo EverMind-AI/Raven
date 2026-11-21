@@ -7,10 +7,9 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from raven.agent.subagent.dag_adjudication import Final, Report
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec
 from raven.agent.subagent.dag_runner import DagRunResult
-from raven.agent.subagent.dag_tool import _successful_final
+from raven.agent.subagent.dag_tool import _successful_result
 from raven.agent.subagent.delegate import Worker, current_delegate, delegate_scope
 from raven.config.schema import PlaybookConfig
 from raven.playbook.agent_generator import (
@@ -524,10 +523,10 @@ def test_workflow_capture_accepts_only_a_clean_completed_dag() -> None:
         summary={"total": 2, "completed": 1, "failed": 1, "cancelled": 0, "skipped": 0},
     )
 
-    assert _successful_final(Final(complete))
-    assert not _successful_final(Final(failed))
-    assert not _successful_final(Final(complete, stopped=True))
-    assert not _successful_final(Report(node_id="research", text="needs a decision"))
+    assert _successful_result(complete, stopped=False)
+    assert not _successful_result(failed, stopped=False)
+    assert not _successful_result(complete, stopped=True)
+    assert not _successful_result("Error running DAG run-x", stopped=False)
 
 
 def test_v2_file_is_plain_yaml_and_contains_no_run_values(tmp_path: Path) -> None:
