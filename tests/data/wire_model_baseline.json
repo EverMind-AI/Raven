@@ -59,6 +59,14 @@
       "vendorx/zz-probe-1": "vendorx/zz-probe-1",
       "zz-probe-1": "zz-probe-1"
     },
+    "atlascloud": {
+      "atlascloud-probe": "openai/atlascloud-probe",
+      "atlascloud/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "atlascloud/zz-probe-1": "openai/zz-probe-1",
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
     "azure_openai": {
       "azure-openai/zz-probe-1": "azure-openai/zz-probe-1",
       "azure-probe": "azure-probe",
