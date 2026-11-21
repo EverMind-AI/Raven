@@ -349,7 +349,11 @@ The hourly dispatch budget is charged once, at commit.
 
 ## Inspect and recover
 
-Ask Raven to use `dag_status` to inspect a run and `cancel_dag` to stop one.
+Use `dag_status` to inspect a run and `cancel_subagent` with its `run_id` to stop it.
+The same cancellation tool accepts `agent` and `instance` to interrupt one active
+delegation. On supported backends, `mode: "report_now"` requests a final reply from
+the work already done. The host receives an advisory notice after one hour of
+execution by default. Set `subagents.longRunNoticeSeconds` to `0` to disable it.
 These are model tools, not `raven dag` shell commands. The TUI and WebUI consume
 live progress and can read the saved graph; RPC exposes `dag.get` and `dag.node`.
 

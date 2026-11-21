@@ -233,10 +233,12 @@ class CodeParticipant(AgentParticipant):
         # registry retires a record the moment its process exits: a command that
         # finishes before the watcher's first poll still has to be named in the
         # closing turn, or the model is told work finished with no work named.
-        tasks = background_exec.running(session_key=step.session_key)
-        if tasks:
-            from raven.agent import turn_clock
+        from raven.agent import turn_clock
 
+        execution = turn_clock.execution_id()
+        selection = {"execution_id": execution} if execution is not None else {}
+        tasks = background_exec.running(session_key=step.session_key, **selection)
+        if tasks:
             left = turn_clock.remaining()
             meta[HOLD_TURN_KEY] = {
                 "why": "waiting for a background command this turn started",

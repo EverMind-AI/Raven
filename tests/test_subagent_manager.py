@@ -4921,6 +4921,51 @@ async def _drain(manager: SubagentManager) -> None:
     await asyncio.gather(*manager._running_tasks.values(), return_exceptions=True)
 
 
+async def test_a_long_running_spawn_notifies_the_host_and_can_be_interrupted(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.dag_control_tools import CancelSubagentTool
+
+    class WaitingBackend:
+        async def run(self, task, **kwargs):
+            entered.set()
+            await asyncio.Future()
+
+    entered = asyncio.Event()
+    notified = asyncio.Event()
+    notices = []
+
+    def submit(req):
+        if req.delegated and req.delegated["status"] == "notice":
+            notices.append(req)
+            notified.set()
+
+    manager = SubagentManager(
+        provider=_StubProvider(),
+        workspace=tmp_path,
+        long_run_notice_seconds=0.01,
+        control_reachable=lambda: True,
+    )
+    monkeypatch.setattr(manager, "_resolve_backend", lambda _agent: WaitingBackend())
+    manager.set_submit(submit)
+    tool = CancelSubagentTool(SimpleNamespace())
+    tool.set_context("web", "s1", "web:s1")
+    await manager.spawn(task="work", session_key="web:s1", origin_channel="web", origin_chat_id="s1", instance="draft")
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.wait_for(notified.wait(), 2)
+        req = notices[0]
+        assert req.conversation == "web:s1"
+        assert "is still active" in req.text and '"instance": "draft"' in req.text
+        assert manager.get_running_count() == 1
+        receipt = await tool.execute(agent=GENERIC_AGENT, instance="draft", call_id=req.delegated["call_id"])
+        assert receipt.startswith("interrupt_requested:")
+        await asyncio.wait_for(_drain(manager), 2)
+        assert manager.get_running_count() == 0
+    finally:
+        await manager.cancel_all()
+
+
 class _StubBackendWithFailedCalls:
     """A backend that answers, having published two failed calls on its way.
 

@@ -363,6 +363,7 @@ def build_runtime(
             workdir_resolver=workdir_resolver,
             subagent_dag_config=ec_config.subagent_dag,
             subagent_questions_config=ec_config.subagent_questions,
+            long_run_notice_seconds=config.subagents.long_run_notice_seconds,
         ),
         engine=EngineWiring(
             strategies=strategies,

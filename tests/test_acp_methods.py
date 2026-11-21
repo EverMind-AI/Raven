@@ -2023,15 +2023,16 @@ class _SpineStack(_Stack):
         )
 
 
-class TestSilentTurn:
-    """A turn the model ends on a silence marker, over the real loop, spine, outlet and translator.
+class TestPromptCompletion:
+    """Prompt completion over the real loop, spine, outlet and translator.
 
-    The prompt must still be answered ``end_turn``, no chunk of the answer may carry any of the
-    marker, and the response meta a hook filed has to be read back off the marker row -- the only
-    assistant row this turn has."""
+    A silent turn still answers ``end_turn``, and its response meta is read from
+    the marker row. An early reply carries the finish request and its outcome
+    through the same path.
+    """
 
     @pytest.fixture
-    async def silent_rig(self, tmp_path, monkeypatch):
+    async def spine_rig(self, tmp_path, monkeypatch):
         from raven.agent.hook import AgentHook, HookDecision
         from raven.agent.loop import AgentLoop
         from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
@@ -2109,8 +2110,8 @@ class TestSilentTurn:
         assert "result" in response, response
         return response["result"]
 
-    async def test_an_acp_silent_turn_ends_end_turn_with_its_meta(self, silent_rig):
-        rig = silent_rig
+    async def test_an_acp_silent_turn_ends_end_turn_with_its_meta(self, spine_rig):
+        rig = spine_rig
         await rig.handshake()
         session_id = await rig.new_session()
         rig.scripts.extend([_ScriptedStream("[SIL", "ENT]"), _ScriptedStream("all quiet")])
@@ -2132,6 +2133,51 @@ class TestSilentTurn:
         assert spoken["stopReason"] == "end_turn" and spoken["_meta"] == {"vendor.x": {"sent": "all quiet"}}
         chunks = [u for u in rig.updates() if u.get("sessionUpdate") == "agent_message_chunk"]
         assert [u["content"]["text"] for u in chunks] == ["all quiet"]
+
+    async def test_a_report_request_reaches_the_bound_turn_over_the_spine(self, spine_rig, monkeypatch):
+        rig = spine_rig
+        await rig.handshake()
+        session_id = await rig.new_session()
+        rig.scripts.append(_ScriptedStream("Progress from the existing work"))
+        ready = asyncio.Event()
+        resume = asyncio.Event()
+        original = rig.engine._run_agent_loop
+
+        async def paused(*args, **kwargs):
+            ready.set()
+            await resume.wait()
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(rig.engine, "_run_agent_loop", paused)
+        prompt = asyncio.create_task(
+            rig.call(
+                "session/prompt",
+                {
+                    "sessionId": session_id,
+                    "prompt": [{"type": "text", "text": "work on this"}],
+                    "_meta": {protocol.REPORT_NOW_PROMPT_KEY: "prompt-1"},
+                },
+            )
+        )
+        try:
+            await asyncio.wait_for(ready.wait(), 2)
+            ack = await rig.call(
+                "_raven/session/steer", {"sessionId": session_id, "intent": "report_now", "promptId": "prompt-1"}
+            )
+            assert ack["result"] == {"status": "report_requested"}
+            assert not prompt.done()
+            resume.set()
+            result = (await asyncio.wait_for(prompt, 2))["result"]
+            assert result["stopReason"] == "end_turn"
+            assert result["_meta"][protocol.REPORTED_EARLY_KEY] is True
+            chunks = [u["content"]["text"] for u in rig.updates() if u.get("sessionUpdate") == "agent_message_chunk"]
+            assert chunks == ["Progress from the existing work"]
+            assert sum(name == "turn.send" for name, _ in rig.stack.calls) == 1
+        finally:
+            resume.set()
+            if not prompt.done():
+                prompt.cancel()
+                await asyncio.gather(prompt, return_exceptions=True)
 
 
 async def test_prompt_usage_owner_is_persisted_per_session(rig):
@@ -2395,6 +2441,73 @@ class TestSteer:
         response = await rig.handshake()
         validate_def("InitializeResponse", response["result"])
         assert response["result"]["agentCapabilities"]["_meta"]["raven.steer"] is True
+        assert response["result"]["agentCapabilities"]["_meta"][protocol.REPORT_NOW_CAPABILITY] is True
+
+    async def test_report_request_is_bound_to_a_held_prompt(self, rig, monkeypatch):
+        from raven.agent import turn_report
+        from raven.agent.tools import background_exec
+
+        await rig.handshake()
+        sid = await rig.new_session()
+        record = rig.engine.sessions.get_or_create(sid)
+        waiting = asyncio.Event()
+        closing = asyncio.Event()
+        clean = asyncio.Event()
+        original = rig.methods._send_bound_turn
+        submitted = []
+
+        def running(session_key=None, *, execution_id=None):
+            assert session_key == sid and execution_id == submitted[0].execution_id
+            waiting.set()
+            return [{"task_id": "bg-own", "command": "build", "log_path": "/tmp/bg-own.log"}]
+
+        async def send(session, text, media, report):
+            submitted.append(report)
+            accepted = await original(session, text, media, report)
+            if report.requested.is_set():
+                assert text == turn_report.REPORT_INSTRUCTION
+                closing.set()
+                await clean.wait()
+                report.applied = True
+                rig.translator.settle_turn(sid, "end_turn")
+            return accepted
+
+        monkeypatch.setattr(background_exec, "running", running)
+        monkeypatch.setattr(rig.methods, "_send_bound_turn", send)
+        task = asyncio.create_task(
+            rig.call(
+                "session/prompt",
+                {
+                    "sessionId": sid,
+                    "prompt": [{"type": "text", "text": "build it"}],
+                    "_meta": {protocol.REPORT_NOW_PROMPT_KEY: "prompt-1"},
+                },
+            )
+        )
+        args = {"sessionId": sid, "intent": "report_now", "promptId": "prompt-1"}
+        try:
+            for _ in range(3):
+                await asyncio.sleep(0)
+            TestHeldTurn._held(record)
+            record.messages[-1]["observers"]["acp_meta"]["raven.holdTurn"]["background"] = True
+            rig.translator.settle_turn(sid, "end_turn")
+            await asyncio.wait_for(waiting.wait(), 2)
+            stale = await rig.call("_raven/session/steer", {**args, "promptId": "retired"})
+            assert stale["result"] == {"status": "not_running"}
+            assert (await rig.call("_raven/session/steer", args))["result"] == {"status": "report_requested"}
+            await asyncio.wait_for(closing.wait(), 2)
+            assert submitted[1] is submitted[0]
+            assert not task.done()
+            clean.set()
+            result = (await asyncio.wait_for(task, 2))["result"]
+            assert result == {"stopReason": "end_turn", "_meta": {protocol.REPORTED_EARLY_KEY: True}}
+            assert (await rig.call("_raven/session/steer", args))["result"] == {"status": "not_running"}
+            assert sum(name == "turn.send" for name, _ in rig.stack.calls) == 2
+        finally:
+            clean.set()
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
     async def test_no_turn_when_nothing_is_open(self, rig):
         await rig.handshake()
@@ -2749,6 +2862,29 @@ async def test_the_deadline_text_names_the_windows_leftover(rig, monkeypatch):
     content = rig.stack.params_for("turn.send")["content"]
     assert "were stopped" in content
     assert "may still be running on Windows" in content
+
+
+async def test_a_scoped_hold_resolves_if_command_cleanup_fails(rig, monkeypatch):
+    from raven.agent.tools import background_exec
+    from raven.spine.turn import TurnReport
+
+    await rig.handshake()
+    sid = await rig.new_session()
+    session = rig.translator.get(sid)
+
+    async def unable_to_reap(session_key, execution_id):
+        assert session_key == sid and execution_id == "current"
+        raise TimeoutError
+
+    monkeypatch.setattr(background_exec, "running", lambda **_kwargs: [{"task_id": "bg-1"}])
+    monkeypatch.setattr(background_exec, "reap_execution", unable_to_reap)
+    ending = rig.translator.begin_turn(sid)
+    await rig.methods._resume_after_background(
+        session, {"background": True, "untilMs": (time.time() - 1) * 1000}, TurnReport("current")
+    )
+
+    assert await asyncio.wait_for(ending, 1) == "refusal"
+    assert not any(name == "turn.send" for name, _ in rig.stack.calls)
 
 
 @pytest.mark.asyncio

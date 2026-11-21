@@ -1,8 +1,9 @@
 """Spawn tool for creating background subagents."""
 
+import json
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
@@ -64,8 +65,9 @@ class SpawnTool(Tool):
     # words -- those arrive separately, as the announcement the manager injects.
     # Declaring it here is what put the receipt's own text beyond the scrub.
 
-    def __init__(self, manager: "SubagentManager"):
+    def __init__(self, manager: "SubagentManager", *, control_advert: Callable[[], str | None] | None = None):
         self._manager = manager
+        self._control_advert = control_advert
         self._default = _SpawnOrigin(channel="cli", chat_id="direct", session_key="cli:direct")
         self._origin: ContextVar[_SpawnOrigin] = ContextVar("spawn_origin")
         self._tool_call_id: ContextVar[str | None] = ContextVar("spawn_tool_call_id", default=None)
@@ -581,4 +583,11 @@ class SpawnTool(Tool):
         # one carries a handle too.
         if instance and not result.startswith(SPAWN_REFUSED_PREFIX):
             self._pending[org.session_key] = {"instance": instance, "instance_auto": minted}
+            if self._control_advert and (advert := self._control_advert()):
+                args = {"agent": subagent or GENERIC_AGENT, "instance": instance, "call_id": node_id}
+                result += (
+                    '\nTo interrupt this execution, call tool_call with name "cancel_subagent" and arguments '
+                    + json.dumps(args)
+                    + f".\n\ncancel_subagent: {advert}"
+                )
         return result

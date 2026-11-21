@@ -25,6 +25,7 @@ loop when it lands is a job for the on-call agent's ops_submit, not this.
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 import json
 import os
@@ -35,6 +36,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from raven.agent import turn_clock
 from raven.contracts.tool import ToolOutput
 from raven.home import raven_home
 
@@ -90,6 +92,7 @@ class BackgroundTask:
     log_path: str
     started_at: float
     session_key: str | None = None
+    execution_id: str | None = None
 
 
 def _meta_path(task_id: str) -> Path:
@@ -184,7 +187,15 @@ def start(
         handle.close()
     _OWN.append(task_id)
     _PROCS[task_id] = proc
-    task = BackgroundTask(task_id, command, proc.pid, str(log), time.time(), session_key)
+    task = BackgroundTask(
+        task_id,
+        command,
+        proc.pid,
+        str(log),
+        time.time(),
+        session_key or turn_clock.session_key() or None,
+        turn_clock.execution_id(),
+    )
     _record(task)
     return task
 
@@ -199,6 +210,7 @@ def _record(task: BackgroundTask) -> None:
                 "log_path": task.log_path,
                 "started_at": task.started_at,
                 "session_key": task.session_key,
+                "execution_id": task.execution_id,
             }
         ),
         encoding="utf-8",
@@ -222,7 +234,13 @@ def adopt(
     _register_reaper()
     task_id = _new_task_id()
     task = BackgroundTask(
-        task_id, command, pid, log_path or str(_log_path(task_id)), started_at or time.time(), session_key
+        task_id,
+        command,
+        pid,
+        log_path or str(_log_path(task_id)),
+        started_at or time.time(),
+        session_key or turn_clock.session_key() or None,
+        turn_clock.execution_id(),
     )
     _OWN.append(task_id)
     _record(task)
@@ -303,7 +321,7 @@ def tail(task_id: str, *, max_bytes: int = 20000) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def running(session_key: str | None = None) -> list[dict]:
+def running(session_key: str | None = None, *, execution_id: str | None = None) -> list[dict]:
     """Every recorded task whose process is still alive, optionally one session's.
 
     A record whose process is gone is retired here, so the set this globs
@@ -320,6 +338,8 @@ def running(session_key: str | None = None) -> list[dict]:
         task_id = str(data.get("task_id") or "")
         if session_key is not None and data.get("session_key") != session_key:
             continue
+        if execution_id is not None and data.get("execution_id") != execution_id:
+            continue
         if _alive(task_id, int(data.get("pid") or -1)):
             out.append(data)
         elif task_id not in _PROCS:
@@ -327,7 +347,7 @@ def running(session_key: str | None = None) -> list[dict]:
     return out
 
 
-def reap(task_id: str) -> bool:
+def reap(task_id: str, *, force: bool = False) -> bool:
     """Kill a task's whole process group if it is still alive; return True if it was."""
     data = status(task_id)
     if not data:
@@ -335,20 +355,56 @@ def reap(task_id: str) -> bool:
     pid = int(data.get("pid") or -1)
     if not _alive(task_id, pid):
         return False
+    sig = getattr(signal, "SIGKILL", signal.SIGTERM) if force else signal.SIGTERM
     if hasattr(os, "killpg"):
         # The group is the task's own (see _alive), so this reaches the whole
         # tree and nothing else. No fallback to a bare kill(pid): a pid that
         # no longer leads its group is not this task any more.
         try:
-            os.killpg(pid, signal.SIGTERM)
+            os.killpg(pid, sig)
         except (ProcessLookupError, PermissionError, OSError):
             return False
         return True
     try:
-        os.kill(pid, signal.SIGTERM)
+        os.kill(pid, sig)
     except OSError:
         return False
     return True
+
+
+async def reap_execution(session_key: str, execution_id: str) -> str:
+    """Wait for this execution's background commands to stop and return their log tails."""
+    tasks = running(session_key, execution_id=execution_id)
+    if not tasks:
+        return ""
+    for task in tasks:
+        reap(task["task_id"])
+
+    async def wait() -> None:
+        while running(session_key, execution_id=execution_id):
+            await asyncio.sleep(0.05)
+
+    try:
+        async with asyncio.timeout(2):
+            await wait()
+    except TimeoutError:
+        for task in running(session_key, execution_id=execution_id):
+            reap(task["task_id"], force=True)
+        async with asyncio.timeout(2):
+            await wait()
+
+    tails = []
+    for task in tasks[:8]:
+        try:
+            with Path(task["log_path"]).open("rb") as log:
+                size = log.seek(0, os.SEEK_END)
+                log.seek(max(0, size - _NOTE_TAIL_BYTES))
+                tail_text = log.read(_NOTE_TAIL_BYTES).decode("utf-8", errors="replace")
+            if tail_text.strip():
+                tails.append(f"{task['task_id']}:\n{tail_text}")
+        except (KeyError, OSError):
+            continue
+    return "\n\n".join(tails)
 
 
 def reap_all() -> int:

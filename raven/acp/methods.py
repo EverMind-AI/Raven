@@ -34,6 +34,7 @@ from collections.abc import Callable
 from itertools import count
 from typing import Any
 from urllib.parse import unquote, urlparse
+from uuid import uuid4
 
 from loguru import logger
 
@@ -43,11 +44,14 @@ from raven.acp.config_options import MODEL_OPTION_ID, model_option, set_model
 from raven.acp.modes import SessionModes, build_session_modes
 from raven.acp.replay import replay
 from raven.acp.updates import AcpSession, TurnAlreadyRunningError, UpdateTranslator
+from raven.agent import turn_report
+from raven.agent.tools import background_exec
 from raven.config import load_config
 from raven.config.schema import DEFAULT_MAX_BACKGROUND_HOLD_SECONDS
 from raven.providers.usage import reported_cost
 from raven.security import redact
 from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT
+from raven.spine.turn import TurnReport
 
 # Methods in the stable manifest that raven does not serve yet. Answered with
 # method-not-found, which is the same answer an unknown name gets -- the
@@ -192,6 +196,7 @@ class AcpMethods:
         # One connection manager per session that brought servers, so the
         # connections a session opened are the connections it closes.
         self._session_mcp: dict[str, Any] = {}
+        self._report_prompts: dict[str, tuple[str, TurnReport]] = {}
 
     # -- frame handling ---------------------------------------------------
 
@@ -746,6 +751,24 @@ class AcpMethods:
         return [] if option is None else [option]
 
     async def _session_prompt(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Bind negotiated finish control to the lifetime of the ACP prompt."""
+        session = self._session_for(params)
+        if session.session_id in self._report_prompts:
+            raise AcpMethodError(protocol.INVALID_REQUEST, str(TurnAlreadyRunningError(session.session_id)))
+        meta = params.get("_meta")
+        prompt_token = meta.get(protocol.REPORT_NOW_PROMPT_KEY) if isinstance(meta, dict) else None
+        if not isinstance(prompt_token, str) or not 1 <= len(prompt_token) <= 128:
+            return await self._run_prompt(session, params)
+        report = TurnReport(uuid4().hex)
+        self._report_prompts[session.session_id] = (prompt_token, report)
+        try:
+            return await self._run_prompt(session, params, report)
+        finally:
+            self._report_prompts.pop(session.session_id, None)
+
+    async def _run_prompt(
+        self, session: AcpSession, params: dict[str, Any], report: TurnReport | None = None
+    ) -> dict[str, Any]:
         """Run one turn and answer with its stop reason, plus what its hooks filed.
 
         The answer comes from the translator's future, which the outbound event
@@ -754,7 +777,6 @@ class AcpMethods:
         record answers with it as ``_meta``; one that filed nothing answers with
         the stop reason alone.
         """
-        session = self._session_for(params)
         text, media, notes = self._read_prompt(params.get("prompt"))
         for note in notes:
             logger.info("acp: prompt content degraded: {}", note)
@@ -812,16 +834,7 @@ class AcpMethods:
                 # route, and a wake scheduled from this turn is later run on
                 # exactly that conversation -- so they must name this session,
                 # not the "default" chat the turn otherwise gets.
-                accepted = await self._call(
-                    "turn.send",
-                    {
-                        "session_key": session.session_key,
-                        "channel": self._channel,
-                        "chat_id": _chat_id_of(session.session_key),
-                        "content": text,
-                        "media": media,
-                    },
-                )
+                accepted = await self._send_bound_turn(session, text, media, report)
             except AcpMethodError as exc:
                 # The turn never started, so no terminating event is coming and
                 # awaiting the future would hang. Say why, then end the turn:
@@ -852,10 +865,16 @@ class AcpMethods:
         # A turn that ended with a wake armed has not finished the work it was
         # asked for; the prompt stays open, held, until a later turn on this
         # session -- the wake's, or a steer's -- ends with nothing pending.
-        while stop == "end_turn" and isinstance(meta, dict) and meta.get(HOLD_TURN_META):
+        while (
+            stop == "end_turn"
+            and isinstance(meta, dict)
+            and meta.get(HOLD_TURN_META)
+            and not (report and report.applied)
+        ):
             hold = meta.pop(HOLD_TURN_META)
             filed_before = len(sessions.get_or_create(session.session_key).messages) if sessions is not None else 0
-            stop = await self._hold_turn(session, hold if isinstance(hold, dict) else {})
+            hold = hold if isinstance(hold, dict) else {}
+            stop = await self._hold_turn(session, hold, report) if report else await self._hold_turn(session, hold)
             meta = self._turn_meta(sessions, session.session_key, filed_before)
         if isinstance(meta, dict):
             # Read here, not passed on: the client is told the turn ended, and
@@ -867,11 +886,33 @@ class AcpMethods:
         # so this reads the ceiling of the turn that actually ended rather than
         # of the one that armed the wake. Only that last turn's answer is sent.
         result: dict[str, Any] = {"stopReason": self._stop_reason(stop, sessions, session.session_key, filed_before)}
+        if report and report.applied and stop == "end_turn":
+            meta = {**(meta or {}), protocol.REPORTED_EARLY_KEY: True}
+        if report and stop == "cancelled":
+            try:
+                await background_exec.reap_execution(session.session_key, report.execution_id)
+            except TimeoutError:
+                logger.error("ACP cancellation could not stop all commands for {}", session.session_id)
         if meta:
             result["_meta"] = meta
         return result
 
-    async def _hold_turn(self, session: AcpSession, hold: dict[str, Any]) -> str:
+    async def _send_bound_turn(
+        self, session: AcpSession, text: str, media: list[str], report: TurnReport | None
+    ) -> dict[str, Any]:
+        with turn_report.submission(report):
+            return await self._call(
+                "turn.send",
+                {
+                    "session_key": session.session_key,
+                    "channel": self._channel,
+                    "chat_id": _chat_id_of(session.session_key),
+                    "content": text,
+                    "media": media,
+                },
+            )
+
+    async def _hold_turn(self, session: AcpSession, hold: dict[str, Any], report: TurnReport | None = None) -> str:
         """Keep the prompt open across the agent's sleep, until its next turn ends.
 
         The agent is not running: it armed a wake and its turn is over, and the
@@ -906,14 +947,14 @@ class AcpMethods:
         # A hold for background work has to end by itself: nothing else will
         # run a turn on this session when the command finishes. The watcher
         # starts that closing turn, which is what answers this prompt.
-        watcher = (
-            asyncio.get_running_loop().create_task(self._resume_after_background(session, hold))
-            if hold.get("background")
-            else None
-        )
+        watcher = None
+        if report is not None:
+            watcher = asyncio.create_task(self._resume_after_background(session, hold, report))
+        elif hold.get("background"):
+            watcher = asyncio.create_task(self._resume_after_background(session, hold))
         try:
             stop = await future
-            if watcher is not None and stop == "cancelled":
+            if watcher is not None and stop == "cancelled" and report is None:
                 self._reap_background(session)
             return stop
         finally:
@@ -929,7 +970,9 @@ class AcpMethods:
         for task in background_exec.running(session_key=session.session_key):
             background_exec.reap(str(task.get("task_id") or ""))
 
-    async def _resume_after_background(self, session: AcpSession, hold: dict[str, Any]) -> None:
+    async def _resume_after_background(
+        self, session: AcpSession, hold: dict[str, Any], report: TurnReport | None = None
+    ) -> None:
         """Run the closing turn once this session's background commands are gone.
 
         Polled rather than event-driven because the registry is process-wide and
@@ -941,8 +984,6 @@ class AcpMethods:
         closing turn: it is a turn like any other and ends the way one does,
         by its own limits or the client's cancel.
         """
-        from raven.agent.tools import background_exec
-
         until = hold.get("untilMs")
         deadline = (float(until) / 1000.0) if isinstance(until, (int, float)) and until > 0 else None
         cap = time.time() + self._background_hold_limit_s
@@ -961,15 +1002,31 @@ class AcpMethods:
                     named[str(task["task_id"])] = task
 
         note(hold.get("tasks"))
-        seen = background_exec.running(session_key=session.session_key)
-        while seen:
+        if report is not None and not hold.get("background"):
+            await report.requested.wait()
+        selection = {"execution_id": report.execution_id} if report is not None else {}
+        seen = background_exec.running(session_key=session.session_key, **selection)
+        while seen and not (report and report.requested.is_set()):
             note(seen)
             if deadline is not None and time.time() >= deadline:
                 stopped = {str(task.get("task_id")) for task in seen}
-                self._reap_background(session)
+                if report is None:
+                    self._reap_background(session)
+                else:
+                    try:
+                        await background_exec.reap_execution(session.session_key, report.execution_id)
+                    except TimeoutError:
+                        self._say(session, "The background commands could not be stopped at the deadline.")
+                        self._translator.settle_turn(session.session_id, "refusal")
+                        return
                 break
-            await asyncio.sleep(BACKGROUND_POLL_S)
-            seen = background_exec.running(session_key=session.session_key)
+            if report is None:
+                await asyncio.sleep(BACKGROUND_POLL_S)
+            else:
+                with contextlib.suppress(TimeoutError):
+                    async with asyncio.timeout(BACKGROUND_POLL_S):
+                        await report.requested.wait()
+            seen = background_exec.running(session_key=session.session_key, **selection)
         lines = [
             f"- {task_id}: {t.get('command')} (log: {t.get('log_path')})"
             + (" -- stopped at the wait limit" if task_id in stopped else "")
@@ -989,28 +1046,30 @@ class AcpMethods:
                 "Read their logs and continue the task; report what they changed."
             )
         content = lead + "\n" + "\n".join(lines)
+        if report is not None:
+            if report.stopping or session.turn is None or session.turn.future.done():
+                return
+            if report.requested.is_set():
+                content = turn_report.REPORT_INSTRUCTION
+            session.turn.turn_id = None
         try:
-            await self._call(
-                "turn.send",
-                {
-                    "session_key": session.session_key,
-                    "channel": self._channel,
-                    "chat_id": _chat_id_of(session.session_key),
-                    "content": content,
-                    "media": [],
-                },
-            )
+            accepted = await self._send_bound_turn(session, content, [], report)
+            if report is not None:
+                self._translator.accept_turn(session.session_id, str(accepted.get("turn_id") or ""))
         except Exception:
             logger.exception("acp: could not run the closing turn after background work on {}", session.session_key)
             # The held prompt is waiting on a turn that never started, and only
             # a turn ending would answer it. Settle it first so the client gets
-            # its stopReason even if telling it why fails too.
-            self._translator.settle_turn(session.session_id, "end_turn")
-            self._say(
-                session,
-                "The closing turn after this session's background work could not be "
-                "started. The commands' logs hold their output; continue from there.",
-            )
+            # its stopReason even if telling it why fails too. A report asked
+            # for the final answer, so its refusal is the honest reason; a plain
+            # hold only has the turn to end.
+            self._translator.settle_turn(session.session_id, "refusal" if report is not None else "end_turn")
+            if report is None:
+                self._say(
+                    session,
+                    "The closing turn after this session's background work could not be "
+                    "started. The commands' logs hold their output; continue from there.",
+                )
 
     async def _heartbeat(self, session: AcpSession, call_id: str) -> None:
         started = time.monotonic()
@@ -1040,6 +1099,19 @@ class AcpMethods:
         which the transcript would otherwise only learn at the turn's end.
         """
         session = self._session_for(params)
+        if params.get("intent") == "report_now":
+            prompt = self._report_prompts.get(session.session_id)
+            turn = session.turn
+            if (
+                prompt is None
+                or prompt[0] != params.get("promptId")
+                or turn is None
+                or turn.future.done()
+                or prompt[1].stopping
+            ):
+                return {"status": "not_running"}
+            prompt[1].requested.set()
+            return {"status": "report_requested"}
         text = params.get("text")
         if not isinstance(text, str) or not text.strip():
             raise AcpMethodError(protocol.INVALID_PARAMS, "text must be a non-empty string", {"field": "text"})
@@ -1143,6 +1215,8 @@ class AcpMethods:
             logger.debug("acp: session/cancel for unknown session {}", session_id)
             return None
         try:
+            if (prompt := self._report_prompts.get(session_id)) is not None:
+                prompt[1].stopping = True
             await self._call("turn.cancel", {"session_key": session.session_key})
         finally:
             self._translator.settle_turn(session.session_id, "cancelled")
