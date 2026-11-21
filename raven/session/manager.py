@@ -553,6 +553,48 @@ def _legacy_log_id(key: str, created_at: Any, message_count: int) -> str:
     return uuid.uuid5(uuid.NAMESPACE_URL, f"raven-session-log:{key}:{created_at}:{message_count}").hex
 
 
+_INTERRUPTED_RESULT = "[interrupted] this call never returned"
+
+
+def repair_dangling_tool_calls(messages: list[dict]) -> list[dict]:
+    """Give every tool call that never got a result an ``[interrupted]`` one.
+
+    An incrementally written transcript can end mid-call: the assistant message
+    is on disk and the process is gone before the tool answered. A strict
+    provider rejects a history whose ``tool_calls`` have no matching tool
+    message, so the repair happens on the way in rather than on the way out --
+    the file keeps saying what actually happened. Each result is filed directly
+    after the call that opened it, and after any results already filed for it,
+    so a later restart reloads the same provider-valid order.
+    """
+    answered = {str(message.get("tool_call_id") or "") for message in messages if message.get("role") == "tool"}
+    repairs: list[tuple[int, list[dict]]] = []
+    for index, message in enumerate(messages):
+        if message.get("role") != "assistant":
+            continue
+        pending = []
+        for call in message.get("tool_calls") or []:
+            call_id = str(call.get("id") or "") if isinstance(call, dict) else str(getattr(call, "id", "") or "")
+            if not call_id or call_id in answered:
+                continue
+            function = call.get("function") if isinstance(call, dict) else getattr(call, "function", None)
+            name = function.get("name") if isinstance(function, dict) else getattr(function, "name", None)
+            pending.append(
+                {"role": "tool", "tool_call_id": call_id, "name": str(name or "tool"), "content": _INTERRUPTED_RESULT}
+            )
+        if pending:
+            repairs.append((index, pending))
+    if not repairs:
+        return list(messages)
+    out = list(messages)
+    for index, pending in reversed(repairs):
+        at = index + 1
+        while at < len(out) and out[at].get("role") == "tool":
+            at += 1
+        out[at:at] = pending
+    return out
+
+
 def read_session_file(path: Path, key: str) -> Session | None:
     """The session stored in the transcript at ``path``, read as ``key``.
 
@@ -566,6 +608,7 @@ def read_session_file(path: Path, key: str) -> Session | None:
 
     try:
         messages = []
+        patches: list[dict] = []
         metadata = {}
         created_at = None
         updated_at = None
@@ -595,6 +638,13 @@ def read_session_file(path: Path, key: str) -> Session | None:
                     logger.debug("Skipping undecodable line in session {}", key)
                     continue
 
+                # A turn's late stamps on rows already written: applied by the
+                # row's own identifier, since a concurrent writer's messages can
+                # move any index.
+                if data.get("_type") == "turn_meta":
+                    patches.extend(data.get("patches") or [])
+                    continue
+
                 # Metadata records are appended per save; last one wins.
                 if data.get("_type") == "metadata":
                     metadata = data.get("metadata", {})
@@ -607,6 +657,18 @@ def read_session_file(path: Path, key: str) -> Session | None:
                 else:
                     messages.append(data)
 
+        if patches:
+            positions = {str(row.get("_row_id")): index for index, row in enumerate(messages) if row.get("_row_id")}
+            for patch in patches:
+                index = positions.get(str(patch.get("row_id")))
+                keys = patch.get("keys")
+                if index is not None and isinstance(keys, dict):
+                    messages[index].update(keys)
+        # The identifier is a filing detail: readers get the rows the loop
+        # knows, without the key the file is written under.
+        for row in messages:
+            row.pop("_row_id", None)
+        messages = repair_dangling_tool_calls(messages)
         session = Session(
             key=key,
             messages=messages,
@@ -632,6 +694,19 @@ def read_session_file(path: Path, key: str) -> Session | None:
     except Exception as e:
         logger.warning("Failed to load session {}: {}", key, e)
         return None
+
+
+def append_turn_meta(session_path: Path, patches: list[dict]) -> None:
+    """Restate keys on rows already written, by row id, under the file lock.
+
+    The turn's rows are appended as it produces them; the stamps filed at its
+    end -- the reply's provenance, the hook observers -- arrive later. One record
+    per turn carries them, and the reader applies it in file order.
+    """
+    if not patches:
+        return
+    payload = json.dumps({"_type": "turn_meta", "patches": patches}, ensure_ascii=False)
+    locked_append(session_path, [payload])
 
 
 def _cut_since_persisted(session: Session) -> bool:
