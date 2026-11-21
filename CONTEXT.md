@@ -115,9 +115,14 @@ produces nothing of its own and exists to put a question to this turn's Agent Pa
 merge what they answer (`ask_intake`, `ask_advice`, `ask_review`, `ask_salvage`, `ask_judge`,
 `ask_system_addendum`, `ask_archive`, `ask_select_tools`). Replacing a role therefore means two
 different things: a new way to produce, or a new rule for adjudicating what the products say.
-Frozen per Generation: the tool array is the prompt-cache prefix, so the set a turn runs on
-does not move between two of its model calls -- except for tools the turn's own `plugin` call
-connected, which join it on purpose (`ToolRegistry.admit_to_this_turn`).
+Frozen per Session: the tool array is the prompt-cache prefix, so the set a session
+assembles with does not move between its model calls or between its turns. It is
+captured on the session's first assembly and recaptured only at a refresh point -- a
+new session, a compaction (cashed by the next assembly), a `/clear`, or a release. A
+live switch, a missing credential, or a selected base changes availability, not the
+array, and is reported in the runtime context; a tool the turn's own `plugin` call
+connects is admitted to `offers` (reachable through `tool_call`) and joins the array at
+the next refresh.
 
 **Harness Curator** (`experimental/curator/`):
 Experimental generation of a worker's Harness from its task, the materials handed to it and
@@ -719,9 +724,11 @@ user declaring the agent owns nothing and is never refilled.
 Two things never carry ownership. The generic row (`Raven-General`) claims none whatever a config
 says, because it carries no capability bias and a line about it would prohibit the agent
 reading it from doing its own work. And the section is withheld entirely on a turn holding
-no dispatch tool — `spawn` and `run_subagent_dag` can both be withheld by
-`tools.disabledTools`, and a prohibition outliving every means of handing the work over
-leaves a request with no compliant action at all. Only the paths the turn does hold are named.
+no dispatch tool — a hard-subset deploy or a charter narrowing can leave the array without
+`spawn` and `run_subagent_dag`, and a prohibition outliving every means of handing the work
+over leaves a request with no compliant action at all. A live `tools.disabledTools` switch
+keeps the schema and reports the tool unavailable in the runtime context instead. Only the
+paths the turn does hold are named.
 _Avoid_: putting it in `description` — that copy is spliced into the tool descriptions, where
 the model reads it only once it is already choosing an agent.
 
@@ -926,8 +933,10 @@ Which interchangeable backend each web tool calls: `tools.web.search.provider` s
 so a selection names a vendor and never a URL. `web_search` is registered whatever the config
 holds and *withheld* from the offered set while the selected vendor's key does not resolve
 (Keenable searches without one and is offered keyless, as Jina reads pages keyless), so a key
-pasted mid-run surfaces it without a restart -- read live from the vendor slot and, for Serper,
-from the pre-vendor leaf, in the order `WebToolsConfig.vendor_key` resolves them, and an empty
+pasted mid-run makes it callable again without a restart -- the schema was already in the
+session's frozen array, and the runtime context clears the notice -- read live from the vendor
+slot and, for Serper, from the pre-vendor leaf, in the order `WebToolsConfig.vendor_key`
+resolves them, and an empty
 slot is a revocation rather than a miss (except for a borrowing vendor, whose empty slot is the
 ordinary state and whose LLM provider key answers instead); `web_fetch` is always offered,
 falling back to Jina, which reads pages without a key. The two sub-agent launchers inherit the host's selection
@@ -2349,12 +2358,13 @@ whose change implies WORK rather than a different answer (constructing a provide
 an MCP handshake, moving a workspace) keeps its apply path -- a door, the pool's
 fingerprint cache, or the generation swap. Timing is asymmetric by design: a revocation
 binds the next read (a tightened deny pattern gates the very next tool call), while an
-addition to the model's tool array lands on the next turn -- `ToolRegistry.turn_scope`
-freezes both registry membership and the withheld set at turn entry, because the array
-is the prompt-cache prefix and must not move between two model calls of one turn. The one
-exception is an addition the turn's own call produced: `ToolRegistry.admit_to_this_turn`
-lets the tools a `plugin` connect or authorize registered join that turn from its next
-model call, at the cost of one rebuilt prefix.
+addition to the model's tool array is held until a session refresh -- `ToolRegistry` freezes
+the array on the session's first assembly and recaptures it only at a new session, a
+compaction, a `/clear`, or a release, because the array is the prompt-cache prefix.
+`ToolRegistry.turn_scope` still freezes registry membership and the withheld set at turn
+entry, so a mid-turn arrival cannot change what `offers` or `execute` admits. The turn's own
+`plugin` call is the one admission: `ToolRegistry.admit_to_this_turn` lets the tools it
+connected reach `tool_call` from the next model call, without moving the array.
 _Avoid_: reading `config.json` keys ad hoc outside this module; treating a live
 preference as a door (doors reconcile members after a durable write; this lane never
 touches member identity).

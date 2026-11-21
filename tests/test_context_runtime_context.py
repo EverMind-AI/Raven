@@ -296,6 +296,7 @@ class TestTheEstimateCountsTheLines:
 
 
 _HEADER = "MCP plugin changes since the last note (an earlier note stands until one here replaces it):"
+TOOL_HEADER = "Tool availability changes since the last note (an earlier note stands until one here replaces it):"
 _AUTH = "MCP plugin 'github': installed, awaiting authorization."
 _CONNECTING = "MCP plugin 'notion': installed, still connecting."
 _FOLDED = "MCP plugin 'notion': connected, offering 3 tool(s)."
@@ -610,7 +611,7 @@ class TestNotesAReclaimTookAwayAreToldAgain:
         assert block["text"] == kept[RUNTIME_CONTEXT_KEY]
         assert block["text"].endswith(f"{_HEADER}\n{_AUTH}")
         assert rest == [self._IMAGE, {"type": "text", "text": "look"}]
-        assert told_notices([kept]) == {"github": _AUTH}
+        assert told_notices([kept]) == {("mcp", "github"): _AUTH}
 
     def test_a_note_the_question_changed_behind_a_recovery_notice_is_not_put_back(self) -> None:
         """The question's own block is read wherever it sits, so a reclaim does
@@ -624,7 +625,7 @@ class TestNotesAReclaimTookAwayAreToldAgain:
         [kept] = retell_notices([older, question], [question])
 
         assert kept["content"] == question["content"]
-        assert told_notices([kept]) == {"notion": _FOLDED}
+        assert told_notices([kept]) == {("mcp", "notion"): _FOLDED}
 
     @pytest.mark.parametrize("words", ["q1", [{"type": "text", "text": "q1"}]], ids=["string", "block-list"])
     def test_a_recorded_block_the_content_no_longer_holds_is_neither_read_nor_retold(self, words: Any) -> None:
@@ -737,7 +738,7 @@ class TestAPluginNameKeysItsOwnLine:
     def test_a_cleared_name_with_a_quote_is_read_as_cleared(self) -> None:
         from raven.context_engine.runtime_context import mcp_notice, notice_changes, told_notices
 
-        told = {"a': b": mcp_notice("a': b", "still connecting.")}
+        told = {("mcp", "a': b"): mcp_notice("a': b", "still connecting.")}
         [_, cleared] = notice_changes([], told)
         replay = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{cleared}", "q")}
 
@@ -772,7 +773,7 @@ class TestAPluginNameKeysItsOwnLine:
         legacy = "MCP plugin 'a'b': installed, still connecting."
         replay = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{legacy}", "q")}
 
-        assert told_notices([replay]) == {"a'b": legacy}
+        assert told_notices([replay]) == {("mcp", "a'b"): legacy}
 
     def test_a_cleared_line_filed_before_the_escaping_still_clears(self) -> None:
         """The line that clears a plugin was written raw too; it has to be read as
@@ -784,3 +785,34 @@ class TestAPluginNameKeysItsOwnLine:
         replay = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{noted}\n{legacy}", "q")}
 
         assert told_notices([replay]) == {}
+
+    def test_a_tool_line_keys_itself(self) -> None:
+        from raven.context_engine.runtime_context import notice_key, tool_notice
+
+        assert notice_key(tool_notice("web_search", "currently unavailable.")) == ("tool", "web_search")
+
+    def test_a_tool_and_a_plugin_with_the_same_name_keep_their_own_lines(self) -> None:
+        from raven.context_engine.runtime_context import mcp_notice, notice_changes, tool_notice
+
+        plugin = mcp_notice("web_search", "still connecting.")
+        tool = tool_notice("web_search", "currently unavailable.")
+
+        assert notice_changes([plugin, tool], {}) == [_HEADER, plugin, TOOL_HEADER, tool]
+
+    def test_an_unchanged_tool_line_is_not_resent(self) -> None:
+        from raven.context_engine.runtime_context import notice_changes, told_notices, tool_notice
+
+        line = tool_notice("web_search", "currently unavailable.")
+        replay = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{TOOL_HEADER}\n{line}", "q")}
+
+        assert notice_changes([line], told_notices([replay])) == []
+
+    def test_a_tool_that_returns_gets_a_cleared_line(self) -> None:
+        from raven.context_engine.runtime_context import notice_changes, notice_key, tool_notice
+
+        told = {("tool", "web_search"): tool_notice("web_search", "currently unavailable.")}
+        [header, cleared] = notice_changes([], told)
+
+        assert header == TOOL_HEADER
+        assert notice_key(cleared) == ("tool", "web_search")
+        assert "available again" in cleared

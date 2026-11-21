@@ -31,7 +31,12 @@ from raven.config.raven import (
 from raven.context_engine import headroom
 from raven.context_engine.history.compacting import CompactingHistoryBuilder
 from raven.context_engine.history.compacting.store import CHECKPOINT_DIR, STATE_FILE, CheckpointStore
-from raven.context_engine.history.markers import HISTORY_CHECKPOINT_KEY, HISTORY_PINNED_KEY, HISTORY_PRIVATE_KEYS
+from raven.context_engine.history.markers import (
+    HISTORY_CHECKPOINT_KEY,
+    HISTORY_COMPACTED_META,
+    HISTORY_PINNED_KEY,
+    HISTORY_PRIVATE_KEYS,
+)
 from raven.context_engine.history_trimmer import HistoryTrimmer
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.context import AssembledPrefix, AssemblyContext, SessionRevision
@@ -273,6 +278,7 @@ class TestACompaction:
         segment = await _builder(tmp_path).build(_ctx(_session(80)))
         meta = segment.meta
         assert meta["compaction_action"] == "compact"
+        assert meta[HISTORY_COMPACTED_META] is True
         assert meta["prompt_tokens"] > meta["trigger_tokens"]
         assert meta["history_tokens"] <= meta["target_tokens"]
         assert meta["history_kept"] < meta["history_total"]
@@ -318,6 +324,8 @@ class TestACompaction:
         first = await builder.build(_ctx(session))
         second = await builder.build(_ctx(session))
         assert (first.meta["compaction_action"], second.meta["compaction_action"]) == ("compact", "pass")
+        assert first.meta[HISTORY_COMPACTED_META] is True
+        assert second.meta[HISTORY_COMPACTED_META] is False
         assert second.meta["compaction_generation"] == 1
         assert second.history == first.history
 

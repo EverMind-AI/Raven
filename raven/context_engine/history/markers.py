@@ -19,7 +19,22 @@ HISTORY_CHECKPOINT_KEY = "_history_checkpoint"
 HISTORY_PINNED_KEY = "_history_pinned"
 """Set to ``True`` on every message of a pinned exchange."""
 
+HISTORY_COMPACTED_META = "history_compacted"
+"""``Segment.meta`` flag: this turn rewrote history, so the tool array may refresh.
+
+The array is the prompt-cache prefix and is frozen for a session; a compaction
+already rebuilds the history half of that prefix, so it is the one turn where
+recapturing the array costs nothing extra. The loop reads this key off the
+assembled metadata and schedules the session's next-assembly refresh. A
+metadata key rather than a message key: it rides the segment, never a message.
+"""
+
 HISTORY_PRIVATE_KEYS = frozenset({HISTORY_CHECKPOINT_KEY, HISTORY_PINNED_KEY})
 
 
-__all__ = ["HISTORY_CHECKPOINT_KEY", "HISTORY_PINNED_KEY", "HISTORY_PRIVATE_KEYS"]
+__all__ = [
+    "HISTORY_CHECKPOINT_KEY",
+    "HISTORY_COMPACTED_META",
+    "HISTORY_PINNED_KEY",
+    "HISTORY_PRIVATE_KEYS",
+]

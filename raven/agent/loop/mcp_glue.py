@@ -36,6 +36,47 @@ async def _swallow_terminal_cancel(task: "asyncio.Task") -> None:
         pass
 
 
+_MCP_AUTH_REMAIN = (
+    "installed, awaiting authorization. Its tools remain in this conversation's tool list, but "
+    "calls to them fail until it is authorized -- by the `plugin` tool's authorize action, or by "
+    "the user in the plugin panel."
+)
+_MCP_CONNECTING_REMAIN = (
+    "installed, still connecting. Its tools remain in this conversation's tool list, but calls to "
+    "them fail until the handshake finishes."
+)
+_MCP_DISCONNECTED_REMAIN = (
+    "disconnected. Its tools remain in this conversation's tool list, and calls to them fail until it reconnects."
+)
+_MCP_DISABLED_REMAIN = (
+    "disabled in settings. Its tools remain in this conversation's tool list, and calls to them "
+    "fail until it is enabled again."
+)
+_MCP_REMOVED_REMAIN = (
+    "no longer loaded. Its tools remain in this conversation's tool list, and calls to them fail "
+    "until it is added back."
+)
+_MCP_AUTH_LIVE = (
+    "installed, awaiting authorization. Its tools are absent from this turn's definitions until "
+    "it is authorized -- by the `plugin` tool's authorize action, or by the user in the plugin "
+    "panel."
+)
+_MCP_AUTH_JOIN = (
+    "installed, awaiting authorization. Its tools are absent from this conversation's tool list; "
+    "after it is authorized they join at the next compaction or new conversation -- by the "
+    "`plugin` tool's authorize action, or by the user in the plugin panel."
+)
+_MCP_CONNECTING_LIVE = (
+    "installed, still connecting. Its tools are absent from this turn's definitions and register "
+    "themselves when the handshake finishes, so they are available from a later turn without "
+    "anyone acting."
+)
+_MCP_CONNECTING_JOIN = (
+    "installed, still connecting. Its tools join this conversation's tool list at the next "
+    "compaction or new conversation."
+)
+
+
 class McpGlueMixin:
     """MCP lifecycle glue: connect, sync, prewarm, apply, close. Bodies moved
     verbatim from main.py."""
@@ -171,8 +212,8 @@ class McpGlueMixin:
     def _mcp_tool_notices(self) -> list[str]:
         """Host facts about MCP tools the definitions cannot carry.
 
-        One line per enabled server whose tools are absent from this turn for a
-        reason the model cannot see, and the three reasons need different lines:
+        One line per server whose tools the model cannot use, and the states
+        need different lines:
 
         * ``auth_required`` -- the wait is on a person, and the answer names who
           can end it. Without this the model reads an unauthorized plugin as a
@@ -185,20 +226,29 @@ class McpGlueMixin:
           names an installed server, so a model that does not think to search
           reports a capability it holds as missing. ``tool_search``'s own
           description says a catalog exists; only this says what is in it.
+        * connected, disconnected, or disabled while its tools are OUTSIDE the
+          session's frozen array -- the array is not recomputed until a new
+          session or a compaction, so the line says what state the server is in
+          and when its tools join. A server that connects mid-session is
+          reachable through ``tool_call`` only if the model knows the name and
+          arguments; the honest fact is the refresh point.
 
-          This line states an inventory and promises no route, which is what keeps
-          it true. This block is rendered once per turn, while the fold is decided
-          per model call against an array a ``before_iteration`` hook may narrow
-          first (``HookDecision.modified_tools``) -- so a turn-level sentence about
-          what this request folded, or about reaching it through ``tool_search`` /
-          ``tool_call``, can be falsified after it is written. "This server is
-          connected and offers N tools" cannot.
+        The array is the session's snapshot (``ToolRegistry.get_definitions``):
+        captured once and refreshed only at a new session, a compaction, or a
+        log id change. This line states an inventory and promises no route,
+        which is what keeps it true. This block is rendered once per turn, while
+        the fold is decided per model call against an array a
+        ``before_iteration`` hook may narrow first
+        (``HookDecision.modified_tools``) -- so a turn-level sentence about what
+        this request folded, or about reaching it through ``tool_search`` /
+        ``tool_call``, can be falsified after it is written. "This server is
+        connected and offers N tools" cannot.
 
-          The count is the server's tools this turn's array carries, not the
-          manager's ``tool_count``: that one counts every wrapper the server
-          registered, including one the operator switched off, which no surface
-          offers. The fold gate is only about noise -- below it every schema is in
-          the array and the line tells the model nothing it cannot see.
+        The folded count is the server's tools the array carries, not the
+        manager's ``tool_count``: that one counts every wrapper the server
+        registered, including one the operator switched off, which no surface
+        offers. The fold gate is only about noise -- below it every schema is in
+        the array and the line tells the model nothing it cannot see.
 
         Rendered into the runtime-context block, not the system prompt -- the
         set changes turn to turn and must never be cached with the prefix. This
@@ -224,32 +274,75 @@ class McpGlueMixin:
         offered: set[str] = set()
         if folded:
             offered = {d["function"]["name"] for d in self.tools.get_definitions()}
+        # None outside a turn: the pre-freeze behaviour, where the array is the
+        # live view and a server's tools appear as soon as it connects.
+        snapshot = self.tools.session_definition_names()
+        snapshot_servers = self.tools.session_definition_servers() if snapshot is not None else frozenset()
+        seen: set[str] = set()
         notices = []
         for snap in mgr.status():
+            name = snap["name"]
+            seen.add(name)
+            snap_names = set(self.tools.session_definition_names_of_server(name)) if snapshot is not None else set()
+            live_names = set(self.tools.names_from(name))
             if not snap.get("enabled", True):
+                if snap_names:
+                    notices.append(mcp_notice(name, _MCP_DISABLED_REMAIN))
                 continue
-            if snap["state"] == "auth_required":
-                notices.append(
-                    mcp_notice(
-                        snap["name"],
-                        "installed, awaiting authorization. Its tools are absent from this turn's "
-                        "definitions until it is authorized -- by the `plugin` tool's authorize "
-                        "action, or by the user in the plugin panel.",
+            state = snap["state"]
+            if state == "auth_required":
+                if snapshot is None:
+                    text = _MCP_AUTH_LIVE
+                elif snap_names:
+                    text = _MCP_AUTH_REMAIN
+                else:
+                    text = _MCP_AUTH_JOIN
+                notices.append(mcp_notice(name, text))
+            elif state == "connecting":
+                if snapshot is None:
+                    text = _MCP_CONNECTING_LIVE
+                elif snap_names:
+                    text = _MCP_CONNECTING_REMAIN
+                else:
+                    text = _MCP_CONNECTING_JOIN
+                notices.append(mcp_notice(name, text))
+            elif snap["connected"]:
+                added = live_names - snap_names
+                gone = snap_names - live_names
+                if snapshot is not None and snap_names and (added or gone):
+                    # A reconnect can change the server's tool set; the frozen
+                    # array kept the old names. Name both halves rather than
+                    # reporting the connection as fully in the list.
+                    parts: list[str] = []
+                    if added:
+                        parts.append(
+                            f"{len(added)} new tool(s) join this conversation's tool list at the next "
+                            "compaction or new conversation"
+                        )
+                    if gone:
+                        parts.append(
+                            f"{len(gone)} tool(s) that are no longer registered remain in the list and "
+                            "calls to them fail"
+                        )
+                    notices.append(mcp_notice(name, "connected; " + "; ".join(parts) + "."))
+                elif snapshot is not None and not snap_names and live_names:
+                    notices.append(
+                        mcp_notice(
+                            name,
+                            f"connected, offering {len(live_names)} tool(s); they join this conversation's "
+                            "tool list at the next compaction or new conversation.",
+                        )
                     )
-                )
-            elif snap["state"] == "connecting":
-                notices.append(
-                    mcp_notice(
-                        snap["name"],
-                        "installed, still connecting. Its tools are absent from this turn's "
-                        "definitions and register themselves when the handshake finishes, so "
-                        "they are available from a later turn without anyone acting.",
-                    )
-                )
-            elif folded and snap["connected"]:
-                mine = [n for n in self.tools.names_from(snap["name"]) if n in offered]
-                if mine:
-                    notices.append(mcp_notice(snap["name"], f"connected, offering {len(mine)} tool(s)."))
+                elif folded:
+                    mine = [n for n in live_names if n in offered]
+                    if mine:
+                        notices.append(mcp_notice(name, f"connected, offering {len(mine)} tool(s)."))
+            elif snap_names:
+                notices.append(mcp_notice(name, _MCP_DISCONNECTED_REMAIN))
+        # A server removed outright has no row in status() at all, but its names
+        # are still advertised by the frozen array.
+        for name in sorted(snapshot_servers - seen):
+            notices.append(mcp_notice(name, _MCP_REMOVED_REMAIN))
         return notices
 
     def prewarm_mcp(self) -> None:
