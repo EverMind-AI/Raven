@@ -449,7 +449,7 @@ Expected: all pass.
 
 - [ ] **Step 1: Write the entries**
 
-- `CONTEXT.md` **Project skill**: a skill directory (`<name>/SKILL.md`) under a `.agents/skills` directory found from the turn's working directory up to its git root (`memory_engine/skill_forge/project_skills.py`), offered as `project/<name>` by the `project` router source; never `always`-injected; read fresh per turn, never from held hits; skipped for the user's home and agent home's ancestors; leader agent only; switch `skillForge.projectSkills.enabled`. _Avoid_: "workspace skill" (agent home's `skills/` layer).
+- `CONTEXT.md` **Project skill**: a skill directory (`<name>/SKILL.md`) under a `.agents/skills` directory found from the turn's working directory up to its git root (`memory_engine/skill_forge/project_skills.py`), offered as `project/<name>` by the `project` router source; never `always`-injected; read fresh per turn, never from held hits; skipped at and above the user's home, and for agent home and its ancestors; leader agent only; switch `skillForge.projectSkills.enabled`. _Avoid_: "workspace skill" (agent home's `skills/` layer).
 - SkillForge: "three sources" becomes four, naming project skills.
 - Skill Discovery: one sentence on `project/` ids and their per-turn resolution.
 - Docs page, both languages: "Skill directories" subsection stating agent home's `skills/` (default `~/.raven/workspace/skills`, moved by `RAVEN_HOME` and `--home`) and the project's `.agents/skills` (the walk, nearest wins, the switch, not injected, leader agent only, the symlink rule), with one install example: `gh skill install <owner>/<repo> skills/<name>/SKILL.md --dir .agents/skills`.
