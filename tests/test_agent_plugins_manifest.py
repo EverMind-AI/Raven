@@ -148,6 +148,60 @@ _CASES = (
         True,
         True,
     ),
+    _Case(
+        "null version",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "version": None},
+        False,
+        False,
+    ),
+    _Case(
+        "null description",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "description": None},
+        False,
+        False,
+    ),
+    _Case(
+        "null homepage",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "homepage": None},
+        False,
+        False,
+    ),
+    _Case(
+        "null repository",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "repository": None},
+        False,
+        False,
+    ),
+    _Case(
+        "null license",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "license": None},
+        False,
+        False,
+    ),
+    _Case(
+        "null author",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "author": None},
+        False,
+        False,
+    ),
+    _Case(
+        "null author name",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "author": {"name": None}},
+        False,
+        False,
+    ),
+    _Case(
+        "null author email",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "author": {"email": None}},
+        False,
+        False,
+    ),
+    _Case(
+        "null author url",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "author": {"url": None}},
+        False,
+        False,
+    ),
 )
 
 _DIVERGENT = frozenset({"unknown top-level field", "extensions is not an object"})
