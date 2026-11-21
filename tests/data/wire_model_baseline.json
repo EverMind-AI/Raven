@@ -412,6 +412,14 @@
       "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
       "zz-probe-1": "openai/zz-probe-1"
     },
+    "runcrate": {
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "runcrate-probe": "openai/runcrate-probe",
+      "runcrate/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "runcrate/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
     "siliconflow": {
       "openai/zz-probe-1": "openai/zz-probe-1",
       "siliconflow-probe": "openai/siliconflow-probe",
