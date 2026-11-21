@@ -563,24 +563,35 @@ def repair_dangling_tool_calls(messages: list[dict]) -> list[dict]:
     is on disk and the process is gone before the tool answered. A strict
     provider rejects a history whose ``tool_calls`` have no matching tool
     message, so the repair happens on the way in rather than on the way out --
-    the file keeps saying what actually happened.
+    the file keeps saying what actually happened. Each result is filed directly
+    after the call that opened it, and after any results already filed for it,
+    so a later restart reloads the same provider-valid order.
     """
-    open_calls: dict[str, str] = {}
+    answered = {str(message.get("tool_call_id") or "") for message in messages if message.get("role") == "tool"}
+    repairs: list[tuple[int, list[dict]]] = []
+    for index, message in enumerate(messages):
+        if message.get("role") != "assistant":
+            continue
+        pending = []
+        for call in message.get("tool_calls") or []:
+            call_id = str(call.get("id") or "") if isinstance(call, dict) else str(getattr(call, "id", "") or "")
+            if not call_id or call_id in answered:
+                continue
+            function = call.get("function") if isinstance(call, dict) else getattr(call, "function", None)
+            name = function.get("name") if isinstance(function, dict) else getattr(function, "name", None)
+            pending.append(
+                {"role": "tool", "tool_call_id": call_id, "name": str(name or "tool"), "content": _INTERRUPTED_RESULT}
+            )
+        if pending:
+            repairs.append((index, pending))
+    if not repairs:
+        return list(messages)
     out = list(messages)
-    for message in out:
-        role = message.get("role")
-        if role == "assistant":
-            for call in message.get("tool_calls") or []:
-                call_id = str(call.get("id") or "") if isinstance(call, dict) else str(getattr(call, "id", "") or "")
-                if not call_id:
-                    continue
-                function = call.get("function") if isinstance(call, dict) else getattr(call, "function", None)
-                name = function.get("name") if isinstance(function, dict) else getattr(function, "name", None)
-                open_calls[call_id] = str(name or "tool")
-        elif role == "tool":
-            open_calls.pop(str(message.get("tool_call_id") or ""), None)
-    for call_id, name in open_calls.items():
-        out.append({"role": "tool", "tool_call_id": call_id, "name": name, "content": _INTERRUPTED_RESULT})
+    for index, pending in reversed(repairs):
+        at = index + 1
+        while at < len(out) and out[at].get("role") == "tool":
+            at += 1
+        out[at:at] = pending
     return out
 
 

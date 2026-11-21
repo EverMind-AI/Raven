@@ -131,10 +131,85 @@ def test_a_call_that_never_returned_is_repaired_on_read(tmp_path):
     session = read_session_file(path, "cli:c")
 
     assert session is not None
+    assert [m.get("role") for m in session.messages] == ["assistant", "tool", "assistant"]
     repaired = [m for m in session.messages if m.get("role") == "tool"]
     assert repaired and repaired[0]["tool_call_id"] == "c1"
     assert repaired[0]["name"] == "exec"
     assert repaired[0]["content"].startswith("[interrupted]")
+
+
+def test_a_repaired_call_keeps_its_place_across_a_restart(tmp_path):
+    """The synthetic result stays at the call boundary when the turn resumes and saves."""
+    from raven.session.manager import SessionManager, read_session_file
+
+    manager = SessionManager(tmp_path)
+    path = manager.session_path("cli:c")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps({"_type": "metadata", "key": "cli:c", "created_at": "2026-01-01T00:00:00", "metadata": {}}),
+                json.dumps({"role": "user", "content": "go"}),
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {"id": "c1", "type": "function", "function": {"name": "exec", "arguments": "{}"}}
+                        ],
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    first = read_session_file(path, "cli:c")
+    assert first is not None
+    assert [m.get("role") for m in first.messages] == ["user", "assistant", "tool"]
+
+    first.record({"role": "user", "content": "continue"})
+    first.record({"role": "assistant", "content": "resumed"})
+    manager.save(first)
+
+    second = read_session_file(path, "cli:c")
+    assert second is not None
+    assert [m.get("role") for m in second.messages] == ["user", "assistant", "tool", "user", "assistant"]
+
+
+def test_only_the_missing_result_of_a_multi_call_is_inserted(tmp_path):
+    """A partial round keeps its answered call first and repairs the one still open."""
+    from raven.session.manager import read_session_file
+
+    path = tmp_path / "s.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps({"_type": "metadata", "key": "cli:c", "created_at": "2026-01-01T00:00:00", "metadata": {}}),
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {"id": "c1", "type": "function", "function": {"name": "exec", "arguments": "{}"}},
+                            {"id": "c2", "type": "function", "function": {"name": "read_file", "arguments": "{}"}},
+                        ],
+                    }
+                ),
+                json.dumps({"role": "tool", "tool_call_id": "c1", "name": "exec", "content": "ok"}),
+                json.dumps({"role": "assistant", "content": "later"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    session = read_session_file(path, "cli:c")
+
+    assert session is not None
+    assert [m.get("role") for m in session.messages] == ["assistant", "tool", "tool", "assistant"]
+    assert [m.get("tool_call_id") for m in session.messages if m.get("role") == "tool"] == ["c1", "c2"]
 
 
 @pytest.mark.asyncio
