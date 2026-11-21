@@ -723,17 +723,17 @@ class ImageGenerateTool(_OpenRouterMediaTool):
     }
 
     # MiniMax keeps the character an input image shows rather than editing it, and
-    # takes one per request.
+    # refuses a request that names more than one.
     _MINIMAX_DESCRIPTION = _DESCRIPTION.replace(
         "(optionally editing/varying input images)", "(optionally keeping the character an input image shows)"
     )
     _MINIMAX_PARAMETERS = copy.deepcopy(_PARAMETERS)
     _MINIMAX_PARAMETERS["properties"]["images"]["description"] = (
-        "Optional reference image whose character MiniMax keeps, one per picture (any more are "
-        "not sent): a local file path, http(s) URL, or data: URI"
+        "Optional reference image whose character MiniMax keeps, one per picture: a local file path, "
+        "http(s) URL, or data: URI. A request naming more than one is refused with MiniMax status 2013"
     )
     _MINIMAX_PARAMETERS["properties"]["prompts"]["items"]["properties"]["images"]["description"] = (
-        "Reference image for this picture only"
+        "Reference image for this picture only; MiniMax accepts one per picture"
     )
 
     description = _ByProvider("_DESCRIPTION", "_MINIMAX_DESCRIPTION")
@@ -1018,13 +1018,14 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         stem: str,
     ) -> str:
         """MiniMax's image route, ``/v1/image_generation``. An input image is the
-        character to keep (``subject_reference``), one per request as MiniMax
-        documents; the pictures come back inline as base64."""
+        character to keep (``subject_reference``); MiniMax takes one per request and
+        refuses more with a status of its own, so every one named is sent and the
+        refusal travels back to the caller. The pictures come back inline as base64."""
         body: dict[str, Any] = {"model": model_id, "prompt": prompt, "n": 1, "response_format": "base64"}
         if aspect_ratio:
             body["aspect_ratio"] = aspect_ratio
         try:
-            refs = [self._image_part(ref)["image_url"]["url"] for ref in (images or [])[:1]]
+            refs = [self._image_part(ref)["image_url"]["url"] for ref in images or []]
         except OSError as e:
             return json.dumps({"error": "could not read input image", "detail": str(e)}, ensure_ascii=False)
         if refs:

@@ -2164,9 +2164,36 @@ async def test_a_minimax_address_alone_never_selects_minimax_s_request_shape(mon
     assert "MiniMax" not in json.dumps(tool.to_schema()), "nor does the address alone pick the schema"
 
 
-async def test_a_minimax_picture_keeps_one_character_and_a_local_one_travels_inline(monkeypatch, tmp_path) -> None:
-    """MiniMax keeps a character from one reference image per request: of several
-    the first is sent, a file on disk as a data URL."""
+def test_a_minimax_image_schema_says_one_reference_and_the_default_is_unchanged(tmp_path) -> None:
+    """The schema follows the provider the section names: on MiniMax a second
+    reference is a refusal the model has to be warned about, elsewhere an image is
+    still an edit input. Off MiniMax the served shape is the class's own, untouched."""
+    minimax = ImageGenerateTool(
+        SimpleNamespace(provider="minimax", api_base="https://api.minimax.io/v1", api_key="k", model="image-01"),
+        workspace=tmp_path,
+    ).to_schema()["function"]
+    default = ImageGenerateTool(
+        SimpleNamespace(api_base="https://openrouter.ai/api/v1", api_key="k", model="openai/gpt-image-2"),
+        workspace=tmp_path,
+    ).to_schema()["function"]
+
+    assert minimax["description"] == ImageGenerateTool._MINIMAX_DESCRIPTION
+    assert minimax["parameters"] == ImageGenerateTool._MINIMAX_PARAMETERS
+    images = minimax["parameters"]["properties"]["images"]["description"]
+    assert "one per picture" in images and "2013" in images and "not sent" not in images
+    batched = minimax["parameters"]["properties"]["prompts"]["items"]["properties"]["images"]["description"]
+    assert "one per picture" in batched
+
+    assert default["description"] == ImageGenerateTool._DESCRIPTION
+    assert default["parameters"] == ImageGenerateTool._PARAMETERS
+    assert "edit/vary" in default["parameters"]["properties"]["images"]["description"]
+
+
+async def test_a_minimax_picture_sends_every_named_reference(monkeypatch, tmp_path) -> None:
+    """MiniMax takes one reference image per request and refuses more with a status
+    of its own. The host sends every one named rather than choosing for the caller,
+    so that refusal reaches the model instead of a picture drawn from a silent first
+    pick. A file on disk travels inline as a data URL."""
     workspace = tmp_path / "ws"
     workspace.mkdir()
     portrait = workspace / "portrait.png"
@@ -2182,7 +2209,11 @@ async def test_a_minimax_picture_keeps_one_character_and_a_local_one_travels_inl
     out = json.loads(await tool.execute("in a garden", images=refs, aspect_ratio="3:4", filename="garden"))
 
     assert Path(out["paths"][0]).name == "garden.png"
-    assert seen[0]["subject_reference"] == [{"type": "character", "image_file": f"data:image/png;base64,{_B64}"}]
+    assert seen[0]["subject_reference"] == [
+        {"type": "character", "image_file": f"data:image/png;base64,{_B64}"},
+        {"type": "character", "image_file": "https://example.test/second.png"},
+        {"type": "character", "image_file": "https://example.test/third.png"},
+    ]
 
 
 async def test_a_minimax_batch_keeps_each_picture_s_own_reference(monkeypatch, tmp_path) -> None:

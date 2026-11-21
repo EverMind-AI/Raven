@@ -32,8 +32,10 @@ not read for these tools, and the OpenRouter key is never sent to MiniMax. An em
 - Models: `image-01` (the default) and `image-01-live`.
 - `aspect_ratio`: `1:1`, `16:9`, `4:3`, `3:2`, `2:3`, `3:4`, `9:16`, `21:9`.
 - An input image is the character to keep (`subject_reference`), not a picture to edit.
-  MiniMax takes one per request, so the first of several is sent; a local file travels
-  as a data URL. MiniMax accepts JPG and PNG under 10 MB.
+  MiniMax takes one per request; a request naming more is answered with HTTP 200 and
+  `base_resp.status_code` 2013 (`invalid params, image_reference must be one`), and that
+  reason reaches the caller. A local file travels as a data URL. MiniMax accepts JPG and
+  PNG under 10 MB.
 - A picture MiniMax's content check withholds is answered as a refusal, not as an empty
   answer to ask again for.
 
