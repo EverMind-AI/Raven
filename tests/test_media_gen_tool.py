@@ -2467,6 +2467,44 @@ def test_the_h3_schema_takes_any_ratio_while_a_legacy_section_keeps_the_eight() 
     assert offered()["properties"]["aspect_ratio"]["enum"] == list(media_gen._SIZES)
 
 
+def test_an_h3_model_name_on_another_provider_keeps_the_eight_ratios() -> None:
+    """The H3 shape follows the route, not the model string. `_via_minimax` is the
+    only path that sends `aspect_ratio` untouched, and only a MiniMax section takes
+    it; an OpenRouter or relay section that happens to name an H3 model runs the
+    Images API, which drops a ratio outside the eight instead of sending it. Offering
+    the H3 shape there would admit a value the route never delivers."""
+    from raven.agent.tools.registry import ToolRegistry
+
+    section = SimpleNamespace(
+        provider="openrouter", api_base="https://openrouter.ai/api/v1", api_key="k", model="MiniMax-H3-Image"
+    )
+    registry = ToolRegistry()
+    registry.register(ImageGenerateTool(lambda: section, workspace=None))
+
+    def ratios() -> tuple[dict, dict]:
+        parameters = next(
+            d["function"] for d in registry.get_definitions() if d["function"]["name"] == "image_generate"
+        )["parameters"]
+        return parameters["properties"]["aspect_ratio"], parameters["properties"]["prompts"]["items"]["properties"][
+            "aspect_ratio"
+        ]
+
+    outside = "an H3 model name must not widen the schema on a non-MiniMax route"
+    top, item = ratios()
+    assert top.get("enum") == list(media_gen._SIZES), outside
+    assert item.get("enum") == list(media_gen._SIZES), outside
+
+    section.provider, section.api_base = "", "https://relay.example/v1"
+    top, item = ratios()
+    assert top.get("enum") == list(media_gen._SIZES), outside
+    assert item.get("enum") == list(media_gen._SIZES), outside
+
+    section.provider, section.api_base = "minimax", "https://api.minimax.io/v1"
+    top, item = ratios()
+    assert "enum" not in top
+    assert "enum" not in item
+
+
 async def test_an_h3_ratio_outside_the_eight_reaches_the_endpoint(monkeypatch, tmp_path) -> None:
     """`5:4` is inside H3's own acceptance and outside the fixed enum, so it is the
     value the registry used to refuse before any request was sent. The legacy route
