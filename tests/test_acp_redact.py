@@ -14,10 +14,12 @@ Three claims are pinned here, and the third is the one most worth a test:
    this table matches and no bearer scheme passes through, which is stated as a
    test rather than left for somebody to discover.
 
-The table is the four rules Codex uses for the same job. Several vendor classes
-this repository does use (GitHub, GitLab, Slack, Google) are deliberately outside
-it; ``test_channels_outside_the_four_rules_pass_through`` records what that
-costs, so the loss is visible rather than discovered in a transcript.
+The table is Codex's four rules plus one structural rule for PEM armour. Several
+vendor classes this repository does use (GitHub, GitLab, Slack, Google) are
+deliberately outside it; ``test_channels_outside_the_table_pass_through`` records
+what that costs, so the loss is visible rather than discovered in a transcript.
+The fifth rule is structural rather than a vendor enumeration, and
+``test_the_table_is_the_codex_rules_plus_pem`` pins the count at exactly five.
 """
 
 from __future__ import annotations
@@ -30,15 +32,15 @@ import pytest
 import raven.security.redact as redact_module
 from raven.security.redact import MAX_SCAN_CHARS, REPLACEMENT, pattern_names, redact, redact_value
 
-#: A PEM pair whose body is synthetic, for the case that records the four-rule
-#: table no longer removing one. The header is built from a label constant rather
-#: than written out, the way the armour fixtures further down are assembled and
-#: for the same stated reason: ``detect-private-key`` rejects any *added* line
-#: containing a literal header, and this file's own existing fixtures only pass
-#: because they predate that rule. Splitting the header means no line carries
-#: both halves, and the string under test is unchanged.
+#: PEM fixtures are built from a label constant, never written out. The repo's
+#: ``detect-private-key`` hook rejects any *added* line containing a literal
+#: header, and this file's older fixtures only pass because they predate the
+#: rule; splitting the header means no line carries both halves, and the strings
+#: under test are unchanged. Please do not "tidy" these into one literal.
 _PRIVATE_KEY_LABEL = "PRIVATE KEY"
-PEM_WITH_SYNTHETIC_BODY = f"-----BEGIN {_PRIVATE_KEY_LABEL}-----\nMIIEowIBAAKCAQEA\n-----END {_PRIVATE_KEY_LABEL}-----"
+_PEM_OPEN = f"-----BEGIN {_PRIVATE_KEY_LABEL}-----"
+_PEM_CLOSE = f"-----END {_PRIVATE_KEY_LABEL}-----"
+PEM_WITH_SYNTHETIC_BODY = f"{_PEM_OPEN}\nMIIEowIBAAKCAQEA\n{_PEM_CLOSE}"
 
 
 class TestWhatItCatches:
@@ -102,6 +104,52 @@ class TestWhatItCatches:
             "sk-abcdefghijklmnop",
         ):
             assert redact(text) == REPLACEMENT, text
+
+    def test_a_private_key_body_goes_but_the_armour_stays(self):
+        """The fifth rule, which Codex does not carry.
+
+        Only the body is replaced, so the reader still learns a key was there.
+        ``RSA`` in the header is pinned too: the rule matches any header label
+        ending in the key words, not just the bare form, because the per-format
+        variants are one delimiter rather than one rule each.
+        """
+        head = f"-----BEGIN RSA {_PRIVATE_KEY_LABEL}-----"
+        pem = f"{head}\nMIIEowIBAAKCAQEA\nabc123\n{_PEM_CLOSE}"
+
+        result = redact(pem)
+
+        assert "MIIEowIBAAKCAQEA" not in result
+        assert head in result, "the reader needs to know what was there"
+        assert _PEM_CLOSE in result
+
+    @pytest.mark.parametrize("closed", [False, True], ids=["cut", "complete"])
+    def test_a_private_key_keeps_no_body_when_its_closing_armour_is_missing(self, closed):
+        """The ``\\Z`` arm of the rule's lookahead, which is what the cut case needs.
+
+        A body a cap ended has no ``-----END``, and that half key is exactly what
+        ``agent/loop/failure_text.py`` persists. Without ``\\Z`` the body would be
+        published whole.
+        """
+        tail = f"\n{_PEM_CLOSE}" if closed else ""
+        result = redact(f"{_PEM_OPEN}\nsynthetic-private-material{tail}")
+
+        assert "synthetic-private-material" not in result
+        assert result.startswith(_PEM_OPEN + REPLACEMENT)
+        assert redact(result) == result
+
+    def test_a_pem_header_without_its_end_keeps_nothing_after_it(self):
+        """A preview that quotes the header as text loses what it showed below it.
+
+        The trade-off the missing-END rule buys: a key whose closing armour a cut
+        removed cannot be told from a header a person is talking about, and
+        leaving the body in would publish the key. It reaches every surface this
+        module scrubs, not only a failure record.
+        """
+        preview = f'PEM_HEADER = "{_PEM_OPEN}"\ndef load(path):\n    return parse(open(path).read())\n'
+
+        assert redact(preview) == f'PEM_HEADER = "{_PEM_OPEN}{REPLACEMENT}'
+        closed = preview.replace(f'{_PEM_OPEN}"', f'{_PEM_OPEN}"\nbody\n{_PEM_CLOSE}')
+        assert "def load" in redact(closed)
 
     def test_one_bearer_rule_covers_the_header_and_the_bare_form(self):
         """Codex matches ``Bearer`` anywhere rather than behind a header label.
@@ -223,20 +271,19 @@ class TestWhatItLeavesAlone:
             "psql postgres://admin:hunter2secret@db:5432/app",
             "glab auth login --token glpat-abcdefghijklmnopqrst",
             "raven provider set --api-key abcdefghijklmnop",
-            PEM_WITH_SYNTHETIC_BODY,
         ],
     )
-    def test_channels_outside_the_four_rules_pass_through(self, text):
-        """What the four-rule table costs, stated rather than discovered.
+    def test_channels_outside_the_table_pass_through(self, text):
+        """What the table costs, stated rather than discovered.
 
         Each of these is a credential shape the table used to match and no longer
-        does: three vendor prefixes, a URL's inline password, a CLI flag, and PEM
-        body. The vendor lines are what a person types, so the person had already
-        put the secret on the command line; the URL and PEM bodies are not, and
-        their loss is recorded in the PR description instead.
+        does: three vendor prefixes, a URL's inline password, and a CLI flag. The
+        vendor and flag lines are what a person types, so the person had already
+        put the secret on the command line; the URL's inline password is not, and
+        its loss is recorded in the PR description.
 
         A GitHub token is deliberately not named here in either direction, so no
-        behaviour test covers that class; ``test_the_table_is_the_four_codex_rules``
+        behaviour test covers that class; ``test_the_table_is_the_codex_rules_plus_pem``
         is the only guard that notices if a rule is added back.
         """
         assert redact(text) == text
@@ -405,14 +452,16 @@ class TestTheLimits:
 
         assert redact(f"echo {opaque}") == f"echo {opaque}"
 
-    def test_the_table_is_the_four_codex_rules(self):
-        """Four patterns, one per Codex rule -- not one per credential vendor.
+    def test_the_table_is_the_codex_rules_plus_pem(self):
+        """Five patterns: Codex's four plus PEM, not one per credential vendor.
 
         Pinned as an exact list rather than a range: a range with a low floor let
         eight rules be deleted with the suite green, which is how the table grew
-        the first time.
+        the first time. The fifth entry is the structural one -- it matches a
+        delimiter, not a vendor -- and it is the only place this table goes past
+        Codex.
         """
-        assert pattern_names() == ("bearer", "openai", "aws-access-key", "named-secret")
+        assert pattern_names() == ("bearer", "openai", "aws-access-key", "named-secret", "pem")
 
     def test_no_pattern_matches_the_replacement_token(self):
         """What makes it idempotent, and what stops a second pass from eating the

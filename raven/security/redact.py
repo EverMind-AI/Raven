@@ -18,16 +18,25 @@ so the shape of the text survives and a person can still tell *what* was run --
 ``curl -H "Authorization: Bearer [redacted]"`` is a readable line, and a wholesale
 match replacement would leave a row nobody can act on.
 
-The table is deliberately the same four rules Codex uses for the same job
-(``codex-rs/secrets/src/sanitizer.rs``): an OpenAI key, an AWS access key id, a
-bearer token, and an assignment to a name that says secret. It is not one rule
-per credential vendor: a vendor prefix is matched only when the prefix alone
+The table is the four rules Codex uses for the same job
+(``codex-rs/secrets/src/sanitizer.rs``) -- an OpenAI key, an AWS access key id,
+a bearer token, and an assignment to a name that says secret -- plus one rule
+Codex does not carry: PEM-armoured private key material. It is not one rule per
+credential vendor: a vendor prefix is matched only when the prefix alone
 identifies the value, and only for the two vendors that rule covers. Everything
 else that carries a secret reaches this table through its label -- which is why
 an ``aws_secret_access_key`` line and a ``~/.raven/beta.json`` token are caught
 without either being named here.
 
-Two deviations from Codex, both load-bearing:
+``pem`` is the fifth rule and the only place this table goes beyond Codex. It is
+structural rather than a vendor enumeration: a PEM block's opening delimiter is a
+delimiter the way ``Bearer`` is a scheme word and ``password=`` is a label, so it
+catches every key format those brackets wrap without naming a vendor. Codex can
+leave it out because Codex has no ``agent/loop/failure_text.py``, the path that
+persists a dispatcher traceback tail to disk here: a key cut in half by that cap
+has no label left, and only the armour identifies it.
+
+Two deviations from Codex's rules, both load-bearing:
 
 * the assignment rule has no leading ``\\b`` and includes ``access_key``.
   ``~/.aws/credentials`` writes ``aws_secret_access_key = ...``, and a ``\\b``
@@ -84,6 +93,17 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             re.IGNORECASE,
         ),
     ),
+    # The fifth rule, and the one Codex does not have. A delimiter rather than a
+    # vendor prefix: any PEM block whose header label ends in the key words opens
+    # it, so every key format those brackets carry -- RSA, EC, DSA, OPENSSH,
+    # ENCRYPTED, bare -- is one rule. Only the body goes; the armour stays, so the
+    # reader can still tell a key was there.
+    #
+    # ``(?=-----END|\Z)``: the ``\Z`` arm is not optional. A body a cap cut in
+    # half has no closing armour, and it is exactly that half-slain key that
+    # ``agent/loop/failure_text.py`` writes to disk; ``-----END`` alone would
+    # leave it whole.
+    ("pem", re.compile(r"(-----BEGIN [A-Z ]*PRIVATE KEY-----)([\s\S]+?)(?=-----END|\Z)")),
     # Deliberately NOT here: a pattern for credential *paths*
     # (``~/.aws/credentials``, ``~/.ssh/id_rsa``). It was written and removed --
     # the path is not a secret, and hiding it takes away the one thing the reader
