@@ -87,7 +87,9 @@ _ELLIPSIS = "..."
 
 #: One clause per category ``LLMProvider._classify`` can return (which is where
 #: ``tool_image_unsupported`` comes from too), plus ``upstream_transport_failure``,
-#: which ``transport_failure_response`` attaches directly. A category with no clause falls to
+#: which ``transport_failure_response`` attaches directly, and
+#: ``protocol_mismatch``, which the streaming accumulator attaches to a stream
+#: answered by a JSON document instead of an event stream. A category with no clause falls to
 #: the default rather than going unsaid -- the trajectory replay's
 #: ``replay_divergence`` is the one in-tree case -- and
 #: ``test_error_classification`` holds the table to the classifier.
@@ -101,6 +103,7 @@ _LLM_ERROR_SUMMARIES = {
     "invalid_request": "The provider rejected the request as malformed",
     "model_unavailable": "The model is not being served",
     "network": "The connection to the provider failed",
+    "protocol_mismatch": "The endpoint does not speak the protocol this provider is configured for",
     "rate_limit": "The provider is rate limiting this account",
     "server": "The provider returned a server error",
     "stream_idle_timeout": "The model's stream stalled until the idle timeout expired",

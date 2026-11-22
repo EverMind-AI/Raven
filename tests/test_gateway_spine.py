@@ -527,6 +527,32 @@ def test_a_failed_turn_reply_reads_by_what_the_failure_was():
     assert _failed_turn_reply("   ", reported=True) == _TURN_FAILED_REPLY
 
 
+async def test_a_channel_is_told_the_endpoint_does_not_speak_the_protocol():
+    """The category summary names what happened, the provider it happened on,
+    and the two settings the operator has to look at. It must not be the network
+    wording this failure arrived under before the category existed, because a
+    retry cannot mend a fixed mismatch -- and a chat reader who retries spends a
+    turn to be told the same thing again.
+
+    The error text is the shape ``stream_llm_call`` now emits for this verdict,
+    provider name included; the end-to-end case below the streaming accumulator
+    proves it is what production produces."""
+    sent = await _reply_to_a_failed_turn(
+        AnswerlessTurnError(
+            "Error calling LLM (protocol_mismatch@zai): check this provider's protocol and base URL: "
+            "the endpoint answered the stream request with a JSON document (application/json), "
+            "not an event stream"
+        )
+    )
+
+    assert sent == [
+        "The endpoint does not speak the protocol this provider is configured for (zai). "
+        "The runtime log has the provider's own account. "
+        "The operator can check that provider's protocol and base URL."
+    ]
+    assert "A retry may work" not in sent[0]
+
+
 async def test_a_failed_turn_clears_the_readback_its_last_run_left():
     """A read-back conversation stores its reply on success only. Without a
     clear on the way out, the next turn on that conversation failing would let

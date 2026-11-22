@@ -2247,6 +2247,31 @@ async def test_a_failed_model_call_tells_the_screen_what_to_do_about_it():
     assert payload["hint"] == "Run /model to check the provider key (disconnect first if it is already saved)."
 
 
+async def test_a_mismatched_endpoint_reaches_the_screen_with_the_settings_to_check():
+    """The screen renders the hint after the failure line, so a mismatch has to
+    arrive as the two settings the operator can look at -- not as the network
+    advice, which asks for a retry that cannot mend a fixed mismatch."""
+
+    class _MismatchedEndpointLoop:
+        async def run_turn(self, req, emit, drain, *, stream, usage_sink=None) -> TurnOutcome:
+            raise AnswerlessTurnError(
+                "Error calling LLM (protocol_mismatch@zai): check this provider's protocol and base URL: "
+                "the endpoint answered the stream request with a JSON document (application/json), "
+                "not an event stream"
+            )
+
+    emitter = FakeEmitter()
+    scheduler, hub, turn_ids, teardown = build_rpc_spine(_MismatchedEndpointLoop(), emitter)
+    try:
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
+        await handle.result()
+    finally:
+        await teardown()
+
+    payload = emitter.emitted[-1][1]["payload"]
+    assert payload["hint"] == "The operator can check that provider's protocol and base URL."
+
+
 async def test_a_failed_turn_sends_the_runners_long_account():
     class _BoomLoop:
         async def run_turn(self, req, emit, drain, *, stream, usage_sink=None) -> TurnOutcome:

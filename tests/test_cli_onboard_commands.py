@@ -757,6 +757,43 @@ def test_onboard_interactive_uses_stubbed_pickers(
     assert data["agents"]["defaults"]["model"] == "anthropic/claude-sonnet-5"
 
 
+@pytest.mark.parametrize(
+    "provider,expected",
+    [("zai", True), ("bigmodel", True), ("deepseek", False)],
+)
+def test_the_key_prompt_names_where_a_coding_plan_key_is_spent(
+    tmp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    provider: str,
+    expected: bool,
+) -> None:
+    """The Zhipu entries are where a GLM Coding Plan key gets pasted, and the
+    note says where that key is actually spent: an anthropic-protocol section
+    on the registry's own Anthropic-compatible address, so the address in the
+    words cannot drift from the one the runtime routes to."""
+    from raven.providers.registry import find_by_name
+
+    monkeypatch.setattr(onboard_commands, "_prompt_api_key", lambda name, **kw: "sk-plan")
+
+    onboard_commands._collect_credentials(
+        provider,
+        is_oauth=False,
+        is_custom=False,
+        api_key=None,
+        base_url=None,
+        model=None,
+        non_interactive=False,
+    )
+
+    out = capsys.readouterr().out
+    assert ("Coding Plan" in out) is expected
+    if expected:
+        address = dict(find_by_name(provider).native_api_bases)["anthropic"]
+        assert address in out
+        assert "protocol anthropic" in out
+
+
 # --------------------------------------------------------------------------- unit-level
 
 
