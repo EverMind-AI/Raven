@@ -9,8 +9,8 @@ all may have nothing wrong with it, and is left where it is.
 
 from __future__ import annotations
 
-import contextlib
 import json
+import sqlite3
 import time
 from pathlib import Path
 
@@ -54,9 +54,32 @@ def save_board(session_dir: Path, board: Board) -> None:
     files.write_text(Path(session_dir) / BOARD_FILENAME, text)
 
 
+def _clear_vectors(path: Path) -> None:
+    connection = sqlite3.connect(path, timeout=1.0)
+    try:
+        table = connection.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'vec'").fetchone()
+        if table is not None:
+            connection.execute("DELETE FROM vec")
+            connection.commit()
+    finally:
+        connection.close()
+
+
 def remove_embeddings(session_dir: Path) -> None:
-    with contextlib.suppress(OSError):
-        files.remove(Path(session_dir) / EMBEDDINGS_FILENAME)
+    path = Path(session_dir) / EMBEDDINGS_FILENAME
+    try:
+        files.remove(path)
+    except OSError as exc:
+        # Windows refuses to unlink a file another handle holds open; clearing the rows
+        # is what the next recall needs, and the file can go at the next clear.
+        if not path.is_file():
+            return
+        try:
+            _clear_vectors(path)
+        except sqlite3.Error as clearing:
+            logger.warning(
+                "Task board recall cache {} stays with its rows: {}; clearing failed: {}", path, exc, clearing
+            )
 
 
 def reset_board(session_dir: Path) -> None:

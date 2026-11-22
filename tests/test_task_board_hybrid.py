@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 
 import numpy as np
 
-from raven.agent.task_board import hybrid
+from raven.agent.task_board import files, hybrid, store
 from raven.agent.task_board.board import Board, ProgressStep, TaskGroup, TaskLink
 from raven.agent.task_board.hybrid import (
     _write_vectors,
@@ -17,7 +18,7 @@ from raven.agent.task_board.hybrid import (
     rrf_order,
 )
 from raven.agent.task_board.service import TaskBoardService
-from raven.agent.task_board.store import EMBEDDINGS_FILENAME, copy_board, reset_board, save_board
+from raven.agent.task_board.store import EMBEDDINGS_FILENAME, copy_board, remove_embeddings, reset_board, save_board
 from raven.session.manager import SessionManager
 
 KEY = "web:alpha"
@@ -378,3 +379,45 @@ async def test_a_clear_while_the_recall_waits_for_the_cache_lock_writes_nothing(
 
     assert await asyncio.wait_for(recall, timeout=1) == []
     assert not (service.session_dir(KEY) / EMBEDDINGS_FILENAME).exists()
+
+
+def _cache_rows(path):
+    connection = sqlite3.connect(path)
+    try:
+        return connection.execute("SELECT COUNT(*) FROM vec").fetchone()[0]
+    finally:
+        connection.close()
+
+
+async def test_a_held_cache_has_its_rows_cleared_in_place(tmp_path, monkeypatch):
+    group = _group("g_first", "First report")
+    await retrieve_completed(Board([group], []), "first", session_dir=tmp_path, embedder=FakeEmbedder())
+    path = tmp_path / EMBEDDINGS_FILENAME
+    assert _cache_rows(path) == 1
+
+    def held(_path):
+        raise PermissionError(32, "The process cannot access the file")
+
+    monkeypatch.setattr(files, "remove", held)
+    remove_embeddings(tmp_path)
+
+    assert path.is_file()
+    assert _cache_rows(path) == 0
+
+
+def test_a_cache_that_cannot_be_removed_or_cleared_is_left_alone(tmp_path, monkeypatch):
+    path = tmp_path / EMBEDDINGS_FILENAME
+    path.touch()
+
+    def held(_path):
+        raise PermissionError(32, "The process cannot access the file")
+
+    def locked(_path):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(files, "remove", held)
+    monkeypatch.setattr(store, "_clear_vectors", locked)
+
+    remove_embeddings(tmp_path)
+
+    assert path.exists()
