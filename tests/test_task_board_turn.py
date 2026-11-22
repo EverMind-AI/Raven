@@ -321,6 +321,7 @@ async def test_a_completed_board_is_summarized_before_the_update(tmp_path, monke
     assert len(provider.requests) == 3
     _turn_call, summary_call, update = provider.requests
     assert summary_call["purpose"] == "task_board" and summary_call["tools"] == []
+    assert summary_call["effort"] == "low"
     assert "Why is the page blank" in _text(summary_call["messages"][-1])
     assert any((t.get("function") or {}).get("name") == "task_board" for t in update["tools"])
     instruction = _text(update["messages"][-1])
