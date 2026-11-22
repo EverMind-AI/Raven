@@ -15,6 +15,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from raven.agent import workdir
 from raven.agent.context import ContextBuilder
 from raven.config.raven import MemoryConfig, SkillForgeRouterConfig
@@ -181,7 +183,7 @@ async def test_a_slow_project_search_does_not_block_the_event_loop(tmp_path: Pat
     index = ProjectSkillIndex([])
     searched: list[str] = []
 
-    def slow_search(query: str, k: int) -> list[tuple]:
+    def slow_search(query: str, k: int, *, should_stop=None) -> list[tuple]:
         searched.append(query)
         time.sleep(1.0)
         return []
@@ -213,6 +215,72 @@ async def test_a_slow_project_search_does_not_block_the_event_loop(tmp_path: Pat
     assert searched == ["pdf text"]
     assert max(gaps) < 0.2
     assert elapsed < 0.9
+
+
+async def test_a_timed_out_search_stops_the_worker_it_left_behind(tmp_path: Path) -> None:
+    repo = _repo(tmp_path / "repo")
+    _skill(repo / ".agents" / "skills", "pdf-tools", body="Extract text from PDF files.")
+    index = ProjectSkillIndex([])
+    stopped = threading.Event()
+
+    def never_ending_search(query: str, k: int, *, should_stop=None) -> list[tuple]:
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if should_stop is not None and should_stop():
+                stopped.set()
+                return []
+            time.sleep(0.005)
+        return []
+
+    index.search = never_ending_search  # type: ignore[method-assign]
+    src = ProjectSkillSource(
+        _project(tmp_path, _Bound(repo), cache=ProjectSkillCache(build=lambda roots: index)),
+        wait_s=0.05,
+    )
+
+    started = time.monotonic()
+    hits = await src.search("pdf text", [], 5)
+    elapsed = time.monotonic() - started
+
+    assert hits == []
+    assert elapsed < 1.0
+    assert await asyncio.to_thread(stopped.wait, 2.0)
+
+
+async def test_a_cancelled_search_stops_the_worker_it_left_behind(tmp_path: Path) -> None:
+    repo = _repo(tmp_path / "repo")
+    _skill(repo / ".agents" / "skills", "pdf-tools", body="Extract text from PDF files.")
+    index = ProjectSkillIndex([])
+    started = threading.Event()
+    stopped = threading.Event()
+    handed: list = []
+
+    def never_ending_search(query: str, k: int, *, should_stop=None) -> list[tuple]:
+        handed.append(should_stop)
+        started.set()
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if should_stop is not None and should_stop():
+                stopped.set()
+                return []
+            time.sleep(0.005)
+        return []
+
+    index.search = never_ending_search  # type: ignore[method-assign]
+    src = ProjectSkillSource(
+        _project(tmp_path, _Bound(repo), cache=ProjectSkillCache(build=lambda roots: index)),
+        wait_s=10.0,
+    )
+
+    task = asyncio.create_task(src.search("pdf text", [], 5))
+    assert await asyncio.to_thread(started.wait, 5.0)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert handed[0]() is True
+    assert await asyncio.to_thread(stopped.wait, 2.0)
 
 
 async def test_the_scent_menu_offers_the_bound_project_skill(tmp_path: Path) -> None:

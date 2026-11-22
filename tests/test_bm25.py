@@ -63,3 +63,27 @@ def test_bm25_chinese_query_matches() -> None:
     scores = bm25.get_scores(tokenize("生成图片"))
     assert scores[0] == max(scores)
     assert scores[0] > 0.0
+
+
+def test_bm25_stop_flag_set_yields_no_scores() -> None:
+    bm25 = BM25Okapi([tokenize("create github issue tracker")])
+    assert bm25.get_scores(tokenize("github issue"), should_stop=lambda: True) == []
+
+
+def test_bm25_stop_flag_is_read_once_per_term() -> None:
+    bm25 = BM25Okapi([tokenize("create github issue tracker")])
+    reads: list[int] = []
+
+    def should_stop() -> bool:
+        reads.append(1)
+        return len(reads) > 1
+
+    assert bm25.get_scores(tokenize("github issue tracker"), should_stop=should_stop) == []
+    assert len(reads) == 2
+
+
+def test_bm25_stop_flag_never_set_scores_unchanged() -> None:
+    bm25 = BM25Okapi([tokenize("create github issue tracker")])
+    assert bm25.get_scores(tokenize("github issue"), should_stop=lambda: False) == bm25.get_scores(
+        tokenize("github issue")
+    )
