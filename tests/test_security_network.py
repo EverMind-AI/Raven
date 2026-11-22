@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import socket
+import time
+
 import httpx
 import pytest
 
@@ -474,3 +478,61 @@ async def test_a_plain_http_pin_carries_host_but_no_sni(public_dns) -> None:
     assert rec.requested == ["http://93.184.216.34/a.png"]
     assert rec.kwargs[0]["headers"]["Host"] == "cdn.example.test"
     assert "extensions" not in rec.kwargs[0]
+
+
+# ---------------------------------------------------------------------------
+# The resolution waits off the loop
+# ---------------------------------------------------------------------------
+
+
+def _slow_public_dns(monkeypatch: pytest.MonkeyPatch, hold: float) -> None:
+    """A resolver that answers one public address, but only after *hold* seconds."""
+
+    def slow_getaddrinfo(host, *_args, **_kwargs):
+        time.sleep(hold)
+        return [(0, 0, 0, "", ("93.184.216.34", 0))]
+
+    monkeypatch.setattr("socket.getaddrinfo", slow_getaddrinfo)
+
+
+async def test_a_slow_resolution_does_not_hold_the_event_loop(monkeypatch) -> None:
+    """One slow resolution must not freeze the process that serves every turn.
+
+    ``socket.getaddrinfo`` is synchronous and holds for seconds on a slow
+    resolver. Measured against a live gateway: HTTP, RPC, WebSocket frames and
+    every other session's turn stopped for the length of the resolution, so
+    the judge now runs in a worker. The heartbeat here is the detector -- a
+    loop held by the resolution cannot advance it.
+    """
+    _slow_public_dns(monkeypatch, 0.2)
+
+    from raven.security.network import guarded_fetch
+
+    ticks = 0
+    beat = asyncio.Event()
+
+    async def heartbeat() -> None:
+        nonlocal ticks
+        while not beat.is_set():
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    ping = asyncio.create_task(heartbeat())
+    rec = _Recorder([(200, "")])
+    await guarded_fetch(rec, "https://cdn.example.test/a.png", what="test")
+    beat.set()
+    await ping
+
+    assert rec.requested == ["https://93.184.216.34/a.png"], "the fetch itself still has to happen"
+    assert ticks >= 5, f"the loop advanced only {ticks} times while the resolver held"
+
+
+async def test_a_refused_target_is_still_never_contacted_off_the_loop(monkeypatch) -> None:
+    """Moving the judge must not move the refusal: the address is not contacted."""
+    _slow_public_dns(monkeypatch, 0.05)
+
+    from raven.security.network import guarded_fetch
+
+    rec = _Recorder([(200, "")])
+    assert await guarded_fetch(rec, "http://169.254.169.254/latest/meta-data/", what="test") is None
+    assert rec.requested == []
