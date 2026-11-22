@@ -63,10 +63,16 @@ def test_the_channel_is_handed_something_it_can_act_on_without_a_command() -> No
         "network",
         "rate_limit",
         "server",
+        "protocol_mismatch",
     ):
         hint = provider_error_hint(category, "openrouter", surface="channel")
         assert hint
         assert "raven " not in hint, category
+
+    assert (
+        provider_error_hint("protocol_mismatch", "openrouter", surface="channel")
+        == "The operator can check that provider's protocol and base URL."
+    )
 
     assert provider_error_hint("unknown", "openrouter", surface="channel") == ""
 
@@ -87,7 +93,15 @@ def test_the_tui_is_pointed_at_the_picker_it_owns() -> None:
         provider_error_hint("auth", "openrouter", surface="tui")
         == "Run /model to check the provider key (disconnect first if it is already saved)."
     )
-    for category in ("billing", "context_overflow", "model_unavailable", "network", "rate_limit", "server"):
+    for category in (
+        "billing",
+        "context_overflow",
+        "model_unavailable",
+        "network",
+        "rate_limit",
+        "server",
+        "protocol_mismatch",
+    ):
         assert provider_error_hint(category, "openrouter", surface="tui") == provider_error_hint(
             category, "openrouter", surface="channel"
         )
@@ -106,3 +120,21 @@ def test_the_command_the_tui_hint_names_is_one_the_tui_registers() -> None:
     assert sources, f"no slash command sources under {_TUI_COMMANDS}"
     registered = {f"/{name}" for path in sources for name in _COMMAND_NAME.findall(path.read_text(encoding="utf-8"))}
     assert named <= registered, f"the hint names {sorted(named - registered)}, which the TUI does not register"
+
+
+def test_a_protocol_mismatch_never_offers_a_retry_on_any_surface() -> None:
+    """An endpoint that does not speak the provider's protocol is a fixed
+    configuration, not a transient fault: the same request a minute later is
+    answered the same way. The verdict had landed under ``network`` before the
+    category existed, which told a chat reader "A retry may work." -- advice
+    that spends a turn and changes nothing. Every surface now names the two
+    settings the operator has to look at instead, and none of them asks for a
+    retry."""
+    for surface in ("cli", "channel", "tui"):
+        hint = provider_error_hint("protocol_mismatch", "zai", surface=surface)
+        assert hint, surface
+        assert "retry" not in hint.lower(), surface
+        assert "protocol and base URL" in hint, surface
+
+    # The control: the category this one used to be filed under still does.
+    assert "retry" in provider_error_hint("network", "zai", surface="channel").lower()

@@ -35,6 +35,7 @@ _CHANNEL_HINTS = {
     "network": "A retry may work.",
     "rate_limit": "Try again in a moment.",
     "server": "A retry later may work.",
+    "protocol_mismatch": "The operator can check that provider's protocol and base URL.",
 }
 
 #: The advice a TUI reader can act on. The chat's advice, with the one
