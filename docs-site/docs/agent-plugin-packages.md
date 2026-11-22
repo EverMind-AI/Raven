@@ -165,8 +165,9 @@ you name the package:
 
 That opt-in is per package because a server entry is a process on your
 machine. The servers a package contributes are named
-`<package>__<server>`, so they never collide with your own
-`tools.mcpServers` entries.
+`<package>__<server>`. If one of those names is already configured in your
+own `tools.mcpServers`, yours wins: the package's server is skipped and
+reported rather than replacing it.
 
 A package's servers run with the package root as the working directory
 (unless the entry names another one), and with `PLUGIN_ROOT` and
@@ -174,7 +175,10 @@ A package's servers run with the package root as the working directory
 the second is a directory Raven keeps for that package across updates
 (`<home>/plugin-data/<package>/`). The format's two placeholders,
 `${PLUGIN_ROOT}` and `${PLUGIN_DATA}`, are expanded in a server's
-arguments, environment and working directory.
+arguments and environment values. A working directory is not expanded
+that way: it must be a plugin-relative path (`./...`) or a path under one
+of the two placeholders, and it has to stay inside the directory it is
+anchored to.
 
 After expansion, an argument or environment value that carries a `..` path
 component is refused and reported. The check splits on `/` and `\`, so a URL
