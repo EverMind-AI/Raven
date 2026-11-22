@@ -9,6 +9,7 @@ all may have nothing wrong with it, and is left where it is.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 from pathlib import Path
@@ -56,7 +57,8 @@ def save_board(session_dir: Path, board: Board) -> None:
 def reset_board(session_dir: Path) -> None:
     files.remove(Path(session_dir) / BOARD_FILENAME)
     files.remove(Path(session_dir) / NOTES_FILENAME)
-    files.remove(Path(session_dir) / EMBEDDINGS_FILENAME)
+    with contextlib.suppress(OSError):
+        files.remove(Path(session_dir) / EMBEDDINGS_FILENAME)
 
 
 def copy_board(src: Path, dst: Path) -> None:
@@ -66,5 +68,3 @@ def copy_board(src: Path, dst: Path) -> None:
     files.write_bytes(Path(dst) / BOARD_FILENAME, files.read_bytes(source))
     if (notes := Path(src) / NOTES_FILENAME).is_file():
         files.write_bytes(Path(dst) / NOTES_FILENAME, files.read_bytes(notes))
-    if (embeddings := Path(src) / EMBEDDINGS_FILENAME).is_file():
-        files.write_bytes(Path(dst) / EMBEDDINGS_FILENAME, files.read_bytes(embeddings))

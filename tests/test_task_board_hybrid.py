@@ -180,7 +180,7 @@ async def test_only_completed_groups_are_recalled(tmp_path):
     assert result == ["g_done"]
 
 
-async def test_reset_removes_the_cache_and_copy_keeps_it(tmp_path):
+async def test_reset_removes_the_cache_and_copy_does_not_carry_it(tmp_path):
     group = _group("g_first", "First report")
     source = tmp_path / "source"
     target = tmp_path / "target"
@@ -191,7 +191,7 @@ async def test_reset_removes_the_cache_and_copy_keeps_it(tmp_path):
     assert (source / EMBEDDINGS_FILENAME).is_file()
 
     copy_board(source, target)
-    assert (target / EMBEDDINGS_FILENAME).is_file()
+    assert not (target / EMBEDDINGS_FILENAME).exists()
 
     reset_board(source)
     assert not (source / EMBEDDINGS_FILENAME).exists()
