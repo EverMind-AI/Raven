@@ -247,13 +247,12 @@ def test_a_scan_cut_private_key_stays_hidden_after_an_earlier_secret_shrinks():
 @pytest.mark.parametrize(
     ("tail", "visible", "kept"),
     [
-        ("eyJ" + "A" * 1400 + "." + "B" * 20 + "." + "C" * 20, "eyJ" + "A" * 30, 978),
         ("https://user:synthetic-password-" + "a" * 1400 + "@host", "synthetic-password", 978),
         ("ghp_" + "A" * 30, "ghp_" + "A" * 8, 12),
         ("password=abcdefghijk", "abcde", 14),
         ('"Authorization": "Bearer opaque-token-value"', "opaqu", 30),
     ],
-    ids=["jwt", "url-userinfo", "vendor-token", "named-secret", "quoted-header"],
+    ids=["url-userinfo", "vendor-token", "named-secret", "quoted-header"],
 )
 def test_a_scan_cut_credential_tail_is_removed_before_earlier_redactions_move_it(tail, visible, kept):
     prefix = "Authorization: Bearer "
@@ -267,8 +266,8 @@ def test_a_previously_capped_record_does_not_expose_a_private_key_fragment():
     assert "synthetic-private-material" not in full
 
 
-def test_a_previously_capped_record_removes_an_incomplete_jwt():
-    token = "eyJ" + "a" * 100
+def test_a_previously_capped_record_removes_an_incomplete_vendor_token():
+    token = "ghp_" + "a" * 100
     full = response_failure_text("provider refused", CallRecord(body=token, body_truncated=True))
     assert token not in full
     assert REPLACEMENT in full
@@ -285,20 +284,18 @@ def test_a_client_body_loses_its_private_key_before_the_record_is_capped():
     "tail",
     [
         "Authorization:" + " " * 32000 + "!",
-        "eyJ" * 10000 + "!",
         # A credential-shaped run that ends before the cut, with other text after
         # it: the tail patterns retry at every position in the run, so each of
         # those attempts walks it again.
         "--token=" * 3900 + " " + "x" * 1500,
-        "pwd=" * 7800 + " " + "x" * 1500,
+        "token=" * 7800 + " " + "x" * 1500,
         # The same run stopped by a comma rather than a space, and a long gap
         # before the last two words: the window cut keeps both inside it.
-        "pwd=" * 7800 + "," + "x" * 2000,
+        "token=" * 7800 + "," + "x" * 2000,
         " " * 16000 + "x y" + "z" * 17000,
     ],
     ids=[
         "authorization-whitespace",
-        "jwt-prefixes",
         "cli-flag-run",
         "named-secret-run",
         "unspaced-named-secret-run",

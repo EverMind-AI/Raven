@@ -177,6 +177,27 @@ def test_another_programs_settings_are_redacted_when_a_call_reads_them() -> None
     assert redact_home_config_read({"command": "grep -r token src/"}, source) == source
 
 
+def test_an_aws_credentials_read_is_redacted_through_the_gate() -> None:
+    """The model-facing path, not only the ACP preview.
+
+    ``scrub_tool_output`` gates on the path, and ``~/.aws/credentials`` is on
+    the positive list. Both values go: the key id by its vendor prefix, the
+    secret by the ``access_key`` label at the tail of its name.
+    """
+    from raven.config.held_secrets import scrub_tool_output
+
+    text = (
+        "[default]\n"
+        "aws_access_key_id = AKIAIOSFODNN7EXAMPLE\n"
+        "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"
+    )
+
+    shown = scrub_tool_output({"path": "~/.aws/credentials"}, text)
+
+    assert "AKIAIOSFODNN7EXAMPLE" not in shown
+    assert "wJalrXUtnFEMI" not in shown
+
+
 def test_no_config_or_an_unreadable_one_holds_nothing_to_scrub(tmp_path, monkeypatch):
     """Scrubbing is a courtesy on the way to the model; a missing or broken
     config must leave the text as it is, not fail the tool result."""
@@ -603,33 +624,33 @@ def test_an_ordinary_header_value_is_left_alone_in_tool_output(tmp_path: Path, m
 
 
 def test_ravens_own_home_is_not_read_as_another_programs_settings() -> None:
-    """The default workspace and the channels' scratch directories sit under
-    Raven's home, and a coding turn there reads its own source."""
+    """Raven's home holds source a coding turn edits, not another program's
+    settings.
+
+    The gate is the positive list in ``_home_config``: under Raven's home only
+    ``config.json`` and the ``oauth`` store are scanned, so the workspace, the
+    channels' scratch root, the plugin directory and the vendored agents are
+    left alone without the source directories being named at all.
+    """
     import os
 
     from raven.home import raven_home
-    from raven.security.redact import _OWN_SOURCE_DIRS, redact_home_config_read
+    from raven.security.redact import redact_home_config_read
 
     source = "token = self.get_token(request)\napi_key=config.api_key_value\n"
     own = raven_home()
-    # The real layout: Raven's home is a dot-directory of the home, so the
-    # matcher would otherwise fire on it.
+    # The real layout: Raven's home is a dot-directory of the home, so a rule
+    # that gated every dot-directory would otherwise fire on all of it.
     assert str(own.parent) == os.path.expanduser("~").rstrip("/") and own.name.startswith(".")
-    # Every member of the list, read from the list: a directory added there
-    # without its two spellings working is the #833 regression, and a test that
-    # respelled the four names would have missed the fifth. ``tmp`` is the
-    # channels' scratch root (``raven/agent/workdir.py:default_channel_root``,
-    # ``<raven home>/tmp`` with the default workspace) -- the busiest of the four
-    # and, before this, the one with a single spelling covered.
-    for name in _OWN_SOURCE_DIRS:
+    for name in ("workspace", "tmp", "plugins", "agents", "bridge", "traces", "telemetry"):
         for arguments in (
             {"path": str(own / name / "x.py")},
             {"command": f"cat {own}/{name}/x.py"},
         ):
             assert redact_home_config_read(arguments, source) == source, arguments
-    # And the store is not on it: adding it is the one edit that would hand #842
-    # back, so the list is asserted rather than trusted.
-    assert "oauth" not in _OWN_SOURCE_DIRS
+    # The credentials Raven keeps there are still scanned.
+    own_config = '{"providers": {"x": {"api_key": "sk-proj-abcdefghijklmnop"}}}'
+    assert redact_home_config_read({"path": str(own / "config.json")}, own_config) != own_config
     settings = '{"apiKey": "sk-or-v1-0123456789abcdef0123456789abcdef"}'
     qwen = os.path.join(os.path.expanduser("~"), ".qwen", "settings.json")
     assert "0123456789abcdef0123456789abcdef" not in redact_home_config_read({"path": qwen}, settings)
@@ -1112,11 +1133,10 @@ def test_the_store_is_found_wherever_the_home_is(monkeypatch: pytest.MonkeyPatch
     """The two resolvers, on a home that is neither under ``HOME`` nor a dot-directory.
 
     ``_own_oauth_store`` asks ``home.oauth_home`` and ``_home_config`` asks
-    ``raven_home()`` and the home; they are separate questions -- "is this Raven's
-    store" against "is this any program's dot-directory of the home" -- and this is
-    the case where the answers differ, so it is the case that says whether the
-    store is still covered when its home is somewhere unusual. It is: the store's
-    own absolute path is the pattern's first root, with no abbreviation to add.
+    ``raven_home()``; this is the case where the home is somewhere unusual, so
+    the store must be covered by its own absolute path alone. ``~/.raven`` is
+    not this process's home here and ``raven`` is not on the credential list, so
+    a source file under it is left alone.
     """
     from raven.security.redact import _home_config, redact_home_config_read
 
@@ -1128,51 +1148,37 @@ def test_the_store_is_found_wherever_the_home_is(monkeypatch: pytest.MonkeyPatch
 
     shown = redact_home_config_read({"path": str(store / "minimax_global.json")}, tokens)
     assert shown == '{"access": "[redacted]"}', shown
-    # ``~/.raven`` is somebody else's dot-directory now, so it falls under the
-    # general rule rather than the exemption: the matcher has no skip there,
-    # because the skip only describes a home that *is* ``<home>/.<name>``.
-    assert _home_config().search("~/.raven/workspace/app.py")
+    assert not _home_config().search("~/.raven/workspace/app.py")
     source = "token = self.get_token(request)\n"
-    assert redact_home_config_read({"path": "~/.raven/workspace/app.py"}, source) != source
-    # The four source directories are exempt in the relocated home, which is the
-    # home this process actually has.
+    assert redact_home_config_read({"path": "~/.raven/workspace/app.py"}, source) == source
+    # Nor is the relocated home's own source scanned; only its token store is.
     for name in ("workspace", "tmp", "plugins", "agents"):
         assert redact_home_config_read({"path": str(elsewhere / name / "x.py")}, source) == source, name
 
 
-def test_the_home_directories_outside_the_exemption_still_lose_their_tokens() -> None:
-    """The exemption is four directories, not "whatever is beside the token store".
+def test_ravens_own_runtime_files_are_not_redacted() -> None:
+    """Only ``config.json`` and the ``oauth`` store are scanned under Raven's home.
 
-    Measured when the exemption was narrowed, the home holds five other
-    directories with source-shaped or credential-shaped text. None of them is a
-    tree a turn edits, so none is exempt, and the OAuth store beside them must
-    keep losing its values -- a widening that reached ``bridge`` and then kept
-    going would hand back #842.
+    ``bridge``, ``traces``, ``telemetry`` and ``subagent_sessions`` are build
+    and runtime output, not another program's settings. The old rule scanned
+    every dot-directory except four source names, which rewrote
+    ``private token: string`` in the bridge's TypeScript. The positive list does
+    not scan them at all; the token store beside them still loses its values.
     """
     from raven.config.held_secrets import scrub_tool_output
     from raven.config.paths import oauth_dir
     from raven.home import raven_home
 
     own = raven_home()
-    # The build output of the WhatsApp bridge. ``src/server.ts`` declares
-    # ``private token: string``; ``string`` is a type, not a credential, and is
-    # rewritten anyway. That cost is recorded in ``_home_config`` and taken
-    # because the tree is a compiled install, replaced by the next build.
-    bridge_source = "class Bridge {\n  constructor(private token: string) {}\n}\n"
-    shown = scrub_tool_output({"path": str(own / "bridge" / "src" / "server.ts")}, bridge_source)
-    assert "private token: [redacted]" in shown, shown
-    assert "string" not in shown, shown
-    # Runtime state: written by the tracing, usage and product-render code.
-    recorded = '{"token": "sk-live-0123456789abcdef", "note": "kept"}\n'
+    recorded = "token = self.get_token(request)\napi_key = config.api_key_value\n"
     for arguments in (
+        {"path": str(own / "bridge" / "src" / "server.ts")},
         {"path": str(own / "traces" / "bundles" / "trace-1" / "spans.jsonl")},
         {"path": str(own / "telemetry" / "usage-2026-10-22.jsonl")},
         {"path": str(own / "subagent_sessions" / "raven-code" / "TOOLS.md")},
         {"command": f"cat {own}/traces/logs/viewer.log"},
     ):
-        shown = scrub_tool_output(arguments, recorded)
-        assert "sk-live-0123456789abcdef" not in shown, (arguments, shown)
-        assert '"note": "kept"' in shown, (arguments, shown)
+        assert scrub_tool_output(arguments, recorded) == recorded, arguments
     # The contrast that must survive every widening: the store next to them.
     tokens = '{"access": "mmx_FAKEACCESS0123456789abcdef", "refresh": "mmx_FAKEREFRESH0123456789abcdef"}'
     shown = scrub_tool_output({"path": str(oauth_dir() / "minimax_global.json")}, tokens)
@@ -1347,159 +1353,98 @@ _SOURCE = "token = self.get_token(request)\n"
 _SETTINGS = '{"apiKey": "sk-or-v1-0123456789abcdef0123456789abcdef"}'
 
 
-async def test_the_source_exemption_ignores_case_on_a_windows_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    r"""``C:\Users\a\.raven\Workspace`` is the ``workspace`` directory on Windows, whatever the case.
+async def test_a_windows_host_matches_credential_directories_case_blind(monkeypatch: pytest.MonkeyPatch) -> None:
+    r"""A Windows host spells another program's credential directory with either
+    slash, a drive letter and any case, as the filesystem does.
 
-    The exemption compared the four names case-sensitively, so a Windows turn
-    reading its own source under a differently cased spelling had its
-    ``token = ...`` lines rewritten. Each name still ends at a separator, a
-    quote or the end: ``pluginsfoo`` is not ``plugins`` in any case.
+    Raven's own home is not on the credential list, so its source is untouched
+    whatever the case; its ``config.json`` and ``oauth`` store still lose their
+    values. A name still ends where the directory does: ``.aws-other`` is not
+    ``.aws``.
     """
-    import json
-
-    from raven.security.redact import _OWN_SOURCE_DIRS
-
     _host(monkeypatch, "windows", _WINDOWS_HOME)
-    for name in _OWN_SOURCE_DIRS:
-        for spelled in (name, name.upper(), name.title()):
-            native = f"C:\\Users\\a\\.raven\\{spelled}\\app.py"
-            for arguments in (
-                {"path": native},
-                {"path": f"c:/users/A/.Raven/{spelled}/app.py"},
-                {"path": f"~\\.raven\\{spelled}\\app.py"},
-                {"command": f'type "C:\\Users\\a\\.raven\\{spelled}"'},
-                {"command": "python -c " + json.dumps(f"open({json.dumps(native)})")},
-            ):
-                assert await _dispatched(arguments, _SOURCE) == _SOURCE, arguments
-    for arguments in (
-        {"path": "C:\\Users\\a\\.raven\\pluginsfoo\\app.py"},
-        {"path": "C:\\Users\\a\\.raven\\PLUGINSFOO\\app.py"},
-        {"path": "~/.raven/Workspace2/app.py"},
-        {"path": "C:\\Users\\a\\.raven\\oauth\\app.py"},
-    ):
-        assert await _dispatched(arguments, _SOURCE) == "token = [redacted])\n", arguments
-    # The home itself is matched in the host's terms, so another program's
-    # settings under it lose their key however the path is written.
     for arguments in (
         {"path": "C:\\Users\\a\\.qwen\\settings.json"},
         {"path": "C:\\USERS\\A\\.QWEN\\settings.json"},
         {"path": "C:/Users/a/.qwen/settings.json"},
+        {"path": "C:\\Users\\a\\.aws\\credentials"},
+        {"path": "c:\\users\\A\\.Aws\\credentials"},
     ):
         assert "0123456789abcdef0123456789abcdef" not in await _dispatched(arguments, _SETTINGS), arguments
-
-
-async def test_the_source_exemption_keeps_case_on_a_posix_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    """POSIX paths are case-sensitive, so ``Workspace`` is not ``workspace`` there."""
-    from raven.security.redact import _OWN_SOURCE_DIRS
-
-    _host(monkeypatch, "posix", "/home/a")
-    for name in _OWN_SOURCE_DIRS:
-        for arguments in ({"path": f"/home/a/.raven/{name}/app.py"}, {"command": f"cat ~/.raven/{name}/app.py"}):
-            assert await _dispatched(arguments, _SOURCE) == _SOURCE, arguments
-        for arguments in ({"path": f"/home/a/.raven/{name.title()}/app.py"}, {"path": f"~/.raven/{name}foo/app.py"}):
-            assert await _dispatched(arguments, _SOURCE) == "token = [redacted])\n", arguments
-    assert "0123456789abcdef" not in await _dispatched({"path": "/home/a/.qwen/settings.json"}, _SETTINGS)
-
-
-@pytest.mark.parametrize(
-    "spelled",
-    [
-        "~/.raven/{}/app.py",
-        "~/.raven//{}/app.py",
-        "~/.raven/./{}/app.py",
-        "/home/a/.raven///.//./{}/app.py",
-        "cat $HOME/.raven//{}",
-        "cat ~/.raven/./{}",
-    ],
-)
-async def test_a_repeated_slash_or_dot_segment_still_reaches_the_posix_source_exemption(
-    monkeypatch: pytest.MonkeyPatch, spelled: str
-) -> None:
-    """``~/.raven//workspace`` and ``~/.raven/./workspace`` are ``~/.raven/workspace``.
-
-    The pass matches the arguments as the call wrote them -- no caller
-    normalizes a path first -- so a doubled slash or a ``.`` segment before a
-    source directory names the same directory and must not cost its source lines.
-    """
-    from raven.security.redact import _OWN_SOURCE_DIRS
-
-    _host(monkeypatch, "posix", "/home/a")
-    for name in _OWN_SOURCE_DIRS:
-        arguments = {"command" if spelled.startswith("cat ") else "path": spelled.format(name)}
+    for arguments in (
+        {"path": "C:\\Users\\a\\.aws-other\\credentials"},
+        {"path": "C:\\Users\\a\\.qwen-other\\settings.json"},
+        {"path": "C:\\Users\\a\\.raven\\workspace\\app.py"},
+        {"path": "C:\\Users\\a\\.raven\\Workspace\\app.py"},
+    ):
         assert await _dispatched(arguments, _SOURCE) == _SOURCE, arguments
+    for arguments in (
+        {"path": "C:\\Users\\a\\.raven\\config.json"},
+        {"path": "C:\\Users\\a\\.raven\\oauth\\app.py"},
+    ):
+        assert await _dispatched(arguments, _SOURCE) == "token = [redacted])\n", arguments
 
 
-@pytest.mark.parametrize(
-    "spelled",
-    [
-        "~/.raven\\{}/app.py",
-        "~/.raven/{}foo/app.py",
-        "~/.raven//{}foo/app.py",
-        "~/.raven/./{}foo/app.py",
-        "~/.raven/.{}/app.py",
-        "~/.raven/oauth/x.json",
-        "~/.raven//oauth/x.json",
-        "~/.raven/./oauth/x.json",
-    ],
-)
-async def test_a_posix_spelling_of_another_entry_is_not_the_source_exemption(
-    monkeypatch: pytest.MonkeyPatch, spelled: str
-) -> None:
-    """Only ``/`` separates on POSIX, and a name still ends where the directory does.
+async def test_a_posix_host_matches_credential_directories_case_sensitively(monkeypatch: pytest.MonkeyPatch) -> None:
+    """POSIX paths are case-sensitive, so ``.QWEN`` is not ``.qwen``.
 
-    A backslash is a character of a POSIX file name, so ``.raven\\workspace`` is
-    another entry of the home, not Raven's workspace; ``workspacefoo`` and
-    ``.workspace`` are other directories; the OAuth store keeps losing its values
-    however the separators before it are spelled.
+    Raven's own home is not on the credential list, so its source is untouched;
+    its ``config.json`` and ``oauth`` store still lose their values.
     """
-    from raven.security.redact import _OWN_SOURCE_DIRS
-
     _host(monkeypatch, "posix", "/home/a")
-    for name in _OWN_SOURCE_DIRS:
-        arguments = {"path": spelled.format(name)}
+    for arguments in (
+        {"path": "/home/a/.qwen/settings.json"},
+        {"path": "/home/a/.aws/credentials"},
+        {"path": "/home/a/.ssh/id_rsa"},
+        {"path": "/home/a/.config/gh/hosts.yml"},
+    ):
+        assert "0123456789abcdef0123456789abcdef" not in await _dispatched(arguments, _SETTINGS), arguments
+    for arguments in (
+        {"path": "/home/a/.QWEN/settings.json"},
+        {"path": "/home/a/.qwen-other/settings.json"},
+        {"path": "/home/a/.raven/workspace/app.py"},
+        {"path": "/home/a/.raven/Workspace/app.py"},
+    ):
+        assert await _dispatched(arguments, _SOURCE) == _SOURCE, arguments
+    for arguments in (
+        {"path": "/home/a/.raven/config.json"},
+        {"path": "/home/a/.raven/oauth/x.py"},
+    ):
         assert await _dispatched(arguments, _SOURCE) == "token = [redacted])\n", arguments
 
 
 @pytest.mark.parametrize(
     "spelled",
     [
-        "C:\\Users\\a\\.raven\\\\{}\\app.py",
-        "C:/Users/a/.raven//{}/app.py",
-        "C:\\Users\\a\\.raven\\.\\{}\\app.py",
-        "C:\\Users\\a\\.raven\\\\.\\\\{}\\app.py",
-        "~/.raven/./{}/app.py",
-        "~\\.raven\\./.\\{}\\app.py",
+        "~/.qwen/settings.json",
+        "~/.qwen//settings.json",
+        "~/.qwen/./settings.json",
+        "cat $HOME/.qwen//settings.json",
+        "cat ~/.qwen/./settings.json",
     ],
 )
-async def test_a_repeated_separator_or_dot_segment_still_reaches_the_windows_source_exemption(
+async def test_a_repeated_separator_or_dot_segment_still_reaches_the_gate(
     monkeypatch: pytest.MonkeyPatch, spelled: str
 ) -> None:
-    r"""Either slash, repeated, and ``.\`` segments name the same directory on Windows too."""
-    from raven.security.redact import _OWN_SOURCE_DIRS
-
-    _host(monkeypatch, "windows", _WINDOWS_HOME)
-    for name in _OWN_SOURCE_DIRS:
-        for arguments in ({"path": spelled.format(name)}, {"path": spelled.format(name.upper())}):
-            assert await _dispatched(arguments, _SOURCE) == _SOURCE, arguments
+    """``~/.qwen//settings.json`` names the same file, and the arguments are
+    matched as the call wrote them."""
+    _host(monkeypatch, "posix", "/home/a")
+    arguments = {"command" if spelled.startswith("cat ") else "path": spelled}
+    assert "0123456789abcdef" not in await _dispatched(arguments, _SETTINGS), arguments
 
 
 @pytest.mark.parametrize(
-    "spelled",
+    "native",
     [
-        "C:\\Users\\a\\.raven\\\\{}foo\\app.py",
-        "C:\\Users\\a\\.raven\\.\\{}foo\\app.py",
-        "C:\\Users\\a\\.raven\\.{}\\app.py",
-        "C:\\Users\\a\\.raven\\\\oauth\\x.json",
-        "C:\\Users\\a\\.raven\\.\\oauth\\x.json",
+        "C:\\Users\\a\\.qwen\\settings.json",
+        "C:\\Users\\a\\.qwen\\\\settings.json",
+        "C:\\Users\\a\\.qwen\\.\\settings.json",
+        "C:/Users/a/.qwen//settings.json",
     ],
 )
-async def test_a_windows_spelling_of_another_entry_is_not_the_source_exemption(
-    monkeypatch: pytest.MonkeyPatch, spelled: str
+async def test_a_windows_repeated_separator_still_reaches_the_gate(
+    monkeypatch: pytest.MonkeyPatch, native: str
 ) -> None:
-    """The wider Windows separators keep the directory boundary and the OAuth store's redaction."""
-    from raven.security.redact import _OWN_SOURCE_DIRS
-
+    """Either slash, repeated, and a ``.`` segment name the same directory."""
     _host(monkeypatch, "windows", _WINDOWS_HOME)
-    for name in _OWN_SOURCE_DIRS:
-        arguments = {"path": spelled.format(name)}
-        assert await _dispatched(arguments, _SOURCE) == "token = [redacted])\n", arguments
+    assert "0123456789abcdef" not in await _dispatched({"path": native}, _SETTINGS), native

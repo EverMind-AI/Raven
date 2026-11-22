@@ -63,6 +63,28 @@ class TestWhatItCatches:
         prefix = text[: text.index(secret)]
         assert prefix in result, "redacting the label as well leaves a row nobody can act on"
 
+    def test_an_aws_credentials_file_loses_both_values(self):
+        """The channel that does not depend on the user making a mistake.
+
+        ``read_file ~/.aws/credentials`` is an ordinary turn (the default
+        ``restrict_to_workspace`` is false), and its result preview is the
+        file's body. The key id is caught by its vendor prefix; the secret is
+        caught by the ``access_key`` label at the tail of
+        ``aws_secret_access_key``. Both must go, because neither pattern alone
+        covers the file.
+        """
+        text = (
+            "[default]\n"
+            "aws_access_key_id = AKIAIOSFODNN7EXAMPLE\n"
+            "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"
+        )
+
+        result = redact(text)
+
+        assert "AKIAIOSFODNN7EXAMPLE" not in result
+        assert "wJalrXUtnFEMI" not in result
+        assert result == "[default]\naws_access_key_id = [redacted]\naws_secret_access_key = [redacted]\n"
+
     def test_a_fine_grained_pat_leaves_nothing_of_its_value(self):
         """A real-shaped token, because a 13-character prefix proves only that
         the prefix went. The value class still has to cross the underscore at
@@ -161,6 +183,19 @@ class TestWhatItLeavesAlone:
             "grep -rn 'secret' docs/",
             "ssh-keygen -t ed25519 -C me@example.com",
             "SELECT id, password_hash FROM users LIMIT 10",
+            # The labels the narrowed table no longer treats as secret names.
+            # ``PWD`` is the shell's working-directory variable, ``auth`` and
+            # ``credential`` are ordinary config words, and ``private_key`` can
+            # be a path. ``string`` and ``abc`` are below the eight-character
+            # floor, and ``passwd`` no longer labels an assignment.
+            "cookie: string",
+            "pwd = /home/user/work",
+            "auth: required",
+            "private_key: /etc/ssl/key.pem",
+            "token: string",
+            'api_key: "abc"',
+            "passwd: compat",
+            "credential: none",
         ],
     )
     def test_ordinary_text_is_unchanged(self, text):
@@ -189,7 +224,6 @@ class TestTheLimits:
             "ghp_ABCD",
             "github_pat_11AB",
             "redis://:abc",
-            "eyJabcdefghijk",
         ],
     )
     def test_a_known_cut_removes_short_credential_tails(self, text):
@@ -208,22 +242,21 @@ class TestTheLimits:
         text = "ordinary diagnostic " + "x" * 1000
         assert redact(text, truncated=True) == text
 
-    def test_a_jwt_is_matched_only_where_a_token_can_start(self):
-        """The boundary the JWT pattern trades coverage for.
+    def test_a_standalone_jwt_is_left_to_its_label(self):
+        """A JWT with no label and no bearer prefix is not treated as a secret.
 
-        ``eyJ`` is three characters a base64 body contains by chance, so an
-        unbounded pattern spent its time at every one of them -- 21 seconds of
-        CPU on a 256,000-character body of them. Matching only at a token
-        boundary removes that, and costs the one shape where a real token is
-        glued to a word: ``/verify-eyJ...`` is published whole. The loss stops
-        there; a separator of any kind, or the start of the text, still matches.
+        Codex has no JWT rule either. A bare ``eyJ...`` triple is
+        indistinguishable from a base64 blob a row legitimately shows, and a
+        pattern for it fires at every accidental ``eyJ`` in a long body; the
+        labeled form (``token=``, ``id_token``) and the bearer form are the
+        shapes a credential actually arrives in, and both are still caught.
         """
         jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
 
+        assert redact(jwt) == jwt
         assert redact(f"/verify-{jwt}") == f"/verify-{jwt}"
         assert REPLACEMENT in redact(f"token={jwt}")
         assert REPLACEMENT in redact(f"Bearer {jwt}")
-        assert REPLACEMENT in redact(jwt)
 
     def test_a_pem_header_without_its_end_keeps_nothing_after_it(self):
         """A preview that quotes the header as text loses what it showed below it.
@@ -245,7 +278,7 @@ class TestTheLimits:
         ("head", "unit", "stop", "size"),
         [
             ("", ".sk-", "!x", 64_000),
-            ("", "pwd=", ",x", 32_000),
+            ("", "token=", ",x", 32_000),
             ("", "--token=", "'x", 32_000),
             ("", " ", "x y", 32_000),
             ("Authorization:", " ", "abcde", 32_000),
@@ -279,17 +312,27 @@ class TestTheLimits:
 
         # One long value per pattern: a run longer than the label room, which a
         # value class narrower than the pattern's own would stop short of.
-        tails = ["eyJ", "x.sk-", "pwd=", '"password": "', "Authorization: Bearer ", "--token ", "https://user:"]
+        tails = [
+            "x.sk-",
+            "token=",
+            '"password": "',
+            "Authorization: Bearer ",
+            "--token ",
+            "https://user:",
+            "glpat-",
+            "xoxb-",
+            "AIza",
+        ]
         tails += ["github_pat_", "redis://:"]
         for tail in tails:
-            for lead in ("", "x " * 300, "pwd=" * 100 + ","):
+            for lead in ("", "x " * 300, "token=" * 100 + ","):
                 text = lead + tail + "aZ9" * 140
                 assert REPLACEMENT in whole_text(text), text
                 assert redact_module._redact_cut_tail(text) == whole_text(text), text
 
         rng = random.Random(978)
-        heads = ["password", "PWD", "api_key", "auth", "token", "Authorization", "Proxy-Authorization"]
-        heads += ["--token", "--with-token", "https://user", "sk-", "ghp_", "eyJ", "AKIA", "xoxb-"]
+        heads = ["password", "api_key", "token", "Authorization", "Proxy-Authorization"]
+        heads += ["--token", "--with-token", "https://user", "sk-", "ghp_", "glpat-", "xoxb-", "AIza", "AKIA"]
         heads += ["github_pat_", "redis://"]
         noise = ["sk-", ".sk-", "pwd=", "--token=", "://", ":", "@", "/", "!", ",", "'", '"', " ", "\n", "x", "Z9"]
         for _ in range(3000):
@@ -339,11 +382,13 @@ class TestTheLimits:
         assert redact(f"echo {opaque}") == f"echo {opaque}"
 
     def test_the_table_stays_small_on_purpose(self):
-        """Sized like the sixteen-pattern table openclaw uses for this job, and
+        """Aligned with the four-pattern table Codex uses for this job, plus the
+        channels it misses (a URL password, PEM material, a bare bearer, a CLI
+        flag) and the four vendor prefixes this repository actually uses -- and
         deliberately not the 409-line RFC-7235 header scanner beside it."""
         names = pattern_names()
 
-        assert 10 <= len(names) <= 20
+        assert 4 <= len(names) <= 14
         assert len(set(names)) == len(names)
 
     def test_no_pattern_matches_the_replacement_token(self):
