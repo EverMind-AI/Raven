@@ -15,7 +15,11 @@ from raven.agent.task_board.hybrid import (
     retrieve_completed,
     rrf_order,
 )
+from raven.agent.task_board.service import TaskBoardService
 from raven.agent.task_board.store import EMBEDDINGS_FILENAME, copy_board, reset_board, save_board
+from raven.session.manager import SessionManager
+
+KEY = "web:alpha"
 
 
 def _group(
@@ -43,6 +47,19 @@ class FakeEmbedder:
             await asyncio.sleep(self.delay)
         if self.fail:
             raise RuntimeError("embedding unavailable")
+        return [[float(len(text)), 1.0] for text in texts]
+
+
+class GatedEmbedder:
+    model = "fake-model"
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        self.started.set()
+        await self.release.wait()
         return [[float(len(text)), 1.0] for text in texts]
 
 
@@ -195,3 +212,54 @@ async def test_reset_removes_the_cache_and_copy_does_not_carry_it(tmp_path):
 
     reset_board(source)
     assert not (source / EMBEDDINGS_FILENAME).exists()
+
+
+async def test_a_failed_recall_leaves_no_cache_file(tmp_path):
+    group = _group("g_alpha", "Alpha report")
+
+    result = await retrieve_completed(
+        Board([group], []), "alpha", session_dir=tmp_path, embedder=FakeEmbedder(fail=True)
+    )
+
+    assert result == ["g_alpha"]
+    assert not (tmp_path / EMBEDDINGS_FILENAME).exists()
+
+
+async def test_a_service_reset_removes_the_cache(tmp_path):
+    service = TaskBoardService(SessionManager(tmp_path), now_ms=lambda: 1_000)
+    group = _group("g_first", "First report")
+    save_board(service.session_dir(KEY), Board([group], []))
+
+    await retrieve_completed(
+        Board([group], []), "first query", session_dir=service.session_dir(KEY), embedder=FakeEmbedder()
+    )
+    assert (service.session_dir(KEY) / EMBEDDINGS_FILENAME).is_file()
+
+    await service.reset(KEY)
+
+    assert not (service.session_dir(KEY) / EMBEDDINGS_FILENAME).exists()
+
+
+async def test_a_recall_in_flight_cannot_recreate_the_cache_after_a_reset(tmp_path):
+    service = TaskBoardService(SessionManager(tmp_path), now_ms=lambda: 1_000)
+    group = _group("g_first", "First report")
+    save_board(service.session_dir(KEY), Board([group], []))
+    embedder = GatedEmbedder()
+
+    recall = asyncio.create_task(
+        retrieve_completed(
+            Board([group], []),
+            "first query",
+            session_dir=service.session_dir(KEY),
+            embedder=embedder,
+            generation=service.generation(KEY),
+            generation_now=lambda: service.generation(KEY),
+            write_lock=service.lock(KEY),
+        )
+    )
+    await embedder.started.wait()
+    await asyncio.wait_for(service.reset(KEY), timeout=1)
+    embedder.release.set()
+
+    assert await asyncio.wait_for(recall, timeout=1) == []
+    assert not (service.session_dir(KEY) / EMBEDDINGS_FILENAME).exists()

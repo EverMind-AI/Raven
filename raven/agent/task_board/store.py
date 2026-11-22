@@ -54,11 +54,15 @@ def save_board(session_dir: Path, board: Board) -> None:
     files.write_text(Path(session_dir) / BOARD_FILENAME, text)
 
 
+def remove_embeddings(session_dir: Path) -> None:
+    with contextlib.suppress(OSError):
+        files.remove(Path(session_dir) / EMBEDDINGS_FILENAME)
+
+
 def reset_board(session_dir: Path) -> None:
     files.remove(Path(session_dir) / BOARD_FILENAME)
     files.remove(Path(session_dir) / NOTES_FILENAME)
-    with contextlib.suppress(OSError):
-        files.remove(Path(session_dir) / EMBEDDINGS_FILENAME)
+    remove_embeddings(session_dir)
 
 
 def copy_board(src: Path, dst: Path) -> None:

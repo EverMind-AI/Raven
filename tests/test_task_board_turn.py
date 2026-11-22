@@ -296,7 +296,9 @@ async def test_a_dispatch_from_an_earlier_turn_is_not_placed_again(tmp_path):
 async def test_a_completed_board_is_summarized_before_the_update(tmp_path, monkeypatch):
     from raven.agent.task_board import runner as board_runner
 
-    async def fake_retrieve(board, query, *, session_dir, limit=5, embedder=None):
+    async def fake_retrieve(
+        board, query, *, session_dir, limit=5, embedder=None, generation=None, generation_now=None, write_lock=None
+    ):
         return ["g_done"]
 
     monkeypatch.setattr(board_runner, "retrieve_completed", fake_retrieve)

@@ -827,7 +827,8 @@ async def run_post_turn(
 
     ``generation`` is the service's count of clears as the turn ended, read by
     the caller when it schedules this update: an update still waiting for the
-    queue when a clear lands belongs to the cleared conversation too.
+    queue when a clear lands belongs to the cleared conversation too, and the
+    recall's cache write is checked against the same count.
 
     ``delegated`` names the run whose result opened the turn -- read as the run the
     board placed when it descends from one -- and ``moved_on`` the groups the
@@ -856,7 +857,14 @@ async def run_post_turn(
                 session_dir = service.session_dir(session_key)
 
                 async def default_recall(board: Board, query: str) -> Sequence[str]:
-                    return await retrieve_completed(board, query, session_dir=session_dir)
+                    return await retrieve_completed(
+                        board,
+                        query,
+                        session_dir=session_dir,
+                        generation=generation,
+                        generation_now=lambda: service.generation(session_key),
+                        write_lock=service.lock(session_key),
+                    )
 
                 recall = default_recall
             else:

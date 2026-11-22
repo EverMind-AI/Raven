@@ -5,7 +5,9 @@ ranked by BM25 over that text. The same text is embedded through the configured
 embedding endpoint and ranked by cosine; the two rankings are fused with RRF,
 BM25 weighted three times. Vectors live in the session directory's SQLite file,
 keyed by the embedding model and the document text, so a group whose text did
-not change is never embedded twice. Any dense failure leaves the BM25 ranking.
+not change is never embedded twice. The file is derived from the board: a clear
+removes it, and a read or a write refuses to run once the clear it began before
+has landed. Any dense failure leaves the BM25 ranking.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ import asyncio
 import hashlib
 import sqlite3
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Callable, Protocol, Sequence
 
 import numpy as np
 from loguru import logger
@@ -110,14 +112,19 @@ def _connect(path: Path) -> sqlite3.Connection:
 
 
 def _read_vectors(path: Path, model: str, items: Sequence[tuple[str, str]]) -> dict[str, np.ndarray]:
-    if not items:
+    if not items or not path.is_file():
         return {}
-    connection = _connect(path)
+    try:
+        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return {}
     try:
         stored = {
             key: (int(dim), blob)
             for key, dim, blob in connection.execute("SELECT key, dim, vec FROM vec WHERE model = ?", (model,))
         }
+    except sqlite3.Error:
+        return {}
     finally:
         connection.close()
     found: dict[str, np.ndarray] = {}
@@ -168,10 +175,19 @@ async def retrieve_completed(
     session_dir: Path,
     limit: int = RECALL_LIMIT,
     embedder: Embedder | None = None,
+    generation: int | None = None,
+    generation_now: Callable[[], int] | None = None,
+    write_lock: asyncio.Lock | None = None,
 ) -> list[str]:
     query = (query or "").strip()[:QUERY_CHARS]
     groups = [group for group in board.groups if group.status == "completed"]
     if not query or not groups:
+        return []
+
+    def current() -> bool:
+        return generation is None or generation_now is None or generation_now() == generation
+
+    if not current():
         return []
     sparse = bm25_order(groups, query)
     try:
@@ -185,12 +201,17 @@ async def retrieve_completed(
         embedded = await asyncio.wait_for(client.embed(texts), timeout=EMBED_TIMEOUT_S)
         if len(embedded) != len(texts):
             raise RuntimeError(f"embedding endpoint returned {len(embedded)} vectors for {len(texts)} inputs")
+        if not current():
+            return []
         if missing:
-            _write_vectors(
-                _cache_path(session_dir),
-                client.model,
-                [(group_id, text, vector) for (group_id, text), vector in zip(missing, embedded[1:])],
-            )
+            rows = [(group_id, text, vector) for (group_id, text), vector in zip(missing, embedded[1:])]
+            if write_lock is None:
+                _write_vectors(_cache_path(session_dir), client.model, rows)
+            else:
+                async with write_lock:
+                    if not current():
+                        return []
+                    _write_vectors(_cache_path(session_dir), client.model, rows)
             for (group_id, _), vector in zip(missing, embedded[1:]):
                 vectors[group_id] = np.asarray(vector, dtype=np.float32)
         dense = dense_order(groups, embedded[0], vectors)

@@ -673,6 +673,36 @@ async def test_a_retrieval_failure_does_not_stop_the_update(tmp_path):
     assert board is not None
 
 
+async def test_the_default_recall_is_guarded_by_the_scheduling_generation(tmp_path, monkeypatch):
+    from raven.agent.task_board import runner as board_runner
+
+    seen: dict = {}
+
+    async def fake_retrieve(board, query, **kwargs):
+        seen.update(kwargs)
+        return []
+
+    monkeypatch.setattr(board_runner, "retrieve_completed", fake_retrieve)
+    service = _completed_service(tmp_path)
+
+    await run_post_turn(
+        service,
+        session_key=KEY,
+        call=Scripted(GOOD),
+        window=WINDOW,
+        dispatches=[SPAWN],
+        turn_at="2026-10-29T10:02:13",
+        turn_id="turn-1",
+        now_ms=service.now_ms,
+        generation=service.generation(KEY),
+        reply_rows=WINDOW,
+    )
+
+    assert seen["generation"] == 0
+    assert seen["generation_now"]() == 0
+    assert seen["write_lock"] is service.lock(KEY)
+
+
 async def test_the_update_instruction_carries_the_update_time():
     instructions: list[str] = []
 
