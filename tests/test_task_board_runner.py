@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
@@ -27,6 +28,7 @@ from raven.agent.task_board.board import (
 from raven.agent.task_board.runner import (
     MAX_ATTEMPTS,
     OPEN_STEPS_SHOWN,
+    _ask,
     asked,
     build_instruction,
     run_post_turn,
@@ -99,9 +101,39 @@ def _service(tmp_path):
     return TaskBoardService(SessionManager(tmp_path), now_ms=lambda: 1_000)
 
 
-def _run(service, call, dispatches=(SPAWN,), turn_at="2026-10-29T10:02:13", window=WINDOW, reply_rows=None, **scope):
+def _completed_service(tmp_path):
+    service = _service(tmp_path)
+    group = TaskGroup(
+        "g_done",
+        "Done matter",
+        "Done summary",
+        "completed",
+        1,
+        2,
+        [ProgressStep("s1", "T0", None, "Done step", "detail", [])],
+    )
+    save_board(service.session_dir(KEY), Board([group], []))
+    return service
+
+
+def _run(
+    service,
+    call,
+    dispatches=(SPAWN,),
+    turn_at="2026-10-29T10:02:13",
+    window=WINDOW,
+    reply_rows=None,
+    retrieve=None,
+    summarize=None,
+    **scope,
+):
     """The update as the turn path schedules it: its generation is read here, at
     scheduling, not once the task first runs."""
+    if retrieve is None:
+
+        async def retrieve(board, query):
+            return []
+
     return run_post_turn(
         service,
         session_key=KEY,
@@ -113,6 +145,8 @@ def _run(service, call, dispatches=(SPAWN,), turn_at="2026-10-29T10:02:13", wind
         turn_id="turn-1",
         now_ms=service.now_ms,
         generation=service.generation(KEY),
+        retrieve=retrieve,
+        summarize=summarize,
         **scope,
     )
 
@@ -412,6 +446,256 @@ def test_the_instruction_stays_bounded_on_a_long_session():
     assert "g_0 [idle] Matter 0 -- Where matter 0 stands" in text
     assert "detail 0." not in text, "a step's summary is for recall; the record carries titles"
     assert "g_1: Matter 1" in text and "group 1 step" not in text and "Where matter 1 stands" not in text
+
+
+BASE = 1_700_000_000_000
+
+
+def _iso(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _record_of(text: str) -> str:
+    return text[text.index("[BEGIN BOARD RECORD]") : text.index("[END BOARD RECORD]")]
+
+
+def test_the_retrieved_completed_groups_are_expanded_in_retrieval_order():
+    groups = [
+        TaskGroup(
+            f"g_{i}",
+            f"Matter {i}",
+            f"Summary {i}",
+            "completed",
+            BASE + i * 1000,
+            BASE + (100 - i * 10) * 1000,
+            [
+                ProgressStep(f"s{i}a", "T0", None, f"Step {i}a", "detail", []),
+                ProgressStep(f"s{i}b", "T0", None, f"Step {i}b", "detail", []),
+                ProgressStep(f"s{i}c", "T0", None, f"Step {i}c", "detail", []),
+            ],
+        )
+        for i in range(1, 7)
+    ]
+
+    record = _record_of(build_instruction(Board(groups, []), [], completed_ids=["g_3", "g_1"]))
+
+    for i in (3, 1):
+        assert f"- g_{i} [completed] Matter {i} -- Summary {i}" in record
+        assert f"    - Step {i}b" in record and f"    - Step {i}c" in record
+        assert f"    - Step {i}a" not in record
+        assert f"(created {_iso(BASE + i * 1000)}, updated {_iso(BASE + (100 - i * 10) * 1000)})" in record
+        assert f"g_{i}: Matter {i}" not in record
+    assert record.index("- g_3 [completed]") < record.index("- g_1 [completed]")
+    assert record.index("- g_1 [completed]") < record.index("Completed:")
+    assert "g_2: Matter 2" in record and "g_4: Matter 4" in record
+
+
+def test_an_unknown_or_open_id_is_not_expanded():
+    open_group = TaskGroup("g_open", "Open", "Open summary", "idle", BASE, BASE, [])
+    closed = TaskGroup("g_done", "Done", "Done summary", "completed", BASE, BASE, [])
+    record = _record_of(
+        build_instruction(Board([open_group, closed], []), [], completed_ids=["g_missing", "g_open", "g_done"])
+    )
+
+    assert record.count("- g_done [completed]") == 1
+    assert "- g_open [completed]" not in record
+
+
+def test_a_duplicate_retrieved_id_is_shown_once():
+    group = TaskGroup("g_done", "Done", "Done summary", "completed", BASE, BASE, [])
+    record = _record_of(build_instruction(Board([group], []), [], completed_ids=["g_done", "g_done"]))
+
+    assert record.count("- g_done [completed]") == 1
+
+
+def test_every_group_shows_its_created_and_updated_times():
+    idle = TaskGroup(
+        "g_active",
+        "Active matter",
+        "Active summary",
+        "idle",
+        BASE,
+        BASE + 1000,
+        [ProgressStep("s_active", "T0", None, "Active step", "detail", [])],
+    )
+    completed = [
+        TaskGroup(
+            f"g_c{i}",
+            f"Completed {i}",
+            f"Completed summary {i}",
+            "completed",
+            BASE + i * 1000,
+            BASE + (10 + i) * 1000,
+            [ProgressStep(f"s_c{i}", "T0", None, f"Completed step {i}", "detail", [])],
+        )
+        for i in range(1, 7)
+    ]
+
+    record = _record_of(build_instruction(Board([idle, *completed], []), []))
+
+    assert (
+        f"- g_active [idle] Active matter -- Active summary (created {_iso(BASE)}, updated {_iso(BASE + 1000)})"
+        in record
+    )
+    for i in range(1, 7):
+        assert f"created {_iso(BASE + i * 1000)}" in record
+        assert f"updated {_iso(BASE + (10 + i) * 1000)}" in record
+
+
+def test_a_completed_group_with_no_summary_keeps_its_times():
+    group = TaskGroup(
+        "g_empty",
+        "No summary",
+        "",
+        "completed",
+        BASE,
+        BASE + 1000,
+        [ProgressStep("s_empty", "T0", None, "Only step", "detail", [])],
+    )
+
+    record = _record_of(build_instruction(Board([group], []), [], completed_ids=["g_empty"]))
+
+    assert f"- g_empty [completed] No summary (created {_iso(BASE)}, updated {_iso(BASE + 1000)})" in record
+    assert "No summary --" not in record
+
+
+def test_every_retrieved_completed_group_leaves_no_compressed_line():
+    for count in (0, 1, 5):
+        groups = [
+            TaskGroup(
+                f"g_{i}",
+                f"Matter {i}",
+                f"Summary {i}",
+                "completed",
+                BASE + i * 1000,
+                BASE + i * 1000,
+                [ProgressStep(f"s{i}", "T0", None, f"Step {i}", "detail", [])],
+            )
+            for i in range(count)
+        ]
+
+        record = _record_of(build_instruction(Board(groups, []), [], completed_ids=[group.id for group in groups]))
+
+        assert "Completed:" not in record
+
+
+def test_the_instruction_carries_the_current_time_when_given():
+    text = build_instruction(Board([], []), [], now="2026-11-20T13:10:00Z")
+
+    assert "Current time: 2026-11-20T13:10:00Z." in text
+
+
+def test_the_instruction_omits_the_current_time_when_not_given():
+    assert "Current time:" not in build_instruction(Board([], []), [])
+
+
+def test_the_instruction_describes_the_retrieved_completed_groups():
+    text = build_instruction(Board([], []), [])
+
+    assert "completed groups most related to this turn" in text
+
+
+async def test_the_summary_is_used_as_the_recall_query(tmp_path):
+    queries: list[str] = []
+
+    async def retrieve(board, query):
+        queries.append(query)
+        return []
+
+    async def summarize(rows):
+        return "Reviewed PR #1"
+
+    await _run(_completed_service(tmp_path), Scripted(GOOD), retrieve=retrieve, summarize=summarize)
+
+    assert queries == ["Reviewed PR #1"]
+
+
+async def test_a_summary_failure_falls_back_to_the_turn_words(tmp_path):
+    queries: list[str] = []
+
+    async def retrieve(board, query):
+        queries.append(query)
+        return []
+
+    async def summarize(rows):
+        raise RuntimeError("summary unavailable")
+
+    await _run(_completed_service(tmp_path), Scripted(GOOD), retrieve=retrieve, summarize=summarize)
+
+    assert "The token is empty" in queries[0]
+
+
+async def test_a_no_work_summary_skips_recall(tmp_path):
+    queries: list[str] = []
+
+    async def retrieve(board, query):
+        queries.append(query)
+        return []
+
+    async def summarize(rows):
+        return "NO_WORK"
+
+    await _run(_completed_service(tmp_path), Scripted(GOOD), retrieve=retrieve, summarize=summarize)
+
+    assert queries == []
+
+
+async def test_the_retrieved_ids_reach_the_instruction(tmp_path):
+    service = _service(tmp_path)
+    group = TaskGroup(
+        "g_done",
+        "Done matter",
+        "Done summary",
+        "completed",
+        1,
+        2,
+        [ProgressStep("s1", "T0", None, "Done step", "detail", [])],
+    )
+    save_board(service.session_dir(KEY), Board([group], []))
+
+    async def retrieve(board, query):
+        return ["g_done"]
+
+    call = Scripted(GOOD)
+    await _run(service, call, retrieve=retrieve)
+
+    instruction = call.seen[0][-1]["content"]
+    assert "- g_done [completed] Done matter -- Done summary" in instruction
+    assert "    - Done step" in instruction
+
+
+async def test_a_retrieval_failure_does_not_stop_the_update(tmp_path):
+    async def retrieve(board, query):
+        raise RuntimeError("recall unavailable")
+
+    board = await _run(_service(tmp_path), Scripted(GOOD), retrieve=retrieve)
+
+    assert board is not None
+
+
+async def test_the_update_instruction_carries_the_update_time():
+    instructions: list[str] = []
+
+    async def call(rows):
+        instructions.append(rows[-1]["content"])
+        return GOOD
+
+    await _ask(
+        Board([], []),
+        session_key=KEY,
+        call=call,
+        window=[],
+        dispatches=[SPAWN],
+        turn_at="T0",
+        turn_id=None,
+        now_ms=lambda: 1_000,
+        owners=[],
+        candidates=[],
+        words="",
+        questions=[],
+    )
+
+    assert "Current time: 1970-01-01T00:00:01Z." in instructions[0]
 
 
 def test_unassigned_handles_are_listed_before_the_turns_own():

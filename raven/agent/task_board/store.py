@@ -20,6 +20,7 @@ from raven.agent.task_board.board import Board, board_from_dict, board_to_dict
 from raven.agent.task_board.notes import NOTES_FILENAME
 
 BOARD_FILENAME = "task_board.json"
+EMBEDDINGS_FILENAME = "task_board_embeddings.sqlite"
 
 
 def load_board(session_dir: Path) -> Board:
@@ -55,6 +56,7 @@ def save_board(session_dir: Path, board: Board) -> None:
 def reset_board(session_dir: Path) -> None:
     files.remove(Path(session_dir) / BOARD_FILENAME)
     files.remove(Path(session_dir) / NOTES_FILENAME)
+    files.remove(Path(session_dir) / EMBEDDINGS_FILENAME)
 
 
 def copy_board(src: Path, dst: Path) -> None:
@@ -64,3 +66,5 @@ def copy_board(src: Path, dst: Path) -> None:
     files.write_bytes(Path(dst) / BOARD_FILENAME, files.read_bytes(source))
     if (notes := Path(src) / NOTES_FILENAME).is_file():
         files.write_bytes(Path(dst) / NOTES_FILENAME, files.read_bytes(notes))
+    if (embeddings := Path(src) / EMBEDDINGS_FILENAME).is_file():
+        files.write_bytes(Path(dst) / EMBEDDINGS_FILENAME, files.read_bytes(embeddings))
