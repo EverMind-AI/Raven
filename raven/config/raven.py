@@ -309,7 +309,7 @@ class ContextCompactionConfig(_Base):
     this is its complement over the range that matters.
     """
 
-    retain_ratio: float = Field(default=0.40, gt=0.0, lt=1.0)
+    retain_ratio: float = Field(default=0.10, gt=0.0, lt=1.0)
     """Share of the window a compaction aims to come back down to. Lower means
     fewer compactions, each discarding more."""
 
@@ -336,7 +336,7 @@ class ContextCompactionConfig(_Base):
     tail_keep_messages: int = Field(default=8, ge=0)
     """Recent messages never compacted, as a count."""
 
-    tail_keep_ratio: float = Field(default=0.25, ge=0.0, lt=1.0)
+    tail_keep_ratio: float = Field(default=0.04, ge=0.0, lt=1.0)
     """Recent messages never compacted, as a share of the window.
 
     Held together with the count as a union, not an alternative: each is a

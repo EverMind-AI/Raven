@@ -47,18 +47,18 @@ WINDOW_TABLE = [
 ]
 
 # The same eight windows with the default 4096 headroom applied, and the target
-# each compacts to: 40% of the raw window, lowered where that would reclaim less
-# than ``minReclaimTokens`` below the trigger (only 32K, where the floor-capped
-# trigger of 28672 sits 15565 above 13107).
+# each compacts to: the configured retain share of the raw window. With the
+# 10% default no tabulated window needs the minReclaim lowering; the clamp is
+# exercised separately on a target configured close to the trigger.
 TARGET_TABLE = [
-    (32_768, 28_672, 12_288),
-    (65_536, 58_982, 26_214),
-    (128_000, 115_200, 51_200),
-    (200_000, 176_136, 80_000),
-    (262_144, 227_796, 104_857),
-    (512_000, 430_080, 204_800),
-    (1_000_000, 811_026, 400_000),
-    (2_000_000, 1_600_000, 800_000),
+    (32_768, 28_672, 3_276),
+    (65_536, 58_982, 6_553),
+    (128_000, 115_200, 12_800),
+    (200_000, 176_136, 20_000),
+    (262_144, 227_796, 26_214),
+    (512_000, 430_080, 51_200),
+    (1_000_000, 811_026, 100_000),
+    (2_000_000, 1_600_000, 200_000),
 ]
 
 # Above this the adaptive ratio binds; at or below it the static reply-headroom
@@ -102,8 +102,9 @@ def test_the_unclamped_trigger_is_that_share_of_the_raw_window(
 def test_the_trigger_and_target_with_the_default_headroom(
     policy: TriggerPolicy, window: int, trigger: int, target: int
 ) -> None:
-    """``min(ratio * W, W - headroom)`` and ``0.40 * W`` clamped to reclaim at
-    least ``minReclaimTokens`` -- the whole formula, at every tabulated window."""
+    """``min(ratio * W, W - headroom)`` and ``retainRatio * W`` clamped to
+    reclaim at least ``minReclaimTokens`` -- the whole formula, at every
+    tabulated window."""
     plan = _plan(policy, window=window)
     assert (plan.trigger_tokens, plan.target_tokens) == (trigger, target)
     assert plan.trigger_tokens - plan.target_tokens >= ContextCompactionConfig().min_reclaim_tokens
@@ -202,12 +203,12 @@ def test_the_target_is_a_share_of_the_raw_window(policy: TriggerPolicy) -> None:
     assert plan.reclaim_clamped is False
 
 
-def test_the_target_drops_until_one_compaction_is_worth_running(policy: TriggerPolicy) -> None:
+def test_the_target_drops_until_one_compaction_is_worth_running() -> None:
     """On a small window the plain target is too close to the trigger to buy
     much, so it is lowered until the round trip reclaims ``minReclaimTokens``.
     Without it a session at the line would compact every single turn."""
-    cfg = ContextCompactionConfig()
-    plan = _plan(policy, window=32_768, prompt_tokens=32_000)
+    cfg = ContextCompactionConfig(retain_ratio=0.79)
+    plan = _plan(TriggerPolicy(cfg), window=32_768, prompt_tokens=32_000)
     assert plan.reclaim_clamped is True
     assert plan.trigger_tokens - plan.target_tokens == cfg.min_reclaim_tokens
     assert plan.target_tokens < int(cfg.retain_ratio * 32_768)
