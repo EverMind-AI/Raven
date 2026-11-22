@@ -691,6 +691,32 @@ def run(argv=None):
         print("Raven restarted.")
         return True
 
+    def fetch_resources():
+        # The knowledge reader's models and the word dictionary, which the
+        # installers fetch but an upgrade never did. `--optional` is the whole
+        # contract -- every step reports its own failure and exits 0 -- so this
+        # is best-effort the same way the installers' step is: a host that
+        # cannot be reached must not keep the old Raven from being put back.
+        # Run from the environment uv just wrote; this helper's own -I
+        # interpreter is the base Python, which has no raven in it.
+        venv = os.path.join(os.environ.get("UV_TOOL_DIR") or "", "raven")
+        py = os.path.join(
+            venv, *(("Scripts", "python.exe") if sys.platform == "win32" else ("bin", "python"))
+        )
+        if not os.path.exists(py):
+            return
+        print("Downloading the word dictionary and parser models...", flush=True)
+        try:
+            status = subprocess.run([py, "-m", "raven.resources", "--optional"], check=False).returncode
+        except OSError as exc:
+            print(f"Warning: could not run the resource download: {exc}", file=sys.stderr)
+            return
+        if status != 0:
+            print(
+                "Warning: resource download failed; raven still runs. Retry later with: raven resources",
+                file=sys.stderr,
+            )
+
     # Everything a version's install is made of sits beside its wheel in the
     # release directory: raven-constraints.txt, the locked pins, and
     # raven-plugins.txt, the plugin wheels the release ships alongside raven as
@@ -965,6 +991,9 @@ def run(argv=None):
         print(f"Raven {latest_version} reinstalled with its plugins.")
     else:
         print(f"Raven upgraded: {current_version} -> {latest_version}")
+    # After the install and before the restart: the environment uv wrote is
+    # complete, and the old Raven is not yet running again on top of it.
+    fetch_resources()
     if relaunch is None:
         print("Restart any other running Raven process to use the new version.")
         return 0

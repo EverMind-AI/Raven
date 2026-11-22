@@ -124,7 +124,7 @@ def test_asking_for_it_by_name_says_when_it_is_missing(monkeypatch) -> None:
     with collecting() as notes:
         _parse(_page(_report), layout=True)
 
-    assert any("not installed" in n for n in notes)
+    assert any("not installed" in n and "raven resources" in n for n in notes)
 
 
 def test_a_page_the_model_chokes_on_falls_back_rather_than_failing(monkeypatch) -> None:
