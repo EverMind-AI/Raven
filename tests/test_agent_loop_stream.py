@@ -44,6 +44,13 @@ class _FakeProvider:
         return self._emits_unparsed_reasoning
 
 
+#: A response header, so its length is the upstream's to choose -- and the
+#: failure sentence it lands in is bounded. This is past every cap the runtime
+#: applies to it, so a test that keeps the recommendation readable with this
+#: header has proved the ordering, not a lucky length.
+_LONG_MEDIA_TYPE = "application/vnd.some-gateway.envelope+json; charset=utf-8; profile=" + "x" * 230
+
+
 def _bind_helper(provider: _FakeProvider):
     """Bind ``_llm_call_stream`` to a SimpleNamespace stand-in for ``self``.
 
@@ -803,20 +810,32 @@ async def test_a_stream_cut_before_its_terminal_chunk_is_a_transport_failure() -
             "llm_provider-x-request-id": "req-1",
             "llm_provider-content-type": "application/json; charset=utf-8",
         },
+        {"llm_provider-content-type": _LONG_MEDIA_TYPE},
     ],
-    ids=["library-prefixed", "bare-header-with-charset", "structured-json-suffix", "content-type-not-first"],
+    ids=[
+        "library-prefixed",
+        "bare-header-with-charset",
+        "structured-json-suffix",
+        "content-type-not-first",
+        "long-media-type",
+    ],
 )
 async def test_a_cut_stream_answered_by_a_json_document_is_a_protocol_mismatch(headers: dict[str, str]) -> None:
     """A stream request that a JSON document answered was never treated as a
     stream: the endpoint does not speak the provider's protocol, and the account
     says so instead of blaming the connection -- the fact the person holding the
-    config can act on. The verdict keeps the cut's recovery flags, so what the
-    loop does with it is unchanged.
+    config can act on.
 
-    The recommendation is asserted on the content that is actually handed back,
-    closing parenthesis included: ``canonical_llm_error`` bounds the detail at
-    ``LLM_ERROR_DETAIL_MAX``, and an account that spent that bound explaining the
-    mismatch left the sentence to check out of the reader's reach."""
+    The verdict is not retryable and the account says nothing was lost: the
+    endpoint answered before a single event arrived, so asking again spends the
+    ladder's waits to be refused identically. ``should_fallback`` stays, because
+    another model may speak the endpoint.
+
+    The recommendation is asserted on the content that is actually handed back.
+    It opens the sentence because ``canonical_llm_error`` bounds the detail at
+    ``LLM_ERROR_DETAIL_MAX``, and the media type it echoes is a response header
+    -- the long case proves a header cannot push the recommendation past that
+    bound, so the whole sentence is asserted, not just its opening."""
     provider = _FakeProvider(
         [
             ChatDelta(
@@ -835,11 +854,11 @@ async def test_a_cut_stream_answered_by_a_json_document_is_a_protocol_mismatch(h
     assert response.finish_reason == "error"
     assert response.error_classification is not None
     assert response.error_classification.category == "protocol_mismatch"
-    assert response.error_classification.retryable is True
+    assert response.error_classification.retryable is False
     assert response.error_classification.should_fallback is True
-    assert "not an event stream" in content
-    assert "check this provider's protocol and base URL" in content
-    assert content.endswith("of reasoning were lost)"), f"the account was cut: {content!r}"
+    assert content.startswith("Error calling LLM (protocol_mismatch): check this provider's protocol and base URL")
+    assert content.endswith("not an event stream"), f"the account was cut: {content!r}"
+    assert "reasoning were lost" not in content
     assert "cut off by the connection" not in content
 
 

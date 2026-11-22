@@ -528,16 +528,20 @@ def test_a_failed_turn_reply_reads_by_what_the_failure_was():
 
 
 async def test_a_channel_is_told_the_endpoint_does_not_speak_the_protocol():
-    """The category summary names what happened; the advice tells the operator
-    which two settings to look at. It must not be the network wording this
-    failure arrived under before the category existed, because a retry cannot
-    mend a fixed mismatch -- and a chat reader who retries spends a turn to be
-    told the same thing again."""
+    """The category summary names what happened, the provider it happened on,
+    and the two settings the operator has to look at. It must not be the network
+    wording this failure arrived under before the category existed, because a
+    retry cannot mend a fixed mismatch -- and a chat reader who retries spends a
+    turn to be told the same thing again.
+
+    The error text is the shape ``stream_llm_call`` now emits for this verdict,
+    provider name included; the end-to-end case below the streaming accumulator
+    proves it is what production produces."""
     sent = await _reply_to_a_failed_turn(
         AnswerlessTurnError(
-            "Error calling LLM (protocol_mismatch@zai): the endpoint answered the stream request with a document "
-            "(application/json), not an event stream: check this provider's protocol and base URL "
-            "(0 chars of reasoning were lost)"
+            "Error calling LLM (protocol_mismatch@zai): check this provider's protocol and base URL: "
+            "the endpoint answered the stream request with a JSON document (application/json), "
+            "not an event stream"
         )
     )
 

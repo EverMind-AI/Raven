@@ -2255,9 +2255,9 @@ async def test_a_mismatched_endpoint_reaches_the_screen_with_the_settings_to_che
     class _MismatchedEndpointLoop:
         async def run_turn(self, req, emit, drain, *, stream, usage_sink=None) -> TurnOutcome:
             raise AnswerlessTurnError(
-                "Error calling LLM (protocol_mismatch@zai): the endpoint answered the stream request with a "
-                "document (application/json), not an event stream: check this provider's protocol and base URL "
-                "(0 chars of reasoning were lost)"
+                "Error calling LLM (protocol_mismatch@zai): check this provider's protocol and base URL: "
+                "the endpoint answered the stream request with a JSON document (application/json), "
+                "not an event stream"
             )
 
     emitter = FakeEmitter()

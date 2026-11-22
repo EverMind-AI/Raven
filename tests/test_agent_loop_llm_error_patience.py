@@ -20,7 +20,14 @@ from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.agent.loop.recovery import RecoveryLimits, limits_from_defaults
 from raven.agent.window import shrink
 from raven.contracts.tool import Tool, ToolResult
-from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import (
+    CallRecord,
+    ChatDelta,
+    ErrorClassification,
+    LLMProvider,
+    LLMResponse,
+    ToolCallRequest,
+)
 from raven.spine.events import NoticeKind
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
@@ -155,6 +162,131 @@ async def test_an_error_nobody_will_ask_again_about_is_not_announced(workspace):
         await _turn(_agent(workspace, provider, delays=(0.0, 0.0, 0.0)), notices)
 
     assert notices == []
+
+
+class _AnswersWithADocument(LLMProvider):
+    """A streaming provider whose every call is answered by a JSON document.
+
+    That is the shape an endpoint answers an OpenAI-shaped stream request with
+    when it speaks another protocol: no ``data:`` frame parses, the client
+    library makes up a terminal chunk, and the accumulator reaches its cut
+    branch. The header is what tells the accumulator *why*, so the verdict can
+    name the protocol instead of the connection.
+    """
+
+    provider_name = "zai"
+
+    def __init__(self, content_type: str = "application/json") -> None:
+        super().__init__(api_key="test")
+        self.content_type = content_type
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    _CHAT_RETRY_DELAYS = ()  # the provider's own ladder, exhausted at once
+
+    async def chat_stream(self, **kwargs):
+        self.calls += 1
+        yield ChatDelta(
+            content=None,
+            finish_reason="stop",
+            finish_synthesized=True,
+            call_record=CallRecord(headers={"content-type": self.content_type}),
+        )
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the stream path is under test
+        raise NotImplementedError
+
+
+async def _streamed_turn(agent: AgentLoop, notices: list[tuple[NoticeKind, str]]):
+    """One turn on the streaming path, which is the only path this verdict comes from."""
+
+    async def on_notice(kind: NoticeKind, detail: str) -> None:
+        notices.append((kind, detail))
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    return await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="build the deck",
+        ),
+        session_key="s1",
+        on_token_delta=on_delta,
+        on_notice=on_notice,
+    )
+
+
+@pytest.mark.parametrize("content_type", ["application/json", "application/json; charset=utf-8"])
+async def test_a_document_answered_stream_is_asked_once_and_never_announced_as_a_retry(workspace, content_type):
+    """The endpoint does not speak the provider's protocol, so asking again gets
+    the same document back. The verdict must not be retryable: the ladder is three
+    waits and a hundred seconds of a reader being told "the model did not answer,
+    trying again" before the one sentence that says what to fix -- advice that a
+    retry disproves while it is being given. ``should_fallback`` still holds,
+    because another model may speak the endpoint.
+
+    The account also has to name the provider: the advice says to check a
+    provider's settings, and a reader running more than one needs to know which.
+    """
+    provider = _AnswersWithADocument(content_type)
+    notices: list[tuple[NoticeKind, str]] = []
+    agent = _agent(workspace, provider, delays=(0.0, 0.0, 0.0))
+
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await _streamed_turn(agent, notices)
+
+    assert provider.calls == 1, "a fixed mismatch is answered identically, so it is not asked again"
+    assert notices == [], "nothing waits, so nothing may announce a wait"
+    reason = str(failed.value)
+    assert "protocol_mismatch@zai" in reason
+    assert "check this provider's protocol and base URL" in reason
+    assert "reasoning were lost" not in reason
+
+
+async def test_a_document_answered_stream_still_tries_the_fallback_model(workspace):
+    """Not retryable is not the same as fatal: the flag that was taken away is the
+    one the ladder waits on. ``should_fallback`` is untouched, so a model that
+    speaks the endpoint is still tried -- and it is tried without a wait first,
+    which is the whole point of demoting the retry."""
+
+    class _DocumentThenAnswer(_AnswersWithADocument):
+        async def chat_stream(self, model=None, **kwargs):
+            self.calls += 1
+            if model != "stub":
+                yield ChatDelta(content="the fallback answered")
+                yield ChatDelta(content=None, finish_reason="stop")
+                return
+            yield ChatDelta(
+                content=None,
+                finish_reason="stop",
+                finish_synthesized=True,
+                call_record=CallRecord(headers={"content-type": self.content_type}),
+            )
+
+    provider = _DocumentThenAnswer()
+    notices: list[tuple[NoticeKind, str]] = []
+    agent = _agent(workspace, provider, delays=(0.0, 0.0, 0.0))
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    async def on_notice(kind: NoticeKind, detail: str) -> None:
+        notices.append((kind, detail))
+
+    final, _used, _messages, outcome = await agent._run_agent_loop(
+        [{"role": "user", "content": "build the deck"}],
+        on_token_delta=on_delta,
+        on_notice=on_notice,
+        fallback_models=["backup"],
+    )
+
+    assert provider.calls == 2, "the primary once, then the fallback -- no ladder in between"
+    assert notices == [], "the fallback is taken before any wait, so nothing is announced"
+    assert final == "the fallback answered" and outcome.status == "completed"
 
 
 class _WordsItsOwnFailure(LLMProvider):

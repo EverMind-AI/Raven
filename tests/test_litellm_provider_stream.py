@@ -918,7 +918,10 @@ async def test_a_stream_request_answered_by_a_document_is_a_protocol_mismatch(mo
     cut. The content-type that says why has to survive the whole production chain
     -- the client wrapper's headers, ``call_record.from_stream`` and
     ``keep_headers`` -- for the verdict to name the protocol instead of the
-    connection, and the recommendation has to survive the detail bound."""
+    connection, and the recommendation has to survive the detail bound.
+
+    The verdict is not retryable: the endpoint will answer the same way, so there
+    is nothing for the loop's ladder to wait for."""
     import json
 
     import httpx
@@ -942,10 +945,11 @@ async def test_a_stream_request_answered_by_a_document_is_a_protocol_mismatch(mo
     content = response.content or ""
     assert response.error_classification is not None
     assert response.error_classification.category == "protocol_mismatch"
-    assert response.error_classification.retryable is True
+    assert response.error_classification.retryable is False
     assert response.error_classification.should_fallback is True
-    assert "check this provider's protocol and base URL" in content
-    assert content.endswith("of reasoning were lost)"), f"the account was cut: {content!r}"
+    assert content.startswith("Error calling LLM (protocol_mismatch): check this provider's protocol and base URL")
+    assert content.endswith("not an event stream"), f"the account was cut: {content!r}"
+    assert "reasoning were lost" not in content
     assert "cut off by the connection" not in content
 
 
