@@ -21,6 +21,17 @@ def _chunk(content: str | None = None, finish_reason: str | None = None) -> Any:
     return SimpleNamespace(choices=[SimpleNamespace(delta=delta, finish_reason=finish_reason)], usage=None)
 
 
+def _usage_chunk(prompt_tokens: int = 7, completion_tokens: int = 2) -> Any:
+    return SimpleNamespace(
+        choices=[],
+        usage=SimpleNamespace(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
+    )
+
+
 class _Wrapper:
     """A stand-in for LiteLLM's CustomStreamWrapper: iterates chunks and remembers
     the finish reason the upstream sent, if any."""
@@ -72,6 +83,26 @@ async def test_a_stop_the_upstream_sent_is_not_marked(monkeypatch: pytest.Monkey
     deltas = await _deltas(monkeypatch, wrapper)
     assert deltas[-1].finish_reason == "stop"
     assert deltas[-1].finish_synthesized is False
+
+
+@pytest.mark.asyncio
+async def test_a_usage_snapshot_after_the_terminal_chunk_still_arrives(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pull that follows the terminal chunk is the adapter's own cleanup.
+
+    OpenAI-compatible routes put the usage snapshot in a chunk of its own after
+    ``finish_reason``. That pull is still part of the reply and has to reach the
+    consumer, which is what the post-settle tail window exists for.
+    """
+    wrapper = _Wrapper(
+        [_chunk(content="hello"), _chunk(finish_reason="stop"), _usage_chunk()],
+        received_finish_reason="stop",
+    )
+    deltas = await _deltas(monkeypatch, wrapper)
+    assert [d.content for d in deltas] == ["hello", None, None]
+    assert deltas[1].finish_reason == "stop"
+    assert deltas[2].usage is not None
+    assert deltas[2].usage["prompt_tokens"] == 7
+    assert deltas[2].usage["completion_tokens"] == 2
 
 
 @pytest.mark.asyncio
