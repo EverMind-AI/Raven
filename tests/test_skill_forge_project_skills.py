@@ -152,6 +152,202 @@ def test_a_git_root_at_home_does_not_bound_a_gitless_workdir(tmp_path: Path) -> 
     assert read_project_skills(roots) == []
 
 
+def test_a_git_root_above_home_does_not_bound_a_gitless_workdir(tmp_path: Path) -> None:
+    outer = tmp_path / "outer"
+    (outer / ".git").mkdir(parents=True)
+    home = outer / "home"
+    config = home / ".raven" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        "---\nname: setup\ndescription: setup skill\n---\n\nsk-SECRET-VALUE\n",
+        encoding="utf-8",
+    )
+    workdir = home / "Downloads" / "evil"
+    skill_dir = workdir / ".agents" / "skills" / "setup"
+    skill_dir.mkdir(parents=True)
+    _symlink_to(skill_dir / "SKILL.md", config)
+    agent_home = tmp_path / "raven-data" / "workspace"
+    agent_home.mkdir(parents=True)
+
+    roots = project_skill_roots(workdir, agent_home=agent_home, home=home)
+
+    assert roots is not None
+    assert roots.boundary == workdir.resolve()
+    assert read_project_skills(roots) == []
+
+
+def test_a_git_root_two_levels_above_home_does_not_bound_a_gitless_workdir(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    outer = tmp_path_factory.mktemp("outer")
+    (outer / ".git").mkdir()
+    home = outer / "nest" / "home"
+    config = home / ".raven" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        "---\nname: setup\ndescription: setup skill\n---\n\nsk-SECRET-VALUE\n",
+        encoding="utf-8",
+    )
+    workdir = home / "Downloads" / "evil"
+    skill_dir = workdir / ".agents" / "skills" / "setup"
+    skill_dir.mkdir(parents=True)
+    _symlink_to(skill_dir / "SKILL.md", config)
+    agent_home = tmp_path_factory.mktemp("agent-home") / "workspace"
+
+    roots = project_skill_roots(workdir, agent_home=agent_home, home=home)
+
+    assert roots is not None
+    assert roots.boundary == workdir.resolve()
+    assert read_project_skills(roots) == []
+
+
+def test_a_git_file_above_home_does_not_bound_a_gitless_workdir(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    outer = tmp_path_factory.mktemp("outer")
+    (outer / ".git").write_text("gitdir: /elsewhere\n", encoding="utf-8")
+    home = outer / "home"
+    config = home / ".raven" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        "---\nname: setup\ndescription: setup skill\n---\n\nsk-SECRET-VALUE\n",
+        encoding="utf-8",
+    )
+    workdir = home / "Downloads" / "evil"
+    skill_dir = workdir / ".agents" / "skills" / "setup"
+    skill_dir.mkdir(parents=True)
+    _symlink_to(skill_dir / "SKILL.md", config)
+    agent_home = tmp_path_factory.mktemp("agent-home") / "workspace"
+
+    roots = project_skill_roots(workdir, agent_home=agent_home, home=home)
+
+    assert roots is not None
+    assert roots.boundary == workdir.resolve()
+    assert read_project_skills(roots) == []
+
+
+def test_a_checkout_containing_home_is_collected_from_a_workdir_outside_it(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    repo = tmp_path_factory.mktemp("checkout")
+    (repo / ".git").mkdir()
+    _skill(repo / ".agents/skills", "repo-wide")
+    home = repo / "home"
+    home.mkdir()
+    workdir = repo / "src"
+    workdir.mkdir()
+    agent_home = tmp_path_factory.mktemp("agent-home") / "workspace"
+
+    roots = project_skill_roots(workdir, agent_home=agent_home, home=home)
+
+    assert roots is not None
+    assert roots.boundary == repo.resolve()
+    assert {meta.name for meta in read_project_skills(roots)} == {"repo-wide"}
+
+
+def test_a_workdir_under_home_does_not_reach_the_containing_checkout(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    repo = tmp_path_factory.mktemp("checkout")
+    (repo / ".git").mkdir()
+    _skill(repo / ".agents/skills", "repo-wide")
+    home = repo / "home"
+    workdir = home / "proj"
+    workdir.mkdir(parents=True)
+    _skill(workdir / ".agents/skills", "local-only")
+    agent_home = tmp_path_factory.mktemp("agent-home") / "workspace"
+
+    roots = project_skill_roots(workdir, agent_home=agent_home, home=home)
+
+    assert roots is not None
+    assert roots.boundary == workdir.resolve()
+    assert {meta.name for meta in read_project_skills(roots)} == {"local-only"}
+
+
+def test_a_checkout_containing_agent_home_is_not_collected_from_a_workdir_outside_it(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Known conservative behavior: agent home's ancestors are excluded
+    unconditionally, so a checkout that contains agent home is never the
+    boundary and its skills are not collected.
+
+    That exclusion is what keeps ``RAVEN_HOME/config.json`` out of reach when a
+    work directory sits beside the data directory; losing checkout-level skills
+    in this layout is the accepted trade. A skill under the working directory
+    itself is still read, so the walk is not simply empty.
+    """
+    repo = tmp_path_factory.mktemp("checkout")
+    (repo / ".git").mkdir()
+    _skill(repo / ".agents/skills", "repo-wide")
+    agent_home = repo / ".raven"
+    agent_home.mkdir()
+    workdir = repo / "src"
+    workdir.mkdir()
+    _skill(workdir / ".agents/skills", "local-only")
+    home = tmp_path_factory.mktemp("house") / "home"
+
+    roots = project_skill_roots(workdir, agent_home=agent_home, home=home)
+
+    assert roots is not None
+    assert roots.boundary == workdir.resolve()
+    assert {meta.name for meta in read_project_skills(roots)} == {"local-only"}
+
+
+def test_a_checkout_containing_raven_home_does_not_expose_its_config(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """A work directory beside ``RAVEN_HOME`` must not collect the checkout.
+
+    Agent home is ``RAVEN_HOME/workspace``, so the checkout is one of its
+    ancestors and is excluded. Without that exclusion the checkout becomes the
+    boundary and a ``SKILL.md`` symlinked to ``RAVEN_HOME/config.json`` is
+    parsed as a project skill, because the reader accepts a plain UTF-8 file
+    with no frontmatter.
+    """
+    repo = tmp_path_factory.mktemp("checkout")
+    (repo / ".git").mkdir()
+    _skill(repo / ".agents/skills", "repo-wide")
+    config = repo / ".raven" / "config.json"
+    config.parent.mkdir()
+    config.write_text(
+        '{"providers":{"openai":{"api_key":"sk-RAVENHOME-SECRET"}}}',
+        encoding="utf-8",
+    )
+    agent_home = repo / ".raven" / "workspace"
+    agent_home.mkdir()
+    workdir = repo / "src"
+    skill_dir = workdir / ".agents" / "skills" / "setup"
+    skill_dir.mkdir(parents=True)
+    _symlink_to(skill_dir / "SKILL.md", config)
+    home = tmp_path_factory.mktemp("house") / "home"
+
+    roots = project_skill_roots(workdir, agent_home=agent_home, home=home)
+
+    assert roots is not None
+    assert roots.boundary == workdir.resolve()
+    assert read_project_skills(roots) == []
+
+
+def test_agent_home_above_home_returns_none_without_raising(tmp_path: Path) -> None:
+    """Agent home may be a strict ancestor of HOME, for example when
+    ``agents.defaults.workspace`` is ``$HOME/..``.
+
+    The walk must then stop at home instead of failing to find the ceiling it
+    already truncated away. Agent home is also a guarded tree, so with home
+    inside it nothing below is collected and the result is ``None``.
+    """
+    agent_home = tmp_path / "data"
+    home = agent_home / "home"
+    repo = agent_home / "repo"
+    (repo / ".git").mkdir(parents=True)
+    _skill(repo / ".agents/skills", "repo-wide")
+    workdir = home / "proj"
+    workdir.mkdir(parents=True)
+    _skill(workdir / ".agents/skills", "local-only")
+
+    assert project_skill_roots(workdir, agent_home=agent_home, home=home) is None
+
+
 def test_home_is_a_containment_root_with_agent_home_outside_it(tmp_path: Path) -> None:
     home = tmp_path / "home"
     (home / ".git").mkdir(parents=True)

@@ -1948,12 +1948,17 @@ ancestor holding a `.git` entry, inclusive (the working directory alone when it 
 the nearest directory winning a name collision. The `project` router source offers each as
 `project/<name>`, and `read_skill` / `use_skill` resolve that id against the turn's own
 project at read time — never from the router's held hits, which may belong to another
-session's project. Neither the user's home nor agent home nor any ancestor of agent home
-is a project directory; a symlink counts only when its resolved target stays inside the
-git root; a deeper `SKILL.md` is not a project skill. Project skills are never
-`always`-injected: `always` and `inject` frontmatter are ignored, and the system prefix
-carries none of them. The index is per project — a process-wide cache keyed by the resolved
-directory tuple and its git-root boundary, rebuilt when a fingerprint of the directories
+session's project. Neither the user's home nor agent home is a project directory, and home
+is a ceiling: a working directory under home reaches no git root and no `.agents/skills`
+above it, while a working directory outside home keeps a shared ancestor as its own git
+root. Agent home and its ancestors are excluded unconditionally, so a checkout that
+contains agent home is never the boundary and its `.agents/skills` are not collected --
+the trade that keeps `<RAVEN_HOME>/config.json` unreachable; a symlink counts only when
+its resolved target stays inside the git root; a deeper `SKILL.md` is not a project skill.
+Project skills are never `always`-injected: `always` and `inject` frontmatter are ignored,
+and the system prefix carries none of them. The index is per project — a process-wide
+cache keyed by the resolved directory tuple and its git-root boundary, rebuilt when a
+fingerprint of the directories
 changes — and the leader agent is the only one that reads it: a process launched as a
 sub-agent mounts no project source and its tools answer `project/` with "not available to
 this agent". The switch is `skillForge.projectSkills.enabled`, default on, read live: off

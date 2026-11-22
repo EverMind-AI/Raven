@@ -117,12 +117,20 @@ skill", which is agent home's `skills/` layer.
 
 From the turn's working directory, walk up to the git root, inclusive, and collect each
 `<dir>/.agents/skills` that is a directory. The git root is the nearest ancestor holding
-a `.git` entry, file or directory (a linked worktree has a `.git` file). With no git root
-above the working directory, only `<workdir>/.agents/skills` is read.
+a `.git` entry, file or directory (a linked worktree has a `.git` file). The user's home
+directory (`Path.home()`) is a ceiling both for finding that root and for the walk: while
+the working directory is under home, the search stops at home, so a `.git` above it is not
+the boundary and `.agents/skills` above it is not collected. With the working directory
+outside home, a shared ancestor is its own git root and the search continues through it.
+Agent home and its ancestors are excluded unconditionally, so a checkout that contains
+agent home is never the boundary. With no git root at or below the ceiling, only
+`<workdir>/.agents/skills` is read.
 
 - No working directory bound (`workdir.current()` is `None`): no project skills.
-- The walk never reads `.agents/skills` in the user's home directory (`Path.home()`), nor
-  in any directory that is agent home or one of its ancestors (`~/.raven`, `~`).
+- A working directory under the user's home directory reaches neither `.agents/skills` at
+  or above home nor anything in the user-level `~/.agents` tree. A git root at home itself
+  is never the boundary. Agent home and its ancestors are never the boundary either, so a
+  checkout that contains agent home does not contribute its `.agents/skills`.
 - Order is nearest first. When two collected directories hold the same skill name, the
   nearer one is the project skill of that name.
 - Layout is flat: `<root>/<name>/SKILL.md` only, the layout `gh skill`, `npx skills` and
