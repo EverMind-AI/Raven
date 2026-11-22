@@ -38,6 +38,9 @@ _NONCE_TTL_S = 30 * 60.0
 
 # The page shows whatever the exchange answered, so the gateway is what says
 # why a sign-in was refused; the two refusals below need different remedies.
+# ``nonce or cookie`` covers the refresh that lands on /auth after the one-time
+# link already signed the tab in and cleared its hash: the nonce is spent on
+# the exchange, so the page would sit on its own text forever with no way out.
 _AUTH_PAGE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Raven</title></head>
 <body style="font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0">
@@ -47,6 +50,10 @@ _AUTH_PAGE = """<!DOCTYPE html>
   const s = document.getElementById('s');
   const nonce = location.hash.slice(1);
   history.replaceState(null, '', '/auth');
+  if (!nonce) {
+    s.textContent = 'No sign-in link here. Open Raven at /, or run raven web for a new sign-in link.';
+    return;
+  }
   let r;
   try {
     r = await fetch('/auth/exchange', {
@@ -280,6 +287,13 @@ class WsGateway:
         )
 
     async def handle_auth_page(self, request: web.Request) -> web.Response:
+        # An already-signed-in browser landing here has no hash to redeem: the
+        # nonce was one-time and the tab cleared it after the exchange, so the
+        # page could only sit on its refusal text forever. The app page at "/"
+        # is the same origin the tab came from, so send it back and let the
+        # cookie carry it in; a browser without a session keeps the page below.
+        if self._authorized(request):
+            raise web.HTTPFound("/")
         return web.Response(text=_AUTH_PAGE, content_type="text/html")
 
     async def handle_auth_exchange(self, request: web.Request) -> web.Response:
