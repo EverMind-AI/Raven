@@ -9,6 +9,7 @@ import numpy as np
 from raven.agent.task_board import hybrid
 from raven.agent.task_board.board import Board, ProgressStep, TaskGroup, TaskLink
 from raven.agent.task_board.hybrid import (
+    _write_vectors,
     bm25_order,
     completed_document,
     dense_order,
@@ -61,6 +62,24 @@ class GatedEmbedder:
         self.started.set()
         await self.release.wait()
         return [[float(len(text)), 1.0] for text in texts]
+
+
+class SignaledEmbedder(FakeEmbedder):
+    def __init__(self) -> None:
+        super().__init__()
+        self.done = asyncio.Event()
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        result = await super().embed(texts)
+        self.done.set()
+        return result
+
+
+class ShortEmbedder:
+    model = "fake-model"
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[1.0, 0.0] for _ in texts[:-1]]
 
 
 def test_the_document_is_title_summary_last_five_steps_and_linked_tasks():
@@ -260,6 +279,102 @@ async def test_a_recall_in_flight_cannot_recreate_the_cache_after_a_reset(tmp_pa
     await embedder.started.wait()
     await asyncio.wait_for(service.reset(KEY), timeout=1)
     embedder.release.set()
+
+    assert await asyncio.wait_for(recall, timeout=1) == []
+    assert not (service.session_dir(KEY) / EMBEDDINGS_FILENAME).exists()
+
+
+def test_bm25_order_without_groups_or_a_query_is_empty():
+    group = _group("g_first", "First report")
+
+    assert bm25_order([], "first") == []
+    assert bm25_order([group], "   ") == []
+
+
+def test_dense_order_without_vectors_is_empty():
+    group = _group("g_first", "First report")
+
+    assert dense_order([group], [1.0, 0.0], {}) == []
+
+
+def test_writing_no_vectors_creates_nothing(tmp_path):
+    _write_vectors(tmp_path / EMBEDDINGS_FILENAME, "fake-model", [])
+
+    assert not (tmp_path / EMBEDDINGS_FILENAME).exists()
+
+
+async def test_a_stale_generation_recalls_nothing(tmp_path):
+    group = _group("g_first", "First report")
+
+    result = await retrieve_completed(
+        Board([group], []),
+        "first",
+        session_dir=tmp_path,
+        embedder=FakeEmbedder(),
+        generation=0,
+        generation_now=lambda: 1,
+    )
+
+    assert result == []
+
+
+async def test_a_short_embedding_reply_falls_back_to_bm25(tmp_path):
+    group = _group("g_alpha", "Alpha report")
+
+    result = await retrieve_completed(Board([group], []), "alpha", session_dir=tmp_path, embedder=ShortEmbedder())
+
+    assert result == ["g_alpha"]
+    assert not (tmp_path / EMBEDDINGS_FILENAME).exists()
+
+
+async def test_an_empty_cache_file_is_read_as_empty_and_rebuilt(tmp_path):
+    path = tmp_path / EMBEDDINGS_FILENAME
+    path.touch()
+    group = _group("g_first", "First report")
+
+    result = await retrieve_completed(Board([group], []), "first", session_dir=tmp_path, embedder=FakeEmbedder())
+
+    assert result == ["g_first"]
+    assert path.stat().st_size > 0
+
+
+async def test_the_cache_write_takes_the_given_lock(tmp_path):
+    group = _group("g_first", "First report")
+    lock = asyncio.Lock()
+
+    result = await retrieve_completed(
+        Board([group], []), "first", session_dir=tmp_path, embedder=FakeEmbedder(), write_lock=lock
+    )
+
+    assert result == ["g_first"]
+    assert (tmp_path / EMBEDDINGS_FILENAME).is_file()
+    assert not lock.locked()
+
+
+async def test_a_clear_while_the_recall_waits_for_the_cache_lock_writes_nothing(tmp_path):
+    service = TaskBoardService(SessionManager(tmp_path), now_ms=lambda: 1_000)
+    group = _group("g_first", "First report")
+    save_board(service.session_dir(KEY), Board([group], []))
+    embedder = SignaledEmbedder()
+    lock = service.lock(KEY)
+    await lock.acquire()
+    recall = asyncio.create_task(
+        retrieve_completed(
+            Board([group], []),
+            "first query",
+            session_dir=service.session_dir(KEY),
+            embedder=embedder,
+            generation=service.generation(KEY),
+            generation_now=lambda: service.generation(KEY),
+            write_lock=lock,
+        )
+    )
+    try:
+        await embedder.done.wait()
+        await asyncio.sleep(0.01)
+        service.on_session_deleted(KEY, True)
+    finally:
+        lock.release()
 
     assert await asyncio.wait_for(recall, timeout=1) == []
     assert not (service.session_dir(KEY) / EMBEDDINGS_FILENAME).exists()
