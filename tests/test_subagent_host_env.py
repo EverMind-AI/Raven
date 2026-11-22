@@ -426,6 +426,9 @@ def test_windows_capture_takes_path_from_the_stores_and_every_other_value_from_r
     machine's own ``USERNAME`` -- so copied over raven's they would hand a child a
     ``ComSpec`` that ``Popen(shell=True)`` cannot start, a ``TEMP`` that is no
     directory, and a second spelling of names raven already has.
+    An entry the live PATH repeats is not carried twice: the doubled tail has
+    measured past what npm's bin spawn carries, leaving the child cmd unable to
+    resolve its own shims.
     """
     windows_host.user["Path"] += r";C:\Users\me\.local\bin"
 
@@ -433,12 +436,98 @@ def test_windows_capture_takes_path_from_the_stores_and_every_other_value_from_r
 
     assert captured is not None
     assert captured["PATH"] == (
-        r"C:\Windows\system32;C:\Windows;C:\Users\me\AppData\Local\Microsoft\WindowsApps;C:\Users\me\.local\bin;"
-        r"C:\Windows\system32;C:\Windows;C:\Users\me\AppData\Local\Microsoft\WindowsApps"
+        r"C:\Windows\system32;C:\Windows;C:\Users\me\AppData\Local\Microsoft\WindowsApps;C:\Users\me\.local\bin"
     )
     assert {name: value for name, value in captured.items() if name != "PATH"} == {
         name: value for name, value in os.environ.items() if name != "PATH"
     }
+
+
+def test_windows_capture_matches_path_entries_case_insensitively(windows_host: _FakeWinreg) -> None:
+    r"""A Windows PATH names a directory in either case, so a second spelling is the same entry.
+
+    The live PATH repeats ``C:\Windows\system32`` with the machine store's spelling,
+    so a user store that adds ``C:\Windows\SYSTEM32`` adds nothing: the entry is
+    already listed, and the spelling kept is the first one seen.
+    """
+    windows_host.user["Path"] += r";C:\Windows\SYSTEM32"
+
+    captured = backend_env._capture_windows(consequence="subagents inherit raven's environment")
+
+    assert captured is not None
+    assert captured["PATH"].split(";") == [
+        r"C:\Windows\system32",
+        r"C:\Windows",
+        r"C:\Users\me\AppData\Local\Microsoft\WindowsApps",
+    ]
+
+
+def test_windows_capture_matches_path_entries_across_a_trailing_separator(windows_host: _FakeWinreg) -> None:
+    r"""``C:\Tools\`` and ``C:\Tools`` name one directory, so the second is not listed again."""
+    windows_host.user["Path"] += ";C:\\Tools;C:\\Tools\\"
+
+    captured = backend_env._capture_windows(consequence="subagents inherit raven's environment")
+
+    assert captured is not None
+    assert captured["PATH"].split(";") == [
+        r"C:\Windows\system32",
+        r"C:\Windows",
+        r"C:\Users\me\AppData\Local\Microsoft\WindowsApps",
+        r"C:\Tools",
+    ]
+
+
+def test_windows_capture_matches_both_path_separators(
+    windows_host: _FakeWinreg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r"""A store may spell a separator either way, so ``C:/Tools`` and ``C:\Tools`` are one entry."""
+    windows_host.user["Path"] += ";C:/Tools"
+    monkeypatch.setenv("PATH", _LOGON["PATH"] + r";C:\Tools")
+
+    captured = backend_env._capture_windows(consequence="subagents inherit raven's environment")
+
+    assert captured is not None
+    assert captured["PATH"].split(";") == [
+        r"C:\Windows\system32",
+        r"C:\Windows",
+        r"C:\Users\me\AppData\Local\Microsoft\WindowsApps",
+        "C:/Tools",
+    ]
+
+
+def test_windows_capture_keeps_a_drive_root_apart_from_the_drive_relative_entry(
+    windows_host: _FakeWinreg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r"""``C:\`` is a directory on that drive; ``C:`` is the current directory on it, and a different path.
+
+    Trimming the separator of one to compare it would fold these two together and
+    drop the live entry as a "duplicate" of a stored root it never matched.
+    """
+    windows_host.machine["Path"] = r"C:\;C:\Windows"
+    windows_host.user["Path"] = ""
+    monkeypatch.setenv("PATH", "C:")
+
+    captured = backend_env._capture_windows(consequence="subagents inherit raven's environment")
+
+    assert captured is not None
+    assert captured["PATH"] == r"C:\;C:\Windows;C:"
+
+
+def test_windows_capture_drops_an_empty_path_segment(
+    windows_host: _FakeWinreg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r"""An empty segment is how a PATH spells the current directory, and here that directory is raven's.
+
+    A user's terminal carries the stores' PATH and no cwd entry, so the union drops
+    it rather than handing a child raven's working directory as a search path.
+    """
+    monkeypatch.setenv("PATH", _LOGON["PATH"] + ";")
+
+    captured = backend_env._capture_windows(consequence="subagents inherit raven's environment")
+
+    assert captured is not None
+    assert captured["PATH"] == _LOGON["PATH"]
+    assert "" not in captured["PATH"].split(";")
 
 
 def test_windows_capture_expands_stored_references_with_ravens_own_values_first(
@@ -467,7 +556,7 @@ def test_windows_capture_keeps_the_users_store_when_the_machines_refuses(windows
     captured = backend_env._capture_windows(consequence="subagents inherit raven's environment")
 
     assert captured is not None
-    assert captured["PATH"] == r"C:\Users\me\AppData\Local\Microsoft\WindowsApps;" + _LOGON["PATH"]
+    assert captured["PATH"] == r"C:\Users\me\AppData\Local\Microsoft\WindowsApps;C:\Windows\system32;C:\Windows"
 
 
 def test_windows_capture_reports_failure_when_no_store_reads(windows_host: _FakeWinreg) -> None:

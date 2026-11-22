@@ -317,9 +317,31 @@ def _capture_windows(*, consequence: str) -> dict[str, str] | None:
         # Union rather than replace: the machine+user stores are the PATH a
         # *new* terminal gets, but raven's own launcher's bin (MinGit/usr/bin,
         # conda) reached this process's PATH without touching the stores, and
-        # a child spawned from the gateway needs every one of them.
+        # a child spawned from the gateway needs every one of them. An entry
+        # already listed is not listed again: the live PATH repeats most of the
+        # stores' own, and the doubled tail has measured past what npm's bin
+        # spawn carries, leaving the child cmd unable to resolve its own shims.
+        #
+        # An entry is compared the way Windows resolves one: case-insensitively,
+        # both separators as the same separator, a trailing one or an inner `..`
+        # as nothing. ``ntpath`` does that without a platform, and it keeps
+        # `C:\` apart from the drive-relative `C:` that names another
+        # directory entirely. An empty segment is dropped rather than kept: it
+        # means "the current directory" on Windows, which is raven's own and no
+        # part of the PATH a user's terminal has.
         live = captured.get("PATH", "")
-        captured["PATH"] = ";".join([*stored, live] if live else stored)
+        union: list[str] = []
+        seen: set[str] = set()
+        for part in [*stored, live] if live else stored:
+            for entry in part.split(";"):
+                if not entry:
+                    continue
+                key = ntpath.normcase(ntpath.normpath(entry))
+                if key in seen:
+                    continue
+                seen.add(key)
+                union.append(entry)
+        captured["PATH"] = ";".join(union)
     return captured
 
 
