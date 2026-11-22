@@ -9,7 +9,7 @@ import pytest
 
 from raven.contracts.llm_provider import ChatDelta, GenerationSettings
 from raven.providers.base import LLMProvider
-from raven.providers.call_timeout import CallTimeoutError, bounded_stream, call_timeout
+from raven.providers.call_timeout import CallTimeoutError, _tail_budget, bounded_stream, call_timeout
 from raven.providers.relay_wire import decode_exception, encode_exception
 from raven.providers.streaming import stream_llm_call
 
@@ -192,18 +192,33 @@ class _FinishingStream:
 
 
 class _TrailingStream:
-    """A settled reply whose iterator keeps handing deltas over."""
+    """A settled reply whose iterator keeps handing deltas over.
+
+    The inner generator is kept reachable from the instance so the only way it
+    can be closed is the decorator's own ``aclosing``: were it collected instead,
+    its ``finally`` would run on the way out and the assertion could not tell the
+    two apart.
+    """
 
     def __init__(self, trail: int):
         self.trail = trail
+        self.closed = False
+        self.inner = None
         self.generation = GenerationSettings(timeout=0.3, stream_idle_timeout=0.1)
 
+    async def _deltas(self):
+        try:
+            yield ChatDelta(content="x", finish_reason="stop")
+            for _ in range(self.trail):
+                await asyncio.sleep(0.04)
+                yield ChatDelta(content=None, usage={"prompt_tokens": 1})
+        finally:
+            self.closed = True
+
     @bounded_stream
-    async def chat_stream(self):
-        yield ChatDelta(content="x", finish_reason="stop")
-        for _ in range(self.trail):
-            await asyncio.sleep(0.04)
-            yield ChatDelta(content=None, usage={"prompt_tokens": 1})
+    def chat_stream(self):
+        self.inner = self._deltas()
+        return self.inner
 
 
 class _BufferedStream:
@@ -215,6 +230,23 @@ class _BufferedStream:
     async def chat_stream(self):
         yield ChatDelta(content="a")
         yield ChatDelta(content="b")
+
+
+class _BufferedTail:
+    """A settled reply whose trailing deltas need no await either.
+
+    After the terminal delta no suspension point follows, so ``asyncio.timeout_at``
+    cannot fire before a buffered delta is handed over; the precheck at the top of
+    the pull is the only guard that refuses one once the tail window is spent.
+    """
+
+    generation = GenerationSettings(timeout=0.3, stream_idle_timeout=0.1)
+
+    @bounded_stream
+    async def chat_stream(self):
+        yield ChatDelta(content="x", finish_reason="stop")
+        yield ChatDelta(content=None, usage={"prompt_tokens": 1})
+        yield ChatDelta(content=None, usage={"prompt_tokens": 2})
 
 
 @pytest.mark.asyncio
@@ -245,7 +277,8 @@ async def test_settled_stream_stops_a_trailing_dribble():
     """A reply that keeps trickling after its terminal delta is still bounded."""
     loop = asyncio.get_running_loop()
     started = loop.time()
-    stream = _TrailingStream(trail=50).chat_stream()
+    trailing = _TrailingStream(trail=50)
+    stream = trailing.chat_stream()
     deltas = [delta async for delta in stream]
     elapsed = loop.time() - started
 
@@ -259,14 +292,44 @@ async def test_settled_stream_stops_a_trailing_dribble():
 
 @pytest.mark.asyncio
 async def test_settled_stream_closes_once_the_tail_window_has_gone():
-    """The tail window opens once, so a consumer that then lingers gets the end."""
-    stream = _TrailingStream(trail=50).chat_stream()
+    """The tail window opens once, so a consumer that then lingers gets the end.
+
+    The pull that finds the window spent returns without resuming the inner
+    generator, so ``aclosing`` is the only thing left that closes it. The inner
+    generator is held from the instance to keep collection from closing it too,
+    which would make this assertion pass for the wrong reason.
+    """
+    trailing = _TrailingStream(trail=50)
+    stream = trailing.chat_stream()
     assert (await anext(stream)).finish_reason == "stop"
     assert (await anext(stream)).content is None
     await asyncio.sleep(0.15)
     with pytest.raises(StopAsyncIteration):
         await anext(stream)
+    assert trailing.closed
     await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_settled_tail_refuses_a_buffered_delta_after_its_window():
+    """Once the tail window is spent, a delta already in hand is refused, not delivered.
+
+    The delta needs no await, so ``asyncio.timeout_at`` has no suspension point to
+    fire at; the precheck is the only thing that can refuse it.
+    """
+    stream = _BufferedTail().chat_stream()
+    assert (await anext(stream)).finish_reason == "stop"
+    assert (await anext(stream)).usage == {"prompt_tokens": 1}
+    await asyncio.sleep(0.15)
+    with pytest.raises(StopAsyncIteration):
+        await anext(stream)
+    await stream.aclose()
+
+
+def test_tail_budget_falls_back_to_the_call_budget_without_an_idle_setting():
+    """A duck-typed generation without ``stream_idle_timeout`` still gets a bounded tail."""
+    generation = SimpleNamespace(timeout=600.0)
+    assert _tail_budget(generation, 600.0) == 600.0
 
 
 @pytest.mark.asyncio
