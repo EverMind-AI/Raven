@@ -16,13 +16,25 @@ measured rather than imagined:
 What this is not: a general secret scanner. Only the capture group is replaced,
 so the shape of the text survives and a person can still tell *what* was run --
 ``curl -H "Authorization: Bearer [redacted]"`` is a readable line, and a wholesale
-match replacement would leave a row nobody can act on. The table is sized like
-the one Codex uses for the same job -- an OpenAI key, an AWS access key id, a
-bearer token and a secret assignment -- plus the two channels Codex does not
-cover but this one does: a credential embedded in a URL, and PEM-armoured private
-key material. It keeps a vendor prefix only where this repository's own workflow
-produces one (GitHub, GitLab, Slack, Google) or where Codex matches it (OpenAI,
-AWS), and deliberately not the 409-line RFC-7235 header scanner beside it.
+match replacement would leave a row nobody can act on.
+
+The table is deliberately the same four rules Codex uses for the same job
+(``codex-rs/secrets/src/sanitizer.rs``): an OpenAI key, an AWS access key id, a
+bearer token, and an assignment to a name that says secret. It is not one rule
+per credential vendor: a vendor prefix is matched only when the prefix alone
+identifies the value, and only for the two vendors that rule covers. Everything
+else that carries a secret reaches this table through its label -- which is why
+an ``aws_secret_access_key`` line and a ``~/.raven/beta.json`` token are caught
+without either being named here.
+
+Two deviations from Codex, both load-bearing:
+
+* the assignment rule has no leading ``\\b`` and includes ``access_key``.
+  ``~/.aws/credentials`` writes ``aws_secret_access_key = ...``, and a ``\\b``
+  before ``secret`` cannot match after the ``_`` that precedes it, so the literal
+  copy of Codex's rule misses the one file that makes this module worth having.
+* the OpenAI value class keeps ``-`` (Codex's does not), so ``sk-ant-...`` and
+  ``sk-proj-...`` are matched whole rather than not at all.
 
 This table applies to Raven's own publishing surfaces. Content received from
 another agent retains that agent's redaction policy.
@@ -40,100 +52,79 @@ from typing import Any
 
 REPLACEMENT = "[redacted]"
 
-# Each pattern captures exactly the secret, never the label. Ordered
-# roughly by how specific they are, though order does not change the result:
-# every pattern is applied, and a string already redacted no longer matches.
+# Each pattern captures exactly the secret, never the label. Every pattern is
+# applied, and a string already redacted no longer matches, so the order is not
+# load-bearing; the bearer rule is first because that is where Codex puts it.
 _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    # Authorization / proxy headers, in either the -H "..." or the raw form.
-    (
-        "http-auth",
-        re.compile(
-            r"((?:Authorization|Proxy-Authorization)\s*+:\s*+(?:Bearer|Basic|Token)\s++)([\w\-.~+/=]{8,}+)",
-            re.IGNORECASE,
-        ),
-    ),
-    # A bearer token with no header label in front of it, matched where Codex
-    # matches it: the scheme word, whitespace (not a newline), then a long run
-    # of token characters.
+    # Codex rule 3. Matched anywhere rather than behind an ``Authorization``
+    # label, so both ``Authorization: Bearer <token>`` and a bare ``Bearer
+    # <token>`` lose the value. ``Basic`` and ``Token`` are not matched: neither
+    # is in Codex's table, and a Basic value is base64 of ``user:password`` with
+    # no label inside it to recognise.
     ("bearer", re.compile(r"(\bBearer[ \t]+)([A-Za-z0-9._~+/-]{16,}=*)", re.IGNORECASE)),
-    # An assignment to anything whose name says secret. The four names Codex
-    # matches, plus ``access_key``: ``~/.aws/credentials`` writes
-    # ``aws_secret_access_key = ...``, whose label is the tail of that name and
-    # whose value no vendor prefix identifies. Eight characters, as in Codex.
+    # Codex rule 1, with ``-`` admitted in the value so the provider-prefixed
+    # forms (``sk-ant-``, ``sk-proj-``) match whole. ``sk_live_`` is Stripe and
+    # is not matched: ``_`` is not in the value class, and this repository has
+    # no Stripe credential.
+    ("openai", re.compile(r"()(sk-[A-Za-z0-9_-]{16,})")),
+    # Codex rule 2, narrowed to the two prefixes a credentials file writes:
+    # ``AKIA`` for a long-term key, ``ASIA`` for a temporary one.
+    ("aws-access-key", re.compile(r"()(\b(?:AKIA|ASIA)[A-Z0-9]{16}\b)")),
+    # Codex rule 4, with the leading ``\b`` dropped and ``access_key`` added --
+    # see the module docstring. Eight characters, as in Codex: below that the
+    # value is a placeholder or a word, not a credential. ``[`` is excluded from
+    # the value so a replacement this module or ``held_secrets`` already wrote --
+    # ``[redacted]``, ``[redacted: providers...apiKey]`` -- cannot be rewritten
+    # again inside a labelled slot; no real credential begins with a bracket.
     (
         "named-secret",
         re.compile(
-            r"((?:api[_-]?key|token|secret|access[_-]?key|password)"
-            r"[\"']?\s*[:=]\s*[\"']?)([^\s\"',;&|)]{8,})",
+            r"((?:api[_-]?key|token|secret|password|access[_-]?key)"
+            r"[\"']?\s*[:=]\s*[\"']?)([^\s\"',;&|)\[]{8,})",
             re.IGNORECASE,
         ),
     ),
-    # Command-line flags that take a credential.
-    ("cli-flag", re.compile(r"(--(?:token|password|api-key|secret|with-token)[= ])([^\s\"']{6,})", re.IGNORECASE)),
-    # A URL with an inline password: scheme://user:secret@host. The user may be
-    # empty, as in redis://:secret@host.
-    ("url-userinfo", re.compile(r"(://[^\s/:@]*:)([^\s/@]{3,})(?=@)")),
-    # Vendor-shaped keys, recognisable without a label because their prefix is
-    # the label. OpenAI and AWS are Codex's two. GitHub, GitLab, Slack and
-    # Google are kept because this repository uses each of them: ``gh``/PATs in
-    # tool titles, the beta channel's GitLab deploy token
-    # (``raven/updates/beta_channel.py``), the Slack channel adapter, and the
-    # Gemini provider's API key.
-    ("openai", re.compile(r"()(sk-(?:proj-|ant-|or-)?[A-Za-z0-9_-]{16,})")),
-    ("github", re.compile(r"()(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{22,})")),
-    ("gitlab", re.compile(r"()(glpat-[A-Za-z0-9_-]{16,})")),
-    ("slack", re.compile(r"()(xox[abposr]-[A-Za-z0-9-]{10,})")),
-    ("google", re.compile(r"()(AIza[0-9A-Za-z_-]{30,})")),
-    ("aws-access-key", re.compile(r"()(\b(?:AKIA|ASIA)[A-Z0-9]{16}\b)")),
-    # A scan or call-record cap may have removed the closing armour.
-    ("pem", re.compile(r"(-----BEGIN [A-Z ]*PRIVATE KEY-----)([\s\S]+?)(?=-----END|\Z)")),
     # Deliberately NOT here: a pattern for credential *paths*
     # (``~/.aws/credentials``, ``~/.ssh/id_rsa``). It was written and removed --
     # the path is not a secret, and hiding it takes away the one thing the reader
     # most needs, which is that the agent read their credential file. What must
     # not escape is the file's *contents*, and those arrive through a result
-    # preview where the named-secret and vendor patterns above catch them.
+    # preview where the label and vendor patterns above catch them.
 )
 
 # Redacting a very large string costs real time on a streaming path, and the
-# strings that reach here are titles, previews and messages -- not file bodies.
-# Past the cap the text is truncated rather than scanned, because a half-scanned
-# string is worse than an honestly shortened one.
+# strings that reach :func:`redact` are titles, previews and messages -- not file
+# bodies. Past the cap the text is truncated rather than scanned, because a
+# half-scanned string is worse than an honestly shortened one. Tool results do
+# not go through this cap: they have their own ceiling (1,000,000 characters)
+# and :func:`redact_tool_result` scans them whole, so this one cannot silently
+# cut a legitimate read short.
 MAX_SCAN_CHARS = 256 * 1024
 
 # At a known cut, a token may be too short for the ordinary patterns or have
 # lost a closing delimiter. Keep ordinary unlabelled text, but remove a tail
-# whose label or prefix already identifies it as a credential. Each pattern is
-# paired with the characters its value is made of, which say where its search
-# can start (_tail_search_start).
+# whose label or prefix already identifies it as a credential.
+#
+# One entry per surviving pattern -- the vendor prefixes share one because they
+# share a value class -- so this is not a second credential enumeration. Each
+# entry is paired with the characters its value is made of, which say where its
+# search can start (_tail_search_start).
 _TRUNCATED_SECRETS: tuple[tuple[re.Pattern[str], re.Pattern[str]], ...] = (
     (
-        re.compile(
-            r"()(?<![A-Za-z0-9_-])((?:sk-|gh[pousr]_|github_pat_|glpat-|xox[abposr]-|AIza|AKIA|ASIA)"
-            r"[A-Za-z0-9_.-]*+)\Z"
-        ),
+        re.compile(r"()(?<![A-Za-z0-9_-])((?:sk-|AKIA|ASIA)[A-Za-z0-9_.-]*+)\Z"),
         re.compile(r"[A-Za-z0-9_.-]*+"),
     ),
-    (re.compile(r"(://[^\s/:@]*+:)([^\s/@]++)\Z"), re.compile(r"[^\s/@]*+")),
     (
         re.compile(
-            r"((?:api[_-]?key|token|secret|access[_-]?key|password)"
-            r"[\"']?\s*+[:=]\s*+[\"']?)([^\s\"',;&|)]++)\Z",
+            r"((?:api[_-]?key|token|secret|password|access[_-]?key)"
+            r"[\"']?\s*+[:=]\s*+[\"']?)([^\s\"',;&|)\[]++)\Z",
             re.IGNORECASE,
         ),
-        re.compile(r"[^\s\"',;&|)]*+"),
+        re.compile(r"[^\s\"',;&|)\[]*+"),
     ),
     (
-        re.compile(
-            r"((?:Proxy-)?Authorization[\"']?\s*+[:=]\s*+[\"']?(?:(?:Bearer|Basic|Token)\s++)?)"
-            r"([\w\-.~+/=]++)\Z",
-            re.IGNORECASE,
-        ),
-        re.compile(r"[\w\-.~+/=]*+"),
-    ),
-    (
-        re.compile(r"(--(?:token|password|api-key|secret|with-token)[= ])([^\s\"']++)\Z", re.IGNORECASE),
-        re.compile(r"[^\s\"']*+"),
+        re.compile(r"(\bBearer[ \t]++)([A-Za-z0-9._~+/-]++)\Z", re.IGNORECASE),
+        re.compile(r"[A-Za-z0-9._~+/-]*+"),
     ),
 )
 
@@ -141,7 +132,7 @@ _TRUNCATED_SECRETS: tuple[tuple[re.Pattern[str], re.Pattern[str]], ...] = (
 # colon or an equals sign, and the scheme word an Authorization label can carry.
 _LABEL_GAP = re.compile(r"[\s\"':=]*+")
 _LABEL_SCHEME = re.compile(r"[A-Za-z]{0,6}+")
-# Room for the name itself; the longest, Proxy-Authorization, is 19 characters.
+# Room for the name itself; the longest label in the table is ``access_key``.
 _LABEL_NAME_CHARS = 32
 
 
@@ -178,6 +169,13 @@ def _redact_cut_tail(text: str) -> str:
     return text
 
 
+def _scrub(text: str) -> str:
+    """Every pattern applied to ``text`` whole. The caller owns its size."""
+    for _, pattern in _PATTERNS:
+        text = pattern.sub(lambda m: m.group(1) + REPLACEMENT, text)
+    return text
+
+
 def redact(text: str, *, truncated: bool = False) -> str:
     """Return ``text`` with every recognised credential replaced.
 
@@ -194,8 +192,7 @@ def redact(text: str, *, truncated: bool = False) -> str:
         text = text[:MAX_SCAN_CHARS]
     if truncated or scan_cut:
         text = _redact_cut_tail(text)
-    for _, pattern in _PATTERNS:
-        text = pattern.sub(lambda m: m.group(1) + REPLACEMENT, text)
+    text = _scrub(text)
     if scan_cut:
         text += "\n[truncated before scanning for credentials]"
     return text
@@ -259,38 +256,15 @@ def _argument_strings(arguments: Any, *, depth: int = 0) -> list[str]:
     return [] if arguments is None else [str(arguments)]
 
 
-#: The entries of the user's home a tool result is scanned for, because they hold
-#: another program's credentials rather than source a turn edits. ``config`` is
-#: the freedesktop location (``~/.config/gh/hosts.yml``, ``~/.config/gcloud``);
-#: the rest are the well-known credential stores. Raven's own home is not here:
-#: only its ``config.json`` and its ``oauth`` store are credential reads, matched
-#: by their own roots in :func:`_home_config`, so the source directories under it
-#: never enter this gate.
-_HOME_CREDENTIAL_ENTRIES = (
-    "aws",
-    "ssh",
-    "gnupg",
-    "kube",
-    "docker",
-    "config",
-    "qwen",
-    "openclaw",
-    "netrc",
-    "npmrc",
-    "pypirc",
-    "git-credentials",
-    "pgpass",
-)
-
 # Raven's own token files name their credentials with words that mean nothing on
 # their own: ``save_token`` writes ``asdict(MiniMaxOAuthToken)``, whose fields are
 # ``access`` and ``refresh``. Adding those two names to ``_PATTERNS`` would be the
 # cheap fix and the wrong one -- it rewrites "refresh the page" and "access the
-# network" in every tool result, a coding turn's included. So this pair is fenced
-# twice over: the call must have reached Raven's OAuth directory (below), and the
-# value must look like a token rather than a word -- sixteen characters or more,
-# no whitespace, no quote. Both conditions together are what the label patterns
-# cannot express for a name this ordinary.
+# network" in every tool result. So this pair is fenced twice over: the call must
+# have reached Raven's OAuth directory (below), and the value must look like a
+# token rather than a word -- sixteen characters or more, no whitespace, no
+# quote. Both conditions together are what the label patterns cannot express for
+# a name this ordinary.
 _OAUTH_TOKEN_FIELD = re.compile(r'("(?:access|refresh)"\s*:\s*")([^\s"\\]{16,})')
 
 
@@ -328,12 +302,9 @@ def _own_oauth_store() -> re.Pattern[str]:
     (``RAVEN_HOME`` elsewhere) has no abbreviation to add and is matched by its
     absolute path alone, which is the only spelling a call can use for it.
 
-    This is a second resolver beside :func:`_home_config`, not the same one: that
-    one answers "is this path a credential location", this one "is this Raven's
-    token store". They share ``raven_home()`` through
-    ``home.oauth_home`` -- the one definition the config shelf's ``oauth_dir``
-    also answers with -- and are asserted together wherever a change could make
-    one wider than the other.
+    This is the only path check left in this module. The pattern table is applied
+    to every tool result regardless of path, so there is no "which directories
+    count as credentials" list to keep current.
     """
     from raven.home import oauth_home
 
@@ -368,79 +339,33 @@ def _redact_oauth_store(text: str) -> str:
     return _OAUTH_TOKEN_FIELD.sub(lambda m: m.group(1) + REPLACEMENT, text)
 
 
-def _home_config() -> re.Pattern[str]:
-    """A path to a credential file under the home.
+def redact_tool_result(arguments: Any, text: str) -> str:
+    """``text`` from a tool call, with every recognised credential replaced.
 
-    The gate is a positive list, not "every dot-directory of the home except
-    Raven's own source": the pass exists for another program's settings
-    (``~/.aws``, ``~/.ssh``, ``~/.config/gh``) and for Raven's own config and
-    token store. A directory that is not one of those is not scanned, which is
-    what keeps a coding turn's reads of its own source -- including the
-    workspace under Raven's home -- out of the gate without naming the source
-    directories at all.
+    The pattern table runs on every tool result, whatever path the call named.
+    That is the point: the alternative is a list of directories that hold
+    credentials, and such a list fails silently -- a credential file it does not
+    name reaches the model in plaintext, and no test goes red. A list was tried
+    and dropped for that reason (``~/.raven/beta.json``, whose ``token`` field is
+    a deploy token, was in the gap).
 
-    Raven's own home is matched only for ``config.json`` and the ``oauth``
-    store. The store may sit outside the home (``RAVEN_HOME`` elsewhere), so its
-    absolute path is a root too; :func:`_own_oauth_store` asks the same question
-    for the second pass, and the two must agree on where the store is.
+    What the unconditional pass costs is the ability to read a file that
+    contains a label-shaped line -- ``token = self.get_token(request)`` in a
+    project's source, for instance -- without that line being rewritten. With
+    four patterns and an eight-character floor the false-positive surface is
+    small, and it is the price of not maintaining a list.
 
-    The spellings are the ones calls have used -- ``~``, ``$HOME``, ``${HOME}``
-    and the host's absolute home -- in the host's terms (:func:`_host_paths`):
-    on Windows either slash separates, repeated, and case is ignored; on POSIX
-    ``/`` separates and case counts. A name ends at a separator, a quote or the
-    end, so ``~/.aws-other`` is not ``~/.aws``. Repeated separators and ``.``
-    segments are taken as written, because no caller normalizes a path first.
-    """
-    from raven.home import oauth_home, raven_home
-
-    style = _path_style()
-    flavour, sep, flags = _host_paths(style)
-    home_dir = flavour(os.path.expanduser("~"))
-    gap = sep if style == _WINDOWS else "/+"
-    gap += r"(?:\." + gap + r")*"
-    boundary = r"(?:[/\\]|$|[\"'\s])"
-    shells = ("~", "$HOME", "${HOME}")
-
-    def roots(path: PurePath) -> list[str]:
-        spelled = [_spelled(path, gap)]
-        try:
-            rel = path.relative_to(home_dir)
-        except ValueError:
-            rel = None
-        if rel is not None and rel.parts:
-            spelled += [re.escape(prefix) + gap + _spelled(rel, gap) for prefix in shells]
-        return spelled
-
-    names = "|".join(_HOME_CREDENTIAL_ENTRIES)
-    home = "|".join(re.escape(prefix) for prefix in shells) + "|" + _spelled(home_dir, sep)
-    found = [r"(?:" + home + r")" + gap + r"\.(?:" + names + r")" + boundary]
-    found += [root + gap + r"config\.json" + boundary for root in roots(flavour(str(raven_home())))]
-    found += [root + boundary for root in roots(flavour(str(oauth_home())))]
-    return re.compile(r"(?:" + "|".join(dict.fromkeys(found)) + r")", flags)
-
-
-def redact_home_config_read(arguments: Any, text: str) -> str:
-    """``text`` redacted when the call reached a credential file under the home.
-
-    Another program's settings (``~/.qwen/settings.json``, ``~/.openclaw``,
-    ``~/.aws``, ``~/.ssh``) hold its keys, and a turn diagnosing that program
-    reads them whole more often than it is told not to -- measured, a model
-    asked to connect an agent ran ``read_file`` on its settings and read its key
-    back. The gate is the positive list in :func:`_home_config` plus Raven's own
-    ``config.json`` and OAuth store. Only those calls: the patterns here would
-    also rewrite placeholders in a project's source and tests, which a coding
-    turn then fails to edit.
-
-    Raven's own OAuth store is the one place a second pass runs, for the token
-    fields whose names (``access``, ``refresh``) are ordinary words -- see
+    The one path-sensitive pass left is Raven's own OAuth store, for the token
+    fields whose names (``access``, ``refresh``) are ordinary words: see
     :data:`_OAUTH_TOKEN_FIELD`. It is gated on the read reaching that directory,
-    so it costs nothing anywhere else. Prose is safe for a reason narrower than
-    that: the field shape is required (a quoted ``access`` or ``refresh``, a colon,
-    then sixteen characters with no space or quote), so a sentence saying "refresh
-    the page" is untouched, while a passage that quotes a token sample -- a note
-    explaining the file format, with ``"refresh": "<40 hex>"`` in it -- is rewritten
-    with the rest of the passage intact. The gate is on the path, not on whether
-    the text is prose.
+    so it costs nothing anywhere else, and prose is safe for a reason narrower
+    than the gate: the field shape is required (a quoted ``access`` or
+    ``refresh``, a colon, then sixteen characters with no space or quote), so a
+    sentence saying "refresh the page" is untouched, while a passage that quotes
+    a token sample is rewritten with the rest of the passage intact.
+
+    ``text`` is scanned whole rather than through :data:`MAX_SCAN_CHARS`: a tool
+    result may legitimately be a megabyte, and that cap exists for ACP frames.
     """
     if not text:
         return text
@@ -448,15 +373,15 @@ def redact_home_config_read(arguments: Any, text: str) -> str:
     store = _own_oauth_store()
     if any(store.search(value) for value in strings):
         text = _redact_oauth_store(text)
-    config = _home_config()
-    return redact(text) if any(config.search(value) for value in strings) else text
+    return _scrub(text)
 
 
 # A mapping key that names its value a secret. The structure carries the label
 # here, which a per-string pass cannot see: in ``{"AWS_SECRET_ACCESS_KEY": "wJal..."}``
 # the value on its own is indistinguishable from a hash. This is the ``mcpServers``
-# ``env`` dict channel, which is one of the reasons this module exists.
-_SECRET_KEY = re.compile(r"(?:api[_-]?key|token|secret|access[_-]?key|password)", re.IGNORECASE)
+# ``env`` dict channel, which is one of the reasons this module exists. The same
+# five names as ``named-secret``, for the same reason it has them.
+_SECRET_KEY = re.compile(r"(?:api[_-]?key|token|secret|password|access[_-]?key)", re.IGNORECASE)
 
 
 def redact_value(value: Any, *, depth: int = 0) -> Any:
@@ -492,4 +417,4 @@ def pattern_names() -> tuple[str, ...]:
     return tuple(name for name, _ in _PATTERNS)
 
 
-__all__ = ["MAX_SCAN_CHARS", "REPLACEMENT", "pattern_names", "redact", "redact_value"]
+__all__ = ["MAX_SCAN_CHARS", "REPLACEMENT", "pattern_names", "redact", "redact_tool_result", "redact_value"]
