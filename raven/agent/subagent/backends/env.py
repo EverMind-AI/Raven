@@ -321,6 +321,14 @@ def _capture_windows(*, consequence: str) -> dict[str, str] | None:
         # already listed is not listed again: the live PATH repeats most of the
         # stores' own, and the doubled tail has measured past what npm's bin
         # spawn carries, leaving the child cmd unable to resolve its own shims.
+        #
+        # An entry is compared the way Windows resolves one: case-insensitively,
+        # both separators as the same separator, a trailing one or an inner `..`
+        # as nothing. ``ntpath`` does that without a platform, and it keeps
+        # `C:\` apart from the drive-relative `C:` that names another
+        # directory entirely. An empty segment is dropped rather than kept: it
+        # means "the current directory" on Windows, which is raven's own and no
+        # part of the PATH a user's terminal has.
         live = captured.get("PATH", "")
         union: list[str] = []
         seen: set[str] = set()
@@ -328,7 +336,7 @@ def _capture_windows(*, consequence: str) -> dict[str, str] | None:
             for entry in part.split(";"):
                 if not entry:
                     continue
-                key = entry.rstrip("\\").lower()
+                key = ntpath.normcase(ntpath.normpath(entry))
                 if key in seen:
                     continue
                 seen.add(key)
