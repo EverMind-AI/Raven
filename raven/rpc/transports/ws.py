@@ -39,7 +39,7 @@ _NONCE_TTL_S = 30 * 60.0
 # The page shows whatever the exchange answered, so the gateway is what says
 # why a sign-in was refused; the two refusals below need different remedies.
 # ``nonce or cookie`` covers the refresh that lands on /auth after the one-time
-# link already signed the tab in and cleared its hash: the cookie is spent on
+# link already signed the tab in and cleared its hash: the nonce is spent on
 # the exchange, so the page would sit on its own text forever with no way out.
 _AUTH_PAGE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Raven</title></head>

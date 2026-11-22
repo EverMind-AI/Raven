@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -186,11 +187,30 @@ async def test_the_sign_in_page_explains_a_missing_hash_instead_of_posting_an_em
     ``/auth`` with no credential at all. Posting the empty string would burn a
     request and come back with the spent-link refusal; the page says directly
     where the app and a fresh link live instead.
+
+    The sentence alone cannot carry this: it stays in the served page even when
+    the branch that reaches it is gone, so a test that only searches for it goes
+    green while the page posts the empty nonce again. The script's shape is
+    asserted too -- the branch on the hash-derived nonce has to explain the dead
+    end and return before the exchange is posted.
     """
     _, client = gateway_client
     resp = await client.get("/auth")
     body = await resp.text()
-    assert "No sign-in link here" in body
+
+    script = re.search(r"<script>(.*?)</script>", body, re.S)
+    assert script is not None, "the sign-in page no longer carries a script"
+    code = script.group(1)
+
+    guard = re.search(r"if\s*\(\s*!\s*nonce\s*\)\s*\{", code)
+    assert guard is not None, "the page no longer branches on a missing nonce"
+
+    exchange = code.find("fetch('/auth/exchange'")
+    assert exchange != -1, "the page no longer posts the nonce to the exchange"
+
+    before_exchange = code[guard.end() : exchange]
+    assert "No sign-in link here" in before_exchange, "the missing-nonce branch must explain the dead end"
+    assert "return;" in before_exchange, "the missing-nonce branch must return before the exchange is posted"
 
 
 # ---------------------------------------------------------------------------
