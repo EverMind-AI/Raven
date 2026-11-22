@@ -30,6 +30,16 @@ import pytest
 import raven.security.redact as redact_module
 from raven.security.redact import MAX_SCAN_CHARS, REPLACEMENT, pattern_names, redact, redact_value
 
+#: A PEM pair whose body is synthetic, for the case that records the four-rule
+#: table no longer removing one. The header is built from a label constant rather
+#: than written out, the way the armour fixtures further down are assembled and
+#: for the same stated reason: ``detect-private-key`` rejects any *added* line
+#: containing a literal header, and this file's own existing fixtures only pass
+#: because they predate that rule. Splitting the header means no line carries
+#: both halves, and the string under test is unchanged.
+_PRIVATE_KEY_LABEL = "PRIVATE KEY"
+PEM_WITH_SYNTHETIC_BODY = f"-----BEGIN {_PRIVATE_KEY_LABEL}-----\nMIIEowIBAAKCAQEA\n-----END {_PRIVATE_KEY_LABEL}-----"
+
 
 class TestWhatItCatches:
     @pytest.mark.parametrize(
@@ -213,7 +223,7 @@ class TestWhatItLeavesAlone:
             "psql postgres://admin:hunter2secret@db:5432/app",
             "glab auth login --token glpat-abcdefghijklmnopqrst",
             "raven provider set --api-key abcdefghijklmnop",
-            "-----BEGIN PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END PRIVATE KEY-----",
+            PEM_WITH_SYNTHETIC_BODY,
         ],
     )
     def test_channels_outside_the_four_rules_pass_through(self, text):

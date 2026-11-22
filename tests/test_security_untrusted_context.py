@@ -1121,17 +1121,14 @@ def test_every_branch_of_the_oauth_store_gate(monkeypatch: pytest.MonkeyPatch, t
     short = '{"access": "abcdefghijklmno mno"}'
     assert redact_tool_result({"path": str(store / "minimax_global.json")}, short) == short
     spaced = '{"access": "abcdefghijklmnopqrst uv"}'
-    assert (
-        redact_tool_result({"path": str(store / "minimax_global.json")}, spaced) == '{"access": "[redacted] uv"}'
-    )
+    assert redact_tool_result({"path": str(store / "minimax_global.json")}, spaced) == '{"access": "[redacted] uv"}'
 
     # The same class stops at a backslash, which is how a quote inside a JSON
     # string arrives: the value up to the escape is replaced, the tail after it
     # is not claimed and not dropped -- the substitution does not cut the line.
     escaped = '{"access": "abcdefghijklmnop\\"tail"}'
     assert (
-        redact_tool_result({"path": str(store / "minimax_global.json")}, escaped)
-        == '{"access": "[redacted]\\"tail"}'
+        redact_tool_result({"path": str(store / "minimax_global.json")}, escaped) == '{"access": "[redacted]\\"tail"}'
     )
     short_escaped = '{"access": "abcdefghijklmno\\"tail"}'
     assert redact_tool_result({"path": str(store / "minimax_global.json")}, short_escaped) == short_escaped
@@ -1315,5 +1312,3 @@ async def test_the_oauth_store_gate_keeps_posix_spelling_on_a_posix_host(monkeyp
     ):
         assert "mmx_FAKEACCESS0123456789abcdef" in await _dispatched(arguments, _STORE_TOKENS), arguments
     assert not _own_oauth_store().flags & re.IGNORECASE
-
-
