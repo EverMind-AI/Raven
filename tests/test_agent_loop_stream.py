@@ -792,20 +792,38 @@ async def test_a_stream_cut_before_its_terminal_chunk_is_a_transport_failure() -
     assert any("without the upstream's terminal chunk" in line and "20 chars of reasoning" in line for line in logged)
 
 
-@pytest.mark.parametrize("header_name", ["llm_provider-content-type", "Content-Type"])
-async def test_a_cut_stream_answered_by_a_json_document_is_a_protocol_mismatch(header_name: str) -> None:
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"llm_provider-content-type": "application/json"},
+        {"Content-Type": "application/json; charset=utf-8"},
+        {"llm_provider-content-type": "application/problem+json"},
+        {
+            "llm_provider-server": "nginx",
+            "llm_provider-x-request-id": "req-1",
+            "llm_provider-content-type": "application/json; charset=utf-8",
+        },
+    ],
+    ids=["library-prefixed", "bare-header-with-charset", "structured-json-suffix", "content-type-not-first"],
+)
+async def test_a_cut_stream_answered_by_a_json_document_is_a_protocol_mismatch(headers: dict[str, str]) -> None:
     """A stream request that a JSON document answered was never treated as a
     stream: the endpoint does not speak the provider's protocol, and the account
     says so instead of blaming the connection -- the fact the person holding the
     config can act on. The verdict keeps the cut's recovery flags, so what the
-    loop does with it is unchanged."""
+    loop does with it is unchanged.
+
+    The recommendation is asserted on the content that is actually handed back,
+    closing parenthesis included: ``canonical_llm_error`` bounds the detail at
+    ``LLM_ERROR_DETAIL_MAX``, and an account that spent that bound explaining the
+    mismatch left the sentence to check out of the reader's reach."""
     provider = _FakeProvider(
         [
             ChatDelta(
                 content=None,
                 finish_reason="stop",
                 finish_synthesized=True,
-                call_record=CallRecord(headers={header_name: "application/json"}),
+                call_record=CallRecord(headers=headers),
             )
         ]
     )
@@ -813,13 +831,16 @@ async def test_a_cut_stream_answered_by_a_json_document_is_a_protocol_mismatch(h
 
     response = await call(messages=[], tools=None, model="m", on_token_delta=None)
 
+    content = response.content or ""
     assert response.finish_reason == "error"
     assert response.error_classification is not None
     assert response.error_classification.category == "protocol_mismatch"
     assert response.error_classification.retryable is True
     assert response.error_classification.should_fallback is True
-    assert "instead of an event stream" in (response.content or "")
-    assert "cut off by the connection" not in (response.content or "")
+    assert "not an event stream" in content
+    assert "check this provider's protocol and base URL" in content
+    assert content.endswith("of reasoning were lost)"), f"the account was cut: {content!r}"
+    assert "cut off by the connection" not in content
 
 
 @pytest.mark.parametrize(

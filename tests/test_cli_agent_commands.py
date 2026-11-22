@@ -694,6 +694,7 @@ def test_print_llm_error_non_auth_categories_get_apt_hint_not_key_guidance(
         "server": "retry",
         "model_unavailable": "provider use",
         "billing": "account",
+        "protocol_mismatch": "does not speak this provider's protocol",
     }
     try:
         for category, expected in cases.items():

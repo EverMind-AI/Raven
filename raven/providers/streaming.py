@@ -68,13 +68,19 @@ def _answered_with_a_document(record: CallRecord | None) -> str | None:
     the endpoint answered the request as a document -- it does not speak the
     protocol this provider called it with, or the path is not the one it called
     -- so the empty stream the cut branch below sees is that answer failing to
-    parse, not a connection that died mid-reply.
+    parse, not a connection that died mid-reply. The media type is read on its
+    own, so a charset parameter does not hide it and a structured suffix
+    (``application/problem+json``) reads the same way.
     """
     if record is None:
         return None
     for name, value in (record.headers or {}).items():
-        if name.lower().endswith("content-type") and "application/json" in str(value).lower():
-            return str(value)
+        if not name.lower().endswith("content-type"):
+            continue
+        text = str(value)
+        mime = text.split(";", 1)[0].strip().lower()
+        if mime == "application/json" or mime.endswith("+json"):
+            return text
     return None
 
 
@@ -86,6 +92,11 @@ def _cut_account(answered_document: str | None, elapsed: float, reasoning_chars:
     with -- so that account names the mismatch rather than the connection, the
     fact a person holding the config can act on. Anything else was cut
     mid-reply and stays a transport failure.
+
+    What to do leads and the count trails, because ``canonical_llm_error``
+    bounds this sentence at ``LLM_ERROR_DETAIL_MAX``: an account that spent the
+    bound explaining the mismatch first left the recommendation, the only part
+    a reader can act on, past the cut.
     """
     if answered_document is not None:
         logger.warning(
@@ -94,11 +105,9 @@ def _cut_account(answered_document: str | None, elapsed: float, reasoning_chars:
         )
         return (
             "protocol_mismatch",
-            f"the endpoint answered the stream request with a JSON document "
-            f"({answered_document}) instead of an event stream after {elapsed:.0f}s; "
-            f"the address this provider is pointed at does not speak its protocol, "
-            f"so no reply can arrive - check the provider's protocol and base URL, "
-            f"not the connection ({reasoning_chars} chars of reasoning were lost)",
+            f"the endpoint answered the stream request with a document ({answered_document}), "
+            f"not an event stream: check this provider's protocol and base URL "
+            f"({reasoning_chars} chars of reasoning were lost)",
         )
     logger.warning(
         "the stream ended without the upstream's terminal chunk after {:.0f}s "

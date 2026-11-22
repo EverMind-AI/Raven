@@ -39,6 +39,7 @@ def test_the_cli_gets_an_apt_hint_and_no_key_guidance_for_the_rest() -> None:
         "server": "provider-side error; retry later or switch models.",
         "model_unavailable": "model not served; pick another with raven provider use <name>/<model>.",
         "billing": "billing or quota issue; check your provider account.",
+        "protocol_mismatch": "the endpoint does not speak this provider's protocol; check its protocol and base URL.",
     }
     for category, body in cases.items():
         assert provider_error_hint(category, "openrouter", surface="cli") == f"Hint: {body}"

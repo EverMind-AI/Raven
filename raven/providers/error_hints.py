@@ -20,6 +20,7 @@ _CLI_HINTS = {
     "server": "provider-side error; retry later or switch models.",
     "model_unavailable": "model not served; pick another with raven provider use <name>/<model>.",
     "billing": "billing or quota issue; check your provider account.",
+    "protocol_mismatch": "the endpoint does not speak this provider's protocol; check its protocol and base URL.",
 }
 
 #: The advice a chat reader can act on. The same categories, worded for
