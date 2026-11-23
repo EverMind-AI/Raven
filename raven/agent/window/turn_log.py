@@ -29,11 +29,11 @@ by a hook rollback were appended after the last ``follow`` and are never seen,
 which is what a rollback means.
 
 The record keeps a tool body as it was, because the window passes only rewrite
-their own copies of it. The loop binds the projection that bounds a body for
-the model (:meth:`TurnLog.bind_projection`), so the body is filed in that same
-bounded form -- including the body behind an elided stand-in, which is the one
-thing the record holds and the window no longer does. Filing it whole is what
-made a session replay bytes no model call ever read.
+their own copies of it. The loop binds the projection that decides what the
+model read (:meth:`TurnLog.bind_projection`), so the body is filed as the
+preview a call sent, or -- when a window pass replaced the body before any call
+projected it -- as the stand-in that call did read. Filing the full body in
+that case is what made a session replay bytes no model call ever read.
 """
 
 from __future__ import annotations
@@ -61,8 +61,8 @@ both attempts."""
 STAND_IN_KEY = "_window_stand_in"
 """Set by a window pass on a copy that replaces what a message said (an elided
 body) rather than restating it (a withdrawn picture's note). The record keeps
-the message the stand-in stood for, in the form the model read it (see
-:meth:`TurnLog.bind_projection`)."""
+the message the stand-in stood for; the projection decides whether that is the
+body's preview or the stand-in itself (see :meth:`TurnLog.bind_projection`)."""
 
 
 class TurnLog:
@@ -90,6 +90,16 @@ class TurnLog:
         self._projection: Callable[[dict[str, Any]], str | None] | None = None
         self._sync(base)
 
+    def owns(self, message: dict[str, Any]) -> bool:
+        """Whether ``message`` is one this log recorded, by its stamp.
+
+        The stamp, not a ``tool_call_id``: history can carry the same id as a
+        call this turn makes, and a set of ids would mistake that row for this
+        turn's own.
+        """
+        seq = message.get(TURN_LOG_KEY)
+        return isinstance(seq, str) and seq.startswith(f"{self._token}:")
+
     def bind_projection(self, project: Callable[[dict[str, Any]], str | None]) -> None:
         """File each recorded tool body in the form ``project`` says the model read it.
 
@@ -97,9 +107,8 @@ class TurnLog:
         call has to name the same bytes for the same result, or the filed turn
         would carry a managed path no call sent and the next replay would
         diverge. Binding is also what lets a row a window pass elided be filed
-        as the preview the calls read instead of the full body the pass stood in
-        for -- the window never rewrites the record, so the record cannot learn
-        it any other way.
+        in the form a call carried -- the window never rewrites the record, so
+        the record cannot learn it any other way.
         """
         self._projection = project
 

@@ -128,7 +128,7 @@ from raven.agent.tools.removals import RemovalWatch
 from raven.agent.window import shrink
 from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, filed_image_note, image_sources
 from raven.agent.window.parts import ATTACHMENT_NOTES_KEY, measure_parts
-from raven.agent.window.turn_log import OPENING_KEY, TURN_LOG_KEY, TurnLog
+from raven.agent.window.turn_log import OPENING_KEY, STAND_IN_KEY, TURN_LOG_KEY, TurnLog
 from raven.contracts.harness import (
     ActionRequest,
     CapabilityRequest,
@@ -1176,17 +1176,24 @@ class TurnPathMixin:
         # projection below, and the persist that closes the turn, carry the
         # preview.
         bounded_results: dict[tuple[str, str], str] = {}
-        # The results this turn appended. A body already in history is left as
-        # stored: projecting it without rewriting the session would hand every
-        # later turn a preview under a fresh managed path, and the prefix would
-        # change each time.
-        turn_tool_calls: set[str] = set()
+        # What a call actually carried for each of this turn's tool rows, by
+        # the record's stamp: the preview the row was sent as, or the stand-in
+        # a window pass left in its place. A preview in the cache is not proof
+        # a call sent it: proactive shrink can replace a fresh result before
+        # its first projection, and filing that preview would store bytes no
+        # model read, and name a managed file no call used.
+        sent_tool_rows: dict[str, str] = {}
+        elided_tool_rows: dict[str, str] = {}
 
         def _model_preview(row: dict[str, Any]) -> str | None:
-            """The content the model reads for one tool row, or ``None`` when it is under budget."""
+            """The content the model reads for one tool row, or ``None`` when no call reads a preview."""
             content = row.get("content")
             call_id = row.get("tool_call_id")
-            if not isinstance(content, str) or not isinstance(call_id, str) or call_id not in turn_tool_calls:
+            if not isinstance(content, str) or not isinstance(call_id, str):
+                return None
+            # The stamp is the row's identity: a body already in history is left
+            # as stored, even when a fresh call reuses its ``tool_call_id``.
+            if not log.owns(row) or row.get(STAND_IN_KEY):
                 return None
             cached = bounded_results.get((call_id, content))
             if cached is not None:
@@ -1209,7 +1216,15 @@ class TurnPathMixin:
             for index, row in enumerate(rows):
                 if not isinstance(row, dict) or row.get("role") != "tool":
                     continue
+                seq = row.get(TURN_LOG_KEY)
+                content = row.get("content")
+                if row.get(STAND_IN_KEY):
+                    if isinstance(seq, str) and isinstance(content, str):
+                        elided_tool_rows[seq] = content
+                    continue
                 preview = _model_preview(row)
+                if isinstance(seq, str) and isinstance(content, str):
+                    sent_tool_rows[seq] = preview if preview is not None else content
                 if preview is None:
                     continue
                 if out is None:
@@ -1217,9 +1232,29 @@ class TurnPathMixin:
                 out[index] = {**row, "content": preview}
             return rows if out is None else out
 
+        def _filed_tool_result(row: dict[str, Any]) -> str | None:
+            """The body the session files for a recorded tool row.
+
+            The call decides, not the projection: a row a call carried is filed
+            as the preview or body that call sent, and a row a window pass
+            replaced before any call projected it is filed as the stand-in the
+            call read. Only a row no call carried -- a blocked or stalled turn
+            -- falls back to bounding it here, so an early exit cannot file an
+            unbounded body.
+            """
+            seq = row.get(TURN_LOG_KEY)
+            if isinstance(seq, str):
+                sent = sent_tool_rows.get(seq)
+                if sent is not None:
+                    return sent
+                elided = elided_tool_rows.get(seq)
+                if elided is not None:
+                    return elided
+            return _model_preview(row)
+
         # A row the window elided is kept by the log as it was, so the persist
         # has to reach it through the record rather than through the last list.
-        log.bind_projection(_model_preview)
+        log.bind_projection(_filed_tool_result)
 
         # Retryable model errors that outlasted the provider's own ladder: how many
         # of the loop's longer waits this turn has spent.
@@ -2257,8 +2292,6 @@ class TurnPathMixin:
                             messages, tool_call.id, result_name, model_text, trusted_note=watch_note, **provenance
                         )
                     if messages:
-                        if isinstance(call_id := messages[-1].get("tool_call_id"), str):
-                            turn_tool_calls.add(call_id)
                         # Dispatch to result, on the entry that answers the call.
                         # The live tool event was its only carrier, so a restored
                         # transcript had to either invent a number or say nothing
@@ -2315,8 +2348,6 @@ class TurnPathMixin:
                             messages[-1]["content"] = cap_tool_result(
                                 messages[-1]["content"], self._TOOL_RESULT_MAX_CHARS
                             )
-                            if isinstance(skipped_call.id, str):
-                                turn_tool_calls.add(skipped_call.id)
                         break
                     # Track consecutive same-tool deterministic failures
                     # (transient errors excluded — a retry would clear those).
@@ -2956,6 +2987,9 @@ class TurnPathMixin:
                 if on_token_delta is not None and not reply_awaited
                 else None
             )
+            # Rows appended by the last tool batch may not have met a window
+            # pass yet; the wrap-up call still has to carry their previews.
+            log.follow(messages)
             final_content = await self._synthesize_final_on_exhaustion(
                 _model_facing(messages),
                 active_model,

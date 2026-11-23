@@ -727,6 +727,64 @@ async def test_a_body_a_shrink_elided_is_filed_as_the_preview_its_call_sent(work
     assert all(f.name.startswith(TOOL_OUTPUT_PREFIX) for f in files)
 
 
+def _four_big_step() -> LLMResponse:
+    return LLMResponse(
+        content="",
+        tool_calls=[ToolCallRequest(id=f"c{i}", name="sixty_k", arguments={}) for i in range(4)],
+        finish_reason="tool_calls",
+        usage=dict(_HUGE_USAGE),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_body_shrunk_before_its_first_call_is_filed_as_the_stand_in(workspace):
+    """A fresh result the proactive pass elides is filed as the stand-in it was sent as.
+
+    Four over-budget results arrive in one step. The next iteration's proactive
+    pass keeps the newest three and replaces the oldest with the placeholder
+    before any call projects it. The record still holds the full body, so filing
+    its preview would store bytes no call read and name a managed file no call
+    used; the session has to keep the stand-in that call sent instead.
+    """
+    from raven.session.tool_output import TOOL_OUTPUT_PREFIX
+
+    provider = _ScriptProvider(
+        [
+            _four_big_step(),
+            LLMResponse(content="done", finish_reason="stop"),
+            LLMResponse(content="again", finish_reason="stop"),
+        ]
+    )
+    agent = _agent(workspace, provider)
+    agent.tools.register(_SixtyKTool())
+
+    await agent._process_message(_turn("go"), session_key=_KEY)
+
+    reads = _tool_rows(provider.main_calls[1])
+    assert [m["tool_call_id"] for m in reads] == ["c0", "c1", "c2", "c3"]
+    assert reads[0]["content"] == shrink.ELIDED_TOOL_OUTPUT, "the first result was elided before its first call"
+    assert all("Full output saved to:" in m["content"] for m in reads[1:]), "the kept rows were sent as previews"
+
+    reloaded = _reloaded(agent)
+    filed = _tool_rows(reloaded)
+    assert [m["tool_call_id"] for m in filed] == ["c0", "c1", "c2", "c3"]
+    assert not any(TURN_LOG_KEY in m for m in reloaded)
+    assert HistoryTrimmer.structural_errors(reloaded) == []
+    assert filed[0]["content"] == shrink.ELIDED_TOOL_OUTPUT, "the elided row is filed as the stand-in its call sent"
+    sent = {m["content"] for call in provider.main_calls for m in _tool_rows(call)}
+    assert all(m["content"] in sent for m in filed), "every filed tool body is a body a call sent"
+    assert [m["content"] for m in filed[1:]] == [m["content"] for m in reads[1:]]
+
+    files = _managed(workspace)
+    assert len(files) == 3, "the elided row writes no managed file"
+    assert all(any(str(f.resolve()) in m["content"] for m in filed) for f in files), "no managed file is orphaned"
+    assert all(f.name.startswith(TOOL_OUTPUT_PREFIX) for f in files)
+
+    # The next turn replays the bytes the last call sent, the stand-in included.
+    await agent._process_message(_turn("again"), session_key=_KEY)
+    assert [m["content"] for m in _tool_rows(provider.main_calls[2])] == [m["content"] for m in filed]
+
+
 @pytest.mark.asyncio
 async def test_a_turn_cancelled_mid_call_files_the_preview_not_the_full_body(workspace):
     """A rescue has to project the record too, or a stop writes an orphan.
@@ -859,3 +917,53 @@ async def test_two_results_sharing_a_tool_call_id_keep_their_own_previews(worksp
     bodies = {f.read_text(encoding="utf-8") for f in files}
     assert bodies == {"a" * 60_000, "b" * 60_000}
     assert all(any(str(f.resolve()) in m["content"] for m in filed) for f in files)
+
+
+@pytest.mark.asyncio
+async def test_a_history_row_reusing_a_call_id_is_not_projected(workspace):
+    """The projection gate is the row's identity, not a bare ``tool_call_id``.
+
+    History can carry a tool call under the same id a later turn advertises.
+    Gating on the id made the stored row look like this turn's own, so the
+    payload re-bounded it under a fresh managed path while the session kept the
+    original bytes; the next replay then diverged at that row.
+    """
+    body = "h" * 60_000
+    provider = _ScriptProvider(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="dup", name="sixty_k", arguments={})],
+                finish_reason="tool_calls",
+            ),
+            LLMResponse(content="done", finish_reason="stop"),
+        ]
+    )
+    agent = _agent(workspace, provider, compact=False)
+    agent.tools.register(_SixtyKTool())
+
+    session = agent.sessions.get_or_create(_KEY)
+    session.record({"role": "user", "content": "the earlier question"})
+    session.record(
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "dup", "type": "function", "function": {"name": "sixty_k", "arguments": "{}"}}],
+        }
+    )
+    session.record({"role": "tool", "tool_call_id": "dup", "name": "sixty_k", "content": body})
+    session.record({"role": "assistant", "content": "the earlier answer"})
+    agent.sessions.save(session)
+
+    await agent._process_message(_turn("go"), session_key=_KEY)
+
+    assert [m["content"] for m in _tool_rows(provider.main_calls[0])] == [body]
+    last_read = _tool_rows(provider.main_calls[1])
+    assert last_read[0]["content"] == body, "the history row is replayed as stored"
+    assert "Full output saved to:" in last_read[1]["content"], "the new row is bounded"
+
+    files = _managed(workspace)
+    assert len(files) == 1, "reusing the id writes no file for the history row"
+
+    reloaded = _tool_rows(_reloaded(agent))
+    assert [m["content"] for m in reloaded] == [body, last_read[1]["content"]]
