@@ -2889,3 +2889,23 @@ async def test_a_hold_without_a_turn_deadline_ends_at_the_configured_cap(rig, mo
     assert reaped == ["bg-5"]
     content = rig.stack.params_for("turn.send")["content"]
     assert "were stopped" in content and "wait limit" in content
+
+
+@pytest.mark.asyncio
+async def test_a_command_that_ended_before_the_first_poll_is_still_named(rig, monkeypatch):
+    """The registry retires a record the moment its process exits. A command
+    that finishes in the gap between the flow's check and the watcher's first
+    look must still be named, not answered with an empty "have finished"."""
+    from types import SimpleNamespace
+
+    from raven.agent.tools import background_exec
+
+    monkeypatch.setattr(background_exec, "running", lambda session_key=None: [])
+    task = {"task_id": "bg-3", "command": "make all", "log_path": "/tmp/bg-3.log"}
+    session = SimpleNamespace(session_id="s1", session_key="cli:c")
+
+    await rig.methods._resume_after_background(session, {"background": True, "untilMs": None, "tasks": [task]})
+
+    content = rig.stack.params_for("turn.send")["content"]
+    assert "have finished" in content
+    assert "bg-3" in content and "make all" in content, "the finished command is still named"
