@@ -65,6 +65,7 @@ def test_only_a_raven_agent_on_this_interpreter_is_forked(tmp_path: Path) -> Non
     assert not raven_agent_argv([str(other), str(script)])
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_a_forked_agent_runs_as_a_fresh_interpreter_would_have(tmp_path: Path) -> None:
     script = _product(
         tmp_path,
@@ -89,6 +90,7 @@ async def test_a_forked_agent_runs_as_a_fresh_interpreter_would_have(tmp_path: P
         endpoint.release()
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_a_launchers_exec_of_raven_runs_raven_in_the_same_process(tmp_path: Path) -> None:
     script = _product(
         tmp_path,
@@ -110,6 +112,7 @@ async def test_a_launchers_exec_of_raven_runs_raven_in_the_same_process(tmp_path
         endpoint.release()
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_ending_an_agent_kills_its_group(tmp_path: Path) -> None:
     script = _product(
         tmp_path,
@@ -137,6 +140,7 @@ async def test_ending_an_agent_kills_its_group(tmp_path: Path) -> None:
         pytest.fail("the agent's own child outlived the group kill")
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_an_agent_ends_with_the_template(tmp_path: Path) -> None:
     script = _product(tmp_path, "import time\nprint('up', flush=True)\ntime.sleep(600)\n")
     endpoint = await _launch(script)
@@ -157,6 +161,7 @@ async def test_an_agent_ends_with_the_template(tmp_path: Path) -> None:
     pytest.fail("a forked agent outlived its template")
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_an_agent_writes_what_it_imported_for_the_next_template(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(fork_template, "LEARN_AFTER_S", 0.2)
     script = _product(tmp_path, "import time, colorsys\ntime.sleep(2)\n")
@@ -173,6 +178,7 @@ async def test_an_agent_writes_what_it_imported_for_the_next_template(tmp_path: 
     assert "__main__" not in learned["products"]["product"]
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_the_template_closes_once_it_has_had_no_agent_for_the_budget(tmp_path: Path, monkeypatch) -> None:
     from raven.config import live as live_mod
 
@@ -218,6 +224,7 @@ async def test_a_template_that_cannot_start_is_not_tried_again(tmp_path: Path, m
     assert started == [1]
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_an_acp_launch_of_a_raven_agent_is_forked_and_offered_the_relay(tmp_path: Path, monkeypatch) -> None:
     """Through the real launch: the agent runs from the template and its environment names the host's relay."""
     from raven.acp_client.client import AcpClient
@@ -249,6 +256,7 @@ async def test_an_acp_launch_of_a_raven_agent_is_forked_and_offered_the_relay(tm
     ("own", "relayed"),
     [({"OPENAI_BASE_URL": "http://agent-only.invalid/v1"}, False), ({"SERPER_API_KEY": "for-a-tool"}, True)],
 )
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_an_agent_configured_with_its_own_llm_environment_makes_its_own_calls(
     tmp_path: Path, monkeypatch, own: dict[str, str], relayed: bool
 ) -> None:
@@ -283,6 +291,7 @@ async def test_an_agent_configured_with_its_own_llm_environment_makes_its_own_ca
         await close_pool()
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_switching_both_off_launches_a_raven_agent_as_before(tmp_path: Path, monkeypatch) -> None:
     from raven.acp_client.client import AcpClient
     from raven.config import live as live_mod
@@ -320,6 +329,7 @@ def test_an_argv_the_check_cannot_read_is_not_forked(monkeypatch, tmp_path: Path
     assert not raven_agent_argv([sys.executable, str(script)])
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_a_closed_agent_takes_no_more_input_and_its_template_counts_none(tmp_path: Path) -> None:
     script = _product(tmp_path, "import sys\nsys.stdin.read()\n")
     endpoint = await _launch(script)
@@ -332,6 +342,7 @@ async def test_a_closed_agent_takes_no_more_input_and_its_template_counts_none(t
     assert template is not None and template.children == 0
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_a_template_that_ended_on_its_own_is_replaced_on_the_next_launch(tmp_path: Path) -> None:
     script = _product(tmp_path, "pass\n")
     first = await _launch(script)
@@ -349,6 +360,7 @@ async def test_a_template_that_ended_on_its_own_is_replaced_on_the_next_launch(t
     assert template._proc is not None and template._proc.pid != old
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_a_launch_cancels_the_pending_idle_close(tmp_path: Path) -> None:
     script = _product(tmp_path, "pass\n")
     first = await _launch(script)
@@ -371,6 +383,7 @@ async def test_a_launch_cancels_the_pending_idle_close(tmp_path: Path) -> None:
     assert template._idle_task is None or template._idle_task is not pending
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_a_template_that_refuses_or_cannot_be_reached_fails_the_fork_alone(tmp_path: Path) -> None:
     script = _product(tmp_path, "pass\n")
     first = await _launch(script)
@@ -391,6 +404,7 @@ async def test_a_template_that_refuses_or_cannot_be_reached_fails_the_fork_alone
     assert not template.broken
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_a_template_that_never_reports_ready_is_not_used(tmp_path: Path, monkeypatch) -> None:
     async def silent(proc):
         return {"ready": False, "reason": "an import started a thread (x)"}
@@ -405,6 +419,7 @@ async def test_a_template_that_never_reports_ready_is_not_used(tmp_path: Path, m
         await template.spawn([sys.executable, str(script)], base, str(tmp_path), base)
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_a_template_late_to_report_ready_is_tried_again_after_a_rest(tmp_path: Path, monkeypatch) -> None:
     """A missed ready deadline is a busy machine, not a broken template.
 
@@ -441,6 +456,7 @@ async def test_a_template_late_to_report_ready_is_tried_again_after_a_rest(tmp_p
     endpoint.release()
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_launches_waiting_on_a_late_template_do_not_each_start_another(tmp_path: Path, monkeypatch) -> None:
     starts = 0
     real_start = fork_template.ForkTemplate._start
@@ -478,6 +494,7 @@ async def test_the_ready_line_is_found_among_what_an_import_printed() -> None:
     await fork_template.ForkTemplate._log_stderr(SimpleNamespace(stderr=None))
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_a_template_built_for_other_skips_is_replaced_while_it_has_no_agent(tmp_path: Path) -> None:
     script = _product(tmp_path, "pass\n")
     base = dict(os.environ)
@@ -494,6 +511,7 @@ async def test_a_template_built_for_other_skips_is_replaced_while_it_has_no_agen
     assert fork_template._TEMPLATE is not old and old is not None and not old.running
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_a_relay_that_cannot_start_leaves_the_agent_to_load_litellm(tmp_path: Path, monkeypatch) -> None:
     from raven.acp_client.client import AcpClient
     from raven.providers import relay_server
@@ -520,6 +538,7 @@ async def test_a_relay_that_cannot_start_leaves_the_agent_to_load_litellm(tmp_pa
         await client.close()
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_a_forked_agent_trusts_the_store_a_launched_one_would(tmp_path: Path, monkeypatch) -> None:
     """The template imports aiohttp, which builds its default TLS context on import: after the switch to the
     system's certificate store, as in an agent launched fresh."""
@@ -539,6 +558,7 @@ async def test_a_forked_agent_trusts_the_store_a_launched_one_would(tmp_path: Pa
 # that loop closes leaves an unreaped child on a pidfd host and a transport whose
 # finalizer fails on the closed loop, which pytest reports as unraisable.
 @pytest.mark.filterwarnings("error::pytest.PytestUnraisableExceptionWarning")
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 def test_a_template_ends_with_the_event_loop_that_started_it(tmp_path: Path) -> None:
     """A CLI turn is one asyncio.run: the template it opened is gone, reaped, when that run returns."""
     script = _product(tmp_path, "print('ran', flush=True)\n")
@@ -562,6 +582,7 @@ def test_a_template_ends_with_the_event_loop_that_started_it(tmp_path: Path) -> 
         asyncio.run(fork_template.close_template())
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_a_loop_in_another_thread_leaves_this_loops_agents_running(tmp_path: Path) -> None:
     """The RPC server runs a CLI command's own asyncio.run on a worker thread, beside its own loop."""
     script = _product(tmp_path, "import time\nprint('up', flush=True)\ntime.sleep(600)\n")
@@ -594,6 +615,7 @@ async def _deaf_template(tmp_path: Path, monkeypatch) -> fork_template.ForkTempl
     return template
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_a_template_that_ignores_its_lifeline_is_killed_and_reaped(tmp_path: Path, monkeypatch) -> None:
     template = await _deaf_template(tmp_path, monkeypatch)
     proc = template._proc
@@ -603,6 +625,7 @@ async def test_a_template_that_ignores_its_lifeline_is_killed_and_reaped(tmp_pat
     assert proc.returncode is not None
 
 
+@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
 async def test_a_close_cut_short_still_ends_the_template_and_closes_its_pipes(tmp_path: Path, monkeypatch) -> None:
     """The loop ending cancels a close still waiting out the grace: an idle close, or the hold task's own."""
     template = await _deaf_template(tmp_path, monkeypatch)
