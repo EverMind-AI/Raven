@@ -57,7 +57,7 @@ from raven.rpc.errors import (
 from raven.rpc.methods import turn as turn_module
 from raven.rpc.methods.system import _raven_version
 from raven.session.export import default_export_path, write_transcript
-from raven.session.manager import new_chat_id
+from raven.session.manager import SessionWriterConflictError, new_chat_id
 from raven.session.refs import tool_result_view
 from raven.session.resolve import manager_for
 from raven.session.title import TITLE_STORAGE_MAX, collapse_to_line
@@ -1336,6 +1336,11 @@ async def session_undo(
     if removed and mgr.exists(session_key):
         try:
             mgr.save(session)
+        except SessionWriterConflictError:
+            # The in-memory cut must not report an undo the transcript never
+            # took: another process holds the session, and the caller has to
+            # see that rather than a success that a reload reverses.
+            raise
         except Exception:
             logger.warning("session.undo: failed to persist undo for {}", session_key)
     if removed:

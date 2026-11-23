@@ -2,7 +2,6 @@
 
 import gc
 import json
-import multiprocessing
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -14,20 +13,11 @@ import raven.session.manager as manager_mod
 from raven.session.manager import (
     Session,
     SessionManager,
-    append_turn_meta,
+    SessionWriterConflictError,
     new_chat_id,
     read_session_file,
 )
-from raven.session.refs import belongs_to, session_ref
 from raven.session.title import TITLE_STORAGE_MAX
-
-
-def _turn_worker(workspace_str: str, key: str, writer_id: int) -> None:
-    mgr = SessionManager(Path(workspace_str))
-    session = mgr.get_or_create(key)
-    session.add_message("user", f"q-{writer_id}")
-    session.add_message("assistant", f"a-{writer_id}")
-    mgr.save(session)
 
 
 def test_new_chat_id_shape():
@@ -70,10 +60,10 @@ def _last_metadata(path: Path) -> dict:
 def test_a_save_keeps_a_key_another_writer_added(tmp_path: Path):
     """A save speaks for the keys its own copy carries and for no others.
 
-    A page and a terminal over one home are two managers over one file. The
-    saved record used to be this copy's metadata whole, so a flag the other
-    one wrote after this copy was loaded -- archiving, most visibly -- was gone
-    the next time anything here saved, and the conversation came back.
+    A housekeeping pass can patch the record while a terminal holds the copy
+    open. The saved record used to be this copy's metadata whole, so a flag the
+    patch wrote after this copy was loaded -- archiving, most visibly -- was
+    gone the next time anything here saved, and the conversation came back.
     """
     key = "tui:20260610_100000_merge"
     holder = SessionManager(tmp_path)
@@ -150,7 +140,7 @@ def test_a_patch_stops_being_a_local_change_once_it_is_on_disk(tmp_path: Path):
 
 
 def test_a_save_does_not_resurrect_a_key_this_copy_cleared(tmp_path: Path):
-    """The merge keeps what it did not write, which makes clearing explicit.
+    """The metadata fold keeps what it did not write, which makes clearing explicit.
 
     Nothing may clear a key by leaving it out any more -- the record on disk
     would hand it back. Every remover states a false value instead, and this
@@ -163,7 +153,7 @@ def test_a_save_does_not_resurrect_a_key_this_copy_cleared(tmp_path: Path):
     session.metadata["pinned"] = True
     holder.save(session)
 
-    # Another writer touches the file, so the next save has to merge.
+    # A metadata patch touches the record, so the next save has to fold it in.
     SessionManager(tmp_path).append_metadata_patch(key, {"archived": True})
 
     session.metadata["pinned"] = False
@@ -176,10 +166,10 @@ def test_a_save_does_not_resurrect_a_key_this_copy_cleared(tmp_path: Path):
 
 
 def test_a_save_over_a_transcript_with_no_record_writes_its_own(tmp_path: Path):
-    """Nothing to merge under is not an error; this copy's metadata stands.
+    """Nothing to fold under is not an error; this copy's metadata stands.
 
     A transcript can lose its metadata record -- a crashed writer, a truncated
-    file -- and the merge has nothing to read. Refusing to save then would
+    file -- and there is nothing on disk to read. Refusing to save then would
     lose the conversation over a record that is already gone.
     """
     key = "tui:20260610_100000_norecord"
@@ -200,7 +190,7 @@ def test_a_save_over_a_transcript_with_no_record_writes_its_own(tmp_path: Path):
 
 
 def test_a_save_re_reads_only_when_the_file_moved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """The merge costs a scan, and an undisturbed conversation does not pay it.
+    """A metadata patch costs a scan, and an undisturbed conversation does not pay it.
 
     Every turn saves, so re-reading the transcript on each one would put the
     file's whole length on the hot path. The copy knows what it last wrote, so
@@ -557,94 +547,67 @@ def test_clear_rewrites_file(tmp_path: Path):
     assert [m["content"] for m in loaded.messages] == ["q2"]
 
 
-def test_concurrent_writers_lose_no_turns(tmp_path: Path):
-    """Two processes saving the same session: both turn blocks land,
-    each block's messages contiguous (tool_call/result adjacency)."""
-    key = "tui:race01"
-    # spawn, not the Linux default fork: pytest leaves the parent multi-threaded,
-    # and forking from there segfaults the interpreter at exit.
-    ctx = multiprocessing.get_context("spawn")
-    procs = [ctx.Process(target=_turn_worker, args=(str(tmp_path), key, w)) for w in range(2)]
-    for p in procs:
-        p.start()
-    for p in procs:
-        p.join(timeout=60)
-        assert p.exitcode == 0
-
-    loaded = SessionManager(tmp_path).get_or_create(key)
-    contents = [m["content"] for m in loaded.messages]
-    assert sorted(contents) == ["a-0", "a-1", "q-0", "q-1"]
-    for writer_id in (0, 1):
-        q_idx = contents.index(f"q-{writer_id}")
-        assert contents[q_idx + 1] == f"a-{writer_id}"
-
-
-def test_two_managers_appending_to_one_file_keep_both_rows(tmp_path: Path):
-    """Two sessions on one transcript is supported; neither append drops the other."""
-    key = "tui:twowriters"
-    first = SessionManager(tmp_path)
-    a = first.get_or_create(key)
-    a.add_message("user", "from a")
-    first.save(a)
-
-    second = SessionManager(tmp_path)
-    b = second.get_or_create(key)
-    b.add_message("user", "from b")
-    second.save(b)
-
-    loaded = SessionManager(tmp_path).get_or_create(key)
-    assert [m["content"] for m in loaded.messages] == ["from a", "from b"]
-
-
-def test_an_undo_keeps_a_row_another_writer_appended_after_the_read(tmp_path: Path):
-    """A rewrite says which of the rows this copy read should go, not what the
-    file should hold in total: a row another writer appended after the read is
-    not the cut's to drop. The cut turn itself still goes."""
-    key = "tui:20260610_100000_cutrace"
-    first = SessionManager(tmp_path)
-    session = first.get_or_create(key)
-    session.add_message("user", "q")
-    session.add_message("assistant", "a")
-    session.add_message("user", "q2")
-    session.add_message("assistant", "a2")
-    first.save(session)
-
-    second = SessionManager(tmp_path)
-    held = second.get_or_create(key)
-    held.add_message("user", "concurrent note")
-    second.save(held)
-
-    assert session.undo_last_turn() == 2
-    first.save(session)
-
-    loaded = read_session_file(first.session_path(key), key)
-    assert loaded is not None
-    assert [m["content"] for m in loaded.messages] == ["q", "a", "concurrent note"]
-
-
 def test_a_clear_replaces_the_file_whole(tmp_path: Path):
-    """A clear mints a new log: the old file is replaced, not merged into.
-
-    That is the one rewrite whose intent is to drop every row, including one
-    another writer appended while this copy was loaded.
-    """
-    key = "tui:20260610_100000_clearrace"
-    first = SessionManager(tmp_path)
-    session = first.get_or_create(key)
+    """A clear mints a new log: the old file is replaced, not appended to."""
+    key = "tui:20260610_100000_clearwhole"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(key)
     session.add_message("user", "old")
-    first.save(session)
-
-    second = SessionManager(tmp_path)
-    held = second.get_or_create(key)
-    held.add_message("user", "concurrent note")
-    second.save(held)
+    mgr.save(session)
 
     session.clear()
-    first.save(session)
+    mgr.save(session)
 
-    loaded = read_session_file(first.session_path(key), key)
+    loaded = read_session_file(mgr.session_path(key), key)
     assert loaded is not None
     assert loaded.messages == []
+
+
+def test_a_second_writer_is_refused_not_merged(tmp_path: Path):
+    """One transcript, one writer: a copy whose file moved on must fail loudly."""
+    key = "tui:20260610_100000_secondwriter"
+    first = SessionManager(tmp_path)
+    session = first.get_or_create(key)
+    session.add_message("user", "from the first terminal")
+    first.save(session)
+
+    second = SessionManager(tmp_path)
+    other = second.get_or_create(key)
+    other.add_message("user", "from the second terminal")
+    second.save(other)
+
+    session.add_message("assistant", "the first terminal's answer")
+    with pytest.raises(SessionWriterConflictError, match="another process is writing this session"):
+        first.save(session)
+
+    reloaded = SessionManager(tmp_path).get_or_create(key)
+    assert [m["content"] for m in reloaded.messages] == ["from the first terminal", "from the second terminal"]
+
+
+def test_an_undo_moves_the_append_boundary_and_keeps_the_next_turn(tmp_path: Path):
+    """Undo cuts the list; the append boundary has to follow it.
+
+    Left where it was, messages recorded after the undo would land behind a
+    boundary that still calls them persisted and an append would skip them.
+    """
+    key = "tui:20260610_100000_undoboundary"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(key)
+    for role, content in (("user", "q1"), ("assistant", "a1"), ("user", "q2"), ("assistant", "a2")):
+        session.add_message(role, content)
+    mgr.save(session)
+    assert session._persisted_count == 4
+
+    assert session.undo_last_turn() == 2
+    assert session._persisted_count == 2, "the append boundary stayed past rows the undo removed"
+
+    session.add_message("user", "q3")
+    session.add_message("assistant", "a3")
+    assert len(session.messages) - session._persisted_count == 2, "the new turn looks persisted already"
+    mgr.save(session)
+
+    reloaded = SessionManager(tmp_path).get_or_create(key)
+    assert [m["content"] for m in reloaded.messages] == ["q1", "a1", "q3", "a3"]
 
 
 def _seed_with_ids(mgr: SessionManager, key: str, *rows: tuple[str, str, str]) -> Session:
@@ -655,177 +618,8 @@ def _seed_with_ids(mgr: SessionManager, key: str, *rows: tuple[str, str, str]) -
     return session
 
 
-def _merge_a_concurrent_append(tmp_path: Path, key: str) -> tuple[SessionManager, Session]:
-    """Two rows with filing keys, then another writer's row, then a merge.
-
-    The rows carry ``_row_id`` because that is how the turn writer files them;
-    a merge that drops the keys loses what a later late stamp addresses.
-    """
-    first = SessionManager(tmp_path)
-    session = _seed_with_ids(first, key, ("user", "q", "r1"), ("assistant", "a", "r2"))
-
-    second = SessionManager(tmp_path)
-    other = second.get_or_create(key)
-    other.record({"role": "user", "content": "from elsewhere", "_row_id": "b1"})
-    second.save(other)
-
-    session.record({"role": "assistant", "content": "tail", "_row_id": "r3"})
-    first.save(session)
-    return first, session
-
-
-def test_a_merge_keeps_a_call_open_until_its_real_result_lands(tmp_path: Path):
-    """A call filed before its result must not be repaired into a second result.
-
-    The other writer appends between the call's write and the result's, so the
-    file the merge reads ends on the unanswered call. Repairing that read
-    invents an ``[interrupted]`` result and the real one then lands beside it:
-    two results for one call id, which a provider rejects.
-    """
-    key = "cli:20260610_100000_pending"
-    first = SessionManager(tmp_path)
-    running = first.get_or_create(key)
-    running.record({"role": "user", "content": "run it"})
-    running.record(
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "exec", "arguments": "{}"}}],
-        }
-    )
-    first.save(running)
-
-    second = SessionManager(tmp_path)
-    other = second.get_or_create(key)
-    other.add_message("user", "while you are there")
-    second.save(other)
-
-    running.record({"role": "tool", "tool_call_id": "c1", "name": "exec", "content": "done"})
-    first.save(running)
-
-    results = [m for m in running.messages if m.get("tool_call_id") == "c1"]
-    assert [m["content"] for m in results] == ["done"], f"the call has more than one result: {running.messages}"
-    assert not any(m.get(manager_mod.SYNTHETIC_INTERRUPTED_KEY) for m in running.messages)
-    loaded = read_session_file(first.session_path(key), key)
-    assert [m.get("tool_call_id") for m in loaded.messages].count("c1") == 1
-
-
-def test_a_rewrite_keeps_a_row_appended_while_this_copy_was_loaded(tmp_path: Path):
-    """Append-only: the other writer's row survives a cut this copy makes."""
-    key = "cli:20260610_100000_appendrace"
-    first = SessionManager(tmp_path)
-    session = _seed_with_ids(
-        first, key, ("user", "q1", "r1"), ("assistant", "a1", "r2"), ("user", "q2", "r3"), ("assistant", "a2", "r4")
-    )
-
-    second = SessionManager(tmp_path)
-    held = second.get_or_create(key)
-    held.add_message("user", "from elsewhere")
-    second.save(held)
-
-    assert session.undo_last_turn() == 2
-    first.save(session)
-
-    assert [m["content"] for m in session.messages] == ["q1", "a1", "from elsewhere"]
-    loaded = read_session_file(first.session_path(key), key)
-    assert [m["content"] for m in loaded.messages] == ["q1", "a1", "from elsewhere"]
-
-
-def test_a_rewrite_keeps_a_same_length_undo_and_append_by_the_other_writer(tmp_path: Path):
-    """The other writer undoes a turn and appends one of the same length.
-
-    A rewrite keyed on the file's length sees no growth, drops the new rows,
-    and writes back the rows the other writer cut because they are still in
-    this copy's list.
-    """
-    key = "cli:20260610_100000_equalrace"
-    first = SessionManager(tmp_path)
-    session = _seed_with_ids(
-        first,
-        key,
-        ("user", "q1", "r1"),
-        ("assistant", "a1", "r2"),
-        ("user", "q2", "r3"),
-        ("assistant", "a2", "r4"),
-        ("user", "q3", "r5"),
-        ("assistant", "a3", "r6"),
-    )
-
-    second = SessionManager(tmp_path)
-    held = second.get_or_create(key)
-    assert held.undo_last_turn() == 2
-    held.record({"role": "user", "content": "x", "_row_id": "b1"})
-    held.record({"role": "assistant", "content": "y", "_row_id": "b2"})
-    second.save(held)
-
-    # The image window rewrote a filed row; the next save rewrites the file.
-    session._refile_rows = True
-    first.save(session)
-
-    expected = ["q1", "a1", "q2", "a2", "x", "y"]
-    assert [m["content"] for m in session.messages] == expected
-    loaded = read_session_file(first.session_path(key), key)
-    assert [m["content"] for m in loaded.messages] == expected
-
-
-def test_a_rewrite_keeps_a_shorter_undo_and_append_by_the_other_writer(tmp_path: Path):
-    """The other writer's undo makes the file shorter than this copy last saw."""
-    key = "cli:20260610_100000_shortrace"
-    first = SessionManager(tmp_path)
-    session = _seed_with_ids(
-        first,
-        key,
-        ("user", "q1", "r1"),
-        ("assistant", "a1", "r2"),
-        ("user", "q2", "r3"),
-        ("assistant", "a2", "r4"),
-        ("user", "q3", "r5"),
-        ("assistant", "a3", "r6"),
-    )
-
-    second = SessionManager(tmp_path)
-    held = second.get_or_create(key)
-    assert held.undo_last_turn() == 2
-    held.record({"role": "user", "content": "x", "_row_id": "b1"})
-    second.save(held)
-
-    session._refile_rows = True
-    first.save(session)
-
-    expected = ["q1", "a1", "q2", "a2", "x"]
-    assert [m["content"] for m in session.messages] == expected
-    loaded = read_session_file(first.session_path(key), key)
-    assert [m["content"] for m in loaded.messages] == expected
-
-
-def test_drop_filed_rows_does_not_duplicate_a_concurrent_writer_rows(tmp_path: Path):
-    """The cut adopts the file, whose rows already end where this copy's list does.
-
-    Without the append boundary moved to what the file held before the cut,
-    the other writer's rows land in this copy's unsaved tail and are picked up
-    again as unseen rows, so the rewrite writes them twice.
-    """
-    key = "cli:20260610_100000_droprace"
-    mgr = SessionManager(tmp_path)
-    session = _seed_with_ids(mgr, key, ("user", "q", "r1"), ("assistant", "a", "r2"))
-
-    other = SessionManager(tmp_path)
-    held = other.get_or_create(key)
-    held.record({"role": "user", "content": "from elsewhere", "_row_id": "b1"})
-    held.record({"role": "assistant", "content": "and here", "_row_id": "b2"})
-    other.save(held)
-
-    assert mgr.drop_filed_rows(session, {"r1"}) is True
-    loaded = read_session_file(mgr.session_path(key), key)
-    assert [m["content"] for m in loaded.messages] == ["a", "from elsewhere", "and here"]
-
-
-def test_drop_filed_rows_adopts_the_file_when_the_scan_never_reached_it(tmp_path: Path):
-    """Rows the attempt filed only in memory are stale, not evidence of a drop.
-
-    The file holds none of the cut ids, but this copy does: returning early
-    leaves the stale rows in memory for the rerun to file over the transcript.
-    """
+def test_drop_filed_rows_takes_rows_that_never_reached_the_file(tmp_path: Path):
+    """Rows the attempt filed only in memory are still the attempt's to drop."""
     key = "cli:20260610_100000_dropstale"
     mgr = SessionManager(tmp_path)
     session = _seed_with_ids(mgr, key, ("user", "q", "r1"), ("assistant", "a", "r2"))
@@ -836,92 +630,6 @@ def test_drop_filed_rows_adopts_the_file_when_the_scan_never_reached_it(tmp_path
     assert [m["content"] for m in session.messages] == ["q", "a"]
     loaded = read_session_file(mgr.session_path(key), key)
     assert [m["content"] for m in loaded.messages] == ["q", "a"]
-
-
-def test_a_merge_keeps_the_ids_a_late_stamp_addresses(tmp_path: Path):
-    """A row's filing key survives the merge, so the turn can still stamp it.
-
-    The late stamps are built by matching the turn's rows to the stored ones by
-    identifier. A merge that hands back the file's rows without their keys
-    leaves nothing to match, and the stamp is silently dropped.
-    """
-    key = "cli:20260610_100000_stampmerge"
-    first, session = _merge_a_concurrent_append(tmp_path, key)
-
-    stored = {str(row.get("_row_id")): row for row in session.messages if row.get("_row_id")}
-    assert "r2" in stored, f"the merge dropped the filing keys: {session.messages}"
-    stored["r2"].update({"replied_via_tool": True, "observers": ["probe"]})
-    append_turn_meta(
-        first.session_path(key),
-        [{"row_id": "r2", "keys": {"replied_via_tool": True, "observers": ["probe"]}}],
-    )
-
-    loaded = read_session_file(first.session_path(key), key)
-    answer = next(m for m in loaded.messages if m.get("content") == "a")
-    assert answer["replied_via_tool"] is True
-    assert answer["observers"] == ["probe"]
-
-
-def test_a_merge_does_not_move_the_log_generation(tmp_path: Path):
-    """A concurrent append changes no ordinal, so a ref's scope must survive it."""
-    key = "cli:20260610_100000_genmerge"
-    _, session = _merge_a_concurrent_append(tmp_path, key)
-
-    assert session.log_generation == 0, "an append another copy made retired this log's refs"
-
-
-def test_a_merge_of_a_loaded_copy_does_not_move_the_generation(tmp_path: Path):
-    """A copy that loaded the session holds no filing keys; the file still does.
-
-    Content says the rows are the same, so the merge keeps this copy's prefix
-    and adopts the file's keys for it. A read that treated the missing keys as
-    a difference retired every ref the loaded copy had handed out.
-    """
-    key = "cli:20260610_100000_loadedgen"
-    first = SessionManager(tmp_path)
-    _seed_with_ids(first, key, ("user", "q", "r1"), ("assistant", "a", "r2"))
-
-    reader = SessionManager(tmp_path)
-    loaded = reader.get_or_create(key)
-    assert [m.get("_row_id") for m in loaded.messages] == [None, None]
-
-    other = SessionManager(tmp_path)
-    held = other.get_or_create(key)
-    held.record({"role": "user", "content": "from elsewhere", "_row_id": "b1"})
-    other.save(held)
-
-    loaded.record({"role": "assistant", "content": "tail", "_row_id": "r3"})
-    reader.save(loaded)
-
-    assert loaded.log_generation == 0, "loading the session and merging an append retired its refs"
-    assert [m.get("_row_id") for m in loaded.messages[:2]] == ["r1", "r2"]
-    assert [m["content"] for m in loaded.messages] == ["q", "a", "from elsewhere", "tail"]
-
-
-@pytest.mark.asyncio
-async def test_a_ref_minted_before_a_merge_still_resolves(tmp_path: Path):
-    """A ref handed out before the merge still names the same message after it."""
-    from raven.agent.tools.context_retrieve import ContextRetrieveTool
-
-    key = "cli:20260610_100000_refmerge"
-    first = SessionManager(tmp_path)
-    session = _seed_with_ids(first, key, ("user", "q", "r1"), ("assistant", "a", "r2"))
-
-    ref = session_ref(session.revision, 1)
-
-    second = SessionManager(tmp_path)
-    other = second.get_or_create(key)
-    other.record({"role": "user", "content": "from elsewhere", "_row_id": "b1"})
-    second.save(other)
-    session.record({"role": "assistant", "content": "tail", "_row_id": "r3"})
-    first.save(session)
-
-    assert belongs_to(ref, session.revision)
-    tool = ContextRetrieveTool(first)
-    tool.set_context("cli", key.partition(":")[2], key)
-    out = await tool.execute(refs=[ref.render()])
-    assert "role=assistant" in out
-    assert "a" in out
 
 
 def test_find_most_recent_reflects_latest_append(tmp_path: Path):
@@ -1444,7 +1152,7 @@ def test_list_sessions_message_count_excludes_turn_meta_lines(tmp_path: Path):
 def test_a_turn_meta_does_not_make_the_next_save_re_read_the_transcript(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """The count a turn_meta used to inflate sent every later save into the merge path."""
+    """The count a turn_meta used to inflate sent every later save into a re-read."""
     from raven.session.manager import append_turn_meta
 
     mgr = SessionManager(tmp_path)
@@ -1461,7 +1169,7 @@ def test_a_turn_meta_does_not_make_the_next_save_re_read_the_transcript(
     session.add_message("assistant", "again")
     mgr.save(session)
 
-    assert reads == [], "a turn_meta record sent the save into the merge path"
+    assert reads == [], "a turn_meta record sent the save into a re-read"
 
 
 def test_a_silent_runtime_turn_is_taken_back_after_a_turn_the_message_tool_answered(tmp_path: Path):
@@ -1583,6 +1291,29 @@ def _seed_dangling_call(mgr: SessionManager, key: str) -> None:
         }
     )
     mgr.save(session)
+
+
+def test_the_readers_repair_is_not_counted_as_a_file_row(tmp_path: Path):
+    """A metadata patch is not a second writer because the repair lengthened memory.
+
+    The reader inserts one synthetic result, so its message list is longer than
+    the file. What a save compares against the file is the number of rows the
+    file actually holds; counting the repair there would make every metadata
+    patch look like a message append and refuse the save.
+    """
+    _seed_dangling_call(SessionManager(tmp_path), "cli:repaircount")
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create("cli:repaircount")
+    assert session._persisted_count == 3
+    assert session._persisted_file_count == 2
+
+    SessionManager(tmp_path).append_metadata_patch(session.key, {"archived": True})
+    session.add_message("user", "next")
+    mgr.save(session)
+
+    reloaded = SessionManager(tmp_path).get_or_create(session.key)
+    assert reloaded._persisted_file_count == 3
+    assert [m["content"] for m in reloaded.messages if m.get("role") == "user"] == ["go", "next"]
 
 
 def test_a_save_does_not_materialize_the_readers_interrupted_repair(tmp_path: Path):
@@ -1782,25 +1513,6 @@ def test_a_turn_after_a_clear_whose_save_failed_replaces_the_cleared_one_on_disk
 
     reloaded = SessionManager(tmp_path).get_or_create("tui:clear-unsaved")
     assert [m["content"] for m in reloaded.messages] == ["new question", "new answer"]
-
-
-def test_once_a_cut_is_on_disk_a_save_keeps_what_another_writer_appended(tmp_path: Path) -> None:
-    mgr = SessionManager(tmp_path)
-    session = _seed(mgr, "tui:cut-saved", ("user", "q1"), ("assistant", "a1"), ("user", "q2"), ("assistant", "a2"))
-    session.undo_last_turn()
-    mgr.save(session)
-    elsewhere_mgr = SessionManager(tmp_path)
-    elsewhere = elsewhere_mgr.get_or_create("tui:cut-saved")
-    elsewhere.add_message("user", "from elsewhere")
-    elsewhere_mgr.save(elsewhere)
-    session.add_message("user", "from here")
-    mgr.save(session)
-
-    reloaded = SessionManager(tmp_path).get_or_create("tui:cut-saved")
-    assert [m["content"] for m in reloaded.messages] == ["q1", "a1", "from elsewhere", "from here"]
-
-
-# ── fork (session fork/branch) ──────────────────────────────────────────────
 
 
 def _seed(mgr: SessionManager, key: str, *turns: tuple[str, str]) -> Session:

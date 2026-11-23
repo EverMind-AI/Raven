@@ -33,7 +33,6 @@ from raven.agent.loop.recovery import EMPTY_REPLY_FAILURE
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.contracts.loop_hooks import AgentHook, HookDecision
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
-from raven.session.manager import SessionManager
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
 
@@ -825,77 +824,6 @@ async def test_a_cancel_during_the_rerun_files_the_rerun_s_own_work(tmp_path):
     assert "call-a" in calls, "the rerun's tool call is not in what the cancel filed"
     results = {str(m.get("tool_call_id")) for m in filed if m.get("role") == "tool"}
     assert set(calls) <= results, "every filed tool call still needs a filed result"
-
-
-class _AnotherWriter(AgentHook):
-    """A second process on the same home, appending while the turn runs.
-
-    Two terminals continuing one session, or two gateway processes pointed at
-    one ``RAVEN_HOME``, each hold a ``SessionManager``; either may write
-    between the turn's incremental saves.
-    """
-
-    def __init__(self, workspace, key: str, at_iteration: int, text: str) -> None:
-        self._workspace = workspace
-        self._key = key
-        self._at = at_iteration
-        self._text = text
-        self._seen = 0
-        self.wrote = False
-
-    async def before_iteration(self, ctx):
-        self._seen += 1
-        if self._seen == self._at:
-            other = SessionManager(self._workspace)
-            session = other.get_or_create(self._key)
-            session.add_message("user", self._text)
-            other.save(session)
-            self.wrote = True
-        return HookDecision()
-
-
-@pytest.mark.asyncio
-async def test_the_rerun_keeps_a_concurrent_writer_s_row_and_drops_only_the_attempt(tmp_path):
-    """The rerun's cut is by row id, so it must read the ids off the file.
-
-    The failed attempt files its rounds as it runs. A second process appends a
-    message between two of those writes; the next save has to merge the file's
-    rows back in, and the copy that lands in memory carries no filing key, so a
-    drop that trusted the in-memory list matched nothing and left the wreckage
-    on disk -- with the rerun's answer behind it. The other writer's row is not
-    the attempt's and must survive.
-    """
-    writer = _AnotherWriter(tmp_path, "cli:c1", at_iteration=2, text="concurrent note")
-    provider = _Scripted(
-        [
-            LLMResponse(
-                content="",
-                tool_calls=[ToolCallRequest(id="call-wreck", name="list_dir", arguments={"path": "."})],
-                finish_reason="tool_calls",
-            ),
-            LLMResponse(
-                content="",
-                tool_calls=[ToolCallRequest(id="call-after", name="list_dir", arguments={"path": "."})],
-                finish_reason="tool_calls",
-            ),
-            *_dead(),
-            *_dead(),
-        ],
-        _answers("Alice Smith won it."),
-    )
-    agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1), writer])
-
-    out = await agent._process_message(_req("look around"))
-
-    assert writer.wrote, "the second writer never appended, so no merge was exercised"
-    assert out[0] == "Alice Smith won it."
-    filed = _persisted(tmp_path)
-    calls = [call["id"] for m in filed for call in (m.get("tool_calls") or [])]
-    assert "call-wreck" not in calls, "the discarded attempt's first call is still on disk"
-    assert not any(m.get("tool_call_id") == "call-wreck" for m in filed), "the discarded result is still on disk"
-    assert not any(m.get("role") == "tool" for m in filed), "a discarded attempt's result is still on disk"
-    assert any(m.get("content") == "Alice Smith won it." for m in filed), "the rerun's answer was not filed"
-    assert any(m.get("content") == "concurrent note" for m in filed), "the other writer's row was dropped"
 
 
 @pytest.mark.asyncio

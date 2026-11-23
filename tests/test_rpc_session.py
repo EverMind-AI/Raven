@@ -1621,6 +1621,20 @@ async def test_session_undo_drops_last_turn(tmp_path):
     assert [m["content"] for m in mgr.get_or_create(key).messages] == ["q1", "a1"]
 
 
+async def test_session_undo_refuses_a_transcript_another_process_wrote(tmp_path):
+    from raven.rpc.methods.session import session_undo
+    from raven.session.manager import SessionWriterConflictError
+
+    mgr, key = _seed_manager(tmp_path)
+    other = SessionManager(tmp_path)
+    theirs = other.get_or_create(key)
+    theirs.add_message("user", "from the other process")
+    other.save(theirs)
+
+    with pytest.raises(SessionWriterConflictError, match="another process is writing this session"):
+        await session_undo({"session_id": key}, agent_loop_factory=lambda: _LoopWithManager(mgr))
+
+
 async def test_session_undo_nothing_to_undo_returns_zero(tmp_path):
     from raven.rpc.methods.session import session_undo
 

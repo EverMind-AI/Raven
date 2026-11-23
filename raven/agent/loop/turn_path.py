@@ -146,7 +146,7 @@ from raven.providers import usage_record
 from raven.providers.base import bound_llm_detail, canonical_llm_error, llm_error_summary, parse_llm_error
 from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
-from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT
+from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT, SessionWriterConflictError
 from raven.session.refs import cap_tool_result, tool_result_view
 from raven.session.tool_output import bound_tool_result, direction_for
 from raven.session.turn_shape import REPLIED_VIA_TOOL, TakeBack, TakeBackStep
@@ -3563,9 +3563,8 @@ class TurnPathMixin:
         # all, so it was absent from every listing, and a reader who left the
         # page could not find their way back to the turn still running in it.
         # Everything below that slices "what this turn added" off the session
-        # counts from this turn's own first entry. Counted after the save, not
-        # before it: a save can merge another writer's messages in ahead of the
-        # question, which it leaves last.
+        # counts from this turn's own first entry. The save appends it last, so
+        # the rows past this index are the question.
         question_at = len(session.messages)
         self._save_turn(
             session,
@@ -3580,7 +3579,7 @@ class TurnPathMixin:
         prev_len = len(session.messages) - len(question)
 
         def _turn_start() -> int:
-            """Where this turn's entries start now; a later save may have merged more in ahead of them."""
+            """Where this turn's entries start now; a later save can replace the question in place."""
             if question:
                 for index in range(len(session.messages) - 1, -1, -1):
                     if session.messages[index] is question[0]:
@@ -3696,7 +3695,7 @@ class TurnPathMixin:
         retry_seed = [dict(m) for m in initial_messages] if retries_left else None
         turn_t0 = monotonic()
         pending: dict[str, Any] = {"rerun": False, "reasons": []}
-        live: dict[str, TurnLog] = {
+        live: dict[str, Any] = {
             "log": TurnLog(initial_messages, persist_from),
             "persisted": persist_from,
             "filed_ids": set(),
@@ -3719,6 +3718,11 @@ class TurnPathMixin:
                 live["filed_ids"].update(self._save_turn(session, list(messages_now[:upto]), skip, final=False))
                 live["persisted"] = upto
                 self.sessions.save(session)
+            except SessionWriterConflictError:
+                # Another process took the transcript. Retrying every step
+                # would file a turn nobody can read; the turn stops here with
+                # the conflict the save raised.
+                raise
             except Exception:
                 logger.exception("incremental session write failed; the turn keeps running")
 
@@ -3735,22 +3739,14 @@ class TurnPathMixin:
             return live["log"].messages()
 
         def _drop_attempt_rows() -> bool:
-            """Take the attempt's rows off disk before the rerun writes its own.
+            """Take the attempt's rows off the transcript before the rerun writes its own.
 
             The failed attempt was filed as it ran, so a rerun that only reset
             the in-memory log left its research in the transcript and appended
             the rerun's answer behind the wreckage. The rows are matched by the
-            identifier the attempt filed them under rather than by position: a
-            concurrent writer's messages can land among them, and a cut by
-            position would take those with it.
-
-            The cut is taken from the file, inside the manager's write
-            transaction. It cannot be taken from ``session.messages``: a save
-            that merged a concurrent writer replaces the prefix it last read
-            with rows read back from the file, and those have no identifier to
-            match. The transaction serializes the cut against an appending
-            writer; it does not make the appending writer's rows part of this
-            copy's list.
+            identifier the attempt filed them under rather than by position: the
+            window can drop a row from the turn record, and a cut by position
+            would take a neighbour with it.
 
             False when the cut could not be written; the caller does not rerun
             then, because the rerun's answer would land on the attempt again.
@@ -3864,7 +3860,7 @@ class TurnPathMixin:
                 if turn_hook_meta.get("output_limited"):
                     session.metadata[OUTPUT_LIMIT_TURN_AT] = _turn_start()
                 else:
-                    # None rather than dropping the key: a save merges its
+                    # None rather than dropping the key: a save folds its
                     # metadata over the record on disk, so a key left unsaid is
                     # kept rather than cleared (SessionManager._metadata_to_write).
                     # The reader asks whether this is an int, which None is not.
@@ -4057,7 +4053,7 @@ class TurnPathMixin:
             from raven.session.manager import append_turn_meta
 
             try:
-                append_turn_meta(self.sessions.session_path(session.key), patches)
+                append_turn_meta(self.sessions.session_path(session.key), patches, session=session)
             except Exception:
                 # The turn already has an answer; a late stamp that could not
                 # be filed is not worth failing it for. The rows keep what the
@@ -4527,7 +4523,7 @@ class TurnPathMixin:
         if not self.sessions.append_metadata_patch(session.key, {"annotated_through": n}):
             logger.debug("episodic cursor for {} not persisted: no session file yet", session.key)
 
-    def _save_turn(
+    def _save_turn(  # noqa: C901 (cc 45: one pass over the rows a turn files)
         self,
         session: Session,
         messages: list[dict],
@@ -4581,9 +4577,14 @@ class TurnPathMixin:
         # stored row rides along, so a row the window rewrote after it was
         # filed can be told from the form that reached the file.
         already_filed = {str(row.get("_row_id")): row for row in getattr(session, "messages", ()) if row.get("_row_id")}
-        if session._filed_contents:
-            for stale in set(session._filed_contents) - set(already_filed):
-                session._filed_contents.pop(stale, None)
+        filed_contents = getattr(session, "_filed_contents", None)
+        if filed_contents:
+            for stale in set(filed_contents) - set(already_filed):
+                filed_contents.pop(stale, None)
+        inbound_filed = getattr(session, "_inbound_filed", None)
+        if inbound_filed:
+            for stale in set(inbound_filed) - set(already_filed):
+                inbound_filed.pop(stale, None)
         first_user_pending = received_at is not None
         # The turn's first user entry is the inbound message; hooks may have
         # rewritten what the model saw (a memo prepended, a reminder appended),
@@ -4608,6 +4609,13 @@ class TurnPathMixin:
             stored = already_filed.get(row_id)
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
+            restored = inbound_filed.get(row_id) if stored is not None and inbound_filed else None
+            if restored is not None:
+                # This row was filed in the user's words before a hook's view
+                # was stripped. Preparing it again must strip the same view,
+                # not file the memo or the reminder over what the user sent.
+                content = entry["content"] = restored
+                entry.pop(ATTACHMENT_NOTES_KEY, None)
             if isinstance(content, list) and any(is_inline_image(part) for part in content):
                 # A multimodal row. Inline images must never reach the JSONL: a
                 # single one adds megabytes that are then replayed on every
@@ -4728,6 +4736,8 @@ class TurnPathMixin:
                         continue
                 if inbound_rewrite_pending:
                     inbound_rewrite_pending = False
+                    if inbound_filed is not None:
+                        inbound_filed[row_id] = inbound_original
                     if isinstance(entry.get("content"), str) and entry["content"] != inbound_original:
                         # The user's own words, without what assembly put
                         # around them -- and without the attachment notes
@@ -4762,7 +4772,8 @@ class TurnPathMixin:
                 continue
             entry.setdefault("timestamp", self._now_fn().isoformat())
             session.record(entry)
-            session._filed_contents[row_id] = _content_digest(entry.get("content"))
+            if filed_contents is not None:
+                filed_contents[row_id] = _content_digest(entry.get("content"))
             if entry.get("_row_id"):
                 written_ids.append(str(entry["_row_id"]))
         session.updated_at = self._now_fn()
@@ -4779,14 +4790,15 @@ class TurnPathMixin:
         longer in this session.
         """
         digest = _content_digest(entry.get("content"))
-        if session._filed_contents.get(row_id) == digest:
+        filed = getattr(session, "_filed_contents", None)
+        if filed is None or filed.get(row_id) == digest:
             return False
         at = next((index for index, row in enumerate(session.messages) if row is stored), None)
         if at is None:
             return False
         entry.setdefault("timestamp", stored.get("timestamp") or self._now_fn().isoformat())
         session.messages[at] = entry
-        session._filed_contents[row_id] = digest
+        filed[row_id] = digest
         session._refile_rows = True
         return True
 
