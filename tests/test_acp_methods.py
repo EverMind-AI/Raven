@@ -2849,6 +2849,37 @@ async def test_a_prompt_held_for_background_work_runs_its_own_closing_turn(rig, 
 
 
 @pytest.mark.asyncio
+async def test_a_failed_closing_turn_still_answers_the_held_prompt(rig, monkeypatch):
+    """The closing turn is the only thing that would end the hold. When it
+    cannot start, the prompt must still get an answer rather than wait on a
+    heartbeat, and the failure must be logged rather than swallowed."""
+    from loguru import logger
+
+    from raven.agent.tools import background_exec
+
+    records: list = []
+    sink = logger.add(lambda message: records.append(message.record), level="ERROR")
+    try:
+        prompt, _ = await _open_background_hold(rig, monkeypatch)
+        monkeypatch.setattr(background_exec, "running", lambda session_key=None: [])
+        rig.stack.send_result = RuntimeError("scheduler draining")
+        response = await asyncio.wait_for(prompt, 2)
+    finally:
+        logger.remove(sink)
+
+    assert response["result"]["stopReason"] == "end_turn", "the client got its answer instead of a hang"
+    logged = [record for record in records if "could not run the closing turn" in record["message"]]
+    assert logged, [record["message"] for record in records]
+    assert logged[0]["exception"] is not None, "the traceback is logged, not swallowed"
+    said = [
+        update["content"]["text"]
+        for update in rig.updates()
+        if update.get("sessionUpdate") == "agent_message_chunk" and "content" in update
+    ]
+    assert any("could not be started" in text for text in said), said
+
+
+@pytest.mark.asyncio
 async def test_cancelling_a_background_hold_reaps_what_it_waited_on(rig, monkeypatch):
     """A cancelled prompt must not leave the adopted command running unseen."""
     from raven.agent.tools import background_exec
@@ -2889,6 +2920,18 @@ async def test_a_hold_without_a_turn_deadline_ends_at_the_configured_cap(rig, mo
     assert reaped == ["bg-5"]
     content = rig.stack.params_for("turn.send")["content"]
     assert "were stopped" in content and "wait limit" in content
+
+
+def test_the_hold_ceiling_default_has_one_source():
+    """The config default is what a caller that injects no config falls back
+    to; two literals would drift and one surface would hold longer than the
+    other documents."""
+    from raven.acp.methods import MAX_BACKGROUND_HOLD_S
+    from raven.config.schema import DEFAULT_MAX_BACKGROUND_HOLD_SECONDS
+
+    assert DEFAULT_MAX_BACKGROUND_HOLD_SECONDS == 1800
+    assert AcpConfig().max_background_hold_seconds == DEFAULT_MAX_BACKGROUND_HOLD_SECONDS
+    assert MAX_BACKGROUND_HOLD_S == float(DEFAULT_MAX_BACKGROUND_HOLD_SECONDS)
 
 
 @pytest.mark.asyncio

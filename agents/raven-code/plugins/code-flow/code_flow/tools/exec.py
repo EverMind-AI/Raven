@@ -89,6 +89,14 @@ ADOPTED_NOTE = (
     "[the command was not killed: the harness kept it running in the background. Do not "
     "run it again -- read the log named above, which is still being written]"
 )
+#: What a turn with no usable second left answers instead of spawning. A
+#: zero-second wait times out before the child can run, and the background lane
+#: would then report a command that never started as "still running".
+NO_TIME_NOTE = (
+    "[the command was not started: less than a second is left before this turn's deadline, "
+    "so there is no time to run it here. Run it in a later turn, or with "
+    "run_in_background: true if it should outlive this one]"
+)
 
 _SPILL_COUNTER = itertools.count(1)
 
@@ -530,7 +538,8 @@ class CodeExecTool(ExecTool):
             "larger value is clamped to the ceiling, not rejected). A command that hits its limit is "
             "handed to the background when the turn has time left -- it keeps running, and the result "
             "names its task and log -- or killed when the turn does not, with the output it produced so "
-            "far marked partial. Not read with 'machine' or 'run_in_background'."
+            "far marked partial. With less than a second left the command is not started at all. "
+            "Not read with 'machine' or 'run_in_background'."
         )
         return schema
 
@@ -542,7 +551,8 @@ class CodeExecTool(ExecTool):
         supposed to stop. The reserve is what the turn still needs to answer.
         The five-second floor gives a nearly expired turn one short command
         instead of nothing, but it may not exceed what is actually left: a
-        floor above zero is still a promise the clock does not keep.
+        floor above zero is still a promise the clock does not keep. Zero
+        therefore means the turn cannot start a command at all.
         """
         from raven.agent import turn_clock
 
@@ -575,6 +585,8 @@ class CodeExecTool(ExecTool):
         if not machine and not run_in_background:
             base = min(self.timeout if timeout is None else timeout, self._MAX_TIMEOUT)
             requested = self._bounded_timeout(timeout)
+            if base > 0 and requested <= 0:
+                return ToolResult(model_text=NO_TIME_NOTE, ok=False)
             if requested < base:
                 note += (
                     f"[note: timeout {requested}s, cut to what is left of this turn's deadline; "
@@ -606,6 +618,7 @@ __all__ = [
     "DEFAULT_MAX_TIMEOUT",
     "DEFAULT_TIMEOUT",
     "MAX_OUTPUT",
+    "NO_TIME_NOTE",
     "SPILL_SUBDIR",
     "TIMED_OUT_NOTE",
     "CodeExecResult",

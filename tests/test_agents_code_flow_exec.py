@@ -913,6 +913,31 @@ def test_the_floor_is_five_seconds_when_that_much_is_left(tmp_path):
         turn_clock.set_deadline(None)
 
 
+def test_a_sub_second_deadline_refuses_the_command_instead_of_adopting_it(tmp_path, monkeypatch):
+    """A zero-second bound cannot start the command, so it must not report one
+    as running in the background. The old path spawned it anyway, timed out
+    before the child could run, and adopted what had never started."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    from raven.agent import turn_clock
+    from raven.agent.tools import background_exec
+
+    tool = _tool(tmp_path)
+    turn_clock.set_deadline(time.monotonic() + 0.9)
+    try:
+        out = _run(tool.execute(command="echo never-ran", timeout=60))
+    finally:
+        turn_clock.set_deadline(None)
+
+    text = out if isinstance(out, str) else out.model_text
+    assert getattr(out, "ok", None) is False, "a command the turn could not start is not a success"
+    assert "was not started" in text
+    assert "less than a second" in text, "the answer names the real reason"
+    assert "still running" not in text
+    assert "background as bg-" not in text
+    assert "never-ran" not in text, "the command produced no output because it never ran"
+    assert not [t for t in background_exec.running() if "echo never-ran" in t["command"]]
+
+
 def test_without_a_deadline_the_request_is_only_capped_by_the_ceiling(tmp_path):
     from raven.agent import turn_clock
 

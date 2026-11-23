@@ -44,6 +44,7 @@ from raven.acp.modes import SessionModes, build_session_modes
 from raven.acp.replay import replay
 from raven.acp.updates import AcpSession, TurnAlreadyRunningError, UpdateTranslator
 from raven.config import load_config
+from raven.config.schema import DEFAULT_MAX_BACKGROUND_HOLD_SECONDS
 from raven.providers.usage import reported_cost
 from raven.security import redact
 from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT
@@ -130,8 +131,10 @@ BACKGROUND_POLL_S = 2.0
 #: without this a command that never exits would hold the prompt -- and the
 #: heartbeat meant to keep the wait observable -- for the life of the process.
 #: Half an hour is long enough for the builds and downloads that adopt work,
-#: and short enough that a wedged command cannot own a prompt forever.
-MAX_BACKGROUND_HOLD_S = 30 * 60.0
+#: and short enough that a wedged command cannot own a prompt forever. The
+#: schema default is the one source; this is the fallback a caller that injects
+#: no config gets.
+MAX_BACKGROUND_HOLD_S = float(DEFAULT_MAX_BACKGROUND_HOLD_SECONDS)
 #: How often a held prompt says it is alive, as a ``tool_call_update`` on the
 #: one call that stands for the wait. Well inside the ten minutes raven's own
 #: client gives a running node before it reports a stall.
@@ -987,6 +990,15 @@ class AcpMethods:
             )
         except Exception:
             logger.exception("acp: could not run the closing turn after background work on {}", session.session_key)
+            # The held prompt is waiting on a turn that never started, and only
+            # a turn ending would answer it. Settle it first so the client gets
+            # its stopReason even if telling it why fails too.
+            self._translator.settle_turn(session.session_id, "end_turn")
+            self._say(
+                session,
+                "The closing turn after this session's background work could not be "
+                "started. The commands' logs hold their output; continue from there.",
+            )
 
     async def _heartbeat(self, session: AcpSession, call_id: str) -> None:
         started = time.monotonic()
