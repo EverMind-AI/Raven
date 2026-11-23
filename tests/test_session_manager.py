@@ -870,6 +870,34 @@ def test_a_merge_does_not_move_the_log_generation(tmp_path: Path):
     assert session.log_generation == 0, "an append another copy made retired this log's refs"
 
 
+def test_a_merge_of_a_loaded_copy_does_not_move_the_generation(tmp_path: Path):
+    """A copy that loaded the session holds no filing keys; the file still does.
+
+    Content says the rows are the same, so the merge keeps this copy's prefix
+    and adopts the file's keys for it. A read that treated the missing keys as
+    a difference retired every ref the loaded copy had handed out.
+    """
+    key = "cli:20260610_100000_loadedgen"
+    first = SessionManager(tmp_path)
+    _seed_with_ids(first, key, ("user", "q", "r1"), ("assistant", "a", "r2"))
+
+    reader = SessionManager(tmp_path)
+    loaded = reader.get_or_create(key)
+    assert [m.get("_row_id") for m in loaded.messages] == [None, None]
+
+    other = SessionManager(tmp_path)
+    held = other.get_or_create(key)
+    held.record({"role": "user", "content": "from elsewhere", "_row_id": "b1"})
+    other.save(held)
+
+    loaded.record({"role": "assistant", "content": "tail", "_row_id": "r3"})
+    reader.save(loaded)
+
+    assert loaded.log_generation == 0, "loading the session and merging an append retired its refs"
+    assert [m.get("_row_id") for m in loaded.messages[:2]] == ["r1", "r2"]
+    assert [m["content"] for m in loaded.messages] == ["q", "a", "from elsewhere", "tail"]
+
+
 @pytest.mark.asyncio
 async def test_a_ref_minted_before_a_merge_still_resolves(tmp_path: Path):
     """A ref handed out before the merge still names the same message after it."""

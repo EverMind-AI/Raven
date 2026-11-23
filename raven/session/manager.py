@@ -582,6 +582,37 @@ def _row_identity(row: dict[str, Any]) -> str:
     )
 
 
+def _same_rows(messages: list[dict[str, Any]], on_disk: list[dict[str, Any]]) -> bool:
+    """Whether two row prefixes name the same messages, in the same order.
+
+    A row this copy loaded carries no filing key; the file still does. For that
+    row the content is what decides. A row this copy does hold a key for must
+    find the same key on disk: a read that dropped the keys would otherwise
+    pass, and the prefix it hands back would lose them.
+    """
+    if len(messages) != len(on_disk):
+        return False
+    for row, disk in zip(messages, on_disk, strict=True):
+        if _row_identity(row) != _row_identity(disk):
+            return False
+        row_id = row.get("_row_id")
+        if row_id and str(row_id) != str(disk.get("_row_id") or ""):
+            return False
+    return True
+
+
+def _adopt_row_ids(messages: list[dict[str, Any]], on_disk: list[dict[str, Any]]) -> None:
+    """Give a loaded row the filing key the file holds for it.
+
+    Rows read by a front end do not carry the key, so a live copy assembled
+    from them would write the rows back without one. Matching content means
+    the two are the same row; the file's key is the one a later stamp names.
+    """
+    for row, disk in zip(messages, on_disk, strict=True):
+        if not row.get("_row_id") and disk.get("_row_id"):
+            row["_row_id"] = disk["_row_id"]
+
+
 def _carry_file_rows(
     messages: list[dict[str, Any]],
     file_rows: list[dict[str, Any]],
@@ -626,6 +657,8 @@ def _carry_file_rows(
         if index is None:
             continue
         claimed[index] = True
+        if not row.get("_row_id") and file_rows[index].get("_row_id"):
+            row["_row_id"] = file_rows[index]["_row_id"]
         kept.append(row)
 
     cut_ids = {str(row["_row_id"]) for row in cut_rows if row.get("_row_id")}
@@ -1452,11 +1485,12 @@ class SessionManager:
                 # The repair rows a load derived are in this copy's list but
                 # never on disk, so the file's prefix ends that many rows sooner.
                 on_disk_count = count - sum(1 for row in session.messages[:count] if row.get(SYNTHETIC_INTERRUPTED_KEY))
-                kept = on_disk is not None and len(on_disk.messages) >= on_disk_count
-                kept = kept and _normalized(_filed_rows(session.messages[:count])) == _normalized(
-                    on_disk.messages[:on_disk_count]
+                kept = on_disk is not None and _same_rows(
+                    _filed_rows(session.messages[:count]), on_disk.messages[:on_disk_count]
                 )
                 if on_disk is not None:
+                    if kept:
+                        _adopt_row_ids(_filed_rows(session.messages[:count]), on_disk.messages[:on_disk_count])
                     head = session.messages[:count] if kept else on_disk.messages[:on_disk_count]
                     merged = head + on_disk.messages[on_disk_count:] + session.messages[count:]
                 if not kept and (session.log_id, session.log_generation) == before:
