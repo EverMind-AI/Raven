@@ -1,9 +1,10 @@
-"""A live off switch changes availability, never the array; the runtime context says which.
+"""Availability is judged at capture; a switch flipped later only changes whether calls run.
 
 The array is the prompt-cache prefix and is frozen for the session by
-``ToolRegistry``. This file pins the loop's half: the reasons it can name, the
-notices it sends, and the refusal a call gets when the schema is visible but the
-switch is off.
+``ToolRegistry``. A tool that is unavailable at the refresh point does not
+enter it at all. This file pins the loop's half: what capture filters, the
+reasons it can name, the notices it sends for a switch flipped after capture,
+and the refusal a call gets.
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ def _no_ambient_search_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SERPER_API_KEY", raising=False)
 
 
-def test_a_live_disabled_tool_keeps_its_schema_and_gets_a_notice(tmp_path: Path, monkeypatch) -> None:
+def test_a_switched_off_tool_never_enters_the_array(tmp_path: Path, monkeypatch) -> None:
     cfg = tmp_path / "config.json"
     _write_switches(cfg, ["grep"])
     monkeypatch.setattr("raven.home._current_config_path", cfg)
@@ -50,8 +51,56 @@ def test_a_live_disabled_tool_keeps_its_schema_and_gets_a_notice(tmp_path: Path,
 
     with loop.tools.session_scope_for("s1"):
         names = {d["function"]["name"] for d in loop.tools.get_definitions()}
-        assert "grep" in names, "the array is the prefix; a switch must not move it"
+
+    assert "grep" not in names, "capture filters what the operator switched off"
+    assert loop.tools.has("grep"), "withheld, not destroyed -- the switch stays reversible"
+
+
+def test_the_five_unconfigured_tools_stay_out_of_the_array(tmp_path: Path, monkeypatch) -> None:
+    """An empty config leaves five registered tools with nothing behind them.
+
+    Credentials and a selected base are judged at capture like any other
+    availability switch, so their schemas never reach the model.
+    """
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    loop = _loop(tmp_path)
+
+    with loop.tools.session_scope_for("s1"):
+        names = {d["function"]["name"] for d in loop.tools.get_definitions()}
+        notes = loop._tool_notices()
+
+    for name in ("image_generate", "knowledge_search", "text_to_speech", "video_generate", "web_search"):
+        assert name not in names, name
+    assert not any(notice_key(note) == ("tool", "web_search") for note in notes), notes
+
+
+def test_a_key_added_after_capture_joins_at_the_next_refresh(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    loop = _loop(tmp_path)
+
+    with loop.tools.session_scope_for("s1"):
+        assert "web_search" not in {d["function"]["name"] for d in loop.tools.get_definitions()}
+
+    monkeypatch.setenv("SERPER_API_KEY", "test-key")
+    loop.tools.invalidate_session_definitions("s1")
+
+    with loop.tools.session_scope_for("s1"):
+        assert "web_search" in {d["function"]["name"] for d in loop.tools.get_definitions()}
+
+
+def test_a_switch_flipped_mid_session_keeps_the_schema_and_gets_a_notice(tmp_path: Path, monkeypatch) -> None:
+    cfg = tmp_path / "config.json"
+    _write_switches(cfg, [])
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    loop = _loop(tmp_path)
+
+    with loop.tools.session_scope_for("s1"):
+        names = {d["function"]["name"] for d in loop.tools.get_definitions()}
+        assert "grep" in names
+        _write_switches(cfg, ["grep"])
         assert not loop.tools.offers_by_name("grep")
+        names = {d["function"]["name"] for d in loop.tools.get_definitions()}
+        assert "grep" in names, "the array is the prefix; a switch must not move it"
         notes = loop._tool_notices()
 
     by_key = {notice_key(note): note for note in notes}
@@ -59,19 +108,20 @@ def test_a_live_disabled_tool_keeps_its_schema_and_gets_a_notice(tmp_path: Path,
     assert "switched off in settings" in by_key[("tool", "grep")]
 
 
-def test_an_unconfigured_tool_says_why_it_cannot_run(tmp_path: Path, monkeypatch) -> None:
+def test_a_credential_withdrawn_after_capture_gets_a_notice(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    monkeypatch.setenv("SERPER_API_KEY", "test-key")
     loop = _loop(tmp_path)
 
     with loop.tools.session_scope_for("s1"):
-        loop.tools.get_definitions()
+        names = {d["function"]["name"] for d in loop.tools.get_definitions()}
+        assert "web_search" in names
+        monkeypatch.delenv("SERPER_API_KEY")
         notes = loop._tool_notices()
 
     by_key = {notice_key(note): note for note in notes}
     assert ("tool", "web_search") in by_key, notes
     assert "no search key" in by_key[("tool", "web_search")]
-    assert ("tool", "knowledge_search") in by_key, notes
-    assert "no knowledge base is selected" in by_key[("tool", "knowledge_search")]
 
 
 def test_a_constructor_disabled_tool_stays_out_and_gets_no_notice(tmp_path: Path, monkeypatch) -> None:
@@ -86,7 +136,23 @@ def test_a_constructor_disabled_tool_stays_out_and_gets_no_notice(tmp_path: Path
     assert not any(notice_key(note) == ("tool", "grep") for note in notes)
 
 
-def test_an_unavailable_tool_call_is_refused_with_the_reason(tmp_path: Path, monkeypatch) -> None:
+def test_a_switch_flipped_mid_session_refuses_with_the_reason(tmp_path: Path, monkeypatch) -> None:
+    cfg = tmp_path / "config.json"
+    _write_switches(cfg, [])
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    loop = _loop(tmp_path)
+
+    with loop.tools.session_scope_for("s1"):
+        loop.tools.get_definitions()
+        _write_switches(cfg, ["grep"])
+        answer = asyncio.run(loop.tools.execute("grep", {}))
+
+    assert "currently unavailable" in answer
+    assert "switched off in settings" in answer
+    assert "not available" not in answer, "an advertised tool is not 'absent'"
+
+
+def test_a_tool_filtered_from_the_array_reads_as_absent(tmp_path: Path, monkeypatch) -> None:
     cfg = tmp_path / "config.json"
     _write_switches(cfg, ["grep"])
     monkeypatch.setattr("raven.home._current_config_path", cfg)
@@ -96,9 +162,8 @@ def test_an_unavailable_tool_call_is_refused_with_the_reason(tmp_path: Path, mon
         loop.tools.get_definitions()
         answer = asyncio.run(loop.tools.execute("grep", {}))
 
-    assert "currently unavailable" in answer
-    assert "switched off in settings" in answer
-    assert "not available" not in answer, "an advertised tool is not 'absent'"
+    assert "not available" in answer
+    assert "currently unavailable" not in answer, "it was never advertised in this session"
 
 
 def test_a_charter_restriction_is_not_reported_as_a_settings_switch(tmp_path: Path, monkeypatch) -> None:

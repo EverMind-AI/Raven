@@ -491,15 +491,13 @@ async def test_a_turn_offers_the_search_when_its_session_named_a_base(tmp_path: 
     assert "knowledge_search" in provider.offered[0]
 
 
-async def test_a_turn_whose_session_named_none_advertises_it_as_unavailable(tmp_path: Any) -> None:
-    """The schema stays in the session's frozen array so the array -- the
-    prompt-cache prefix -- does not move when a base is attached or detached.
-    Availability is the runtime context's job: the tool answers calls with a
-    refusal and the notice says no base is selected."""
+async def test_a_turn_whose_session_named_no_base_does_not_offer_the_search(tmp_path: Any) -> None:
+    """Availability is judged at capture: with no base selected the tool has
+    nothing to search, so its schema never enters the session's array."""
     provider = await _turn(tmp_path / "ws", [])
 
     assert provider.offered, "the turn made no model call"
-    assert "knowledge_search" in provider.offered[0], "a frozen array keeps the schema"
+    assert "knowledge_search" not in provider.offered[0]
 
 
 # -- which library the tool searches -------------------------------

@@ -266,3 +266,26 @@ class TestConnectPathAndClose:
             )
             await loop.apply_mcp_config({"svc": _cfg()})
         assert loop.tools.get("read_mcp_resource") is not None
+
+
+class TestTheFrozenArrayAtRefresh:
+    async def test_withdrawn_meta_tools_leave_the_next_refresh(self, workspace):
+        """The five are unregistered when no server serves them, but a captured
+        array keeps its names until a refresh point -- the same contract as a
+        server's own tools. After the refresh they must not come back."""
+        loop = _loop(workspace)
+        with patch(_PATCH, new=_connect(_Caps(resources=object()))):
+            await loop.apply_mcp_config({"svc": _cfg()})
+            with loop.tools.session_scope_for("s1"):
+                names = {d["function"]["name"] for d in loop.tools.get_definitions()}
+                assert RESOURCE_TOOL_NAMES <= names
+
+                await loop.apply_mcp_config({})
+                still = {d["function"]["name"] for d in loop.tools.get_definitions()}
+                assert RESOURCE_TOOL_NAMES <= still, "the session keeps its array until a refresh"
+
+                loop.tools.invalidate_session_definitions("s1")
+                refreshed = {d["function"]["name"] for d in loop.tools.get_definitions()}
+
+        assert not (RESOURCE_TOOL_NAMES & refreshed)
+        assert not loop.tools.has("read_mcp_resource")

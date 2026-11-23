@@ -481,13 +481,13 @@ class ToolRegistry:
     def set_hard_withheld_source(self, source: Callable[[], frozenset[str]] | None) -> None:
         """Install the names off for the life of the process, not for a turn.
 
-        A session snapshot keeps live-withheld tools in the array so a switch
-        flipped mid-session never moves the prompt-cache prefix. That reasoning
-        does not cover a name the *constructor* fixed off: it cannot change
-        while the process runs, so keeping it out costs no cache, and the eval
-        harness that passes such a list means "the model never sees it". This
-        source is that list, resolved against the registry at capture time so a
-        name that arrives later (an MCP tool) is still judged.
+        A session snapshot judges the live switches at capture time, but a
+        switch flipped *after* capture never moves the prompt-cache prefix.
+        That reasoning does not cover a name the *constructor* fixed off: it
+        cannot change while the process runs, so keeping it out costs no cache,
+        and the eval harness that passes such a list means "the model never sees
+        it". This source is that list, resolved against the registry at capture
+        time so a name that arrives later (an MCP tool) is still judged.
         """
         self._hard_withheld = source
 
@@ -947,11 +947,12 @@ class ToolRegistry:
 
         Inside a turn the array is the prompt-cache prefix: it is captured the
         first time a session asks for it and served unchanged until the loop
-        invalidates it (a compaction, a log id change, a release). Availability
-        changes -- an off switch, a credential, a base attached mid-conversation
-        -- are reported in the runtime context instead, so they never move the
-        prefix. Outside a turn (a sub-agent, a bare test) the live
-        view is served, unchanged.
+        invalidates it (a compaction, a log id change, a release). Capture
+        judges the operator's availability switches -- a tool that is off right
+        then does not enter the array -- while a switch flipped after capture
+        only changes whether calls run, reported in the runtime context, so it
+        never moves the prefix. Outside a turn (a sub-agent, a bare test) the
+        live view is served, unchanged.
 
         The live view is assembled per LLM call, which is what makes an off
         switch take effect on the next turn rather than the next restart: the
@@ -1011,25 +1012,39 @@ class ToolRegistry:
         return cached
 
     def _capture_definitions(self, session_key: str) -> _SessionDefinitions:
-        """Take the session's array from the REGISTERED set, not the offered one.
+        """Take the session's array from what is available at the refresh point.
 
-        The live withheld axis is deliberately not consulted: a tool it has off
-        is still in the array, so flipping the switch either way mid-session
-        changes only whether calls run. The constructor's hard subset and the
-        schema-hidden declarations are the exceptions -- neither can move while
-        the process runs, so keeping them out costs no cache.
+        Capture is where availability is judged: a tool the operator's switches
+        have off right now (a disabled entry, a missing credential, a base not
+        selected) does not enter the array, so the model is not shown a schema
+        it cannot call. Once captured the array does not move -- flipping a
+        switch later in the session changes only whether calls run, reported by
+        the runtime context -- because the array is the prompt-cache prefix.
+
+        Only the operator axis is consulted. The turn freeze and a dispatch's
+        charter are per-turn restrictions applied on read (see
+        :meth:`get_definitions` and :meth:`withheld_names`); freezing either
+        into the session would turn one turn's narrowing into the session's
+        availability. The constructor's hard subset and the schema-hidden
+        declarations are also kept out: neither can move while the process
+        runs, so keeping them out costs no cache.
         """
         try:
             hard = self._hard_withheld() if self._hard_withheld is not None else frozenset()
         except Exception:  # noqa: BLE001 - a bad read must not cost the session its array
             logger.warning("tools: could not read the hard-disabled list; keeping every name")
             hard = frozenset()
+        try:
+            unavailable = self._withheld() if self._withheld is not None else frozenset()
+        except Exception:  # noqa: BLE001 - a bad read must not cost the session its array
+            logger.warning("tools: could not read the availability switches; keeping every name")
+            unavailable = frozenset()
         entries: list[tuple[str, dict[str, Any]]] = []
         last: dict[str, tuple[str, dict[str, Any]]] = {}
         origins: dict[str, "MCPToolRef | None"] = {}
         dynamic: set[str] = set()
         for name, tool in self._visible_tools().items():
-            if name in hard or name in self._schema_hidden:
+            if name in hard or name in unavailable or name in self._schema_hidden:
                 continue
             if not self.offers_on_this_channel(tool) or not self._visible_to_this_turn(name):
                 continue

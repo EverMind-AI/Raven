@@ -1,16 +1,20 @@
 """The tool array is frozen for a session and recomputed only at a refresh point.
 
-The array is the prompt-cache prefix, so a live availability switch must not
-move it. Inside ``session_scope_for`` the registry serves the snapshot it took
-at the session's first assembly; outside one (a sub-agent, a test)
-it keeps the live view. Refresh points are a new session, a ``log_id`` change
-(``/clear``), an explicit invalidation (compaction), and a release.
+The array is the prompt-cache prefix. Inside ``session_scope_for`` the registry
+serves the snapshot it took at the session's first assembly; outside one (a
+sub-agent, a test) it keeps the live view. Refresh points are a new session, a
+``log_id`` change (``/clear``), an explicit invalidation (compaction), and a
+release.
 
-What a snapshot includes is the *registered* set, not the offered set: a tool a
-live switch has withheld is still in it, so flipping the switch either way
-mid-session only changes whether calls run, never the array. The constructor's
-hard subset is the exception -- it cannot change for the life of the process,
-so keeping it out costs no cache and preserves the eval-harness contract.
+Capture judges the operator's availability switches: a tool that is off at the
+refresh point does not enter the array, so the model is never shown a schema it
+cannot call. Once captured the array does not move -- flipping a switch later
+only changes whether calls run, never the array. Only the operator axis is
+frozen: the turn freeze and a dispatch's charter are applied on read, so a
+per-turn narrowing never becomes the session's availability. The constructor's
+hard subset and schema-hidden declarations are kept out too -- neither can
+change for the life of the process, so keeping them out costs no cache and
+preserves the eval-harness contract.
 """
 
 from __future__ import annotations
@@ -134,23 +138,66 @@ def test_a_new_log_id_refreshes_the_snapshot() -> None:
         assert _defs(reg) == ["exec", "find"]
 
 
-def test_unavailable_reason_reads_back_the_source() -> None:
+def test_a_tool_that_is_off_at_capture_never_enters_the_snapshot() -> None:
     reg = _registry("exec", "grep")
-    reg.set_withheld_source(lambda: frozenset({"exec"}))
+    reg.set_withheld_source(lambda: frozenset({"grep"}))
+
+    with reg.session_scope_for("s1"):
+        assert _defs(reg) == ["exec"]
+
+
+def test_a_tool_becomes_available_again_at_the_next_refresh_point() -> None:
+    switches = {"find"}
+    reg = _registry("exec", "find")
+    reg.set_withheld_source(lambda: frozenset(switches))
+
+    with reg.session_scope_for("s1"):
+        assert _defs(reg) == ["exec"]
+        switches.discard("find")
+        assert _defs(reg) == ["exec"], "a switch turned on mid-session must not move the array"
+
+    reg.invalidate_session_definitions("s1")
+
+    with reg.session_scope_for("s1"):
+        assert _defs(reg) == ["exec", "find"]
+
+
+def test_a_charter_is_not_frozen_into_the_session_snapshot() -> None:
+    """A charter narrows one dispatch on read; it must never become the
+    session's availability, or every later turn of the session inherits it."""
+    from raven.agent.subagent.charter import Charter, charter_scope
+
+    reg = _registry("exec", "grep")
+    with charter_scope(Charter(tools=("grep",))):
+        with reg.session_scope_for("s1"):
+            assert _defs(reg) == ["grep"]
+
+    with reg.session_scope_for("s1"):
+        assert _defs(reg) == ["exec", "grep"], "the charter leaked into the captured array"
+
+
+def test_unavailable_reason_reads_back_the_source() -> None:
+    switches: set[str] = set()
+    reg = _registry("exec", "grep")
+    reg.set_withheld_source(lambda: frozenset(switches))
     reg.set_withheld_reason_source(lambda: {"exec": "switched off in settings"})
 
     with reg.session_scope_for("s1"):
         assert _defs(reg) == ["exec", "grep"]
+        switches.add("exec")
         assert reg.unavailable_reason("exec") == "switched off in settings"
         assert reg.unavailable_reason("grep") is None
         assert reg.unavailable_reason("missing") is None
 
 
-def test_session_definition_names_are_the_snapshot_not_the_offered_set() -> None:
+def test_session_definition_names_are_the_captured_array_not_a_live_read() -> None:
+    switches: set[str] = set()
     reg = _registry("exec", "grep")
-    reg.set_withheld_source(lambda: frozenset({"grep"}))
+    reg.set_withheld_source(lambda: frozenset(switches))
 
     with reg.session_scope_for("s1"):
+        assert reg.session_definition_names() == frozenset({"exec", "grep"})
+        switches.add("grep")
         assert reg.session_definition_names() == frozenset({"exec", "grep"})
 
 
