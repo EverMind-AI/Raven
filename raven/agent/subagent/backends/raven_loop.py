@@ -380,6 +380,7 @@ class RavenLoopBackend:
                     on_delta=on_delta,
                     media=media,
                     report=report,
+                    authored_task=authored_task,
                 )
         except asyncio.CancelledError:
             if report is not None:
@@ -410,6 +411,7 @@ class RavenLoopBackend:
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         media: Sequence[Media] = (),
         report: TurnReport | None = None,
+        authored_task: str | None = None,
     ) -> str:
         # The spawn's snapshot wins over the pair this backend was built with;
         # see ``SubagentBackend.run``. The constructor pair remains the fallback
@@ -595,7 +597,12 @@ class RavenLoopBackend:
         )
         iteration = 0
         participants = charter_mod.charter_participants()
-        original_task = task
+        # The question a generated function reads is the task the dispatching
+        # model wrote, not the one this lane hands the loop: the charter's
+        # preamble is already on ``task`` by the time it arrives, so reading
+        # ``task`` would answer on the brief twice over. An older caller that
+        # carries no authored task leaves ``task`` in place.
+        original_task = authored_task or task
 
         async def participant_answer(verb: str, *args: Any) -> Any:
             if not participants:

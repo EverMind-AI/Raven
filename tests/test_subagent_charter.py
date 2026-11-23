@@ -746,6 +746,78 @@ def advise(step):
 """
 
 
+ECHO_THE_QUESTION = """
+def intake(text, step):
+    return {"text": step.get("question")}
+"""
+
+
+async def test_a_generated_function_reads_the_task_the_model_wrote(tmp_path) -> None:
+    """The charter's preamble is already on the task the worker's loop is handed,
+    so a function that read that task would read the brief twice -- and answer on
+    the brief rather than on what was asked. The question is the authored task."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.subagent.delegate import dispatch_charter
+    from raven.contracts.llm_provider import LLMResponse
+
+    class _Provider:
+        def __init__(self) -> None:
+            self.seen: list[list[dict]] = []
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+        async def chat_with_retry(self, *, messages, tools, model):
+            self.seen.append(list(messages))
+            return LLMResponse(content="done", finish_reason="stop")
+
+    provider = _Provider()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+    prefixed = "Summarise in three bullets.\n\nSummarise the Q3 revenue table."
+
+    with dispatch_charter({"brief": "Summarise in three bullets.", "functions": {"intake": ECHO_THE_QUESTION}}):
+        await backend.run(
+            prefixed,
+            task_id="t1",
+            workspace=tmp_path,
+            executor=None,
+            history=[],
+            authored_task="Summarise the Q3 revenue table.",
+        )
+
+    # The function answered with the question it was handed, and the worker asked
+    # the model that: the authored task, with the brief read once by the loop.
+    assert provider.seen[-1][-1] == {"role": "user", "content": "Summarise the Q3 revenue table."}
+
+
+async def test_a_worker_that_carries_no_authored_task_is_asked_what_it_was_handed(tmp_path) -> None:
+    """An older caller sends no authored task, and the question stays the task:
+    dropping it would leave a generated function reading nothing at all."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.subagent.delegate import dispatch_charter
+    from raven.contracts.llm_provider import LLMResponse
+
+    class _Provider:
+        def __init__(self) -> None:
+            self.seen: list[list[dict]] = []
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+        async def chat_with_retry(self, *, messages, tools, model):
+            self.seen.append(list(messages))
+            return LLMResponse(content="done", finish_reason="stop")
+
+    provider = _Provider()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+    prefixed = "Summarise in three bullets.\n\nSummarise the Q3 revenue table."
+
+    with dispatch_charter({"brief": "Summarise in three bullets.", "functions": {"intake": ECHO_THE_QUESTION}}):
+        await backend.run(prefixed, task_id="t1", workspace=tmp_path, executor=None, history=[])
+
+    assert provider.seen[-1][-1] == {"role": "user", "content": prefixed}
+
+
 # --------------------------------------------------------------------------- #
 # The deadline: tighter, never looser                                           #
 # --------------------------------------------------------------------------- #
