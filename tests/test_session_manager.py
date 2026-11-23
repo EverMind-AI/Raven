@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 import raven.session.manager as manager_mod
-from raven.session.manager import Session, SessionManager, new_chat_id
+from raven.session.manager import Session, SessionManager, new_chat_id, read_session_file
 from raven.session.title import TITLE_STORAGE_MAX
 
 
@@ -570,6 +570,74 @@ def test_concurrent_writers_lose_no_turns(tmp_path: Path):
     for writer_id in (0, 1):
         q_idx = contents.index(f"q-{writer_id}")
         assert contents[q_idx + 1] == f"a-{writer_id}"
+
+
+def test_two_managers_appending_to_one_file_keep_both_rows(tmp_path: Path):
+    """Two sessions on one transcript is supported; neither append drops the other."""
+    key = "tui:twowriters"
+    first = SessionManager(tmp_path)
+    a = first.get_or_create(key)
+    a.add_message("user", "from a")
+    first.save(a)
+
+    second = SessionManager(tmp_path)
+    b = second.get_or_create(key)
+    b.add_message("user", "from b")
+    second.save(b)
+
+    loaded = SessionManager(tmp_path).get_or_create(key)
+    assert [m["content"] for m in loaded.messages] == ["from a", "from b"]
+
+
+def test_an_undo_keeps_a_row_another_writer_appended_after_the_read(tmp_path: Path):
+    """A rewrite says which of the rows this copy read should go, not what the
+    file should hold in total: a row another writer appended after the read is
+    not the cut's to drop. The cut turn itself still goes."""
+    key = "tui:20260610_100000_cutrace"
+    first = SessionManager(tmp_path)
+    session = first.get_or_create(key)
+    session.add_message("user", "q")
+    session.add_message("assistant", "a")
+    session.add_message("user", "q2")
+    session.add_message("assistant", "a2")
+    first.save(session)
+
+    second = SessionManager(tmp_path)
+    held = second.get_or_create(key)
+    held.add_message("user", "concurrent note")
+    second.save(held)
+
+    assert session.undo_last_turn() == 2
+    first.save(session)
+
+    loaded = read_session_file(first.session_path(key), key)
+    assert loaded is not None
+    assert [m["content"] for m in loaded.messages] == ["q", "a", "concurrent note"]
+
+
+def test_a_clear_replaces_the_file_whole(tmp_path: Path):
+    """A clear mints a new log: the old file is replaced, not merged into.
+
+    That is the one rewrite whose intent is to drop every row, including one
+    another writer appended while this copy was loaded.
+    """
+    key = "tui:20260610_100000_clearrace"
+    first = SessionManager(tmp_path)
+    session = first.get_or_create(key)
+    session.add_message("user", "old")
+    first.save(session)
+
+    second = SessionManager(tmp_path)
+    held = second.get_or_create(key)
+    held.add_message("user", "concurrent note")
+    second.save(held)
+
+    session.clear()
+    first.save(session)
+
+    loaded = read_session_file(first.session_path(key), key)
+    assert loaded is not None
+    assert loaded.messages == []
 
 
 def test_find_most_recent_reflects_latest_append(tmp_path: Path):
@@ -1263,16 +1331,28 @@ def test_a_save_does_not_materialize_the_readers_interrupted_repair(tmp_path: Pa
     )
 
 
-def test_a_fork_does_not_copy_the_readers_interrupted_repair_into_the_child(tmp_path: Path):
-    """A fork of a crashed transcript keeps the call and lets the reader repair it."""
-    _seed_dangling_call(SessionManager(tmp_path), "cli:forkrepair")
+def test_a_fork_repairs_the_child_it_caches_without_writing_the_repair(tmp_path: Path):
+    """The child served from this manager is provider-valid; its file says what happened.
 
-    child = SessionManager(tmp_path).fork("cli:forkrepair")
+    A fork filters the synthetic results a reader derives out of its inherited
+    history, so a parent that ends mid-call leaves the child ending on an
+    assistant ``tool_calls`` row with no result. The child is cached and served
+    from that cache for its first turn, where a strict provider rejects it. The
+    repair is made in memory; the save leaves it out of the file, which derives
+    it again on read.
+    """
+    mgr = SessionManager(tmp_path)
+    _seed_dangling_call(mgr, "cli:forkrepair")
+
+    child = mgr.fork("cli:forkrepair")
 
     assert child is not None
-    assert not any(m.get("role") == "tool" for m in child.messages), "the synthetic result was inherited"
-    path = SessionManager(tmp_path).session_path(child.key)
-    assert "[interrupted]" not in path.read_text(encoding="utf-8")
+    assert mgr.get_or_create(child.key) is child, "the fork is served from this manager's cache"
+    repairs = [m for m in child.messages if m.get("role") == "tool"]
+    assert len(repairs) == 1, f"the cached child is not provider-valid: {child.messages}"
+    assert repairs[0].get(manager_mod.SYNTHETIC_INTERRUPTED_KEY) is True
+    path = mgr.session_path(child.key)
+    assert "[interrupted]" not in path.read_text(encoding="utf-8"), "the reader's repair was filed"
 
 
 def test_clear_resets_the_episodic_cursor_through_a_save(tmp_path: Path):

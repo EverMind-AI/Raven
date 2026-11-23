@@ -3734,27 +3734,20 @@ class TurnPathMixin:
             the rerun's answer behind the wreckage. The rows are matched by the
             identifier the attempt filed them under rather than by position: a
             concurrent writer's messages can land among them, and a cut by
-            position would take those with it. The write goes through the
-            manager's transaction, so it cannot race an appending writer.
+            position would take those with it.
+
+            The cut is taken from the file, inside the manager's write
+            transaction. It cannot be taken from ``session.messages``: a save
+            that merged a concurrent writer replaces the prefix it last read
+            with rows read back from the file, and those have no identifier to
+            match. The transaction serializes the cut against an appending
+            writer; it does not make the appending writer's rows part of this
+            copy's list.
 
             False when the cut could not be written; the caller does not rerun
             then, because the rerun's answer would land on the attempt again.
             """
-            filed = live["filed_ids"]
-            original = session.messages
-            kept = [row for row in original if str(row.get("_row_id") or "") not in filed]
-            if len(kept) == len(original):
-                return True
-            session.messages = kept
-            session.truncations += 1
-            try:
-                self.sessions.save(session)
-            except Exception:
-                session.messages = original
-                session.truncations -= 1
-                logger.exception("could not drop the failed attempt's rows; the turn will not re-run")
-                return False
-            return True
+            return self.sessions.drop_filed_rows(session, live["filed_ids"])
 
         def _seed_for_the_rerun(msgs: list[dict]) -> list[dict]:
             """The question again, plus whatever the reader said while the attempt ran.
