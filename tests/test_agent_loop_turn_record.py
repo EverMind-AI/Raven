@@ -16,8 +16,9 @@ from typing import Any
 
 import pytest
 
+from raven.agent.hook import AgentHook, HookDecision
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
+from raven.agent.loop.bundles import EngineWiring, HostWiring, ToolWiring, TurnPolicy
 from raven.agent.window import compaction, shrink
 from raven.agent.window.turn_log import TURN_LOG_KEY, TurnLog
 from raven.config.raven import CheckpointConfig, RuntimeConfig
@@ -77,7 +78,7 @@ def workspace():
         yield Path(td)
 
 
-def _agent(workspace: Path, provider: LLMProvider, *, compact: bool = True) -> AgentLoop:
+def _agent(workspace: Path, provider: LLMProvider, *, compact: bool = True, hooks: Any = None) -> AgentLoop:
     cfg = CompactionConfig(enabled=True, reserved_tokens=199_100, preserve_recent_tokens=300) if compact else None
     return AgentLoop(
         provider=provider,
@@ -85,6 +86,7 @@ def _agent(workspace: Path, provider: LLMProvider, *, compact: bool = True) -> A
         model="stub",
         policy=TurnPolicy(max_iterations=12),
         tools=ToolWiring(restrict_to_workspace=True),
+        host=HostWiring(hooks=hooks),
         engine=EngineWiring(
             # Wide enough that the history slot has room; the reserve puts the
             # in-turn trigger at 900 tokens.
@@ -682,6 +684,67 @@ def _tool_rows(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [m for m in messages if m.get("role") == "tool"]
 
 
+def _wire_body(message: dict[str, Any]) -> str:
+    """The text one provider payload row carries, whether it is a str or a text-block list."""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    return "".join(part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text")
+
+
+@pytest.mark.asyncio
+async def test_a_cache_strategy_marks_the_preview_not_the_full_tool_body(workspace):
+    """The projection has to run before the strategies, not after them.
+
+    ``CacheOptimizer`` is on by default and rewrites the newest non-system
+    messages' content from a str into a text-block list to hang a cache
+    breakpoint on it. A projection that ran after that rewrite no longer
+    recognised the row as a tool result: the last call carried the
+    60,000-character body while the session filed the 51,704-character preview,
+    and the next turn replayed bytes the previous call never sent. Every call
+    has to carry the filed bytes, and what the strategy wraps has to be the
+    bounded preview rather than the body.
+    """
+    from raven.token_wise.cache_optimizer import CacheOptimizer
+
+    provider = _ScriptProvider(
+        [_big_step(i) for i in range(4)]
+        + [
+            LLMResponse(content="done", finish_reason="stop"),
+            LLMResponse(content="again", finish_reason="stop"),
+        ]
+    )
+    agent = _agent(workspace, provider, compact=False)
+    agent.tools.register(_SixtyKTool())
+    # The real strategy, so the rewrite is the one production performs; only
+    # the capability probe is pinned, because the test model is not a wire id.
+    agent.strategies.register(CacheOptimizer(max_breakpoints=4, supports_caching=lambda _model: True))
+
+    await agent._process_message(_turn("go"), session_key=_KEY)
+
+    last_call = _tool_rows(provider.main_calls[-1])
+    assert len(last_call) == 4
+    assert isinstance(last_call[-1]["content"], list), "the cache strategy really rewrote the tail row"
+
+    filed = {m["tool_call_id"]: _wire_body(m) for m in _tool_rows(_reloaded(agent))}
+    assert len(filed) == 4
+    assert all(len(body) < len(_SIXTY_K) for body in filed.values()), "the session files previews, not the 60 KB bodies"
+    assert all("Full output saved to:" in body for body in filed.values())
+    for call in provider.main_calls:
+        for row in _tool_rows(call):
+            assert _wire_body(row) == filed[row["tool_call_id"]], "every call carries the bytes the session files"
+
+    files = _managed(workspace)
+    assert len(files) == 4
+    assert all(any(str(f.resolve()) in body for body in filed.values()) for f in files), "no managed file is orphaned"
+    assert all(f.read_text(encoding="utf-8") == _SIXTY_K for f in files)
+
+    # The next turn replays the bytes the last call sent, block list and all.
+    await agent._process_message(_turn("again"), session_key=_KEY)
+    replayed = {m["tool_call_id"]: _wire_body(m) for m in _tool_rows(provider.main_calls[-1])}
+    assert replayed == filed
+
+
 @pytest.mark.asyncio
 async def test_a_body_a_shrink_elided_is_filed_as_the_preview_its_call_sent(workspace):
     """The record keeps a body the window elided; it must keep it bounded.
@@ -813,6 +876,54 @@ async def test_a_turn_cancelled_mid_call_files_the_preview_not_the_full_body(wor
 
     files = _managed(workspace)
     assert len(files) == 1, "the preview file the first call wrote is the one the session names"
+    assert str(files[0].resolve()) in filed[0]["content"]
+    assert files[0].read_text(encoding="utf-8") == _SIXTY_K
+
+
+class _CancelBeforeTheNextCall(AgentHook):
+    """Stops the turn between a tool result landing and the call that would read it."""
+
+    name = "cancel_before_the_next_call"
+
+    def __init__(self) -> None:
+        self.iterations = 0
+
+    async def before_iteration(self, ctx):
+        self.iterations += 1
+        if self.iterations == 2:
+            raise asyncio.CancelledError()
+        return HookDecision()
+
+
+@pytest.mark.asyncio
+async def test_a_result_cancelled_before_its_first_call_is_filed_as_its_preview(workspace):
+    """The third filing branch: a row no call ever carried.
+
+    The 60 KB result lands, and the turn is stopped before the next call that
+    would project it. No call sent the body and no window pass replaced it, so
+    the record's only form for it is the projection itself. Filing the full body
+    would store bytes no model read, and leave the managed file the bound wrote
+    unreferenced.
+    """
+    provider = _ScriptProvider([_big_step(0)])
+    agent = _agent(workspace, provider, compact=False, hooks=[_CancelBeforeTheNextCall()])
+    agent.tools.register(_SixtyKTool())
+
+    with pytest.raises(asyncio.CancelledError):
+        await agent._process_message(_turn("go"), session_key=_KEY)
+
+    assert _tool_rows(provider.main_calls[-1]) == [], "no call ever carried the result"
+
+    reloaded = _reloaded(agent)
+    filed = _tool_rows(reloaded)
+    assert len(filed) == 1
+    assert filed[0]["content"] != _SIXTY_K
+    assert len(filed[0]["content"]) < len(_SIXTY_K)
+    assert "Full output saved to:" in filed[0]["content"]
+    assert reloaded[-1].get("turn_ended", {}).get("status") == "cancelled"
+
+    files = _managed(workspace)
+    assert len(files) == 1, "the bound wrote one file, and the filed row is what names it"
     assert str(files[0].resolve()) in filed[0]["content"]
     assert files[0].read_text(encoding="utf-8") == _SIXTY_K
 

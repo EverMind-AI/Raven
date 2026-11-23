@@ -1184,6 +1184,11 @@ class TurnPathMixin:
         # model read, and name a managed file no call used.
         sent_tool_rows: dict[str, str] = {}
         elided_tool_rows: dict[str, str] = {}
+        # None of the three is evicted; a turn with no iteration cap grows them
+        # by one entry per over-budget row until it ends. A stamp cannot come
+        # back: ``TurnLog.drop`` only removes the current iteration, and a row
+        # a call carried was appended in an earlier one -- the call that first
+        # projects it runs before anything of its own iteration is added.
 
         def _model_preview(row: dict[str, Any]) -> str | None:
             """The content the model reads for one tool row, or ``None`` when no call reads a preview."""
@@ -1709,25 +1714,27 @@ class TurnPathMixin:
             pending_gen_overrides = None
             call_reasoning_effort = gen_overrides.get("reasoning_effort")
             last_tool_defs, last_model, last_effort = tool_defs, active_model, call_reasoning_effort
+            # Before the strategies, not after: a strategy that re-shapes a
+            # message's content (CacheOptimizer wraps the tail into a
+            # text-block list) would hide the tool row from a projection that
+            # ran later, so the full body would go on the wire while the
+            # session filed the preview. The transcript keeps the full body;
+            # only this payload carries the preview.
+            projected_messages = _model_facing(messages)
             call_messages, call_tools, call_model = await first_call.stage(
                 "the before_llm_call strategies",
                 self.strategies.before_llm_call(
-                    messages,
+                    projected_messages,
                     tool_defs,
                     active_model,
                 ),
                 iteration=iteration,
-                fallback=(messages, tool_defs, active_model),
+                fallback=(projected_messages, tool_defs, active_model),
             )
-            # Last, and on the payload only: the strategies above decide against
-            # the shape the messages arrived in, and the prompt-cache prefix
-            # stays stable because the same arrivals always fold the same way.
+            # On the payload only, after the strategies: they decide against the
+            # shape the messages arrived in, and the prompt-cache prefix stays
+            # stable because the same arrivals always fold the same way.
             call_messages = merge_mid_turn(call_messages, replay=True)
-            # The model reads the preview of an over-budget tool result; the
-            # transcript keeps the full body for the hooks above, and the
-            # persist at the end of the turn writes the same bytes this call
-            # sends so the next replay starts from an identical prefix.
-            call_messages = _model_facing(call_messages)
             # Sized to the prompt it goes out beside, which is the room the
             # history strategy's trigger holds back: near that line the model's
             # whole ceiling no longer fits, and a provider that checks
