@@ -150,9 +150,8 @@ def test_a_single_line_over_the_byte_budget_keeps_its_head(tmp_path: Path) -> No
     bounded = bound_tool_result(wrap_untrusted(body, source="exec"), tmp_path, limits=limits)
 
     preview = _body(bounded).removesuffix(TOOL_RESULT_TRUNCATION_MARKER)
-    assert preview
-    assert len(preview.encode("utf-8")) <= 50 * 1024
-    assert preview.startswith("x")
+    assert len(preview.encode("utf-8")) == 50 * 1024
+    assert preview == "x" * (50 * 1024)
     assert "bytes omitted" in bounded
 
 
@@ -165,9 +164,8 @@ def test_a_single_line_over_the_byte_budget_keeps_its_tail_for_exec(tmp_path: Pa
     visible = _body(bounded)
     assert visible.startswith(TOOL_RESULT_TRUNCATION_MARKER)
     preview = visible.removeprefix(TOOL_RESULT_TRUNCATION_MARKER).lstrip("\n")
-    assert preview
-    assert len(preview.encode("utf-8")) <= 50 * 1024
-    assert preview.endswith("y")
+    assert len(preview.encode("utf-8")) == 50 * 1024
+    assert preview == "y" * (50 * 1024)
     assert "the preview shows the end" in bounded
 
 
@@ -335,3 +333,29 @@ def test_a_symlink_inside_the_workspace_is_also_refused(tmp_path: Path) -> None:
     assert is_truncated(bounded)
     assert "Full output saved to:" not in bounded
     assert list(target.iterdir()) == []
+
+
+def test_blank_lines_before_an_over_budget_line_keep_that_line(tmp_path: Path) -> None:
+    """With the line limit off, the budget stop can itself be a blank line."""
+    body = "\n" * (60 * 1024) + "x" * 100
+    limits = ToolOutputLimits(max_lines=0, max_bytes=50 * 1024, max_chars=0)
+
+    bounded = bound_tool_result(wrap_untrusted(body, source="web_fetch"), tmp_path, limits=limits)
+
+    preview = _body(bounded).removesuffix(TOOL_RESULT_TRUNCATION_MARKER)
+    assert preview == "x" * 100
+    assert "bytes omitted" in bounded
+
+
+def test_blank_lines_after_an_over_budget_line_keep_that_line_for_exec(tmp_path: Path) -> None:
+    """The same stop at the end: the tail keeps the line before the blank run."""
+    body = "y" * 100 + "\n" * (60 * 1024)
+    limits = ToolOutputLimits(max_lines=0, max_bytes=50 * 1024, max_chars=0)
+
+    bounded = bound_tool_result(wrap_untrusted(body, source="exec"), tmp_path, limits=limits, direction="tail")
+
+    visible = _body(bounded)
+    assert visible.startswith(TOOL_RESULT_TRUNCATION_MARKER)
+    preview = visible.removeprefix(TOOL_RESULT_TRUNCATION_MARKER).lstrip("\n")
+    assert preview == "y" * 100
+    assert "the preview shows the end" in bounded

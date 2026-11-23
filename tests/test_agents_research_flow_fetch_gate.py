@@ -585,13 +585,16 @@ def test_the_fetch_gate_twin_leads_the_record_by_exactly_the_second_valve():
 _SESSION = "test:big-fetch"
 # U+6C49 is a 3-byte CJK character; the source stays ASCII for the language gate.
 _PAGE = chr(0x6C49) * 20_000
+# ensure_ascii=False keeps the page as UTF-8 rather than \u escapes, so the
+# envelope really is 60 KB on one line and the bound cuts inside a CJK character.
 _BIG_ENVELOPE = json.dumps(
     {
         "url": "https://example.com/big",
         "finalUrl": "https://example.com/big",
         "content": _PAGE,
         "length": len(_PAGE),
-    }
+    },
+    ensure_ascii=False,
 )
 
 
@@ -682,6 +685,7 @@ async def test_a_big_fetch_is_a_success_for_the_gate_and_a_preview_for_the_model
     bounded preview. Before the bound moved to the call seam, the gate saw the
     preview, ``fetch_result_ok`` returned False, and the gate stayed closed.
     """
+    assert len(_BIG_ENVELOPE.encode("utf-8")) == 60_105, "60 KB of UTF-8 on one line"
     gate = FetchGate(k=2, release_after_failed_fetches=99)
     seat = _FetchGateSeat(gate)
     provider = _TurnScript(

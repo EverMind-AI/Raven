@@ -27,12 +27,19 @@ pass's copies of a turn message already carry the stamp, and the list it
 returns is adopted with nothing appended to the old one lost. Messages removed
 by a hook rollback were appended after the last ``follow`` and are never seen,
 which is what a rollback means.
+
+The record keeps a tool body as it was, because the window passes only rewrite
+their own copies of it. The loop binds the projection that bounds a body for
+the model (:meth:`TurnLog.bind_projection`), so the body is filed in that same
+bounded form -- including the body behind an elided stand-in, which is the one
+thing the record holds and the window no longer does. Filing it whole is what
+made a session replay bytes no model call ever read.
 """
 
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from raven.agent.window import compaction
@@ -54,7 +61,8 @@ both attempts."""
 STAND_IN_KEY = "_window_stand_in"
 """Set by a window pass on a copy that replaces what a message said (an elided
 body) rather than restating it (a withdrawn picture's note). The record keeps
-the message the stand-in stood for."""
+the message the stand-in stood for, in the form the model read it (see
+:meth:`TurnLog.bind_projection`)."""
 
 
 class TurnLog:
@@ -79,7 +87,33 @@ class TurnLog:
         self._index: dict[str, int] = {}
         self._live: list[dict[str, Any]] = base
         self._mark = start
+        self._projection: Callable[[dict[str, Any]], str | None] | None = None
         self._sync(base)
+
+    def bind_projection(self, project: Callable[[dict[str, Any]], str | None]) -> None:
+        """File each recorded tool body in the form ``project`` says the model read it.
+
+        The loop owns the projection because it owns the preview cache: the same
+        call has to name the same bytes for the same result, or the filed turn
+        would carry a managed path no call sent and the next replay would
+        diverge. Binding is also what lets a row a window pass elided be filed
+        as the preview the calls read instead of the full body the pass stood in
+        for -- the window never rewrites the record, so the record cannot learn
+        it any other way.
+        """
+        self._projection = project
+
+    def project_tool_results(self) -> None:
+        """Rewrite the recorded tool bodies through the bound projection."""
+        if self._projection is None:
+            return
+        self._sync(self._live)
+        for entry in self._entries:
+            if entry.get("role") != "tool":
+                continue
+            preview = self._projection(entry)
+            if preview is not None:
+                entry["content"] = preview
 
     def follow(self, messages: list[dict[str, Any]]) -> None:
         """Adopt ``messages`` as the list the loop works on from here.

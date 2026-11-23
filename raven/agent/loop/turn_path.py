@@ -1165,13 +1165,17 @@ class TurnPathMixin:
             log.follow(result.messages)
             return result
 
-        # The preview each over-budget tool result is sent as, keyed by
-        # ``tool_call_id`` so every call of the turn sends the same bytes. The
-        # message itself keeps the full body: hooks and observers read the
-        # transcript, not the payload, and several research gates decide a
-        # fetch's success by parsing that body. Only the projection below, and
-        # the persist at the end of the turn, carry the preview.
-        bounded_results: dict[str, tuple[str, str]] = {}
+        # The preview each over-budget tool result is sent as, keyed by the call
+        # and by the body it bounded so every call of the turn sends the same
+        # bytes. The body is part of the key because a step can advertise two
+        # calls under one ``tool_call_id``; keying on the id alone let the later
+        # result evict the earlier one, and every call then re-filed both under
+        # a fresh managed path. The message itself keeps the full body: hooks and
+        # observers read the transcript, not the payload, and several research
+        # gates decide a fetch's success by parsing that body. Only the
+        # projection below, and the persist that closes the turn, carry the
+        # preview.
+        bounded_results: dict[tuple[str, str], str] = {}
         # The results this turn appended. A body already in history is left as
         # stored: projecting it without rewriting the session would hand every
         # later turn a preview under a fresh managed path, and the prefix would
@@ -1184,9 +1188,9 @@ class TurnPathMixin:
             call_id = row.get("tool_call_id")
             if not isinstance(content, str) or not isinstance(call_id, str) or call_id not in turn_tool_calls:
                 return None
-            cached = bounded_results.get(call_id)
-            if cached is not None and content == cached[0]:
-                return cached[1]
+            cached = bounded_results.get((call_id, content))
+            if cached is not None:
+                return cached
             preview = bound_tool_result(
                 content,
                 self.workspace,
@@ -1196,7 +1200,7 @@ class TurnPathMixin:
             )
             if preview == content:
                 return None
-            bounded_results[call_id] = (content, preview)
+            bounded_results[(call_id, content)] = preview
             return preview
 
         def _model_facing(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1212,6 +1216,10 @@ class TurnPathMixin:
                     out = list(rows)
                 out[index] = {**row, "content": preview}
             return rows if out is None else out
+
+        # A row the window elided is kept by the log as it was, so the persist
+        # has to reach it through the record rather than through the last list.
+        log.bind_projection(_model_preview)
 
         # Retryable model errors that outlasted the provider's own ladder: how many
         # of the loop's longer waits this turn has spent.
@@ -3078,8 +3086,12 @@ class TurnPathMixin:
 
         # The turn files the bytes its calls sent: the previews replace the full
         # bodies the hooks read, so the session and the next replay carry what
-        # the model saw. A result no call ever read -- a blocked or stalled turn
-        # -- is bounded here too, so an early exit cannot file an unbounded body.
+        # the model saw. The record is projected first, because a body a window
+        # pass elided is no longer in ``messages`` and only the record still
+        # holds it; what remains here is for a list the record never saw. A
+        # result no call ever read -- a blocked or stalled turn -- is bounded
+        # here too, so an early exit cannot file an unbounded body.
+        log.project_tool_results()
         for row in messages:
             if isinstance(row, dict) and row.get("role") == "tool":
                 preview = _model_preview(row)
@@ -3591,6 +3603,18 @@ class TurnPathMixin:
         pending: dict[str, Any] = {"rerun": False, "reasons": []}
         live: dict[str, TurnLog] = {"log": TurnLog(initial_messages, persist_from)}
 
+        def _attempt_record() -> list[dict]:
+            """The attempt's record as the model read it.
+
+            A rescue files this instead of the last window, so it has to project
+            the record the same way the end of a completed attempt does: a tool
+            body the window pass elided is kept by the log as it was, and a
+            cancelled turn that filed that body whole would write bytes no model
+            call read.
+            """
+            live["log"].project_tool_results()
+            return live["log"].messages()
+
         def _seed_for_the_rerun(msgs: list[dict]) -> list[dict]:
             """The question again, plus whatever the reader said while the attempt ran.
 
@@ -3733,7 +3757,7 @@ class TurnPathMixin:
             # note saying a person ended the turn. Then the cancel proceeds.
             self._save_broken_turn(
                 session,
-                live["log"].messages(),
+                _attempt_record(),
                 persist_from,
                 None,
                 streamed,
@@ -3749,7 +3773,7 @@ class TurnPathMixin:
             # than straight after the question.
             self._save_broken_turn(
                 session,
-                live["log"].messages(),
+                _attempt_record(),
                 persist_from,
                 None,
                 streamed,
@@ -3764,7 +3788,7 @@ class TurnPathMixin:
         except Exception as exc:
             self._save_broken_turn(
                 session,
-                live["log"].messages(),
+                _attempt_record(),
                 persist_from,
                 None,
                 streamed,
@@ -4081,6 +4105,9 @@ class TurnPathMixin:
     ) -> None:
         """Persist what a cancelled or failed turn got as far as producing.
 
+        The rows arrive as the model read them: the caller projects the
+        attempt's record before handing it over, so a tool body the window
+        elided is filed as the preview its calls sent, never the full body.
         The tail of the turn plus two kinds of repair, then one closing marker:
 
         - an assistant message whose tool calls never got results gains a

@@ -189,11 +189,16 @@ def _bounded_preview(body: str, limits: ToolOutputLimits, direction: str) -> tup
     if ordered and unit in ("bytes", "characters") and not any(line.strip() for line in kept):
         # A line that is itself over budget has no whole line to keep, and a
         # preview of blank lines alone is empty in everything but size. Keep the
-        # head or tail of the line the budget stopped at -- ``ordered[len(kept)]``,
-        # not ``ordered[0]``: the lines before it were kept, and the one that did
-        # not fit is the one to cut. The character cap applies before the byte cap
-        # so a UTF-8 cut never splits a character.
-        first = ordered[len(kept)]
+        # head or tail of the first non-blank line after the budget stop --
+        # ``ordered[len(kept)]`` itself can be blank when the body opens on
+        # blank lines and the line limit is off, and cutting that gives an
+        # empty preview. The lines before it were kept, and the one that did
+        # not fit is the one to cut. The character cap applies before the byte
+        # cap so a UTF-8 cut never splits a character.
+        index = len(kept)
+        while index < len(ordered) and not ordered[index].strip():
+            index += 1
+        first = ordered[index] if index < len(ordered) else ordered[len(kept)]
         if limits.max_chars:
             first = first[: limits.max_chars] if direction == "head" else first[-limits.max_chars :]
         if limits.max_bytes:

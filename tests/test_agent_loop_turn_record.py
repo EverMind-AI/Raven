@@ -634,3 +634,228 @@ async def test_a_tool_result_cut_to_the_cap_is_the_same_bytes_on_the_wire_and_in
     assert len(files) == 1
     assert str(files[0].resolve()) in saved["content"]
     assert files[0].read_text(encoding="utf-8") == _HUGE_BODY
+
+
+_SIXTY_K = "x" * 60_000
+
+
+class _SixtyKTool(Tool):
+    """Returns a body larger than the model-facing budget, on every call."""
+
+    name = "sixty_k"
+    description = "Return a long deterministic result."
+    parameters = {"type": "object", "properties": {}, "required": []}
+
+    async def execute(self, **kwargs: Any) -> str:
+        return _SIXTY_K
+
+
+class _HangingSixtyKTool(_SixtyKTool):
+    """Answers the first call, then hangs -- a turn cancelled mid-call."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def execute(self, **kwargs: Any) -> str:
+        self.calls += 1
+        if self.calls > 1:
+            raise asyncio.CancelledError()
+        return _SIXTY_K
+
+
+def _big_step(i: int) -> LLMResponse:
+    return LLMResponse(
+        content="",
+        tool_calls=[ToolCallRequest(id=f"c{i}", name="sixty_k", arguments={})],
+        finish_reason="tool_calls",
+    )
+
+
+def _managed(workspace: Path) -> list[Path]:
+    from raven.session.tool_output import tool_output_dir
+
+    directory = tool_output_dir(workspace)
+    return sorted(directory.glob("tool_*.txt")) if directory.is_dir() else []
+
+
+def _tool_rows(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [m for m in messages if m.get("role") == "tool"]
+
+
+@pytest.mark.asyncio
+async def test_a_body_a_shrink_elided_is_filed_as_the_preview_its_call_sent(workspace):
+    """The record keeps a body the window elided; it must keep it bounded.
+
+    Four over-budget results fill the window, the fifth call is refused as too
+    long, and the emergency shrink replaces the oldest body with a placeholder.
+    The model's last read is that placeholder, and the record still holds the
+    body the placeholder stood in for -- so the persist has to project it, or it
+    files the full body while every call sent a preview and the next replay
+    starts on bytes no call ever read.
+    """
+    from raven.session.tool_output import TOOL_OUTPUT_PREFIX
+
+    script: list[Any] = [_big_step(i) for i in range(4)]
+    script.append(
+        LLMResponse(content="This model's maximum context length (8192 tokens) was exceeded", finish_reason="error")
+    )
+    script.append(LLMResponse(content="answer after the elision", finish_reason="stop"))
+    provider = _ScriptProvider(script)
+    agent = _agent(workspace, provider, compact=False)
+    agent.tools.register(_SixtyKTool())
+
+    await agent._process_message(_turn("go"), session_key=_KEY)
+
+    assert shrink.ELIDED_TOOL_OUTPUT in _texts(provider.main_calls[-1]), "the window really was elided"
+    first_read = _tool_rows(provider.main_calls[1])[0]["content"]
+    assert "Full output saved to:" in first_read, "the first read was the bounded preview"
+    last_read = _tool_rows(provider.main_calls[-1])[0]["content"]
+    assert last_read == shrink.ELIDED_TOOL_OUTPUT, "the model's last read of that row was the placeholder"
+
+    reloaded = _reloaded(agent)
+    filed = _tool_rows(reloaded)
+    _no_window_artifacts(reloaded)
+    assert len(filed) == 4
+    assert filed[0]["content"] == first_read, "the elided body is filed as the preview its calls sent"
+    assert len(filed[0]["content"]) < len(_SIXTY_K), "the full body is not what the session files"
+    sent = {m["content"] for call in provider.main_calls for m in _tool_rows(call)}
+    assert all(m["content"] in sent for m in filed), "every filed tool body is a body a call sent"
+
+    files = _managed(workspace)
+    assert len(files) == 4
+    assert all(any(str(f.resolve()) in m["content"] for m in filed) for f in files), "no managed file is orphaned"
+    assert all(f.name.startswith(TOOL_OUTPUT_PREFIX) for f in files)
+
+
+@pytest.mark.asyncio
+async def test_a_turn_cancelled_mid_call_files_the_preview_not_the_full_body(workspace):
+    """A rescue has to project the record too, or a stop writes an orphan.
+
+    The first result is over budget and its preview is written when the second
+    call is prepared; that call never returns, so the turn is filed from the
+    record. Filing the body whole both stores bytes no call read and leaves the
+    managed file it already wrote unreferenced.
+    """
+    provider = _ScriptProvider([_big_step(0), _big_step(1)])
+    agent = _agent(workspace, provider, compact=False)
+    agent.tools.register(_HangingSixtyKTool())
+
+    with pytest.raises(asyncio.CancelledError):
+        await agent._process_message(_turn("go"), session_key=_KEY)
+
+    first_read = _tool_rows(provider.main_calls[1])[0]["content"]
+    assert "Full output saved to:" in first_read
+    reloaded = _reloaded(agent)
+    filed = _tool_rows(reloaded)
+    _no_window_artifacts(reloaded)
+    assert filed[0]["content"] == first_read, "the cancelled turn files what the model read"
+    assert len(filed[0]["content"]) < len(_SIXTY_K)
+    assert filed[1]["content"] == "[interrupted] this call never returned"
+    assert reloaded[-1].get("turn_ended", {}).get("status") == "cancelled"
+
+    files = _managed(workspace)
+    assert len(files) == 1, "the preview file the first call wrote is the one the session names"
+    assert str(files[0].resolve()) in filed[0]["content"]
+    assert files[0].read_text(encoding="utf-8") == _SIXTY_K
+
+
+@pytest.mark.asyncio
+async def test_a_tool_body_already_in_history_is_replayed_as_stored(workspace):
+    """Only this turn's results are projected; history is replayed byte for byte.
+
+    Projecting a stored body would hand every later turn a preview under a fresh
+    managed path, so the prefix would move each time and a replayed session
+    would still disagree with its own record. A body already filed as a preview
+    is already the bounded form, and one filed before the bound existed stays
+    what the record says it is.
+    """
+    from raven.session.tool_output import ToolOutputLimits, bound_tool_result
+
+    provider = _ScriptProvider([LLMResponse(content="done", finish_reason="stop")])
+    agent = _agent(workspace, provider, compact=False)
+    stored_preview = bound_tool_result("y" * 60_000, workspace, limits=ToolOutputLimits())
+    assert "Full output saved to:" in stored_preview
+    before = _managed(workspace)
+    assert len(before) == 1
+
+    session = agent.sessions.get_or_create(_KEY)
+    session.record({"role": "user", "content": "the earlier question"})
+    session.record(
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "old1", "type": "function", "function": {"name": "exec", "arguments": "{}"}},
+                {"id": "old2", "type": "function", "function": {"name": "web_fetch", "arguments": "{}"}},
+            ],
+        }
+    )
+    session.record({"role": "tool", "tool_call_id": "old1", "name": "exec", "content": _SIXTY_K})
+    session.record({"role": "tool", "tool_call_id": "old2", "name": "web_fetch", "content": stored_preview})
+    session.record({"role": "assistant", "content": "the earlier answer"})
+    agent.sessions.save(session)
+
+    await agent._process_message(_turn("go"), session_key=_KEY)
+
+    sent = {m["tool_call_id"]: m["content"] for m in _tool_rows(provider.main_calls[0])}
+    assert sent["old1"] == _SIXTY_K, "a body already in history is sent as stored"
+    assert sent["old2"] == stored_preview, "a stored preview is not bounded a second time"
+    assert _managed(workspace) == before, "replaying history writes no new managed file"
+    reloaded = {m["tool_call_id"]: m["content"] for m in _tool_rows(_reloaded(agent))}
+    assert reloaded["old1"] == _SIXTY_K
+    assert reloaded["old2"] == stored_preview
+
+
+class _TwoBodyTool(Tool):
+    """Answers with a different over-budget body on each call."""
+
+    name = "two_body"
+    description = "Return one long body, then another."
+    parameters = {"type": "object", "properties": {}, "required": []}
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def execute(self, **kwargs: Any) -> str:
+        self.calls += 1
+        return ("a" if self.calls == 1 else "b") * 60_000
+
+
+@pytest.mark.asyncio
+async def test_two_results_sharing_a_tool_call_id_keep_their_own_previews(workspace):
+    """One step can advertise two calls under one id; neither may evict the other.
+
+    Keying the preview cache on the id alone made each result overwrite the
+    other, so every call re-bounded both under fresh managed paths and the filed
+    turn stopped matching the payload. The body is part of the key.
+    """
+    provider = _ScriptProvider(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(id="same", name="two_body", arguments={}),
+                    ToolCallRequest(id="same", name="two_body", arguments={}),
+                ],
+                finish_reason="tool_calls",
+            ),
+            LLMResponse(content="done", finish_reason="stop"),
+        ]
+    )
+    agent = _agent(workspace, provider, compact=False)
+    agent.tools.register(_TwoBodyTool())
+
+    await agent._process_message(_turn("go"), session_key=_KEY)
+
+    sent = _tool_rows(provider.main_calls[-1])
+    assert len(sent) == 2
+    assert "a" * 1_000 in sent[0]["content"] and "b" * 1_000 not in sent[0]["content"]
+    assert "b" * 1_000 in sent[1]["content"] and "a" * 1_000 not in sent[1]["content"]
+    filed = _tool_rows(_reloaded(agent))
+    assert [m["content"] for m in filed] == [m["content"] for m in sent]
+
+    files = _managed(workspace)
+    assert len(files) == 2, "one managed file per distinct body, not per call"
+    bodies = {f.read_text(encoding="utf-8") for f in files}
+    assert bodies == {"a" * 60_000, "b" * 60_000}
+    assert all(any(str(f.resolve()) in m["content"] for m in filed) for f in files)

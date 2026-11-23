@@ -460,13 +460,16 @@ class ContextConfig(_Base):
     removes the byte limit. Whichever of this, ``toolResultMaxLines`` and the
     legacy ``toolResultMaxChars`` is reached first decides the preview.
 
-    The cut is applied when the result enters the conversation, not only on the
-    way to disk: the model reads the bounded preview, the log files the same
-    bytes, and the next turn's replay matches what was sent. A cap applied only
-    at the write left the model holding the full result and the replay holding
-    the cut one, so the provider's prefix cache broke at the cut. The untrusted
-    fence around the result stays whole: the cut lands inside it, before the
-    genuine END marker and any trusted note after it.
+    The cut is applied where the model reads the result: on the payload of the
+    call, after the iteration hooks and the ``before_llm_call`` strategies have
+    run, and not when the result enters the conversation. The hooks and
+    observers in between still read the full body, which is what the research
+    gates parse. The session files the preview the call sent, so the next
+    turn's replay matches what was sent. A cap applied only on the way to disk
+    left the model holding the full result and the replay holding the cut one,
+    so the provider's prefix cache broke at the cut. The untrusted fence around
+    the result stays whole: the cut lands inside it, before the genuine END
+    marker and any trusted note after it.
 
     When the cut fires, the full body is written to
     ``<workspace>/tool-output/tool_<id>.txt`` (owner-only on POSIX; Windows
