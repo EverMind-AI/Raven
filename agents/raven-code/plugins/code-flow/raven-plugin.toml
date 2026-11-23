@@ -31,6 +31,14 @@ enabled_by_default = true
 name = "code_flow"
 factory = "code_flow.flow:make_flow_hook"
 
+# The turn clock: a launcher facing a task budget writes it into the slice, and
+# this seat hands it to the loop under the shared turn-budget key. Declines when
+# the slice names no clock, so an unset deadline casts nothing.
+
+[[plugin.contributes.hooks]]
+name = "code_turn_budget"
+factory = "code_flow.flow:make_turn_budget_hook"
+
 # Forget-on-deletion (paper: raven/contracts/session_events.py): a deleted
 # session leaves the ledger, so it is never counted as a neighbour again.
 

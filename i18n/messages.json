@@ -9055,6 +9055,14 @@
       "en": "Tool iteration cap",
       "zh": "工具循环上限"
     },
+    "gui.settings.roles.iterations_unbounded": {
+      "en": "No cap",
+      "zh": "不限"
+    },
+    "gui.settings.roles.iterations_unbounded_note": {
+      "en": "Edit maxToolIterations in config.json to set a cap",
+      "zh": "要设上限,请编辑 config.json 里的 maxToolIterations"
+    },
     "gui.settings.roles.times": {
       "en": "times",
       "zh": "次"

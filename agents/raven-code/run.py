@@ -88,6 +88,10 @@ MODES_DIR = HERE / "modes"
 # rank would leave the agent on its default rather than guess. The baseline IS
 # the high profile, so it needs no overlay file; the others do.
 BASELINE_MODE = "high"
+#: Seconds kept back from ``--timeout`` for the turn to stop on its own terms.
+#: The loop checks a wall clock between iterations, never mid-call, so the last
+#: call and the wrap-up still have to fit inside the margin.
+WRAPUP_MARGIN_SECONDS = 120
 # What a client's mode picker shows, and what the dispatching model reads when
 # it chooses a tier for a task. The copy lives here rather than in the overlay
 # files because it is product text about the choice, not config the agent reads.
@@ -403,7 +407,14 @@ def resolve_mode(overlay: dict) -> tuple[None, dict]:
     return None, {}
 
 
-def render_config(source: Path, partition: Path, mode: str | None = None, *, unattended: bool = False) -> Path:
+def render_config(
+    source: Path,
+    partition: Path,
+    mode: str | None = None,
+    *,
+    unattended: bool = False,
+    timeout: int | None = None,
+) -> Path:
     """Write a copy of ``source`` with the secrets merged in, under ``partition``.
 
     The partition is the rendered file's parent and the pinned Agent home, so
@@ -412,7 +423,9 @@ def render_config(source: Path, partition: Path, mode: str | None = None, *, una
     session cwd, or ``--workspace``). ``mode`` is which effort tier sessions
     start in; the source stays the baseline whatever the tier. ``unattended``
     says this hosting has nobody to answer a permission prompt -- see the
-    ask-tier note below.
+    ask-tier note below. ``timeout`` is the caller's deadline for this turn:
+    rendered into the code flow's slice as a turn clock, minus the wrap-up
+    margin, so the loop stops itself instead of being killed mid-call.
     """
     config = json.loads(source.read_text(encoding="utf-8"))
     host = render.host_config()
@@ -534,6 +547,10 @@ def render_config(source: Path, partition: Path, mode: str | None = None, *, una
         acp["modes"] = catalogue
         acp["defaultMode"] = mode or BASELINE_MODE
         log(f"[run] modes: {', '.join(catalogue)} (default {acp['defaultMode']})")
+
+    if timeout:
+        slice_ = config.setdefault("plugins", {}).setdefault("config", {}).setdefault(FLOW_PLUGIN_ID, {})
+        slice_["wallClockSeconds"] = max(10, int(timeout) - WRAPUP_MARGIN_SECONDS)
 
     partition.mkdir(parents=True, exist_ok=True)
     seed_guide(partition)
@@ -774,7 +791,7 @@ def run_task(args: argparse.Namespace) -> int:
     _VERBOSE = args.verbose
     _LOG_FILE = state_dir / "launcher.log"
 
-    rendered = render_config(Path(args.config).resolve(), state_dir, unattended=True)
+    rendered = render_config(Path(args.config).resolve(), state_dir, unattended=True, timeout=args.timeout)
     workspace = resolve_workspace(state_dir, args.workspace)
 
     transcript = session_file(state_dir, workspace, conversation)
@@ -908,7 +925,12 @@ def main() -> int:
     # No wall-clock cap by default: a real coding task has no predictable
     # length, and a killed run produces nothing at all. The per-LLM-call and
     # per-command limits stay: those bound a stall, not a long task.
-    parser.add_argument("--timeout", type=int, default=0, help="seconds; 0 (default) means no limit")
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=0,
+        help="seconds; 0 (default) means no time limit and no tool-iteration cap",
+    )
     parser.add_argument("--keep-going", action="store_true", help="do not fail when no answer was committed")
     parser.add_argument("--verbose", action="store_true", help="mirror diagnostics to stderr; never when spawned")
     args = parser.parse_args()

@@ -372,6 +372,11 @@ _SAID_LOG_MAX_CHARS = 2000
 # drop them too, or it answers about a message nobody is going to keep.
 _TURN_TRANSIENT_KEYS = ("_recovery_synthetic", ATTACHED_IMAGE_KEY)
 
+# Tells a wrap-up call that named no cap from one whose turn is explicitly
+# unbounded: both would otherwise arrive as ``None``, and the fallback text has
+# to say which one the reader got.
+_ITERATION_CAP_FROM_LOOP = object()
+
 
 def _stamp_context_used_on_kept(
     messages: list[dict[str, Any]],
@@ -814,6 +819,7 @@ class TurnPathMixin:
         prompt: str = _MAX_ITER_SYNTHESIS_PROMPT,
         fallback: str | None = None,
         synthesis_policy: TurnSynthesisPolicy | None = None,
+        iteration_cap: Any = _ITERATION_CAP_FROM_LOOP,
     ) -> str:
         """Wrap up an interrupted turn with tools withheld from the model.
 
@@ -837,8 +843,10 @@ class TurnPathMixin:
         ``prompt`` and ``fallback`` are the caller's because the reason differs
         and the reason is model-visible: a turn stopped on a repeating call has
         not used up its budget, and told that it had, it summarizes the wrong
-        thing.
+        thing. ``iteration_cap`` is the cap the turn actually hit, so the static
+        fallback names that number; omitted, the loop's own default answers.
         """
+        cap = self.max_iterations if iteration_cap is _ITERATION_CAP_FROM_LOOP else iteration_cap
         if synthesis_policy is not None:
             prompt = f"{prompt}\n\n{synthesis_policy.guidance}"
         # The turn's own conversation plus one instruction: the main line, not a
@@ -885,7 +893,7 @@ class TurnPathMixin:
                     except Exception as exc:
                         logger.warning("Early-exit synthesis repair failed: {}", exc)
             if not text:
-                text = fallback or _MAX_ITER_STATIC_FALLBACK.format(n=self.max_iterations)
+                text = fallback or _MAX_ITER_STATIC_FALLBACK.format(n=cap or "unbounded")
                 if synthesis_policy.format_fallback is not None:
                     try:
                         text = synthesis_policy.format_fallback(text)
@@ -924,7 +932,7 @@ class TurnPathMixin:
         except Exception as exc:
             logger.warning("Early-exit synthesis call failed: {}", exc)
         if fallback is None:
-            fallback = _MAX_ITER_STATIC_FALLBACK.format(n=self.max_iterations)
+            fallback = _MAX_ITER_STATIC_FALLBACK.format(n=cap or "unbounded")
         # The streamed-success path already delivered its text through
         # ``on_token_delta``; this fallback did not. Push it through the stream
         # too, or the run_turn boundary — which suppresses the closing ``Text``
@@ -1241,7 +1249,12 @@ class TurnPathMixin:
 
         # Read once, here: a mode switched mid-turn lands on the next turn.
         policy = self.session_policy(session_key or "")
-        iteration_cap = policy.max_iterations or self.max_iterations
+        pinned = policy.max_iterations if policy.max_iterations is not None else self.max_iterations
+        if pinned is not None and pinned < 0:
+            # A negative pin is a bad value, not a request for no cap: fall back
+            # to the loop's own cap rather than lifting every bound.
+            pinned = self.max_iterations
+        iteration_cap = pinned if pinned is None or pinned > 0 else None
         # The effort this turn's own calls run at, short of a hook's rollback
         # override: the session's own pick over its mode's word over the
         # configured default as the file has it now -- ``session_effort.in_force``,
@@ -1433,7 +1446,7 @@ class TurnPathMixin:
         # closes over it: a continuation that raises ends the turn on the cut
         # answer from the iteration before, whose measurement this still holds.
         measured_parts: dict[str, int] | None = None
-        while iteration < iteration_cap:
+        while iteration_cap is None or iteration < iteration_cap:
             # Checked here and not mid-generation: cancelling a call in flight
             # discards a finished generation and leaves no answer, and a deadline
             # landing between a tool result and the model reading it produces a
@@ -1451,7 +1464,7 @@ class TurnPathMixin:
             logger.info(
                 "Iteration {}/{} model={}",
                 iteration,
-                iteration_cap,
+                iteration_cap if iteration_cap is not None else "unbounded",
                 active_model,
             )
 
@@ -2823,7 +2836,11 @@ class TurnPathMixin:
         exhausted = (
             final_content is None
             and not ended_answered
-            and (stalled_tool is not None or iteration >= iteration_cap or stopped_by == "wall_clock")
+            and (
+                stalled_tool is not None
+                or (iteration_cap is not None and iteration >= iteration_cap)
+                or stopped_by == "wall_clock"
+            )
         )
         # Assigned, not latched, as ``output_limited`` is: a rerun's own run decides.
         if hook_metadata is not None:
@@ -2882,9 +2899,10 @@ class TurnPathMixin:
                     if stalled_tool is not None
                     else _WALL_CLOCK_STATIC_FALLBACK
                     if stopped_by == "wall_clock"
-                    else _MAX_ITER_STATIC_FALLBACK.format(n=self.max_iterations)
+                    else _MAX_ITER_STATIC_FALLBACK.format(n=iteration_cap if iteration_cap is not None else "unbounded")
                 ),
                 synthesis_policy=turn_synthesis(turn_meta),
+                iteration_cap=iteration_cap,
             )
             silent = not reply_awaited and is_silence(final_content, origin, taught=silence_taught)
             await _settle_silence(wrap_up_gate, silent=silent)

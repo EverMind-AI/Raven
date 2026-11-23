@@ -994,11 +994,22 @@ class TestTheIterationCap:
         _write(path, {"agents": {"defaults": {"max_tool_iterations": 9}}})
         assert max_tool_iterations(LiveConfig(path)) == 9
 
-    def test_a_cap_that_is_not_a_positive_int_is_no_answer(self, tmp_path: Path) -> None:
+    def test_an_explicit_null_or_zero_means_unbounded(self, tmp_path: Path) -> None:
+        """``0`` is the unbounded marker; ``None`` would read as "no answer".
+
+        The two differ: absent keeps the loop's built-in cap, while an explicit
+        null or zero says the config wants no cap at all.
+        """
+        path = tmp_path / "config.json"
+        for value in (None, 0):
+            _write(path, {"agents": {"defaults": {"maxToolIterations": value}}})
+            assert max_tool_iterations(LiveConfig(path)) == 0
+
+    def test_a_cap_that_is_not_an_int_is_no_answer(self, tmp_path: Path) -> None:
         """None means "keep what the loop was built with". A bool is an int in
         Python and would otherwise cap the loop at 1."""
         path = tmp_path / "config.json"
-        for value in ("40", 0, -1, True, None):
+        for value in ("40", -1, True):
             _write(path, {"agents": {"defaults": {"maxToolIterations": value}}})
             assert max_tool_iterations(LiveConfig(path)) is None
 
@@ -1018,6 +1029,19 @@ class TestTheIterationCap:
         _write(path, {})
 
         assert AgentLoop.max_iterations.fget(loop) == 40
+
+    def test_an_explicit_null_or_zero_leaves_the_turn_unbounded(self, tmp_path: Path) -> None:
+        """The loop's built-in cap is what an absent key keeps; an explicit
+        null or zero overrides it with "no cap", not with a fallback."""
+        from types import SimpleNamespace
+
+        from raven.agent.loop import AgentLoop
+
+        path = tmp_path / "config.json"
+        loop = SimpleNamespace(_live_config=LiveConfig(path), _default_max_iterations=40)
+        for value in (None, 0):
+            _write(path, {"agents": {"defaults": {"maxToolIterations": value}}})
+            assert AgentLoop.max_iterations.fget(loop) is None
 
 
 class TestTheWindowIsResolvedPerTurn:

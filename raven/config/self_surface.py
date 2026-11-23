@@ -238,6 +238,7 @@ SECTIONS: tuple[Section, ...] = (
                 writer="settings",
                 low=1,
                 high=200,
+                note="1-200 here; set null or 0 in config.json for no cap, which this surface cannot write",
             ),
             Setting(
                 "agents.defaults.contextWindowTokens",
