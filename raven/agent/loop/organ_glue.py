@@ -148,6 +148,26 @@ class OrganGlueMixin:
         """The candidate message view, asked of the Memory role that owns it."""
         return self.harness.memory.candidate_messages(session)
 
+    def _bind_session_log(self, session_key: str, log_id: str | None, messages: list[dict[str, Any]]) -> None:
+        """Bind the registry to the log this turn replays and to what it was told.
+
+        The notes the model holds are the ones in these messages' runtime-context
+        blocks, read back the way the engine reads them when it decides what to
+        send (``told_notices``). Handing the registry those subjects at every
+        assembly, rather than letting it keep its own record, is what keeps the
+        two from disagreeing after a release, a restart, a ``/clear`` or a merge
+        that adopts another writer's log.
+        """
+        from raven.context_engine.runtime_context import told_notices  # deferred -- see module note
+
+        told = told_notices(messages)
+        self.tools.bind_session_revision(
+            session_key,
+            log_id,
+            told_tools=[name for kind, name in told if kind == "tool"],
+            told_servers=[name for kind, name in told if kind == "mcp"],
+        )
+
     def _wire_output_ceiling(self, model: str | None = None, *, pinned: int | None = None) -> int:
         """The output ceiling a request for ``model`` will actually carry, asking for ``pinned`` if given.
 
@@ -228,8 +248,9 @@ class OrganGlueMixin:
         # The session log this turn reads. ``/clear`` mints a new log id on the
         # same key; a frozen array captured under the old one is dropped and
         # recaptured here, before the engine budgets with it.
+        session_messages = self._context_messages_for_session(session)
         revision = session.revision if isinstance(session, Session) else None
-        self.tools.bind_session_revision(session_key, revision.log_id if revision is not None else None)
+        self._bind_session_log(session_key, revision.log_id if revision is not None else None, session_messages)
 
         # Reset the metadata stash BEFORE calling the engine. If
         # ``engine.assemble`` raises partway, the next caller falls back to
@@ -238,7 +259,6 @@ class OrganGlueMixin:
         self._last_injected_skill_ids = None
         self._last_window_parts = {}
         self._last_degraded_segments: list[str] = []
-        session_messages = self._context_messages_for_session(session)
         assembled = await self.harness.memory.assemble(
             session_key,
             session_messages,

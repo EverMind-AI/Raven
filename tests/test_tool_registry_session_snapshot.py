@@ -272,6 +272,12 @@ def test_scheduling_a_refresh_waits_for_the_next_assembly() -> None:
 
     with reg.session_scope_for("s1"):
         assert set(_defs(reg)) == {"exec", "find"}
+        reg.register(_Stub("late"))
+
+    reg.bind_session_revision("s1", "log-a")
+
+    with reg.session_scope_for("s1"):
+        assert set(_defs(reg)) == {"exec", "find"}, "the mark is cashed once; an ordinary turn keeps the array"
 
 
 def test_two_sessions_keep_their_own_arrays() -> None:

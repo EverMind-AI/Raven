@@ -126,15 +126,20 @@ runtime context; the next refresh re-judges it. The report has both directions: 
 the array that is switched off gets an unavailable line, and a tool the capture excluded
 whose switch is put back is announced as usable with its definition copied from the
 array's own JSON -- the call already runs, because dispatch reads the live switches, but
-the model was never shown a schema it can now send. A compaction retires a notice only
-when its array carries the subject: a name the new array drops because its switch is
-still off keeps the unavailable line, together with a name the old array carried and the
-compaction withholds again. The standing set is pruned to exactly those names, so a key
-missing from the runtime context always means its condition was resolved, never that a
-refresh forgot it. A `/clear` is not that kind of refresh: it starts a log the model has
-been told nothing in, so the standing set goes with the old log, as at a release, and a
-tool that is off at the new capture gets no notice, as in a new session. The per-server
-MCP notice follows the same rules, keyed by the server. A call to a withheld tool the
+the model was never shown a schema it can now send. Which notes stand is read from the
+log, not kept beside it: at every assembly the registry is handed the subjects the
+replayed log's runtime-context blocks still hold, read back the way the engine reads
+them when it decides what to send. A refresh therefore retires a notice only when its
+array carries the subject or its switch is back on: a name the new array drops because
+its switch is still off keeps the unavailable line while the log holds one. The same
+read makes every lifecycle agree with the log -- a compaction keeps the log and its
+notes, a restart or a reopen after a release replays the stored log and speaks for what
+it holds, a log id adopted from another writer together with this copy's unsaved turns
+speaks for those turns, and a `/clear`, an empty log, speaks for nothing, so a tool off
+at its capture gets no notice, as in a new session. A key missing from the runtime
+context therefore means its condition was resolved, never that a refresh, a restart or a
+release forgot it. The per-server MCP notice follows the same rules, keyed by the
+server. A call to a withheld tool the
 session holds a schema for is refused with the reason, and the refusal says whether this
 conversation's tool list still carries it: only a name in the frozen array stays in the
 list. A tool the turn's own `plugin` call connects is admitted to `offers` (reachable

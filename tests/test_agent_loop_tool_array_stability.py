@@ -42,7 +42,7 @@ def _run(loop: AgentLoop, monkeypatch, metadata: dict, calls: list[str], bound: 
         return _assembled(metadata)
 
     monkeypatch.setattr(loop.tools, "schedule_definitions_refresh", calls.append)
-    monkeypatch.setattr(loop.tools, "bind_session_revision", lambda key, log: bound.append((key, log)))
+    monkeypatch.setattr(loop.tools, "bind_session_revision", lambda key, log, **told: bound.append((key, log)))
     monkeypatch.setattr(loop.harness.memory, "assemble", assemble)
     session = loop.sessions.get_or_create("test:c1")
     asyncio.run(

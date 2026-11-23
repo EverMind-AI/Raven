@@ -249,12 +249,13 @@ class McpGlueMixin:
 
         The array is the session's snapshot (``ToolRegistry.get_definitions``):
         captured once and refreshed only at a new session, a compaction, or a
-        log id change. A line already sent for a server whose tools a
-        compaction then drops stays: the server is still down, so the notice is
+        log id change. A line the log already holds for a server whose tools a
+        refresh then drops stays: the server is still down, so the notice is
         still true, and only its wording moves from "remain in the list" to
         "are absent from it". Dropping the key instead would make the consumer
-        clear a live note. A log id change (``/clear``) starts a log that holds
-        no line, so it starts with none. This line states an inventory and promises no route, which
+        clear a live note. Which servers the log holds a line for is read from
+        the log at every assembly, so a ``/clear`` starts with none and a
+        reopened or restarted session with exactly what it holds. This line states an inventory and promises no route, which
         is what keeps it true. This block is rendered once per turn, while
         the fold is decided per model call against an array a
         ``before_iteration`` hook may narrow first
@@ -297,8 +298,8 @@ class McpGlueMixin:
         # live view and a server's tools appear as soon as it connects.
         snapshot = self.tools.session_definition_names()
         snapshot_servers = self.tools.session_definition_servers() if snapshot is not None else frozenset()
-        # A server whose tools leave the array at a compaction keeps its key
-        # through the standing set: the next line says the tools are absent,
+        # A server whose tools leave the array keeps its key while the log
+        # holds a note about it: the next line says the tools are absent,
         # which is true, instead of letting the key vanish and the consumer
         # announce a clear while the server is still down.
         notified = self.tools.notified_mcp_servers() if snapshot is not None else frozenset()
@@ -307,7 +308,6 @@ class McpGlueMixin:
 
         def emit(server: str, text: str) -> None:
             notices.append(mcp_notice(server, text))
-            self.tools.note_notified_mcp(server)
 
         for snap in mgr.status():
             name = snap["name"]
@@ -362,12 +362,6 @@ class McpGlueMixin:
                         f"connected, offering {len(live_names)} tool(s); they join this conversation's "
                         "tool list at the next compaction or new conversation.",
                     )
-                elif snapshot is not None and not snap_names and not live_names:
-                    # Connected with nothing to offer: the disconnect this
-                    # server was noted for no longer holds. Ahead of the fold
-                    # branch, which has nothing to say for such a server and
-                    # would otherwise keep it standing for good.
-                    self.tools.forget_notified_mcp(name)
                 elif folded:
                     mine = [n for n in live_names if n in offered]
                     if mine:

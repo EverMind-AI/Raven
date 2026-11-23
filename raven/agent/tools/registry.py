@@ -450,19 +450,19 @@ class ToolRegistry:
         # Reset with the array, so a refresh point never re-announces a tool it
         # has just captured.
         self._session_unavailable_at_capture: dict[str, frozenset[str]] = {}
-        # Names whose availability this session's runtime context has spoken
-        # for and the frozen array does not carry. A compaction refresh folds
-        # the old array's names in before recapturing, so a name the new array
-        # drops while its switch is still off keeps its line; capture then
-        # prunes the set to names that are still withheld. One set, because the
-        # notice consumer treats a missing key as "resolved": a subject leaves
-        # ``current`` only when the array carries it again. It records what one
-        # log was told, so a new log (``/clear``) and a release drop it.
+        # The tool and MCP-server subjects the session's log holds a standing
+        # note about. Not a record kept here: the log is the record (its
+        # runtime-context blocks, read back by ``told_notices``), and
+        # :meth:`bind_session_revision` replaces both sets from it at every
+        # assembly. The notice consumer treats a key missing from ``current``
+        # as resolved, so a lane must keep speaking for every subject the log
+        # still holds; a copy that outlived or fell behind the log -- across a
+        # release, a restart, a ``/clear``, or a merge that adopts another
+        # writer's log -- would make it clear a note that still applies, or
+        # speak into a log that holds none. Within the assembly a tool
+        # announced as newly available is added, so a call later in the same
+        # turn is refused with its reason.
         self._session_notified_tools: dict[str, set[str]] = {}
-        # The same standing subject for the per-server MCP notice: a server
-        # whose tools the session was told about and the array no longer
-        # carries. Kept apart from the tool set because the key is the server,
-        # not a tool name.
         self._session_notified_mcp: dict[str, set[str]] = {}
         # Placed at assembly, not by registering late: an MCP server connects,
         # and a session brings its own tools, after the host wired its own, so
@@ -780,11 +780,11 @@ class ToolRegistry:
         self._definitions_refresh_pending.discard(session_key)
 
     def _forget_session_log(self, session_key: str) -> None:
-        """Drop the array and everything the session's log has been told.
+        """Drop the array, its baseline, and the standing sets read from the log.
 
-        For a log the model will never read again: a release, and a ``/clear``,
-        which starts a log with no history. The standing sets record what one
-        log was told, so they go with it rather than speaking into the next.
+        For a release and a log id change. The standing sets come back at the
+        next :meth:`bind_session_revision`, read from whatever log that turn
+        replays, so nothing here decides what the next log has been told.
         """
         self._session_definitions.pop(session_key, None)
         self._session_unavailable_at_capture.pop(session_key, None)
@@ -1124,17 +1124,6 @@ class ToolRegistry:
             else:
                 entries.append(pair)
         entries.extend(last[name] for name in self._listed_last if name in last)
-        # A standing subject survives the refresh only while its switch is
-        # still off and the new array still lacks it; one the array carries
-        # again is resolved, and the consumer's cleared line is then true.
-        standing = self._session_notified_tools.get(session_key)
-        if standing:
-            still_off = set(unavailable).difference(origins)
-            self._session_notified_tools[session_key] = standing & still_off
-        standing_mcp = self._session_notified_mcp.get(session_key)
-        if standing_mcp:
-            carried = {ref.server for ref in origins.values() if ref is not None}
-            self._session_notified_mcp[session_key] = standing_mcp - carried
         return _SessionDefinitions(
             entries=entries,
             origins=origins,
@@ -1147,24 +1136,11 @@ class ToolRegistry:
 
         Called by :meth:`bind_session_revision` when it cashes a context
         compaction marked by the previous turn. Costs one rebuilt prefix, which
-        the caller has already paid for by rebuilding the history.
-
-        The names the old array carried move into the standing-notice sets
-        before the array is dropped. A compaction keeps the conversation and
-        retells its notes, so a name the new capture still withholds is still
-        spoken for, and its key does not vanish from one assembly to the next;
-        capture prunes the set again once the new array is known. A log id
-        change is not this: see :meth:`bind_session_revision`.
+        the caller has already paid for by rebuilding the history. What the
+        model has been told is not touched: the compaction retells its notes,
+        and the standing sets are read from the log at the same bind.
         """
-        cached = self._session_definitions.pop(session_key, None)
-        if cached is not None:
-            notified = self._session_notified_tools.setdefault(session_key, set())
-            notified_mcp = self._session_notified_mcp.setdefault(session_key, set())
-            for name, ref in cached.origins.items():
-                if ref is None:
-                    notified.add(name)
-                else:
-                    notified_mcp.add(ref.server)
+        self._session_definitions.pop(session_key, None)
         self._session_unavailable_at_capture.pop(session_key, None)
 
     def schedule_definitions_refresh(self, session_key: str) -> None:
@@ -1179,8 +1155,15 @@ class ToolRegistry:
         """
         self._definitions_refresh_pending.add(session_key)
 
-    def bind_session_revision(self, session_key: str, log_id: str | None) -> None:
-        """Record the session log this turn reads, dropping a stale snapshot.
+    def bind_session_revision(
+        self,
+        session_key: str,
+        log_id: str | None,
+        *,
+        told_tools: Iterable[str] = (),
+        told_servers: Iterable[str] = (),
+    ) -> None:
+        """Record the session log this turn reads, and what that log has been told.
 
         ``/clear`` mints a new ``log_id`` on the same session key; a snapshot
         taken under the old log is reset with it, while a turn that reads the
@@ -1188,11 +1171,13 @@ class ToolRegistry:
         previous turn's compaction is cashed here, at the start of the next
         assembly.
 
-        The two refreshes differ in what the model has been told. A compaction
-        keeps the log, so the standing notices carry over
-        (:meth:`invalidate_session_definitions`). A new log has no history: the
-        notices the old one held go with it, as at a release, or a tool the new
-        conversation never saw would be reported to it as unavailable.
+        ``told_tools`` and ``told_servers`` are the subjects of the standing
+        notes the log this turn replays still holds (``told_notices`` over its
+        messages). They replace the standing sets outright, every time: the
+        log is the only record of what the model was told, so a ``/clear``
+        (an empty log) speaks for nothing, while a restart, a reopen after a
+        release, or a log id adopted from another writer together with this
+        copy's unsaved turns speaks for exactly what those turns hold.
         """
         known = self._session_log_ids.get(session_key, _MISSING)
         if known is not _MISSING and known != log_id:
@@ -1201,6 +1186,8 @@ class ToolRegistry:
             self._definitions_refresh_pending.discard(session_key)
             self.invalidate_session_definitions(session_key)
         self._session_log_ids[session_key] = log_id
+        self._session_notified_tools[session_key] = set(told_tools)
+        self._session_notified_mcp[session_key] = set(told_servers)
 
     def newly_available(self, withheld_now: "frozenset[str]") -> list[str]:
         """Names that left the unavailable set since this session's array was captured.
@@ -1250,7 +1237,9 @@ class ToolRegistry:
         Called where the announcement is actually produced, not from
         :meth:`newly_available`, because a name whose definition could not be
         read is never announced -- and must not be reported as withdrawn later.
-        Idempotent: the announcement is produced every turn of its window.
+        Held for the rest of this assembly's turn, so a call to the name later
+        in it is refused with the reason; the next bind reads it back from the
+        log the turn wrote.
         """
         session = self._definition_session.get()
         if session is None:
@@ -1280,39 +1269,18 @@ class ToolRegistry:
         session = self._definition_session.get()
         if session is None:
             return []
+        array = self._session_definitions_for(session).origins
         notified = self._session_notified_tools.get(session)
         if not notified:
             return []
-        array = self._session_definitions_for(session).origins
         return [
             name
             for name in sorted(notified & withheld_now)
             if name not in array and self._visible(name) is not None and self._origins.get(name) is None
         ]
 
-    def note_notified_mcp(self, server: str) -> None:
-        """Record that this session's runtime context spoke for an MCP server.
-
-        Same lifecycle as :meth:`note_notified_tool`, keyed by server because
-        ``_mcp_tool_notices`` speaks per server. A refresh folds the old
-        array's servers in, so a server still down after it keeps its key.
-        """
-        session = self._definition_session.get()
-        if session is None:
-            return
-        self._session_notified_mcp.setdefault(session, set()).add(server)
-
-    def forget_notified_mcp(self, server: str) -> None:
-        """Drop a server whose notice the current state has resolved."""
-        session = self._definition_session.get()
-        if session is None:
-            return
-        notified = self._session_notified_mcp.get(session)
-        if notified is not None:
-            notified.discard(server)
-
     def notified_mcp_servers(self) -> frozenset[str]:
-        """Servers whose MCP notice the session still holds; empty outside a session."""
+        """Servers the session's log holds an MCP note about; empty outside a session."""
         session = self._definition_session.get()
         if session is None:
             return frozenset()

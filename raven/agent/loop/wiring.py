@@ -71,12 +71,14 @@ _WEB_VENDORS_KEY = "tools.web.providers"
 
 
 def _unavailable_tool_notice(name: str, reason: str) -> str:
-    """The one sentence a refusal and both directions of an availability flip use.
+    """The one unavailable line both notice lanes use.
 
     ``_tool_availability_notices`` speaks for a name in the frozen array and
     ``_tool_withdrawn_again_notices`` for one the session was told about; a
     model reading either must get the same fact in the same words, so the text
-    lives here rather than in two literals that could drift.
+    lives here rather than in two literals that could drift. A call to such a
+    name is refused separately, by ``ToolRegistry.unavailable_refusal``, which
+    also says whether the tool list still carries it.
     """
     from raven.context_engine.runtime_context import tool_notice
 
@@ -279,13 +281,15 @@ class WiringMixin:
         cannot explain it; and its switch being back off stops the announcement,
         so without this line the notice machinery would clear the announcement
         as "available again" while a call is refused. The sentence is the
-        refusal's own (see ``_unavailable_tool_notice``), reason included.
+        array lane's own (see ``_unavailable_tool_notice``), reason included.
 
         The same lane speaks for a name the previous array carried and a
         refresh dropped while its switch was still off: after that capture the
-        array lacks it too, and the notice it already holds is still true. The
-        line is returned until the array carries the name again or the switch
-        comes back on, so a missing key always means the subject was resolved.
+        array lacks it too, and the notice the log holds is still true. Which
+        names the log holds a note about is read from the log at every
+        assembly (``ToolRegistry.bind_session_revision``). The line is returned
+        until the array carries the name again or the switch comes back on, so
+        a missing key always means the subject was resolved.
         """
         reasons = self._withheld_tool_reasons()
         return [
@@ -322,9 +326,12 @@ class WiringMixin:
         the replayed history already holds. The next capture puts the schema in
         the array and this line stops (see ``ToolRegistry.newly_available``).
 
-        Each announced name is recorded, so the reverse flip can be reported by
-        :meth:`_tool_withdrawn_again_notices` -- the array does not carry it --
-        and so the record survives a refresh that still withholds it.
+        Each announced name is recorded for the rest of the turn, so a call to
+        it later in the turn is refused with its reason. Across turns the
+        announcement is read back from the log that carries it, which is what
+        lets :meth:`_tool_withdrawn_again_notices` report the reverse flip --
+        the array does not carry the name -- and keep doing so through a
+        refresh that still withholds it.
         """
         from raven.context_engine.runtime_context import tool_notice
 
