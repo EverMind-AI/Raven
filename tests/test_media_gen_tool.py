@@ -1530,6 +1530,82 @@ async def test_an_empty_settings_quality_reaches_a_custom_generations_route(
     assert body["quality"] == "high"
 
 
+async def test_the_answer_says_settings_decided_the_model_the_call_named(monkeypatch, tmp_path):
+    """A trace showed the outgoing model and nothing about where it came from,
+    so a Settings model that outranked the call read the same as the call's own
+    value: a requested Sunburst answered by another model, with no reason given."""
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    tool = _image_tool(monkeypatch, handler, model="openai/gpt-image-2", workspace=tmp_path)
+    out = json.loads(await tool.execute("a poster", model="openai/gpt-image-2.5-sunburst"))
+
+    assert out["model"] == "openai/gpt-image-2"
+    assert out["selection"] == {
+        "model": {"requested": "openai/gpt-image-2.5-sunburst", "sent": "openai/gpt-image-2", "source": "settings"}
+    }
+
+
+async def test_the_answer_says_settings_decided_the_quality_the_call_named(monkeypatch, tmp_path):
+    """The other half: a quality named in Settings outranks the call's, and the
+    answer says so instead of showing a requested high quality gone missing."""
+    from raven.config.schema import ImageToolConfig
+
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+
+    tool = ImageGenerateTool(
+        ImageToolConfig(model="openai/gpt-image-2.5", quality="low", api_key="k"), workspace=tmp_path
+    )
+    out = json.loads(await tool.execute("a kitten", quality="high"))
+
+    assert out["quality"] == "low"
+    assert out["selection"] == {"quality": {"requested": "high", "sent": "low", "source": "settings"}}
+
+
+async def test_an_answer_names_no_source_when_settings_decided_nothing(monkeypatch, tmp_path):
+    """A call that named both fields against a section that names neither has
+    nothing overridden, and its trace stays as it was."""
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    tool = _image_tool(monkeypatch, handler, model="", workspace=tmp_path)
+    out = json.loads(await tool.execute("a poster", model="openai/gpt-image-2", quality="high"))
+
+    assert out["success"] and "selection" not in out
+
+
+async def test_a_batch_carries_the_selection_of_each_picture(monkeypatch, tmp_path):
+    """Each picture of a batch is its own call, so each carries what Settings
+    decided for it rather than the batch saying it once for all of them."""
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    tool = _image_tool(monkeypatch, handler, model="openai/gpt-image-2", workspace=tmp_path)
+    out = json.loads(
+        await tool.execute(prompts=[{"prompt": "a cat"}, {"prompt": "a dog"}], model="openai/gpt-image-2.5-sunburst")
+    )
+
+    assert [item["selection"]["model"]["sent"] for item in out["results"]] == ["openai/gpt-image-2"] * 2
+    assert "selection" not in out
+
+
 @pytest.mark.parametrize(
     "model",
     [

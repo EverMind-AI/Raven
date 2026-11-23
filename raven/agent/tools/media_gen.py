@@ -901,6 +901,8 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                         item[key] = reply[key]
             if reply.get("model"):
                 item["model"] = reply["model"]
+            if reply.get("selection"):
+                item["selection"] = reply["selection"]
             results.append(item)
         failed = [item for item in results if item.get("error")]
         answer_body: dict[str, Any] = {
@@ -919,6 +921,37 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         return json.dumps(answer_body, ensure_ascii=False)
 
     async def _generate_one(self, spec: dict[str, Any], stem: str, model: str | None, output_dir: str | None) -> str:
+        """One picture's answer, with what Settings decided said on it."""
+        return self._explain_selection(await self._generate_one_answer(spec, stem, model, output_dir), spec, model)
+
+    def _explain_selection(self, answer: str, spec: dict[str, Any], model: str | None) -> str:
+        """Say which of the call's model and quality Settings decided, where it did.
+
+        The answer carried the outgoing model and quality and nothing about where
+        they came from, so a Settings entry that outranked the call read the same
+        as the call's own value: a trace showed a requested Sunburst answered by
+        another model and a requested high quality omitted, with no reason for
+        either. Only a call that named the field is told anything, because a call
+        that named nothing had nothing overridden.
+        """
+        body = json.loads(answer)
+        if not body.get("success"):
+            return answer
+        config = self._config
+        selection: dict[str, Any] = {}
+        if model and getattr(config, "model", ""):
+            selection["model"] = {"requested": model, "sent": body.get("model"), "source": "settings"}
+        settings_quality = getattr(config, "quality", "")
+        if spec.get("quality") and settings_quality and body.get("quality") == settings_quality:
+            selection["quality"] = {"requested": spec["quality"], "sent": settings_quality, "source": "settings"}
+        if not selection:
+            return answer
+        body["selection"] = selection
+        return json.dumps(body, ensure_ascii=False)
+
+    async def _generate_one_answer(
+        self, spec: dict[str, Any], stem: str, model: str | None, output_dir: str | None
+    ) -> str:
         prompt = str(spec.get("prompt") or "")
         images = list(spec.get("images") or []) or None
         aspect_ratio = spec.get("aspect_ratio") or None
