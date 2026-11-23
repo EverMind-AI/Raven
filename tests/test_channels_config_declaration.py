@@ -93,7 +93,11 @@ def test_the_file_slice_outranks_the_declared_default(monkeypatch):
     monkeypatch.setattr(
         loader,
         "_channel_slices",
-        {"telegram": {"token": "tok-123", "groupPolicy": "open", "proxy": "socks5://p:1"}},
+        {
+            str(loader.get_config_path()): {
+                "telegram": {"token": "tok-123", "groupPolicy": "open", "proxy": "socks5://p:1"}
+            }
+        },
     )
     view = dispense_channel_config(SPECS["telegram"], ChannelSocket(), channel="telegram")
 
