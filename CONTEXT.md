@@ -126,10 +126,14 @@ runtime context; the next refresh re-judges it. The report has both directions: 
 the array that is switched off gets an unavailable line, and a tool the capture excluded
 whose switch is put back is announced as usable with its definition copied from the
 array's own JSON -- the call already runs, because dispatch reads the live switches, but
-the model was never shown a schema it can now send. That announcement is retired by the
-next refresh, whose array carries the schema itself. A tool the turn's own `plugin` call
-connects is admitted to `offers` (reachable through `tool_call`) and joins the array at
-the next refresh.
+the model was never shown a schema it can now send. A refresh retires a notice only when
+its array carries the subject: a name the new array drops because its switch is still off
+keeps the unavailable line, together with a name the old array carried and the refresh
+withholds again. The standing set is pruned to exactly those names, so a key missing from
+the runtime context always means its condition was resolved, never that a refresh forgot
+it. The per-server MCP notice follows the same rule, keyed by the server. A tool the turn's
+own `plugin` call connects is admitted to `offers` (reachable through `tool_call`) and
+joins the array at the next refresh.
 
 **Harness Curator** (`experimental/curator/`):
 Experimental generation of a worker's Harness from its task, the materials handed to it and

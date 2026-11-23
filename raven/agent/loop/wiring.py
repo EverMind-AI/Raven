@@ -272,7 +272,7 @@ class WiringMixin:
         return lines
 
     def _tool_withdrawn_again_notices(self) -> list[str]:
-        """One line per tool that was announced as callable and is withheld again.
+        """One line per tool the session spoke for and whose switch is off again.
 
         The reverse of :meth:`_tool_became_available_notices`, inside the same
         window. Such a name never entered the array, so the array's own lane
@@ -281,13 +281,16 @@ class WiringMixin:
         as "available again" while a call is refused. The sentence is the
         refusal's own (see ``_unavailable_tool_notice``), reason included.
 
-        Returned for the rest of the window, like the announcement it replaces:
-        the fact still holds, and dropping it early would clear a true note.
+        The same lane speaks for a name the previous array carried and a
+        refresh dropped while its switch was still off: after that capture the
+        array lacks it too, and the notice it already holds is still true. The
+        line is returned until the array carries the name again or the switch
+        comes back on, so a missing key always means the subject was resolved.
         """
         reasons = self._withheld_tool_reasons()
         return [
             _unavailable_tool_notice(name, reasons[name])
-            for name in self.tools.announced_withheld_again(frozenset(reasons))
+            for name in self.tools.notified_withheld_again(frozenset(reasons))
         ]
 
     def _tool_notices(self) -> list[str]:
@@ -320,7 +323,8 @@ class WiringMixin:
         the array and this line stops (see ``ToolRegistry.newly_available``).
 
         Each announced name is recorded, so the reverse flip can be reported by
-        :meth:`_tool_withdrawn_again_notices` -- the array does not carry it.
+        :meth:`_tool_withdrawn_again_notices` -- the array does not carry it --
+        and so the record survives a refresh that still withholds it.
         """
         from raven.context_engine.runtime_context import tool_notice
 
@@ -329,7 +333,7 @@ class WiringMixin:
             schema = self.tools.definition_of(name)
             if schema is None:
                 continue
-            self.tools.note_announced_available(name)
+            self.tools.note_notified_tool(name)
             lines.append(
                 tool_notice(
                     name,

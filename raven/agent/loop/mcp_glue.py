@@ -48,13 +48,25 @@ _MCP_CONNECTING_REMAIN = (
 _MCP_DISCONNECTED_REMAIN = (
     "disconnected. Its tools remain in this conversation's tool list, and calls to them fail until it reconnects."
 )
+_MCP_DISCONNECTED_JOIN = (
+    "disconnected. Its tools are absent from this conversation's tool list; they join at the next compaction "
+    "or new conversation after it reconnects."
+)
 _MCP_DISABLED_REMAIN = (
     "disabled in settings. Its tools remain in this conversation's tool list, and calls to them "
     "fail until it is enabled again."
 )
+_MCP_DISABLED_JOIN = (
+    "disabled in settings. Its tools are absent from this conversation's tool list; they join at the "
+    "next compaction or new conversation after it is enabled again."
+)
 _MCP_REMOVED_REMAIN = (
     "no longer loaded. Its tools remain in this conversation's tool list, and calls to them fail "
     "until it is added back."
+)
+_MCP_REMOVED_JOIN = (
+    "no longer loaded. Its tools are absent from this conversation's tool list; they join at the next "
+    "compaction or new conversation if it is added back."
 )
 _MCP_AUTH_LIVE = (
     "installed, awaiting authorization. Its tools are absent from this turn's definitions until "
@@ -237,8 +249,12 @@ class McpGlueMixin:
 
         The array is the session's snapshot (``ToolRegistry.get_definitions``):
         captured once and refreshed only at a new session, a compaction, or a
-        log id change. This line states an inventory and promises no route,
-        which is what keeps it true. This block is rendered once per turn, while
+        log id change. A line already sent for a server whose tools a refresh
+        then drops stays: the server is still down, so the notice is still
+        true, and only its wording moves from "remain in the list" to "are
+        absent from it". Dropping the key instead would make the consumer clear
+        a live note. This line states an inventory and promises no route, which
+        is what keeps it true. This block is rendered once per turn, while
         the fold is decided per model call against an array a
         ``before_iteration`` hook may narrow first
         (``HookDecision.modified_tools``) -- so a turn-level sentence about what
@@ -280,8 +296,18 @@ class McpGlueMixin:
         # live view and a server's tools appear as soon as it connects.
         snapshot = self.tools.session_definition_names()
         snapshot_servers = self.tools.session_definition_servers() if snapshot is not None else frozenset()
+        # A server whose tools leave the array at a refresh keeps its key
+        # through the standing set: the next line says the tools are absent,
+        # which is true, instead of letting the key vanish and the consumer
+        # announce a clear while the server is still down.
+        notified = self.tools.notified_mcp_servers() if snapshot is not None else frozenset()
         seen: set[str] = set()
-        notices = []
+        notices: list[str] = []
+
+        def emit(server: str, text: str) -> None:
+            notices.append(mcp_notice(server, text))
+            self.tools.note_notified_mcp(server)
+
         for snap in mgr.status():
             name = snap["name"]
             seen.add(name)
@@ -289,7 +315,9 @@ class McpGlueMixin:
             live_names = set(self.tools.names_from(name))
             if not snap.get("enabled", True):
                 if snap_names:
-                    notices.append(mcp_notice(name, _MCP_DISABLED_REMAIN))
+                    emit(name, _MCP_DISABLED_REMAIN)
+                elif name in notified:
+                    emit(name, _MCP_DISABLED_JOIN)
                 continue
             state = snap["state"]
             if state == "auth_required":
@@ -299,7 +327,7 @@ class McpGlueMixin:
                     text = _MCP_AUTH_REMAIN
                 else:
                     text = _MCP_AUTH_JOIN
-                notices.append(mcp_notice(name, text))
+                emit(name, text)
             elif state == "connecting":
                 if snapshot is None:
                     text = _MCP_CONNECTING_LIVE
@@ -307,7 +335,7 @@ class McpGlueMixin:
                     text = _MCP_CONNECTING_REMAIN
                 else:
                     text = _MCP_CONNECTING_JOIN
-                notices.append(mcp_notice(name, text))
+                emit(name, text)
             elif snap["connected"]:
                 added = live_names - snap_names
                 gone = snap_names - live_names
@@ -326,25 +354,30 @@ class McpGlueMixin:
                             f"{len(gone)} tool(s) that are no longer registered remain in the list and "
                             "calls to them fail"
                         )
-                    notices.append(mcp_notice(name, "connected; " + "; ".join(parts) + "."))
+                    emit(name, "connected; " + "; ".join(parts) + ".")
                 elif snapshot is not None and not snap_names and live_names:
-                    notices.append(
-                        mcp_notice(
-                            name,
-                            f"connected, offering {len(live_names)} tool(s); they join this conversation's "
-                            "tool list at the next compaction or new conversation.",
-                        )
+                    emit(
+                        name,
+                        f"connected, offering {len(live_names)} tool(s); they join this conversation's "
+                        "tool list at the next compaction or new conversation.",
                     )
                 elif folded:
                     mine = [n for n in live_names if n in offered]
                     if mine:
-                        notices.append(mcp_notice(name, f"connected, offering {len(mine)} tool(s)."))
+                        emit(name, f"connected, offering {len(mine)} tool(s).")
+                elif snapshot is not None and not snap_names and not live_names:
+                    # Connected with nothing to offer: the disconnect this
+                    # server was noted for no longer holds.
+                    self.tools.forget_notified_mcp(name)
             elif snap_names:
-                notices.append(mcp_notice(name, _MCP_DISCONNECTED_REMAIN))
-        # A server removed outright has no row in status() at all, but its names
-        # are still advertised by the frozen array.
-        for name in sorted(snapshot_servers - seen):
-            notices.append(mcp_notice(name, _MCP_REMOVED_REMAIN))
+                emit(name, _MCP_DISCONNECTED_REMAIN)
+            elif name in notified:
+                emit(name, _MCP_DISCONNECTED_JOIN)
+        # A server removed outright has no row in status() at all. Its names may
+        # still be in the frozen array, or the refresh may already have dropped
+        # them; the wording follows the array, the key stays in both cases.
+        for name in sorted((snapshot_servers | notified) - seen):
+            emit(name, _MCP_REMOVED_REMAIN if name in snapshot_servers else _MCP_REMOVED_JOIN)
         return notices
 
     def prewarm_mcp(self) -> None:

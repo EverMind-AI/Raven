@@ -38,6 +38,29 @@ def _write_switches(path: Path, names: list[str]) -> None:
     path.write_text(json.dumps({"tools": {"disabledTools": names}}), encoding="utf-8")
 
 
+class _ServingSearch:
+    """A stand-in for the vendor client: proves an announced tool really dispatches."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def __call__(self, *args, **kwargs):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return None
+
+    async def post(self, url: str, **kwargs):
+        import httpx
+
+        self.calls.append(url)
+        payload = {"organic": [{"title": "Raven", "link": "https://a.example", "snippet": "A bird."}]}
+        return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
+
+
 @pytest.fixture(autouse=True)
 def _no_ambient_search_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SERPER_API_KEY", raising=False)
@@ -214,32 +237,12 @@ def test_a_tool_that_became_available_is_announced_with_its_schema(tmp_path: Pat
 
 
 def test_a_tool_announced_as_available_actually_runs(tmp_path: Path, monkeypatch) -> None:
-    class _Serving:
-        def __init__(self) -> None:
-            self.calls: list[str] = []
-
-        def __call__(self, *args, **kwargs):
-            return self
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return None
-
-        async def post(self, url: str, **kwargs):
-            import httpx
-
-            self.calls.append(url)
-            payload = {"organic": [{"title": "Raven", "link": "https://a.example", "snippet": "A bird."}]}
-            return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
-
     monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
     loop = _loop(tmp_path)
     _capture_without_web_search(loop)
 
     monkeypatch.setenv("SERPER_API_KEY", "test-key")
-    client = _Serving()
+    client = _ServingSearch()
     monkeypatch.setattr("raven.agent.tools.web.httpx.AsyncClient", client)
 
     with loop.tools.session_scope_for("s1"):
@@ -447,23 +450,38 @@ def test_the_withdrawn_again_notice_is_not_resent_while_it_still_holds(
     assert notice_changes(again, told) == [], "an unchanged withdrawal must not be sent again"
 
 
-def test_the_withdrawn_again_notice_stops_at_the_next_refresh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The refresh re-judges availability; after it the array speaks alone."""
+def test_the_withdrawn_again_notice_survives_a_refresh_while_still_withheld(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refresh drops the name from the array, not the fact that the session was told.
+
+    The key has one meaning: a standing availability note. Omitting it while the
+    switch is still off is what let the consumer infer "available again" from a
+    refresh."""
     monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
     loop = _loop(tmp_path)
     _capture_without_web_search(loop)
     _, withdrawn = _announce_then_withdraw_web_search(loop, monkeypatch)
     assert any("currently unavailable" in note for note in withdrawn), withdrawn
+    told = {notice_key(note): note for note in withdrawn if notice_key(note) is not None}
 
     loop.tools.bind_session_revision("s1", "log-b")
 
     with loop.tools.session_scope_for("s1"):
         notes = loop._tool_notices()
+        names = loop.tools.session_definition_names() or frozenset()
 
-    assert not any("currently unavailable" in note for note in notes), notes
-    assert "s1" not in loop.tools._session_announced_available, "the refresh resets the announcement set"
+    assert "web_search" not in names, "the refresh re-judged it and kept it out"
+    assert any("currently unavailable" in note for note in notes), notes
+    assert notice_changes(notes, told) == [], "an unchanged withdrawal must not be cleared"
     reasons = frozenset(loop._withheld_tool_reasons())
-    assert loop.tools.announced_withheld_again(reasons) == []
+    with loop.tools.session_scope_for("s1"):
+        assert loop.tools.notified_withheld_again(reasons) == ["web_search"]
+
+    with loop.tools.session_scope_for("s1"):
+        answer = asyncio.run(loop.tools.execute("web_search", {"query": "x"}))
+    assert "currently unavailable" in answer, answer
+    assert "not available" not in answer, "the session holds this schema; it is not absent"
 
 
 def test_a_tool_never_announced_is_never_reported_as_withdrawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -480,3 +498,220 @@ def test_a_tool_never_announced_is_never_reported_as_withdrawn(tmp_path: Path, m
         keys = {notice_key(note) for note in notes}
         for name in ("image_generate", "knowledge_search", "text_to_speech", "video_generate", "web_search"):
             assert ("tool", name) not in keys, f"{name} never changed and must stay silent: {notes}"
+
+
+class _NoticeLog:
+    """One session's replayed notice history, advanced the way real history is.
+
+    ``notice_changes`` compares the turn's lines with what the transcript holds;
+    recording its output here makes each refresh step a real transition rather
+    than a string comparison against the previous list.
+    """
+
+    def __init__(self) -> None:
+        self.told: dict[tuple[str, str], str] = {}
+        self.current: dict[tuple[str, str], str] = {}
+        self.sent: list[str] = []
+
+    def turn(self, loop: AgentLoop) -> dict[tuple[str, str], str]:
+        with loop.tools.session_scope_for("s1"):
+            notes = loop._tool_notices()
+            current = {notice_key(note): note for note in notes if notice_key(note) is not None}
+        sent = notice_changes(notes, self.told)
+        for line in sent:
+            key = notice_key(line)
+            if key is None:
+                continue
+            if key in current:
+                self.told[key] = current[key]
+            else:
+                self.told.pop(key, None)
+        self.current = current
+        self.sent = sent
+        return current
+
+    def cleared(self) -> list[str]:
+        """The lines that say a keyed note no longer applies."""
+        return [line for line in self.sent if (key := notice_key(line)) is not None and key not in self.current]
+
+
+def _session_names(loop: AgentLoop) -> frozenset[str]:
+    with loop.tools.session_scope_for("s1"):
+        return loop.tools.session_definition_names() or frozenset()
+
+
+def _execute(loop: AgentLoop, name: str, params: dict) -> str:
+    with loop.tools.session_scope_for("s1"):
+        return asyncio.run(loop.tools.execute(name, params))
+
+
+def _serve_search(monkeypatch: pytest.MonkeyPatch) -> _ServingSearch:
+    client = _ServingSearch()
+    monkeypatch.setattr("raven.agent.tools.web.httpx.AsyncClient", client)
+    return client
+
+
+def test_the_reverse_lane_keeps_its_key_across_a_refresh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The whole reverse-lane cycle: absent, announced, withdrawn, refreshed, enabled.
+
+    Every step executes the tool: the notice is true exactly when dispatch runs
+    or refuses as the line says. No step may produce a cleared line.
+    """
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    loop = _loop(tmp_path)
+    loop.tools.bind_session_revision("s1", "log-a")
+    log = _NoticeLog()
+    query = {"query": "hello"}
+
+    current = log.turn(loop)
+    assert ("tool", "web_search") not in current
+    assert "not available" in _execute(loop, "web_search", query)
+
+    monkeypatch.setenv("SERPER_API_KEY", "test-key")
+    client = _serve_search(monkeypatch)
+    current = log.turn(loop)
+    assert "now available" in current[("tool", "web_search")]
+    assert "Results for: hello" in _execute(loop, "web_search", query)
+
+    monkeypatch.delenv("SERPER_API_KEY")
+    current = log.turn(loop)
+    assert "currently unavailable" in current[("tool", "web_search")]
+    assert "currently unavailable" in _execute(loop, "web_search", query)
+
+    loop.tools.bind_session_revision("s1", "log-b")
+    current = log.turn(loop)
+    assert "web_search" not in _session_names(loop), "the refresh re-judged it and kept it out"
+    assert "currently unavailable" in current[("tool", "web_search")]
+    assert log.cleared() == [], "the note still holds; no key may be cleared"
+    assert log.sent == [], "the unchanged withdrawal is not re-sent"
+    assert "currently unavailable" in _execute(loop, "web_search", query)
+
+    monkeypatch.setenv("SERPER_API_KEY", "test-key")
+    current = log.turn(loop)
+    assert "now available" in current[("tool", "web_search")]
+    assert any("now available" in line for line in log.sent)
+    assert log.cleared() == []
+    assert "Results for: hello" in _execute(loop, "web_search", query)
+    assert client.calls
+
+
+def test_the_array_lane_keeps_its_key_across_a_refresh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tool the array carried, withdrawn, and still withdrawn at the refresh.
+
+    The old array's name is the advertisement; after the refresh the array no
+    longer carries it, so only the standing set can keep the notice. Every step
+    executes the tool to check that the line matches dispatch.
+    """
+    cfg = tmp_path / "config.json"
+    _write_switches(cfg, [])
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    loop = _loop(tmp_path)
+    loop.tools.bind_session_revision("s1", "log-a")
+    note = tmp_path / "note.txt"
+    note.write_text("hello from the array lane", encoding="utf-8")
+    params = {"path": str(note)}
+    log = _NoticeLog()
+
+    current = log.turn(loop)
+    assert ("tool", "read_file") not in current
+    assert "hello from the array lane" in _execute(loop, "read_file", params)
+
+    _write_switches(cfg, ["read_file"])
+    current = log.turn(loop)
+    assert "currently unavailable" in current[("tool", "read_file")]
+    assert "currently unavailable" in _execute(loop, "read_file", params)
+
+    loop.tools.bind_session_revision("s1", "log-b")
+    current = log.turn(loop)
+    assert "read_file" not in _session_names(loop)
+    assert "currently unavailable" in current[("tool", "read_file")]
+    assert log.cleared() == []
+    assert log.sent == []
+    assert "currently unavailable" in _execute(loop, "read_file", params)
+
+    _write_switches(cfg, [])
+    current = log.turn(loop)
+    assert "now available" in current[("tool", "read_file")]
+    assert any("now available" in line for line in log.sent)
+    assert log.cleared() == []
+    assert "hello from the array lane" in _execute(loop, "read_file", params)
+
+    loop.tools.bind_session_revision("s1", "log-c")
+    log.turn(loop)
+    assert "read_file" in _session_names(loop)
+    assert not loop.tools._session_notified_tools.get("s1"), "the array carries it; the standing name is pruned"
+
+
+def test_a_refresh_that_captures_the_tool_clears_the_note_truthfully(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the array carries the schema, a cleared line is true: dispatch runs."""
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    loop = _loop(tmp_path)
+    loop.tools.bind_session_revision("s1", "log-a")
+    log = _NoticeLog()
+    query = {"query": "hello"}
+
+    log.turn(loop)
+    monkeypatch.setenv("SERPER_API_KEY", "test-key")
+    client = _serve_search(monkeypatch)
+    current = log.turn(loop)
+    assert "now available" in current[("tool", "web_search")]
+
+    loop.tools.bind_session_revision("s1", "log-b")
+    current = log.turn(loop)
+    assert "web_search" in _session_names(loop), "the refresh captured the now-callable tool"
+    assert ("tool", "web_search") not in current
+    assert any("available again" in line for line in log.cleared()), log.sent
+    assert "Results for: hello" in _execute(loop, "web_search", query)
+    assert client.calls
+    assert not loop.tools._session_notified_tools.get("s1"), "the array carries it; the standing name is pruned"
+
+
+def test_a_tool_never_announced_stays_silent_across_a_refresh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tool off at capture and still off was never spoken for; a refresh must
+    not invent a notice for it. Silence is the absence of a key, not a clear."""
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    loop = _loop(tmp_path)
+    log = _NoticeLog()
+
+    for revision in ("log-a", "log-b", "log-c"):
+        loop.tools.bind_session_revision("s1", revision)
+        current = log.turn(loop)
+        assert ("tool", "web_search") not in current
+        assert log.cleared() == []
+
+    assert "not available" in _execute(loop, "web_search", {"query": "hello"})
+
+
+def test_releasing_the_session_drops_its_standing_notices(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A released session's history is gone, so its standing subjects go too."""
+    cfg = tmp_path / "config.json"
+    _write_switches(cfg, [])
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    loop = _loop(tmp_path)
+    loop.tools.bind_session_revision("s1", "log-a")
+    note = tmp_path / "note.txt"
+    note.write_text("released", encoding="utf-8")
+    params = {"path": str(note)}
+    log = _NoticeLog()
+
+    log.turn(loop)
+    _write_switches(cfg, ["read_file"])
+    log.turn(loop)
+    loop.tools.bind_session_revision("s1", "log-b")
+    current = log.turn(loop)
+    assert "currently unavailable" in current[("tool", "read_file")]
+    assert loop.tools._session_notified_tools.get("s1") == {"read_file"}
+
+    loop.tools.release_session_tools("s1")
+
+    assert "s1" not in loop.tools._session_notified_tools
+    assert "s1" not in loop.tools._session_notified_mcp
+    assert "s1" not in loop.tools._session_definitions
+
+    loop.tools.bind_session_revision("s1", "log-c")
+    fresh = _NoticeLog()
+    current = fresh.turn(loop)
+    assert ("tool", "read_file") not in current
+    assert "not available" in _execute(loop, "read_file", params)

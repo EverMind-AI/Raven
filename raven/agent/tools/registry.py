@@ -439,16 +439,19 @@ class ToolRegistry:
         # Reset with the array, so a refresh point never re-announces a tool it
         # has just captured.
         self._session_unavailable_at_capture: dict[str, frozenset[str]] = {}
-        # Names this session's runtime context has told the model are callable
-        # even though the frozen array lacks them (see :meth:`newly_available`).
-        # The reverse transition needs it: capture excluded the name, so it is
-        # not among the array's names and ``_tool_availability_notices`` cannot
-        # speak for it; the switch being back off empties ``newly_available``'s
-        # difference, so the forward lane cannot either. Without this set both
-        # lanes fall silent and the notice machinery clears the announcement as
-        # "available again" while dispatch refuses the call.
-        # Reset with the array: after a refresh the array is the only signal.
-        self._session_announced_available: dict[str, set[str]] = {}
+        # Names whose availability this session's runtime context has spoken
+        # for and the frozen array does not carry. A refresh folds the old
+        # array's names in before recapturing, so a name the new array drops
+        # while its switch is still off keeps its line; capture then prunes
+        # the set to names that are still withheld. One set, because the
+        # notice consumer treats a missing key as "resolved": a subject leaves
+        # ``current`` only when the array carries it again.
+        self._session_notified_tools: dict[str, set[str]] = {}
+        # The same standing subject for the per-server MCP notice: a server
+        # whose tools the session was told about and the array no longer
+        # carries. Kept apart from the tool set because the key is the server,
+        # not a tool name.
+        self._session_notified_mcp: dict[str, set[str]] = {}
         # Placed at assembly, not by registering late: an MCP server connects,
         # and a session brings its own tools, after the host wired its own, so
         # registration order cannot keep anything at the end. See ``list_last``.
@@ -762,7 +765,8 @@ class ToolRegistry:
         self._session_tools.pop(session_key, None)
         self._session_definitions.pop(session_key, None)
         self._session_unavailable_at_capture.pop(session_key, None)
-        self._session_announced_available.pop(session_key, None)
+        self._session_notified_tools.pop(session_key, None)
+        self._session_notified_mcp.pop(session_key, None)
         self._session_log_ids.pop(session_key, None)
         self._definitions_refresh_pending.discard(session_key)
 
@@ -1099,6 +1103,17 @@ class ToolRegistry:
             else:
                 entries.append(pair)
         entries.extend(last[name] for name in self._listed_last if name in last)
+        # A standing subject survives the refresh only while its switch is
+        # still off and the new array still lacks it; one the array carries
+        # again is resolved, and the consumer's cleared line is then true.
+        standing = self._session_notified_tools.get(session_key)
+        if standing:
+            still_off = set(unavailable).difference(origins)
+            self._session_notified_tools[session_key] = standing & still_off
+        standing_mcp = self._session_notified_mcp.get(session_key)
+        if standing_mcp:
+            carried = {ref.server for ref in origins.values() if ref is not None}
+            self._session_notified_mcp[session_key] = standing_mcp - carried
         return _SessionDefinitions(
             entries=entries,
             origins=origins,
@@ -1113,10 +1128,22 @@ class ToolRegistry:
         not a new session: a context compaction (cashed there from the previous
         turn's mark) and a log id change. Costs one rebuilt prefix, which the
         caller has already paid for by rebuilding the history.
+
+        The names the old array carried move into the standing-notice sets
+        before the array is dropped. A name the new capture still withholds is
+        then still spoken for, so its key does not vanish from one assembly to
+        the next; capture prunes the set again once the new array is known.
         """
-        self._session_definitions.pop(session_key, None)
+        cached = self._session_definitions.pop(session_key, None)
+        if cached is not None:
+            notified = self._session_notified_tools.setdefault(session_key, set())
+            notified_mcp = self._session_notified_mcp.setdefault(session_key, set())
+            for name, ref in cached.origins.items():
+                if ref is None:
+                    notified.add(name)
+                else:
+                    notified_mcp.add(ref.server)
         self._session_unavailable_at_capture.pop(session_key, None)
-        self._session_announced_available.pop(session_key, None)
 
     def schedule_definitions_refresh(self, session_key: str) -> None:
         """Mark the array for recapture at the session's next assembly.
@@ -1189,8 +1216,8 @@ class ToolRegistry:
             fresh.append(name)
         return fresh
 
-    def note_announced_available(self, name: str) -> None:
-        """Record that this session's runtime context announced ``name`` as callable.
+    def note_notified_tool(self, name: str) -> None:
+        """Record that this session's runtime context spoke for ``name``.
 
         Called where the announcement is actually produced, not from
         :meth:`newly_available`, because a name whose definition could not be
@@ -1200,40 +1227,68 @@ class ToolRegistry:
         session = self._definition_session.get()
         if session is None:
             return
-        self._session_announced_available.setdefault(session, set()).add(name)
+        self._session_notified_tools.setdefault(session, set()).add(name)
 
-    def announced_withheld_again(self, withheld_now: "frozenset[str]") -> list[str]:
-        """Names announced as callable this window and withheld again now.
+    def notified_withheld_again(self, withheld_now: "frozenset[str]") -> list[str]:
+        """Names the session spoke for and whose switch is off again now.
 
-        The other half of :meth:`newly_available`, over the same window. Such a
-        name is not in the frozen array, so ``_tool_availability_notices`` --
-        which speaks for the array's names -- cannot report it; and the switch
-        being back off empties ``newly_available``'s difference, so the forward
-        lane cannot either. Without this, both lanes fall silent and the notice
-        machinery clears the announcement as "available again" while dispatch
-        refuses the call.
+        The other half of :meth:`newly_available`, over the same window, and
+        also the lane a name falls into when a refresh drops it from the array
+        while its switch is still off. Such a name is not in the frozen array,
+        so ``_tool_availability_notices`` -- which speaks for the array's names
+        -- cannot report it; and the switch being back off empties
+        :meth:`newly_available`'s difference. Without this, both lanes fall
+        silent and the notice machinery clears the announcement as "available
+        again" while dispatch refuses the call.
 
         ``withheld_now`` is the operator axis, as in :meth:`newly_available`: a
         charter narrowing or the turn freeze is a restriction on this turn, not
         an availability fact, and a sentence naming a setting would be false.
 
-        The name stays reported for the rest of the window, like the
-        announcement it replaces: the line is still true, so dropping it early
-        would make the machinery clear a note that still applies. A refresh
-        resets the set; after it the array is the only signal.
+        The name stays reported until the array carries it again or the switch
+        comes back on; the line is still true, so dropping it early would make
+        the machinery clear a note that still applies.
         """
         session = self._definition_session.get()
         if session is None:
             return []
-        announced = self._session_announced_available.get(session)
-        if not announced:
+        notified = self._session_notified_tools.get(session)
+        if not notified:
             return []
         array = self._session_definitions_for(session).origins
         return [
             name
-            for name in sorted(announced & withheld_now)
+            for name in sorted(notified & withheld_now)
             if name not in array and self._visible(name) is not None and self._origins.get(name) is None
         ]
+
+    def note_notified_mcp(self, server: str) -> None:
+        """Record that this session's runtime context spoke for an MCP server.
+
+        Same lifecycle as :meth:`note_notified_tool`, keyed by server because
+        ``_mcp_tool_notices`` speaks per server. A refresh folds the old
+        array's servers in, so a server still down after it keeps its key.
+        """
+        session = self._definition_session.get()
+        if session is None:
+            return
+        self._session_notified_mcp.setdefault(session, set()).add(server)
+
+    def forget_notified_mcp(self, server: str) -> None:
+        """Drop a server whose notice the current state has resolved."""
+        session = self._definition_session.get()
+        if session is None:
+            return
+        notified = self._session_notified_mcp.get(session)
+        if notified is not None:
+            notified.discard(server)
+
+    def notified_mcp_servers(self) -> frozenset[str]:
+        """Servers whose MCP notice the session still holds; empty outside a session."""
+        session = self._definition_session.get()
+        if session is None:
+            return frozenset()
+        return frozenset(self._session_notified_mcp.get(session, ()))
 
     def definition_of(self, name: str) -> dict[str, Any] | None:
         """One tool's definition, in the shape the array serves, or ``None``.
@@ -1298,26 +1353,26 @@ class ToolRegistry:
         """Why a name the session was told about cannot run right now, or ``None``.
 
         The session was told about a name either because capture put it in the
-        frozen array, or because :meth:`newly_available` announced it and its
-        definition was handed to the model. Both are schemas the model holds, so
-        both refusals name the reason; a name that was neither is answered as
-        absent.
+        frozen array, or because a notice lane spoke for it -- an announcement,
+        or a withdrawal that survived a refresh. Both are schemas the model
+        holds, so both refusals name the reason; a name that was neither is
+        answered as absent.
 
         ``None`` when the name is not withheld, is outside a session, was
-        neither in the array nor announced (a hard-withheld name is answered as
-        absent, the way an unregistered one is), or is withheld by an axis the
-        reason source does not speak for -- a charter narrowing this dispatch,
-        or the turn freeze. Those are restrictions on *this turn*, not an
-        operator setting, and inventing a settings sentence for them is a fact
-        the model would act on wrongly.
+        neither in the array nor spoken for (a hard-withheld name is answered
+        as absent, the way an unregistered one is), or is withheld by an axis
+        the reason source does not speak for -- a charter narrowing this
+        dispatch, or the turn freeze. Those are restrictions on *this turn*,
+        not an operator setting, and inventing a settings sentence for them is
+        a fact the model would act on wrongly.
         """
         if name not in self.withheld_names():
             return None
         session = self._definition_session.get()
         if session is None:
             return None
-        announced = name in self._session_announced_available.get(session, ())
-        if name not in self._session_definitions_for(session).origins and not announced:
+        notified = name in self._session_notified_tools.get(session, ())
+        if name not in self._session_definitions_for(session).origins and not notified:
             return None
         if self._withheld_reason is None:
             return None

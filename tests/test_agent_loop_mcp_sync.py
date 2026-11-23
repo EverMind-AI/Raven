@@ -20,6 +20,7 @@ import pytest
 
 from raven.agent.loop.main import AgentLoop
 from raven.config.schema import MCPServerConfig
+from raven.context_engine.runtime_context import notice_changes, notice_key
 from raven.contracts.tool import Tool
 from raven.mcp.naming import MCPToolRef
 from raven.providers.base import LLMProvider
@@ -1474,3 +1475,138 @@ def test_the_no_answer_sentinel_survives_the_package_layer(workspace) -> None:
     loop = _loop(workspace, package_mcp_servers={"pkg__srv": MCPServerConfig(command="echo")})
 
     assert loop._with_package_servers(None) is None
+
+
+def _register_svc_tool(loop) -> None:
+    loop.tools.register(
+        _FakeTool("mcp_svc_search"), origin=MCPToolRef(name="mcp_svc_search", server="svc", tool="search")
+    )
+
+
+async def test_a_disconnected_server_keeps_its_notice_across_a_refresh(workspace) -> None:
+    """The server is still down after the refresh; its key must stay.
+
+    The old notice said the tools remain in the list. After the refresh the
+    array no longer carries them, so the wording has to move to "absent", not
+    disappear: a missing key is the consumer's signal that the note is resolved.
+    """
+    loop = _loop(workspace)
+    _register_svc_tool(loop)
+    loop.tools.bind_session_revision("s1", "log-a")
+
+    with loop.tools.session_scope_for("s1"):
+        assert "mcp_svc_search" in (loop.tools.session_definition_names() or ())
+        loop.tools.unregister("mcp_svc_search")
+        loop._mcp_manager = _StatusManager(_snap("svc", "disconnected"))
+        before = loop._mcp_tool_notices()
+    assert any("remain in this conversation's tool list" in note for note in before), before
+    told = {notice_key(note): note for note in before if notice_key(note) is not None}
+
+    loop.tools.bind_session_revision("s1", "log-b")
+
+    with loop.tools.session_scope_for("s1"):
+        after = loop._mcp_tool_notices()
+        names = loop.tools.session_definition_names() or frozenset()
+        answer = await loop.tools.execute("mcp_svc_search", {})
+
+    by_key = {notice_key(note): note for note in after if notice_key(note) is not None}
+    line = by_key[("mcp", "svc")]
+    assert "mcp_svc_search" not in names, "the refresh re-judged it and kept it out"
+    assert "disconnected" in line
+    assert "absent from this conversation's tool list" in line
+    assert "remain in this conversation's tool list" not in line
+    sent = notice_changes(after, told)
+    assert not any("the earlier note about it no longer applies" in note for note in sent), sent
+    assert "not available" in answer, "dispatch agrees: the unloaded tool does not run"
+
+
+async def test_a_disabled_server_keeps_its_notice_across_a_refresh(workspace) -> None:
+    """The same standing-key rule covers the disabled switch state."""
+    loop = _loop(workspace)
+    _register_svc_tool(loop)
+    loop.tools.bind_session_revision("s1", "log-a")
+
+    with loop.tools.session_scope_for("s1"):
+        assert "mcp_svc_search" in (loop.tools.session_definition_names() or ())
+        loop.tools.unregister("mcp_svc_search")
+        loop._mcp_manager = _StatusManager(_snap("svc", "disconnected", enabled=False))
+        before = loop._mcp_tool_notices()
+    assert any("disabled in settings" in note for note in before), before
+    told = {notice_key(note): note for note in before if notice_key(note) is not None}
+
+    loop.tools.bind_session_revision("s1", "log-b")
+
+    with loop.tools.session_scope_for("s1"):
+        after = loop._mcp_tool_notices()
+
+    by_key = {notice_key(note): note for note in after if notice_key(note) is not None}
+    line = by_key[("mcp", "svc")]
+    assert "disabled in settings" in line
+    assert "absent from this conversation's tool list" in line
+    sent = notice_changes(after, told)
+    assert not any("the earlier note about it no longer applies" in note for note in sent), sent
+
+
+async def test_a_removed_server_keeps_its_notice_across_a_refresh(workspace) -> None:
+    """A removed server has no status row and no new array names; the standing
+    server is the only thing that can keep its key."""
+    loop = _loop(workspace)
+    _register_svc_tool(loop)
+    loop.tools.bind_session_revision("s1", "log-a")
+
+    with loop.tools.session_scope_for("s1"):
+        assert "mcp_svc_search" in (loop.tools.session_definition_names() or ())
+        loop.tools.unregister("mcp_svc_search")
+        loop._mcp_manager = _StatusManager()
+        before = loop._mcp_tool_notices()
+    assert any("no longer loaded" in note for note in before), before
+    told = {notice_key(note): note for note in before if notice_key(note) is not None}
+
+    loop.tools.bind_session_revision("s1", "log-b")
+
+    with loop.tools.session_scope_for("s1"):
+        after = loop._mcp_tool_notices()
+
+    by_key = {notice_key(note): note for note in after if notice_key(note) is not None}
+    line = by_key[("mcp", "svc")]
+    assert "no longer loaded" in line
+    assert "absent from this conversation's tool list" in line
+    sent = notice_changes(after, told)
+    assert not any("the earlier note about it no longer applies" in note for note in sent), sent
+
+
+async def test_a_reconnected_server_clears_its_notice_truthfully(workspace) -> None:
+    """The resolution path must still lose the key, and the cleared line is
+    then true because the refresh captured the callable tool."""
+    loop = _loop(workspace)
+    _register_svc_tool(loop)
+    loop.tools.bind_session_revision("s1", "log-a")
+
+    with loop.tools.session_scope_for("s1"):
+        assert "mcp_svc_search" in (loop.tools.session_definition_names() or ())
+        loop.tools.unregister("mcp_svc_search")
+        loop._mcp_manager = _StatusManager(_snap("svc", "disconnected"))
+        loop._mcp_tool_notices()
+
+    loop.tools.bind_session_revision("s1", "log-b")
+    with loop.tools.session_scope_for("s1"):
+        joined = loop._mcp_tool_notices()
+    told = {notice_key(note): note for note in joined if notice_key(note) is not None}
+    assert ("mcp", "svc") in told
+
+    _register_svc_tool(loop)
+    loop._mcp_manager = _StatusManager(_snap("svc", "connected"))
+    with loop.tools.session_scope_for("s1"):
+        waiting = loop._mcp_tool_notices()
+    assert "join" in {notice_key(note): note for note in waiting if notice_key(note) is not None}[("mcp", "svc")]
+    told = {notice_key(note): note for note in waiting if notice_key(note) is not None}
+
+    loop.tools.bind_session_revision("s1", "log-c")
+    with loop.tools.session_scope_for("s1"):
+        final = loop._mcp_tool_notices()
+        names = loop.tools.session_definition_names() or frozenset()
+
+    assert "mcp_svc_search" in names
+    assert ("mcp", "svc") not in {notice_key(note) for note in final if notice_key(note) is not None}
+    sent = notice_changes(final, told)
+    assert any("the earlier note about it no longer applies" in note for note in sent), sent
