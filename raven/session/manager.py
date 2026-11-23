@@ -335,7 +335,7 @@ class Session:
     # Structure: {"original_message": str, "question": str, "domain": str}
     # Cleared immediately after the user's answer is processed.
     pending_clarification: dict | None = field(default=None)
-    # ── What this copy knows about its file ───────────────────────────────────
+    # -- What this copy knows about its file --
     # Several accounts, because each answers a different question and folding two
     # together makes one of them wrong. ``read_session_file`` sets them on load and
     # ``SessionManager.save`` -- the only writer of message rows -- brings every one
