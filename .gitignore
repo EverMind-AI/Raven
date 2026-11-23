@@ -160,3 +160,8 @@ plugins-dist/ppt-engine/raven_ppt/assets/templates/covers/
 # MkDocs build output. The site is published from CI; HTML is never committed
 # (AGENTS.md section 7).
 docs-site/site/
+
+# Managed tool-output files: a large tool result is written here under the
+# agent's workspace, and the bytes are the turn's, not the repository's. A
+# `git add -A` next to a live workspace would otherwise commit them.
+tool-output/
