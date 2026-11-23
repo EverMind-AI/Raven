@@ -712,6 +712,27 @@ def test_a_turn_meta_leaves_another_clients_metadata_record_for_the_next_save(tm
     )
 
 
+def test_a_metadata_patch_leaves_the_stamp_behind_another_clients_record(tmp_path: Path):
+    """A patch made here does not settle the cached copy's stamp over the file.
+
+    The record it appends merges the last one on disk, which can be another
+    client's that this copy has not folded yet. Moved past both, the stamp would
+    let the next save write this copy's metadata over that client's keys.
+    """
+    key = "tui:20260610_100000_twopatches"
+    manager, session, path = _a_saved_turn(tmp_path, key)
+
+    assert SessionManager(tmp_path).append_metadata_patch(key, {"pinned": True})
+    assert manager.append_metadata_patch(key, {"archived": True})
+    session.add_message("user", "next")
+    manager.save(session)
+
+    metadata = read_session_file(path, key).metadata
+    assert (metadata.get("pinned"), metadata.get("archived")) == (True, True), (
+        "the save after a local patch wrote over the pin another client set"
+    )
+
+
 def test_a_turn_meta_is_not_filed_over_rows_another_writer_added(tmp_path: Path):
     """A late stamp is not filed into a transcript a second writer has moved.
 
