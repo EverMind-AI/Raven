@@ -1,6 +1,7 @@
 """Session management for conversation history."""
 
 import copy
+import hashlib
 import inspect
 import json
 import os
@@ -218,17 +219,43 @@ def _declares(method: Any, name: str) -> bool:
     return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
-def _stamp(path: Path) -> tuple[int, int] | None:
-    """A transcript's (size, mtime_ns), or None when it is not there.
+_STAMP_TAIL_BYTES = 4096
+"""How much of a transcript's end the stamp digests: one read, not a scan of the file.
+
+A rewrite of the same length changes the tail, which is what makes the anchor
+catch a second writer the size and clock cannot. A row rewritten in the middle
+alone leaves it alone, so the pair is a cheap tell, not a checksum of the file.
+"""
+
+
+def _tail_stamp(handle: Any, size: int) -> str:
+    """A short digest of the last ``_STAMP_TAIL_BYTES`` of a transcript.
+
+    The window is measured in bytes, so a handle opened for text is read through
+    its raw buffer: counting characters would land the two digests on different
+    windows for anything the file does not spell in ASCII.
+    """
+    raw = getattr(handle, "buffer", handle)
+    raw.seek(max(0, size - _STAMP_TAIL_BYTES))
+    return hashlib.blake2b(raw.read(_STAMP_TAIL_BYTES), digest_size=16).hexdigest()
+
+
+def _stamp(path: Path) -> tuple[int, int, str] | None:
+    """A transcript's (size, mtime_ns, tail digest), or None when it is not there.
 
     What a saved copy compares itself against to know whether anybody else has
-    written to the file since it last read or wrote it.
+    written to the file since it last read or wrote it. The size and the clock
+    are not enough on their own: ``st_mtime_ns`` counts in the filesystem's own
+    ticks, which can be as coarse as a millisecond, so a rewrite of the same
+    length lands in the tick the copy already recorded and both halves compare
+    equal. The tail digest is the content anchor that tells those apart.
     """
     try:
-        st = path.stat()
+        with open(path, "rb") as handle:
+            st = os.fstat(handle.fileno())
+            return (st.st_size, st.st_mtime_ns, _tail_stamp(handle, st.st_size))
     except OSError:
         return None
-    return (st.st_size, st.st_mtime_ns)
 
 
 @dataclass
@@ -293,14 +320,16 @@ class Session:
     # the writer can tell a rewrite from the transforms it makes itself. Pruned
     # to the rows the copy still holds.
     _filed_contents: dict[str, str] = field(default_factory=dict, repr=False)
-    # The user's words a filed inbound row was restored to, by identifier. The
-    # hooks' rewrite is a view of the request, not of the record: a row already
-    # filed that is prepared again must be restored the same way.
-    _inbound_filed: dict[str, str] = field(default_factory=dict, repr=False)
+    # What a filed inbound row holds now, by identifier: the words the user
+    # typed when the row is text, the blocks and placeholders it was filed as
+    # when the question carried a picture. The hooks' rewrite is a view of the
+    # request, not of the record: a row already filed that is prepared again
+    # must be restored to the form the file holds, not to the string behind it.
+    _inbound_filed: dict[str, Any] = field(default_factory=dict, repr=False)
     # What the transcript looked like the last time this copy read or wrote it,
-    # as (size, mtime_ns). save() compares it to notice a second writer before
-    # appending or rewriting.
-    _file_stamp: tuple[int, int] | None = field(default=None, repr=False)
+    # as (size, mtime_ns, tail digest). save() compares it to notice a second
+    # writer before appending or rewriting.
+    _file_stamp: tuple[int, int, str] | None = field(default=None, repr=False)
     # The metadata as this copy last read it from the file or wrote it there.
     # What ``metadata`` says that this does not is what this copy changed, and
     # only that may outrank a record written since -- the snapshot itself is
@@ -660,7 +689,8 @@ def read_session_file(path: Path, key: str) -> Session | None:
             # file, so the next save notices it changed rather than writing over
             # a revision this copy never saw.
             st = os.fstat(f.fileno())
-            file_stamp = (st.st_size, st.st_mtime_ns)
+            file_stamp = (st.st_size, st.st_mtime_ns, _tail_stamp(f, st.st_size))
+            f.seek(0)
             for line in f:
                 line = line.strip()
                 if not line:
@@ -1394,9 +1424,15 @@ class SessionManager:
         last, count = written
         if not _message_rows_moved(session, last, count):
             return
+        # Dropped before the raise, because the message below tells the caller to
+        # reload and nothing else would: the copy stays cached otherwise, and
+        # every later save of it is refused for the rest of the process's life.
+        # The next ``get_or_create`` reads the transcript the other writer left.
+        self.invalidate(session.key)
         raise SessionWriterConflictError(
             f"session {session.key!r} changed on disk since this copy loaded it: "
-            "another process is writing this session. Close the other writer and reload it before saving again."
+            "another process is writing this session. This copy is stale: the next read "
+            "of the session returns the transcript the other writer left."
         )
 
     def drop_filed_rows(self, session: Session, row_ids: Collection[str]) -> bool:

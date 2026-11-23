@@ -584,6 +584,101 @@ def test_a_second_writer_is_refused_not_merged(tmp_path: Path):
     assert [m["content"] for m in reloaded.messages] == ["from the first terminal", "from the second terminal"]
 
 
+def test_a_refused_save_hands_the_next_load_the_file_not_the_stale_copy(tmp_path: Path):
+    """The conflict says the copy is stale, so something has to make that true.
+
+    The manager keeps the copy in memory, and every later save of it is refused
+    for as long as it is there. Dropping it on the raise is what makes the next
+    ``get_or_create`` read the transcript the other writer left -- and lets this
+    process use the session again instead of until a restart.
+    """
+    key = "tui:20260610_100000_stalecopy"
+    first = SessionManager(tmp_path)
+    session = first.get_or_create(key)
+    session.add_message("user", "from the first terminal")
+    first.save(session)
+
+    second = SessionManager(tmp_path)
+    other = second.get_or_create(key)
+    other.add_message("user", "from the second terminal")
+    second.save(other)
+
+    session.add_message("assistant", "the first terminal's answer")
+    with pytest.raises(SessionWriterConflictError, match="another process is writing this session"):
+        first.save(session)
+
+    reloaded = first.get_or_create(key)
+    assert [m["content"] for m in reloaded.messages] == ["from the first terminal", "from the second terminal"], (
+        "the next load served the copy the conflict just refused"
+    )
+    reloaded.add_message("assistant", "the first terminal's answer")
+    first.save(reloaded)
+
+    on_disk = read_session_file(first.session_path(key), key)
+    assert [m["content"] for m in on_disk.messages] == [
+        "from the first terminal",
+        "from the second terminal",
+        "the first terminal's answer",
+    ], "the reloaded copy could not save the session the conflict released"
+
+
+def _a_same_length_rewrite(tmp_path: Path, key: str) -> tuple[SessionManager, Session, Path, tuple]:
+    """Let a second writer replace one turn with another of exactly the same length.
+
+    The file keeps its size and its message count; the revision moves, because the
+    second copy undid its turn before appending the replacement.
+    """
+    first = SessionManager(tmp_path)
+    session = first.get_or_create(key)
+    session.add_message("user", "q1")
+    session.add_message("assistant", "a1")
+    first.save(session)
+    path = first.session_path(key)
+    before = session._file_stamp
+    assert before is not None
+
+    second = SessionManager(tmp_path)
+    other = second.get_or_create(key)
+    assert other.undo_last_turn() == 2
+    other.add_message("user", "q2")
+    other.add_message("assistant", "a2")
+    second.save(other)
+
+    assert path.stat().st_size == before[0], "the fixture no longer rewrites the same number of bytes"
+    assert other.log_generation == session.log_generation + 1, "the fixture no longer moves the revision"
+    return first, session, path, before
+
+
+def test_a_same_length_rewrite_in_the_same_clock_tick_is_refused(tmp_path: Path):
+    """Size and clock cannot tell two rewrites of one length apart.
+
+    ``st_mtime_ns`` counts in the filesystem's ticks (about a millisecond here),
+    so a rewrite of the same length lands on the reading the first copy already
+    holds. Left at that, the copy appends over the other writer; the tail digest
+    in the stamp is what still sees the file move.
+    """
+    first, session, path, before = _a_same_length_rewrite(tmp_path, "tui:20260610_100000_samesize")
+    os.utime(path, ns=(before[1], before[1]))
+
+    session.add_message("assistant", "the first terminal's answer")
+    with pytest.raises(SessionWriterConflictError, match="another process is writing this session"):
+        first.save(session)
+
+
+def test_a_rewrite_that_keeps_the_size_and_the_count_is_refused_when_the_log_moved(tmp_path: Path):
+    """The other half of the same judgement: the rows are not the ones this copy wrote.
+
+    A same-length replacement keeps the message count, so counting the rows is not
+    enough to call the file unchanged -- the revision it records is.
+    """
+    first, session, path, before = _a_same_length_rewrite(tmp_path, "tui:20260610_100000_logmoved")
+    os.utime(path, ns=(before[1] + 1_000_000_000, before[1] + 1_000_000_000))
+
+    session.add_message("assistant", "the first terminal's answer")
+    with pytest.raises(SessionWriterConflictError, match="another process is writing this session"):
+        first.save(session)
+
+
 def test_an_undo_moves_the_append_boundary_and_keeps_the_next_turn(tmp_path: Path):
     """Undo cuts the list; the append boundary has to follow it.
 

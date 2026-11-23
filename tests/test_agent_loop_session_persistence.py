@@ -461,3 +461,80 @@ def test_a_row_rewritten_after_it_was_filed_is_filed_in_its_new_form(tmp_path):
     assert loop._save_turn(session, [picture, after], len(session.messages), final=False) == [], (
         "an unchanged filed row was prepared and written again"
     )
+
+
+def test_a_row_replaced_in_place_is_not_one_this_write_added(tmp_path):
+    """The rerun cut is built from what the write appended, so a rewrite is not in it.
+
+    A row already in the file that a later write replaces keeps its identifier --
+    the image window withdraws a picture from a row the turn already filed. It is
+    not a second row, and the attempt did not write it now. Counted among the
+    attempt's rows, the cut that clears the attempt would take it off the
+    transcript as well: the user's own question went that way.
+    """
+    from raven.agent.window.images import withdrawn_image_note
+
+    loop = _loop(tmp_path, _ScriptedProvider([_text("unused")]))
+    session = loop.sessions.get_or_create("cli:c")
+    picture = {
+        "role": "tool",
+        "tool_call_id": "c1",
+        "name": "screenshot",
+        "content": [
+            {"type": "text", "text": "the window"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        ],
+    }
+    after = {"role": "assistant", "content": "done"}
+
+    appended = loop._save_turn(session, [picture, after], 0, final=False)
+    assert appended == [picture["_row_id"], after["_row_id"]], "the fixture did not append both rows"
+
+    picture["content"][-1] = {
+        "type": "text",
+        "text": withdrawn_image_note(
+            {"caption": "the window", "tool": "screenshot", "iteration": 1},
+            index=1,
+            total=1,
+            reason="budget",
+            keep=0,
+        ),
+    }
+    replaced = loop._save_turn(session, [picture, after], len(session.messages), final=False)
+
+    assert replaced == [], "the row it replaced in place was reported as one it added"
+    assert loop.sessions.drop_filed_rows(session, set(replaced)) is True
+    assert any(row.get("tool_call_id") == "c1" for row in session.messages), (
+        "the rerun's cut took a row the attempt did not write"
+    )
+
+
+def test_an_image_question_keeps_its_placeholder_when_the_turn_closes(tmp_path):
+    """The opening write files a multimodal question as blocks plus the placeholder.
+
+    The closing write prepares that row again from the live message, which still
+    carries the bytes. Restoring the words the user typed would make the closing
+    write a rewrite -- the file would keep the question's text alone, with the
+    placeholder gone -- so what the inbound row is restored to is the form the
+    opening write filed.
+    """
+    loop = _loop(tmp_path, _ScriptedProvider([_text("unused")]))
+    session = loop.sessions.get_or_create("cli:c")
+    question = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "what is this?"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        ],
+    }
+
+    loop._save_turn(session, [question], 0, received_at="2026-01-01T00:00:00", inbound_original="what is this?")
+    loop.sessions.save(session)
+    loop._save_turn(session, [question, {"role": "assistant", "content": "a picture"}], 1)
+    loop.sessions.save(session)
+
+    rows = _filed(loop.sessions.session_path("cli:c"))
+    assert rows[0]["content"] == [
+        {"type": "text", "text": "what is this?"},
+        {"type": "text", "text": "[image]"},
+    ], "the closing write rewrote the question as text"

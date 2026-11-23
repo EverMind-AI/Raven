@@ -4545,7 +4545,9 @@ class TurnPathMixin:
         paths the loop completed.
 
         Returns the ``_row_id`` of every row it appended, so the turn can tell
-        which of its rows are already on disk.
+        which of its rows are already on disk. A row already there that this
+        write replaces in place is not one of them: the turn did not write it,
+        and the rerun cut takes back exactly what the turn wrote.
 
         ``received_at`` is the wall clock at which the turn's inbound message
         arrived, and it is the opening write that passes one: the turn's other
@@ -4734,10 +4736,9 @@ class TurnPathMixin:
                         entry["content"] = parts[1]
                     else:
                         continue
-                if inbound_rewrite_pending:
+                files_the_inbound = inbound_rewrite_pending
+                if files_the_inbound:
                     inbound_rewrite_pending = False
-                    if inbound_filed is not None:
-                        inbound_filed[row_id] = inbound_original
                     if isinstance(entry.get("content"), str) and entry["content"] != inbound_original:
                         # The user's own words, without what assembly put
                         # around them -- and without the attachment notes
@@ -4760,6 +4761,14 @@ class TurnPathMixin:
                     if not filtered:
                         continue
                     entry["content"] = filtered
+                if files_the_inbound and inbound_filed is not None:
+                    # The form this write files, not the words the user typed:
+                    # a question carrying a picture is filed as blocks and a
+                    # placeholder, and the closing write prepares the row again
+                    # from the live one. Handed back the string, it would
+                    # rewrite a multimodal question as text and lose the
+                    # placeholder.
+                    inbound_filed[row_id] = entry.get("content")
             if role == "user" and runtime_lines and not carries_runtime_context(entry.get("content"), runtime_lines):
                 # Filed beside the user's words, which ``content`` keeps alone, so
                 # the history projection replays the block this turn sent. Lines
@@ -4767,8 +4776,7 @@ class TurnPathMixin:
                 # sent twice.
                 entry[RUNTIME_CONTEXT_FIELD] = runtime_lines
             if stored is not None:
-                if self._refile_stored_row(session, row_id, entry, stored):
-                    written_ids.append(row_id)
+                self._refile_stored_row(session, row_id, entry, stored)
                 continue
             entry.setdefault("timestamp", self._now_fn().isoformat())
             session.record(entry)
