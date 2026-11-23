@@ -583,7 +583,8 @@ def test_the_fetch_gate_twin_leads_the_record_by_exactly_the_second_valve():
 
 
 _SESSION = "test:big-fetch"
-_PAGE = "A" * 60_000
+# U+6C49 is a 3-byte CJK character; the source stays ASCII for the language gate.
+_PAGE = chr(0x6C49) * 20_000
 _BIG_ENVELOPE = json.dumps(
     {
         "url": "https://example.com/big",
