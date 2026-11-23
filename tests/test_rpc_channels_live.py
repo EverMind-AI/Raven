@@ -136,3 +136,33 @@ async def test_qr_passes_the_gateways_answer_through(monkeypatch: pytest.MonkeyP
     assert r["qr"] == "data:image/png;base64,AAA"
     assert r["connected"] is False
     assert r["running"] is True
+
+
+async def test_status_reads_camelcase_extras_written_by_the_web_ui(tmp_path: Path) -> None:
+    """The Web UI stores channel cargo under camelCase keys (`appId`); a lookup by
+    the snake_case spec name alone reported configured credentials as missing."""
+    import json
+
+    import raven.home as raven_home_module
+    from raven.config.loader import set_config_path
+
+    previous = raven_home_module._current_config_path
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"workspace": str(tmp_path / "ws")}},
+                "channels": {"feishu": {"enabled": True, "appId": "cli_x", "appSecret": "s3cret"}},
+            }
+        )
+    )
+    set_config_path(cfg_path)
+    try:
+        status = await console_module.channels_status({})
+    finally:
+        raven_home_module._current_config_path = previous
+    row = next(c for c in status["channels"] if c["name"] == "feishu")
+
+    assert row["missing"] == []
+    assert row["configured"] is True
+    assert {f["key"]: f["set"] for f in row["fields"]}["app_id"] is True

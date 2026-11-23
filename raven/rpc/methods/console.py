@@ -1931,7 +1931,13 @@ async def channels_status(params: dict, *, agent_loop_factory=None) -> dict:
                 # policy drew as an empty box in the configure form, forever.
                 current: Any = model
                 for part in field.split("."):
-                    current = getattr(current, part, None)
+                    value = getattr(current, part, None)
+                    if value is None:
+                        # The Web UI writes cargo under camelCase keys, which the
+                        # socket model keeps as extras; the spec names are snake_case.
+                        head, *rest = part.split("_")
+                        value = getattr(current, head + "".join(w.title() for w in rest), None)
+                    current = value
                     if current is None:
                         break
                 is_set = current not in (None, "", []) and current != spec.get("default")
