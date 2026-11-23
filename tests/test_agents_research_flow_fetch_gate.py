@@ -10,7 +10,9 @@ from __future__ import annotations
 import ast
 import json
 import sys
+import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -27,8 +29,18 @@ from research_flow.support.harness_text import (  # noqa: E402
     is_harness_echo,
     sufficiency_notice,
 )
+from research_flow.tools.web import fetch_result_ok  # noqa: E402
 
-from raven.contracts.loop_hooks import AgentHookContext  # noqa: E402
+from raven.agent.loop import AgentLoop  # noqa: E402
+from raven.agent.loop.bundles import EngineWiring, HostWiring, ToolWiring, TurnPolicy  # noqa: E402
+from raven.config.raven import CheckpointConfig, ContextConfig, RuntimeConfig  # noqa: E402
+from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision  # noqa: E402
+from raven.contracts.tool import Tool  # noqa: E402
+from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest  # noqa: E402
+from raven.security.trust import unwrap_untrusted  # noqa: E402
+from raven.session.refs import TOOL_RESULT_TRUNCATION_MARKER  # noqa: E402
+from raven.spine.message import ChatType, Source  # noqa: E402
+from raven.spine.turn import Origin, TurnRequest  # noqa: E402
 
 
 def _ok_fetch() -> str:
@@ -558,3 +570,169 @@ def test_the_fetch_gate_twin_leads_the_record_by_exactly_the_second_valve():
     assert changed == TWIN_LEADS_CHANGED, "changed outside the named lead (or a stale entry): " + repr(
         changed ^ TWIN_LEADS_CHANGED
     )
+
+
+# ── the real loop: the gate parses the whole body, the model reads the preview ──
+#
+# Every test above hands the hook a hand-built context. These drive the real
+# ``AgentLoop._process_message`` with the gate seated in the phase the loop
+# fires it from, so the only thing simulated is the boundary itself. The bug
+# they pin was ordering: the result was bounded when it entered ``messages``,
+# so the gate parsed a cut JSON envelope and read a successfully opened page as
+# a failed fetch, while the truncated preview is the right thing for the model.
+
+
+_SESSION = "test:big-fetch"
+_PAGE = "A" * 60_000
+_BIG_ENVELOPE = json.dumps(
+    {
+        "url": "https://example.com/big",
+        "finalUrl": "https://example.com/big",
+        "content": _PAGE,
+        "length": len(_PAGE),
+    }
+)
+
+
+class _BigFetchTool(Tool):
+    name = "web_fetch"
+    description = "Return one over-budget page envelope."
+    parameters = {"type": "object", "properties": {}, "required": []}
+
+    async def execute(self, **kwargs: Any) -> str:
+        return _BIG_ENVELOPE
+
+
+class _SearchTool(Tool):
+    name = "web_search"
+    description = "Return search results."
+    parameters = {"type": "object", "properties": {}, "required": []}
+
+    async def execute(self, **kwargs: Any) -> str:
+        return "1. A\n2. B"
+
+
+class _FetchGateSeat(AgentHook):
+    """The real observer, seated where the loop runs an iteration hook."""
+
+    def __init__(self, gate: FetchGate) -> None:
+        self.observer = FetchGateObserver(gate)
+        self.seen: list[list[dict[str, Any]]] = []
+
+    @property
+    def name(self) -> str:
+        return "FetchGateObserver"
+
+    async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
+        self.seen.append([dict(m) for m in (ctx.messages or [])])
+        return await self.observer.before_iteration(ctx)
+
+
+class _TurnScript(LLMProvider):
+    """The main loop's scripted answers; a call from beside the turn answers apart."""
+
+    def __init__(self, script: list[LLMResponse]) -> None:
+        super().__init__(api_key="test")
+        self._script = list(script)
+        self.main_calls: list[list[dict[str, Any]]] = []
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        if tools is None:
+            return LLMResponse(content="aside", finish_reason="stop")
+        self.main_calls.append([dict(m) for m in messages])
+        return self._script.pop(0)
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+def _turn() -> TurnRequest:
+    return TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="test", chat_id="big-fetch", sender_id="user", chat_type=ChatType.DM),
+        text="open the page",
+    )
+
+
+def _tool_step(call_id: str, name: str) -> LLMResponse:
+    return LLMResponse(
+        content="",
+        tool_calls=[ToolCallRequest(id=call_id, name=name, arguments={})],
+        finish_reason="tool_calls",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_big_fetch_is_a_success_for_the_gate_and_a_preview_for_the_model():
+    """Both directions of the same turn, on the real loop.
+
+    Two searches close the gate; the ``web_fetch`` that follows opens a page
+    whose envelope is 60 KB of one-line JSON. The gate must read that as a
+    successful fetch (``gate_reopened`` 1) even though the model is sent a
+    bounded preview. Before the bound moved to the call seam, the gate saw the
+    preview, ``fetch_result_ok`` returned False, and the gate stayed closed.
+    """
+    gate = FetchGate(k=2, release_after_failed_fetches=99)
+    seat = _FetchGateSeat(gate)
+    provider = _TurnScript(
+        [
+            _tool_step("s1", "web_search"),
+            _tool_step("s2", "web_search"),
+            _tool_step("f1", "web_fetch"),
+            LLMResponse(content="done", finish_reason="stop"),
+        ]
+    )
+    with tempfile.TemporaryDirectory() as td:
+        agent = AgentLoop(
+            provider=provider,
+            workspace=Path(td),
+            model="stub",
+            policy=TurnPolicy(max_iterations=8),
+            tools=ToolWiring(restrict_to_workspace=True),
+            engine=EngineWiring(
+                context_config=ContextConfig(tool_result_max_lines=2_000, tool_result_max_bytes=50 * 1024),
+                runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="never")),
+            ),
+            host=HostWiring(hooks=[seat]),
+        )
+        agent.tools.register(_BigFetchTool())
+        agent.tools.register(_SearchTool())
+
+        await agent._process_message(_turn(), session_key=_SESSION)
+
+        # The hook read the full body: the predicate that failed on the cut
+        # envelope is True again, and the gate counted a successful reopen.
+        assert gate.fired == 1
+        assert gate.opened == 1
+        assert gate.closed is False
+        hook_view = [m for seen in seat.seen for m in seen if m.get("role") == "tool" and m.get("name") == "web_fetch"]
+        assert hook_view, "the gate never saw the fetch result"
+        assert _BIG_ENVELOPE in unwrap_untrusted(hook_view[-1]["content"])
+        assert fetch_result_ok(unwrap_untrusted(hook_view[-1]["content"]))
+
+        # The model read the preview of the same message.
+        sent = [m for m in provider.main_calls[3] if m.get("role") == "tool" and m.get("name") == "web_fetch"]
+        assert len(sent) == 1
+        content = sent[0]["content"]
+        assert TOOL_RESULT_TRUNCATION_MARKER in content
+        assert "Full output saved to:" in content
+        assert _PAGE not in content
+        assert len(content) < len(_BIG_ENVELOPE)
+
+        # And the session files those exact bytes, not the body the hook read.
+        agent.sessions.invalidate(_SESSION)
+        saved = [
+            m
+            for m in agent.sessions.get_or_create(_SESSION).messages
+            if m.get("role") == "tool" and m.get("name") == "web_fetch"
+        ][-1]
+        assert saved["content"] == content

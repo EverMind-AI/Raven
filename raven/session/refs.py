@@ -77,9 +77,11 @@ def cap_tool_result(content: Any, cap: int) -> Any:
     whole. Non-string content (a multimodal result) is returned unchanged: the
     cap has always guarded ``str`` content only.
 
-    Called when the result enters the conversation and again when it is written
-    to the session, so the model and a later replay read the same bytes; the
-    provider's cached prefix survives the turn boundary.
+    Called where a result enters the conversation outside the iteration loop,
+    and again when a tool result is written to the session as the fallback for
+    a body no model call bounded. The bounded preview the loop sends is what
+    keeps the model and a later replay on the same bytes; this cap only catches
+    content that never reached that path.
     """
     if not isinstance(content, str) or not cap or is_truncated(content):
         return content

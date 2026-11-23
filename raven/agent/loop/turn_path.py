@@ -1165,6 +1165,54 @@ class TurnPathMixin:
             log.follow(result.messages)
             return result
 
+        # The preview each over-budget tool result is sent as, keyed by
+        # ``tool_call_id`` so every call of the turn sends the same bytes. The
+        # message itself keeps the full body: hooks and observers read the
+        # transcript, not the payload, and several research gates decide a
+        # fetch's success by parsing that body. Only the projection below, and
+        # the persist at the end of the turn, carry the preview.
+        bounded_results: dict[str, tuple[str, str]] = {}
+        # The results this turn appended. A body already in history is left as
+        # stored: projecting it without rewriting the session would hand every
+        # later turn a preview under a fresh managed path, and the prefix would
+        # change each time.
+        turn_tool_calls: set[str] = set()
+
+        def _model_preview(row: dict[str, Any]) -> str | None:
+            """The content the model reads for one tool row, or ``None`` when it is under budget."""
+            content = row.get("content")
+            call_id = row.get("tool_call_id")
+            if not isinstance(content, str) or not isinstance(call_id, str) or call_id not in turn_tool_calls:
+                return None
+            cached = bounded_results.get(call_id)
+            if cached is not None and content == cached[0]:
+                return cached[1]
+            preview = bound_tool_result(
+                content,
+                self.workspace,
+                limits=self._TOOL_OUTPUT_LIMITS,
+                direction=direction_for(row.get("name")),
+                readers=tuple(name for name in ("read_file", "grep") if self.tools.get(name) is not None),
+            )
+            if preview == content:
+                return None
+            bounded_results[call_id] = (content, preview)
+            return preview
+
+        def _model_facing(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            """``rows`` as the model reads them: an over-budget tool result carries its preview."""
+            out: list[dict[str, Any]] | None = None
+            for index, row in enumerate(rows):
+                if not isinstance(row, dict) or row.get("role") != "tool":
+                    continue
+                preview = _model_preview(row)
+                if preview is None:
+                    continue
+                if out is None:
+                    out = list(rows)
+                out[index] = {**row, "content": preview}
+            return rows if out is None else out
+
         # Retryable model errors that outlasted the provider's own ladder: how many
         # of the loop's longer waits this turn has spent.
         error_waits = 0
@@ -1632,6 +1680,11 @@ class TurnPathMixin:
             # the shape the messages arrived in, and the prompt-cache prefix
             # stays stable because the same arrivals always fold the same way.
             call_messages = merge_mid_turn(call_messages, replay=True)
+            # The model reads the preview of an over-budget tool result; the
+            # transcript keeps the full body for the hooks above, and the
+            # persist at the end of the turn writes the same bytes this call
+            # sends so the next replay starts from an identical prefix.
+            call_messages = _model_facing(call_messages)
             # Sized to the prompt it goes out beside, which is the room the
             # history strategy's trigger holds back: near that line the model's
             # whole ceiling no longer fits, and a provider that checks
@@ -2195,21 +2248,9 @@ class TurnPathMixin:
                         messages = self.context.add_tool_result(
                             messages, tool_call.id, result_name, model_text, trusted_note=watch_note, **provenance
                         )
-                    if messages and messages[-1].get("role") == "tool":
-                        # The cap lands here, before the next call reads the
-                        # result: the model and the session write must hold the
-                        # same bytes or the next turn's cached prefix breaks.
-                        # The full body goes to a managed file, so the preview
-                        # is the durable replay record rather than the whole
-                        # output being lost with the cut.
-                        messages[-1]["content"] = bound_tool_result(
-                            messages[-1]["content"],
-                            self.workspace,
-                            limits=self._TOOL_OUTPUT_LIMITS,
-                            direction=direction_for(result_name),
-                            readers=tuple(name for name in ("read_file", "grep") if self.tools.get(name) is not None),
-                        )
                     if messages:
+                        if isinstance(call_id := messages[-1].get("tool_call_id"), str):
+                            turn_tool_calls.add(call_id)
                         # Dispatch to result, on the entry that answers the call.
                         # The live tool event was its only carrier, so a restored
                         # transcript had to either invent a number or say nothing
@@ -2266,6 +2307,8 @@ class TurnPathMixin:
                             messages[-1]["content"] = cap_tool_result(
                                 messages[-1]["content"], self._TOOL_RESULT_MAX_CHARS
                             )
+                            if isinstance(skipped_call.id, str):
+                                turn_tool_calls.add(skipped_call.id)
                         break
                     # Track consecutive same-tool deterministic failures
                     # (transient errors excluded — a retry would clear those).
@@ -2906,7 +2949,7 @@ class TurnPathMixin:
                 else None
             )
             final_content = await self._synthesize_final_on_exhaustion(
-                messages,
+                _model_facing(messages),
                 active_model,
                 list(fallbacks_left),
                 on_token_delta=wrap_up_gate or on_token_delta,
@@ -3032,6 +3075,16 @@ class TurnPathMixin:
             outcome.checkpoint_id = cid
             if status == "interrupted":
                 outcome.edited_files = changed
+
+        # The turn files the bytes its calls sent: the previews replace the full
+        # bodies the hooks read, so the session and the next replay carry what
+        # the model saw. A result no call ever read -- a blocked or stalled turn
+        # -- is bounded here too, so an early exit cannot file an unbounded body.
+        for row in messages:
+            if isinstance(row, dict) and row.get("role") == "tool":
+                preview = _model_preview(row)
+                if preview is not None:
+                    row["content"] = preview
 
         return final_content, tools_used, messages, outcome
 
@@ -4270,7 +4323,15 @@ class TurnPathMixin:
         received_at: str | None = None,
         trace_id: str | None = None,
     ) -> None:
-        """Save new-turn messages into session, truncating large tool results.
+        """Save new-turn messages into session, cutting any tool result still over the char cap.
+
+        The loop hands this method the persisted view of the turn: an over-budget
+        tool result already carries the bounded preview the model was sent, and
+        the managed file that holds its full body. The character cap below is the
+        fallback for a result that never passed through the loop -- a turn whose
+        attempt died before its last iteration, or an entry a caller files
+        directly -- so the model and the replay still read the same bytes on the
+        paths the loop completed.
 
         ``received_at`` is the wall clock at which the turn's inbound message
         arrived, and it is the opening write that passes one: the turn's other
@@ -4412,6 +4473,8 @@ class TurnPathMixin:
                 content = _strip_inline_images(content)
                 entry["content"] = content
             if role == "tool":
+                # The loop already bounded what the model read; this is the
+                # fallback for a body that never passed through it.
                 entry["content"] = cap_tool_result(content, self._TOOL_RESULT_MAX_CHARS)
             elif role == "user":
                 if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
