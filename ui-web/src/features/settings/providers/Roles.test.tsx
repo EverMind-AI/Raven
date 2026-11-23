@@ -474,6 +474,51 @@ describe('model roles', () => {
     expect(screen.getByRole('alert').textContent).toBe('gui.settings.roles.max {"n":200}')
   })
 
+  /* An explicit null or 0 is the file saying "no cap", which is not the
+     built-in 40: Number(null) is 0 and `0 || 40` is 40, so the number control
+     used to report a cap the file never wrote. */
+  it.each([
+    ['null', null],
+    ['zero', 0],
+  ])('an explicit %s cap reads as unbounded, not as 40', async (_spelling, value) => {
+    const data = snap()
+    ;(data.raw.agents as { defaults: Record<string, unknown> }).defaults.maxToolIterations = value
+    const { calls } = install(data)
+    await mount('model')
+    const disc = screen.getByText('gui.settings.roles.params').closest('button') as HTMLButtonElement
+    expect([...disc.querySelectorAll('.settings-sv')][1]!.textContent)
+      .toBe('gui.settings.roles.sum_itersgui.settings.roles.iterations_unbounded')
+    await act(async () => { fireEvent.click(disc) })
+    expect(screen.getByText('gui.settings.roles.iterations_unbounded')).toBeTruthy()
+    expect(screen.queryByText(/40 gui\.settings\.roles\.times/)).toBeNull()
+    /* No stepper to bump: one here would silently write 41 and cap a value the
+       file says is uncapped, and this surface cannot write the null back. */
+    expect(screen.queryByLabelText('gui.settings.more')).toBeNull()
+    expect(screen.getByText('gui.settings.roles.iterations_unbounded_note')).toBeTruthy()
+    expect(sets(calls)).toEqual([])
+  })
+
+  it('an absent cap keeps the built-in 40, which an explicit null does not', async () => {
+    const data = snap()
+    delete (data.raw.agents as { defaults: Record<string, unknown> }).defaults.maxToolIterations
+    install(data)
+    await mount('model')
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.roles.params')) })
+    expect(screen.getByText('40 gui.settings.roles.times')).toBeTruthy()
+    expect(screen.queryByText('gui.settings.roles.iterations_unbounded')).toBeNull()
+    expect(screen.getByLabelText('gui.settings.more')).toBeTruthy()
+  })
+
+  it('a positive cap reads as that number', async () => {
+    const data = snap()
+    ;(data.raw.agents as { defaults: Record<string, unknown> }).defaults.maxToolIterations = 150
+    install(data)
+    await mount('model')
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.roles.params')) })
+    expect(screen.getByText('150 gui.settings.roles.times')).toBeTruthy()
+    expect(screen.queryByText('gui.settings.roles.iterations_unbounded')).toBeNull()
+  })
+
   it('an unset effort reads as the provider default, and that rung clears the key rather than writing a word', async () => {
     /* The harness holds `low`; this is the install that never touched the key,
        which the page used to draw as Low -- a setting the file does not hold. */
