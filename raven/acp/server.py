@@ -39,6 +39,7 @@ from raven.acp.permissions import AcpPermissionBroker
 from raven.acp.questions import AcpQuestions
 from raven.acp.stdio import read_frames, write_frame
 from raven.acp.updates import UpdateTranslator
+from raven.config import load_config
 
 SHUTDOWN_GRACE_S = 5.0
 """How long a handler gets to finish after the client closed stdin.
@@ -96,6 +97,7 @@ async def serve(reader: asyncio.StreamReader, out: BinaryIO, *, channel: str = A
         outbound=outbound,
         questions=questions,
         channel=channel,
+        background_hold_limit_s=float(load_config().acp.max_background_hold_seconds),
     )
     logger.info("acp: engine ready on channel {} ({} methods)", channel, len(stack.dispatcher.methods()))
 

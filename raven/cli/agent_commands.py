@@ -47,6 +47,8 @@ EXIT_ACTIONS_REFUSED = 3
 
 #: How long a quiet moment has to last before the launcher calls the work done.
 _BACKGROUND_SETTLE_S = 2.0
+#: How often the launcher asks whether that work is still there.
+_BACKGROUND_POLL_S = 1.0
 
 
 def _report_refusals(refusals: list) -> None:
@@ -138,7 +140,7 @@ async def _wait_for_background_work(agent_loop, scheduler, conversation: str) ->
             await asyncio.sleep(_BACKGROUND_SETTLE_S)
             if not busy():
                 return
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(_BACKGROUND_POLL_S)
 
 
 def _print_turn_failure(text: str) -> None:

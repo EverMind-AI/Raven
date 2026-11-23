@@ -36,12 +36,14 @@ sys.path.insert(0, str(PLUGIN_DIR))
 
 from code_flow.tools import plugin as factories  # noqa: E402
 from code_flow.tools.exec import (  # noqa: E402
+    ADOPTED_NOTE,
     MAX_OUTPUT,
     SPILL_SUBDIR,
     TIMED_OUT_NOTE,
     CodeExecResult,
     CodeExecTool,
     CodeExecutor,
+    _CappedLog,
 )
 
 
@@ -645,18 +647,26 @@ def test_the_registry_runs_a_long_timeout_instead_of_refusing_it(tmp_path):
 # --- partial output on timeout -----------------------------------------------------------
 
 
-def test_a_timed_out_command_keeps_the_output_it_produced(tmp_path):
+def test_a_timed_out_command_keeps_the_output_it_produced(tmp_path, monkeypatch):
+    """When there is nothing to hand the work to, the kill path still reports
+    what the command had printed: the output is not what was lost."""
+
+    async def refuse_adoption(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(CodeExecutor, "_adopt", refuse_adoption)
     tool = _tool(tmp_path)
     out = _run(tool.execute(command="echo started; echo more >&2; sleep 30", timeout=1))
     text = str(out)
     assert "started" in text, "what the command printed before the kill is kept"
     assert "STDERR:\nmore" in text
     assert "Timed out after 1s" in text and TIMED_OUT_NOTE in text
+    assert "still running" not in text, "nothing was adopted, so nothing is still running"
     assert "Exit code: -1" in text
     assert getattr(out, "ok", None) is False
 
 
-def test_trunks_executor_preserves_output_on_timeout(tmp_path):
+def test_trunks_executor_preserves_output_on_timeout(tmp_path, monkeypatch):
     """The shared executor preserves output produced before the timeout.
 
     This is the retired half of the reason the fork replaced it: trunk used to
@@ -668,9 +678,16 @@ def test_trunks_executor_preserves_output_on_timeout(tmp_path):
     reports the kill through the stderr line and exit ``-1`` and nothing more,
     while ``CodeExecResult`` also flags ``timed_out`` and renders
     ``TIMED_OUT_NOTE``, which tells the model its output is a fragment. The
-    last assertion is what keeps the two from quietly converging.
+    last assertion is what keeps the two from quietly converging. Adoption is
+    refused here so the fork kills, rather than adopting, which is the only
+    path that renders this marker now.
     """
     from raven.sandbox.direct_executor import DirectExecutor
+
+    async def refuse_adoption(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(CodeExecutor, "_adopt", refuse_adoption)
 
     command = "echo started; sleep 30"
     result = _run(DirectExecutor().exec(command, timeout=0.3))
@@ -806,13 +823,36 @@ def test_the_published_config_carries_the_ceiling_in_the_slice_not_in_a_dead_hos
     assert published["plugins"]["config"]["code-flow"]["tools"]["exec"] == {"maxTimeout": 600}
 
 
-def test_the_default_timeout_leaves_room_for_the_turn_to_finish(tmp_path):
-    """120 s default, 600 s ceiling: a command must not eat a task budget."""
+def test_the_unstated_timeout_is_the_configured_one(tmp_path):
+    """``tools.exec.timeout`` is read live for the next command, not bypassed
+    for the module default: a deployment that configured 23 gets 23."""
     from code_flow.tools.exec import DEFAULT_MAX_TIMEOUT, DEFAULT_TIMEOUT
 
+    from raven.sandbox.interfaces import ExecResult
+
     assert (DEFAULT_TIMEOUT, DEFAULT_MAX_TIMEOUT) == (120, 600)
-    tool = _tool(tmp_path, max_timeout=DEFAULT_MAX_TIMEOUT)
-    assert tool._bounded_timeout(None) == DEFAULT_TIMEOUT, "an unstated timeout is the default, not the ceiling"
+
+    class Capture(DirectExecutor):
+        def __init__(self) -> None:
+            self.timeouts: list[int | None] = []
+
+        async def exec(self, command, cwd=None, timeout=None, env=None):
+            self.timeouts.append(timeout)
+            return ExecResult(stdout="", stderr="", exit_code=0)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    executor = Capture()
+    tool = CodeExecTool(
+        timeout=23,
+        working_dir=str(home),
+        executor=executor,
+        extra_allowed_dirs=(home,),
+        max_timeout=DEFAULT_MAX_TIMEOUT,
+    )
+    assert tool._bounded_timeout(None) == 23
+    _run(tool.execute(command="true"))
+    assert executor.timeouts == [23], "the configured value is what the executor actually ran under"
 
 
 def test_a_turn_deadline_shortens_the_command_and_says_so(tmp_path):
@@ -825,7 +865,7 @@ def test_a_turn_deadline_shortens_the_command_and_says_so(tmp_path):
 
     tool = _tool(tmp_path, max_timeout=600)
     started = time.monotonic()
-    turn_clock.set_deadline(started + 40)
+    turn_clock.set_deadline(started + 100)
     try:
         out = _run(tool.execute(command="sleep 2", timeout=600))
     finally:
@@ -835,6 +875,42 @@ def test_a_turn_deadline_shortens_the_command_and_says_so(tmp_path):
     assert "Exit code: 0" in text, "the command ran to completion inside the shortened limit"
     assert time.monotonic() - started < 5, "the 600 s request was cut to the turn's remaining time"
     assert "deadline" in text.lower(), "the note says why the request was shortened"
+
+
+def test_the_deadline_reserve_is_twenty_seconds(tmp_path):
+    from raven.agent import turn_clock
+
+    tool = _tool(tmp_path, max_timeout=600)
+    turn_clock.set_deadline(time.monotonic() + 101.5)
+    try:
+        assert tool._bounded_timeout(600) == 81, "100 s left minus the 20 s wrap-up reserve"
+    finally:
+        turn_clock.set_deadline(None)
+
+
+def test_the_short_command_floor_never_exceeds_the_time_left(tmp_path):
+    """Five seconds is a floor for a nearly expired turn, not a licence to
+    overrun its clock: with less than that left, the command gets what is
+    actually there."""
+    from raven.agent import turn_clock
+
+    tool = _tool(tmp_path)
+    turn_clock.set_deadline(time.monotonic() + 0.9)
+    try:
+        assert tool._bounded_timeout(None) == 0, "under a second left is under a second, not five"
+    finally:
+        turn_clock.set_deadline(None)
+
+
+def test_the_floor_is_five_seconds_when_that_much_is_left(tmp_path):
+    from raven.agent import turn_clock
+
+    tool = _tool(tmp_path)
+    turn_clock.set_deadline(time.monotonic() + 10.5)
+    try:
+        assert tool._bounded_timeout(None) == 5, "the reserve cannot be paid, so the floor applies"
+    finally:
+        turn_clock.set_deadline(None)
 
 
 def test_without_a_deadline_the_request_is_only_capped_by_the_ceiling(tmp_path):
@@ -859,6 +935,7 @@ def test_a_timed_out_command_is_adopted_instead_of_killed(tmp_path, monkeypatch)
 
     async def main() -> str:
         result = await tool.execute(command="echo first; sleep 1.2; echo second", timeout=1)
+        assert getattr(result, "ok", None) is False, "an unfinished call is not a success"
         # The pipes are ours, so the pumping lives on this loop: keep it running
         # past the call the way a live turn does.
         await asyncio.sleep(1.0)
@@ -870,8 +947,14 @@ def test_a_timed_out_command_is_adopted_instead_of_killed(tmp_path, monkeypatch)
     assert found, f"the result names the task: {text[:200]}"
     task_id = found.group(1)
     assert "first" in text, "what it printed before the limit is still the result"
+    assert "still running" in text
+    assert "was killed" not in text, "the command was adopted, not killed"
+    assert "Retry with a larger" not in text, "a larger timeout would start a duplicate"
+    assert TIMED_OUT_NOTE not in text
+    assert ADOPTED_NOTE in text
     data = background_exec.status(task_id) or {}
     assert data.get("log_path"), "the record outlives the call while the process does"
+    assert data["log_path"] in text, "the result names where the rest of the output goes"
     assert "second" in Path(data["log_path"]).read_text(encoding="utf-8")
     background_exec.reap(task_id)
 
@@ -891,3 +974,87 @@ def test_no_time_left_kills_instead_of_adopting(tmp_path, monkeypatch):
         turn_clock.set_deadline(None)
 
     assert not [t for t in background_exec.running() if "sleep 30" in t["command"]]
+
+
+@pytest.mark.slow
+def test_a_failed_adoption_kills_the_command_instead_of_leaking_it(tmp_path, monkeypatch):
+    """A log the harness cannot open must not leave the child running unseen."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    from raven.agent.tools import background_exec
+
+    def refuse(*args, **kwargs):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(background_exec, "adopt", refuse)
+    pidfile = tmp_path / "pid"
+    tool = _tool(tmp_path)
+    out = _run(tool.execute(command=f"echo $$ > {shlex.quote(str(pidfile))}; sleep 30", timeout=1))
+
+    text = str(out)
+    assert "Timed out after 1s" in text and TIMED_OUT_NOTE in text
+    assert "still running" not in text, "the handover failed, so the kill path answered"
+    pid = int(pidfile.read_text().strip())
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    pytest.fail(f"the command (pid {pid}) outlived the failed adoption")
+
+
+def test_an_adopted_log_rotates_at_its_size_cap(tmp_path):
+    """A chatty adopted command must not be able to fill the disk with its log."""
+    from raven.agent.tools import background_exec
+
+    path = tmp_path / "capped.log"
+    with path.open("ab", buffering=0) as raw:
+        log = _CappedLog(raw, 200)
+        for index in range(100):
+            log.write(f"line-{index:03d}\n".encode())
+        log.close()
+
+    data = path.read_bytes()
+    assert background_exec.LOG_ROTATE_MARK in data, "the reader is told the front is gone"
+    assert len(data) <= 200, "the file stays at its cap while the pipe keeps draining"
+    assert b"line-099" in data, "the recent output is the part kept"
+    assert b"line-000" not in data, "the opening output was rotated out"
+
+
+@pytest.mark.slow
+def test_an_adoption_that_ends_before_it_returns_does_not_say_still_running(tmp_path, monkeypatch):
+    """The command can exit between the timeout and the handover; a stale
+    "still running" then sends the model to wait for work that is over."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+
+    class Racy:
+        def __init__(self) -> None:
+            self.reads = 0
+
+        @property
+        def returncode(self):
+            self.reads += 1
+            return None if self.reads == 1 else 0
+
+        stdout = None
+        stderr = None
+
+    tool = _tool(tmp_path)
+
+    async def adopt_it():
+        adopted = await tool._executor._adopt(
+            Racy(), 4_000_001, "make all", 5, bytearray(b"partial\n"), bytearray(), []
+        )
+        await asyncio.sleep(0)
+        return adopted
+
+    result = _run(adopt_it())
+
+    assert result is not None
+    text = result.as_text()
+    assert "finished just as the harness took it over" in text
+    assert "still running" not in text
+    assert "was killed" not in text
+    assert result.adopted is False, "a finished command is a complete result, not a held one"
+    assert result.exit_code == 0, "the command's real exit code answers for it"

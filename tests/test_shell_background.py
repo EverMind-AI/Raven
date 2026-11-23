@@ -359,3 +359,29 @@ def test_adopted_work_is_listed_under_its_session(monkeypatch, tmp_path):
     finally:
         if proc.poll() is None:
             proc.kill()
+
+
+def test_tail_reads_only_the_end_of_a_large_log(home):
+    """A log's tail is read from the end, not by loading the whole file first."""
+    log = home / "background" / "large.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("HEAD-MARKER\n" + "padding line\n" * 20_000 + "TAIL-MARKER\n", encoding="utf-8")
+    task = background_exec.adopt("chatty", 4_000_002, log_path=str(log))
+
+    text = background_exec.tail(task.task_id, max_bytes=128)
+
+    assert "TAIL-MARKER" in text
+    assert "HEAD-MARKER" not in text
+    assert len(text.encode()) <= 128
+
+
+def test_two_adoptions_in_one_millisecond_get_distinct_ids(home):
+    """The ids are how the record and the log are found; a collision overwrites
+    the first command's record while both keep running."""
+    first = background_exec.adopt("first", 4_000_003)
+    second = background_exec.adopt("second", 4_000_004)
+
+    assert first.task_id != second.task_id
+    assert background_exec.status(first.task_id)["command"] == "first"
+    assert background_exec.status(second.task_id)["command"] == "second"
+    assert first.log_path != second.log_path

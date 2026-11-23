@@ -919,6 +919,13 @@ class AcpConfig(Base):
     by a value it never chose. Naming something is checked -- see the validator
     below for why those two are different cases."""
 
+    max_background_hold_seconds: int = Field(default=1800, ge=60)
+    """How long a ``session/prompt`` may stay held for this session's background
+    commands when the turn set no wall clock of its own. ACP sessions carry no
+    clock by default, so this is what keeps a command that never exits from
+    holding the prompt forever. At the limit the remaining commands are stopped
+    and the closing turn runs, so the client always gets an answer."""
+
     @model_validator(mode="after")
     def _resolve_the_named_default(self) -> "AcpConfig":
         """Match a named default case-insensitively, and refuse one that matches nothing.

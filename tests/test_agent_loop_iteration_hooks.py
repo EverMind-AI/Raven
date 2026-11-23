@@ -762,6 +762,7 @@ async def test_the_loop_sets_the_turn_clock_from_its_budget(tmp_path):
     from raven.agent.loop import TURN_BUDGETS_KEY
 
     seen: list[float | None] = []
+    sessions: list[tuple[str, str]] = []
 
     class Watch(AgentHook):
         async def before_user_inbound(self, ctx):
@@ -770,12 +771,15 @@ async def test_the_loop_sets_the_turn_clock_from_its_budget(tmp_path):
 
         async def before_iteration(self, ctx):
             seen.append(turn_clock.remaining())
+            sessions.append((ctx.session_key, turn_clock.session_key()))
             return HookDecision()
 
     loop = _loop(tmp_path, _ScriptedProvider([_text("answered")]), [Watch()])
     await loop._process_message(_req())
 
     assert seen and seen[0] is not None and 0 < seen[0] <= 60
+    assert sessions, "the hook ran inside the turn"
+    assert sessions[0][1] == sessions[0][0], "the adopted work is filed under the turn's session"
 
 
 @pytest.mark.asyncio

@@ -229,8 +229,12 @@ class CodeParticipant(AgentParticipant):
         # A command that outlived its call is still this session's work. The
         # client must not be told the turn ended while it runs, or it reads the
         # agent as finished; the ACP layer keeps the prompt open and runs a
-        # closing turn once these are gone.
-        if background_exec.running(session_key=step.session_key):
+        # closing turn once these are gone. The tasks ride the hold because the
+        # registry retires a record the moment its process exits: a command that
+        # finishes before the watcher's first poll still has to be named in the
+        # closing turn, or the model is told work finished with no work named.
+        tasks = background_exec.running(session_key=step.session_key)
+        if tasks:
             from raven.agent import turn_clock
 
             left = turn_clock.remaining()
@@ -238,6 +242,10 @@ class CodeParticipant(AgentParticipant):
                 "why": "waiting for a background command this turn started",
                 "untilMs": None if left is None else int((time.time() + left) * 1000),
                 "background": True,
+                "tasks": [
+                    {"task_id": task.get("task_id"), "command": task.get("command"), "log_path": task.get("log_path")}
+                    for task in tasks
+                ],
             }
         return {ACP_META_OBSERVER: meta}
 

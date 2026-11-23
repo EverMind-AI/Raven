@@ -2763,3 +2763,129 @@ async def test_a_closing_turn_that_fails_is_logged_not_raised(rig, monkeypatch):
     session = SimpleNamespace(session_id="s1", session_key="cli:c")
 
     await rig.methods._resume_after_background(session, {"background": True, "untilMs": None})
+
+
+async def _open_background_hold(rig, monkeypatch, *, poll: float = 0):
+    """Drive a real ``session/prompt`` until its turn arms a background hold.
+
+    The turn's hook stash is what tells the ACP layer to hold, so the test files
+    one onto the assistant message the turn appends -- the same record the real
+    code flow writes -- rather than calling the hold helpers directly.
+    """
+    from raven.agent.tools import background_exec
+
+    task = {"task_id": "bg-1", "command": "make all", "log_path": "/tmp/bg-1.log"}
+    monkeypatch.setattr(background_exec, "running", lambda session_key=None: [task])
+    monkeypatch.setattr("raven.acp.methods.BACKGROUND_POLL_S", poll)
+
+    await rig.handshake()
+    session_id = await rig.new_session()
+    prompt = asyncio.create_task(
+        rig.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": "build it"}]})
+    )
+    for _ in range(4):
+        await asyncio.sleep(0)
+    record = rig.engine.sessions.get_or_create(session_id)
+    record.add_message(
+        "assistant",
+        "started the build",
+        observers={
+            "acp_meta": {
+                "raven.holdTurn": {
+                    "why": "waiting for a background command this turn started",
+                    "untilMs": None,
+                    "background": True,
+                    "tasks": [task],
+                }
+            }
+        },
+    )
+    rig.translator.settle_turn(session_id, "end_turn")
+    for _ in range(200):
+        if any(u.get("_meta", {}).get("raven.toolName") == "wait_for_wake" for u in rig.updates()):
+            break
+        await asyncio.sleep(0)
+    else:
+        pytest.fail("the prompt never opened a background hold")
+    return prompt, session_id
+
+
+@pytest.mark.asyncio
+async def test_a_prompt_held_for_background_work_runs_its_own_closing_turn(rig, monkeypatch):
+    """From ``session/prompt`` through the real hold: the watcher, not a test
+    calling it, starts the closing turn and that turn answers the prompt."""
+    from raven.agent.tools import background_exec
+
+    task = {"task_id": "bg-1", "command": "make all", "log_path": "/tmp/bg-1.log"}
+    snapshots = iter([[task], []])
+    started = time.monotonic()
+    prompt, session_id = await _open_background_hold(rig, monkeypatch, poll=0.05)
+    monkeypatch.setattr(background_exec, "running", lambda session_key=None: next(snapshots, []))
+
+    sends = []
+    for _ in range(200):
+        sends = [params for name, params in rig.stack.calls if name == "turn.send"]
+        if len(sends) >= 2:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        pytest.fail("the held prompt never started its closing turn")
+
+    elapsed = time.monotonic() - started
+    assert elapsed >= 0.05, f"the watcher ran a closing turn without waiting a poll ({elapsed:.3f}s)"
+    closing = sends[-1]
+    assert closing["session_key"] == session_id
+    assert "bg-1" in closing["content"] and "make all" in closing["content"]
+    assert "have finished" in closing["content"]
+
+    # The closing turn is a real turn on this session: its ending is what
+    # answers the held prompt.
+    rig.translator.settle_turn(session_id, "end_turn")
+    response = await asyncio.wait_for(prompt, 2)
+
+    assert response["result"]["stopReason"] == "end_turn"
+    hold_updates = [u for u in rig.updates() if u.get("toolCallId", "").startswith("hold-")]
+    assert hold_updates[0]["title"].startswith("waiting for a background command")
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_background_hold_reaps_what_it_waited_on(rig, monkeypatch):
+    """A cancelled prompt must not leave the adopted command running unseen."""
+    from raven.agent.tools import background_exec
+
+    reaped: list[str] = []
+    prompt, session_id = await _open_background_hold(rig, monkeypatch)
+    monkeypatch.setattr(background_exec, "reap", lambda task_id: reaped.append(task_id) or True)
+
+    await rig.notify("session/cancel", {"sessionId": session_id})
+    response = await asyncio.wait_for(prompt, 2)
+
+    assert response["result"]["stopReason"] == "cancelled"
+    assert reaped == ["bg-1"], "the cancelled hold kills the command it was waiting on"
+    assert ("turn.cancel", {"session_key": session_id}) in rig.stack.calls
+
+
+@pytest.mark.asyncio
+async def test_a_hold_without_a_turn_deadline_ends_at_the_configured_cap(rig, monkeypatch):
+    """ACP sessions carry no wall clock by default; without a cap a command
+    that never exits would hold the prompt -- and its heartbeat -- forever."""
+    from types import SimpleNamespace
+
+    from raven.agent.tools import background_exec
+
+    reaped: list[str] = []
+    task = {"task_id": "bg-5", "command": "sleep forever", "log_path": "/tmp/bg-5.log"}
+    monkeypatch.setattr(background_exec, "running", lambda session_key=None: [task])
+    monkeypatch.setattr(background_exec, "reap", lambda task_id: reaped.append(task_id) or True)
+    monkeypatch.setattr("raven.acp.methods.BACKGROUND_POLL_S", 0.02)
+    rig.methods._background_hold_limit_s = 0.2
+    session = SimpleNamespace(session_id="s1", session_key="cli:c")
+
+    started = time.monotonic()
+    await asyncio.wait_for(rig.methods._resume_after_background(session, {"background": True, "untilMs": None}), 2)
+    elapsed = time.monotonic() - started
+
+    assert elapsed >= 0.15, f"the hold ran into its cap instead of returning at once ({elapsed:.3f}s)"
+    assert reaped == ["bg-5"]
+    content = rig.stack.params_for("turn.send")["content"]
+    assert "were stopped" in content and "wait limit" in content

@@ -17,9 +17,12 @@ Trunk drains the pipes itself now and hands back what arrived, so the output is
 no longer what separates the two. What remains here is the reading: trunk
 signals the kill through ``exit_code`` and a stderr line, while
 ``CodeExecResult`` flags ``timed_out`` and renders ``TIMED_OUT_NOTE``, which
-tells the model the output is a fragment rather than the whole run. The drain
-below therefore duplicates trunk's; retiring it is the fork owners' call, and
-nothing depends on which of the two performs it.
+tells the model the output is a fragment rather than the whole run. A command
+that still has turn time left is not killed at all: the executor adopts it into
+the background lane and renders ``ADOPTED_NOTE`` instead, so the model reads
+"still running, do not rerun" rather than two contradictory sentences. The
+drain below therefore duplicates trunk's; retiring it is the fork owners' call,
+and nothing depends on which of the two performs it.
 
 *A large output is saved whole, not lost in the middle.* Trunk keeps the head
 and the tail of 10,000 characters; the middle is nowhere. Here the budget is
@@ -58,6 +61,7 @@ from loguru import logger
 
 from code_flow.tools.diagnostic_workers import MAX_WORKERS
 from code_flow.tools.diagnostics import UNKNOWN, PythonDiagnostics
+from raven.agent.tools import background_exec
 from raven.agent.tools.shell import ExecTool
 from raven.contracts.tool import ToolOutput, ToolResult
 from raven.sandbox.direct_executor import DirectExecutor
@@ -77,6 +81,13 @@ TIMED_OUT_NOTE = (
     "[the command hit its time limit and was killed; the output above is what it had "
     "produced by then and is partial. Retry with a larger `timeout` if it just needs "
     "longer, or run it with run_in_background: true and read its log]"
+)
+#: The same marker for a command that was handed over instead of killed. It must
+#: not say the work is gone: the model would start it again while the adopted
+#: copy is still writing to its port or its build directory.
+ADOPTED_NOTE = (
+    "[the command was not killed: the harness kept it running in the background. Do not "
+    "run it again -- read the log named above, which is still being written]"
 )
 
 _SPILL_COUNTER = itertools.count(1)
@@ -109,6 +120,7 @@ class CodeExecResult(ExecResult):
     """Trunk's result plus what a coding run needs to read it right."""
 
     timed_out: bool = False
+    adopted: bool = False
     spill_dir: Path | None = None
 
     def as_text(self, max_chars: int = MAX_OUTPUT) -> str:
@@ -118,7 +130,9 @@ class CodeExecResult(ExecResult):
         if self.stderr.strip():
             parts.append(f"STDERR:\n{self.stderr}")
         parts.append(f"\nExit code: {self.exit_code}")
-        if self.timed_out:
+        if self.adopted:
+            parts.append(ADOPTED_NOTE)
+        elif self.timed_out:
             parts.append(TIMED_OUT_NOTE)
         result = "\n".join(parts)
         if len(result) <= max_chars:
@@ -142,6 +156,44 @@ class CodeExecResult(ExecResult):
         return result[:half] + marker + result[-half:]
 
 
+class _CappedLog:
+    """A binary log that stops growing at ``limit`` while its pipe stays drained.
+
+    Rotation keeps the recent output, which is the part a reader needs, and
+    discarding the rest is what keeps a chatty adopted command from filling the
+    disk. The caller must keep feeding every chunk: the child blocks when its
+    pipe fills, so dropping bytes is the writer's job, not a reason to stop
+    reading.
+    """
+
+    def __init__(self, handle: Any, limit: int) -> None:
+        self._handle = handle
+        self._limit = max(limit, len(background_exec.LOG_ROTATE_MARK) + 1)
+        self._written = 0
+
+    def write(self, chunk: bytes) -> None:
+        if not chunk:
+            return
+        marker = background_exec.LOG_ROTATE_MARK
+        if len(chunk) >= self._limit:
+            self._rotate()
+            chunk = chunk[-(self._limit - len(marker)) :]
+        elif self._written + len(chunk) > self._limit:
+            self._rotate()
+        self._handle.write(chunk)
+        self._written += len(chunk)
+
+    def _rotate(self) -> None:
+        marker = background_exec.LOG_ROTATE_MARK
+        self._handle.seek(0)
+        self._handle.truncate()
+        self._handle.write(marker)
+        self._written = len(marker)
+
+    def close(self) -> None:
+        self._handle.close()
+
+
 async def _pump(stream: asyncio.StreamReader | None, handle: Any) -> None:
     """Copy a live pipe into an adopted task's log, to the end."""
     if stream is None:
@@ -151,7 +203,6 @@ async def _pump(stream: asyncio.StreamReader | None, handle: Any) -> None:
         if not chunk:
             return
         handle.write(chunk)
-        handle.flush()
 
 
 async def _drain(stream: asyncio.StreamReader | None, into: bytearray) -> None:
@@ -226,9 +277,13 @@ class CodeExecutor(DirectExecutor):
         output already captured opens the log, and the two further readers
         append the rest. ``None`` when the process is already gone or the
         harness has no clock left to give it -- the caller then kills.
+
+        ``exit_code`` stays ``-1`` unless the command ended while custody was
+        being taken: the call did not produce a finished result, so ``ok`` is
+        false with it. A failed adoption raises and the caller kills; it must
+        never leave the child running with nobody writing its log.
         """
         from raven.agent import turn_clock
-        from raven.agent.tools import background_exec
 
         if process.returncode is not None:
             return None
@@ -236,29 +291,48 @@ class CodeExecutor(DirectExecutor):
         if left is not None and left <= 0:
             return None
         task = background_exec.adopt(command, pgid, session_key=turn_clock.session_key() or None)
-        handle = open(task.log_path, "ab", buffering=0)
-        handle.write(bytes(out) + bytes(err))
+        handle: _CappedLog | None = None
+        try:
+            handle = _CappedLog(open(task.log_path, "ab", buffering=0), background_exec.LOG_MAX_BYTES)
+            handle.write(bytes(out) + bytes(err))
+        except BaseException:
+            if handle is not None:
+                handle.close()
+            raise
+        sink = handle
         for drain in drains:
             drain.cancel()
         pumps = [
-            asyncio.create_task(_pump(process.stdout, handle)),
-            asyncio.create_task(_pump(process.stderr, handle)),
+            asyncio.create_task(_pump(process.stdout, sink)),
+            asyncio.create_task(_pump(process.stderr, sink)),
         ]
 
         async def _close_when_done() -> None:
             await asyncio.gather(*pumps, return_exceptions=True)
-            handle.close()
+            sink.close()
 
         asyncio.create_task(_close_when_done())
-        message = (
-            f"Timed out after {effective}s; the command is still running in the background "
-            f"as {task.task_id}. Output continues in {task.log_path}."
-        )
+        # The command may have exited between the timeout and this point. Saying
+        # "still running" then is stale in the one direction that matters: the
+        # model is told to wait for work that is already over. Its result is
+        # complete too, so it is not marked adopted or partial.
+        finished = process.returncode is not None
+        if finished:
+            message = (
+                f"Timed out after {effective}s; the command finished just as the harness took it "
+                f"over. Its output is in {task.log_path}."
+            )
+        else:
+            message = (
+                f"Timed out after {effective}s; the command is still running in the background "
+                f"as {task.task_id}. Output continues in {task.log_path}."
+            )
         return CodeExecResult(
             stdout=bytes(out).decode("utf-8", errors="replace"),
             stderr=(bytes(err).decode("utf-8", errors="replace").rstrip("\n") + "\n" if err else "") + message,
-            exit_code=-1,
-            timed_out=True,
+            exit_code=int(process.returncode) if finished else -1,
+            timed_out=not finished,
+            adopted=not finished,
             spill_dir=self._spill_dir,
         )
 
@@ -290,7 +364,11 @@ class CodeExecutor(DirectExecutor):
             await asyncio.wait_for(process.wait(), timeout=effective)
         except asyncio.TimeoutError:
             timed_out = True
-            adopted = await self._adopt(process, pgid, command, effective, out, err, drains)
+            try:
+                adopted = await self._adopt(process, pgid, command, effective, out, err, drains)
+            except Exception as exc:  # noqa: BLE001 - a failed handover must kill, never escape
+                logger.warning("code-flow exec: could not adopt the timed-out command: {}", exc)
+                adopted = None
             if adopted is None:
                 self._kill_process_group(process, pgid)
                 try:
@@ -450,8 +528,9 @@ class CodeExecTool(ExecTool):
             "Timeout in seconds for a command on THIS computer. Increase for long-running work "
             f"such as a build or a test suite (default {self.timeout}, ceiling {self._MAX_TIMEOUT}; a "
             "larger value is clamped to the ceiling, not rejected). A command that hits its limit is "
-            "killed and the output it produced so far comes back marked partial. Not read with "
-            "'machine' or 'run_in_background'."
+            "handed to the background when the turn has time left -- it keeps running, and the result "
+            "names its task and log -- or killed when the turn does not, with the output it produced so "
+            "far marked partial. Not read with 'machine' or 'run_in_background'."
         )
         return schema
 
@@ -461,14 +540,18 @@ class CodeExecTool(ExecTool):
         The loop reads its deadline between iterations, never mid-call, so a
         command allowed to run past it spends the overrun after the turn was
         supposed to stop. The reserve is what the turn still needs to answer.
+        The five-second floor gives a nearly expired turn one short command
+        instead of nothing, but it may not exceed what is actually left: a
+        floor above zero is still a promise the clock does not keep.
         """
         from raven.agent import turn_clock
 
-        effective = min(DEFAULT_TIMEOUT if timeout is None else timeout, self._MAX_TIMEOUT)
+        effective = min(self.timeout if timeout is None else timeout, self._MAX_TIMEOUT)
         left = turn_clock.remaining()
         if left is None:
             return effective
-        return max(5, min(effective, int(left - DEADLINE_RESERVE_SECONDS)))
+        budget = int(left - DEADLINE_RESERVE_SECONDS)
+        return min(effective, max(5, budget), int(left))
 
     async def execute(
         self,
@@ -490,7 +573,7 @@ class CodeExecTool(ExecTool):
             )
             timeout = self._MAX_TIMEOUT
         if not machine and not run_in_background:
-            base = min(DEFAULT_TIMEOUT if timeout is None else timeout, self._MAX_TIMEOUT)
+            base = min(self.timeout if timeout is None else timeout, self._MAX_TIMEOUT)
             requested = self._bounded_timeout(timeout)
             if requested < base:
                 note += (
@@ -519,6 +602,7 @@ class CodeExecTool(ExecTool):
 
 
 __all__ = [
+    "ADOPTED_NOTE",
     "DEFAULT_MAX_TIMEOUT",
     "DEFAULT_TIMEOUT",
     "MAX_OUTPUT",

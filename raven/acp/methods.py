@@ -125,6 +125,13 @@ HOLD_TURN_META = "raven.holdTurn"
 
 #: How often a held prompt asks whether its background work is gone.
 BACKGROUND_POLL_S = 2.0
+#: The longest a prompt may stay held for background work when the turn named
+#: no deadline of its own. ACP sessions carry no wall clock by default, so
+#: without this a command that never exits would hold the prompt -- and the
+#: heartbeat meant to keep the wait observable -- for the life of the process.
+#: Half an hour is long enough for the builds and downloads that adopt work,
+#: and short enough that a wedged command cannot own a prompt forever.
+MAX_BACKGROUND_HOLD_S = 30 * 60.0
 #: How often a held prompt says it is alive, as a ``tool_call_update`` on the
 #: one call that stands for the wait. Well inside the ten minutes raven's own
 #: client gives a running node before it reports a stall.
@@ -162,11 +169,13 @@ class AcpMethods:
         questions: Any = None,
         channel: str = "acp",
         modes: "SessionModes | None" = None,
+        background_hold_limit_s: float = MAX_BACKGROUND_HOLD_S,
     ) -> None:
         self._dispatcher = dispatcher
         # Resolved from config on first use when not injected, so a test can
         # hand in a catalogue and a live process reads the file it serves.
         self._modes = modes
+        self._background_hold_limit_s = background_hold_limit_s
         self._translator = translator
         self._emit = emit
         self._agent_loop = agent_loop
@@ -922,29 +931,39 @@ class AcpMethods:
 
         Polled rather than event-driven because the registry is process-wide and
         holds no subscribers; two seconds is the same order as the heartbeat the
-        client clocks liveness by. At the deadline the rest are killed and the
-        closing turn runs anyway, so a prompt is never left open forever.
+        client clocks liveness by. The wait has a deadline even when the turn
+        named none: ``MAX_BACKGROUND_HOLD_S`` would otherwise let a command that
+        never exits hold the prompt forever. At that deadline the rest are
+        killed and the closing turn runs anyway, so a prompt is never left open
+        forever.
         """
         from raven.agent.tools import background_exec
 
         until = hold.get("untilMs")
         deadline = (float(until) / 1000.0) if isinstance(until, (int, float)) and until > 0 else None
+        cap = time.time() + self._background_hold_limit_s
+        if self._background_hold_limit_s > 0 and (deadline is None or deadline > cap):
+            deadline = cap
         stopped = False
-        done = background_exec.running(session_key=session.session_key)
-        while done:
+        # The record is retired as soon as its process exits, so a task named by
+        # the hold may be gone by the first poll. Keep the names, or the closing
+        # turn tells the model something finished and names nothing.
+        known = [task for task in hold.get("tasks") or () if isinstance(task, dict) and task.get("task_id")]
+        seen = background_exec.running(session_key=session.session_key)
+        done = seen or known
+        while seen:
             if deadline is not None and time.time() >= deadline:
                 self._reap_background(session)
                 stopped = True
                 break
             await asyncio.sleep(BACKGROUND_POLL_S)
             seen = background_exec.running(session_key=session.session_key)
-            if not seen:
-                break
-            done = seen
+            if seen:
+                done = seen
         lines = [f"- {t.get('task_id')}: {t.get('command')} (log: {t.get('log_path')})" for t in done]
         if stopped:
             lead = (
-                "[system] The turn's deadline was reached, so the background commands this session "
+                "[system] The wait limit was reached, so the background commands this session "
                 "started were stopped. Read their logs and continue the task; report what they changed."
             )
             if os.name == "nt":
