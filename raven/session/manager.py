@@ -258,6 +258,39 @@ def _stamp(path: Path) -> tuple[int, int, str] | None:
         return None
 
 
+def _advance_stamp(session: "Session", path: Path, *, held: bool) -> None:
+    """Move ``session``'s stamp past a write it just made. The only place that does.
+
+    The stamp says the file holds nothing this copy has not read or written, and
+    every save trusts it: a stamp that still matches skips the re-read. Moved past
+    bytes the copy never took in, it hides them from every later save -- another
+    writer's rows, so the conflict is never raised, or another client's metadata
+    record, so the fold never runs and the next save writes over it.
+
+    One rule for every writer: the stamp moves under the write lock, right after a
+    write this copy made, and only when the copy ``held`` everything the file held
+    just before that write. Otherwise it stays where it was, and the next save
+    re-reads the file and settles the difference.
+
+    - ``SessionManager.save`` always holds it: a moved row has raised by then, and
+      a metadata record has been folded into what it wrote, under the same lock.
+    - ``append_turn_meta`` holds it only when the stamp still matched before its
+      append. It folds nothing, so a metadata record written since is left for the
+      next save to fold.
+    - ``SessionManager.append_metadata_patch`` never holds it: no lock spans the
+      scan its record merges and the append, so it cannot show what the file held
+      in between, and the copy it updates is not the copy that wrote.
+
+    ``read_session_file`` sets the first stamp, taken before the read, so a write
+    landing during the read leaves the copy behind the file rather than ahead. A
+    new writer of another record kind calls this with what it can show; a writer
+    of message rows goes through ``save``, which keeps the accounts that
+    :class:`Session` lists.
+    """
+    if held:
+        session._file_stamp = _stamp(path)
+
+
 @dataclass
 class Session:
     """
@@ -302,6 +335,32 @@ class Session:
     # Structure: {"original_message": str, "question": str, "domain": str}
     # Cleared immediately after the user's answer is processed.
     pending_clarification: dict | None = field(default=None)
+    # ── What this copy knows about its file ───────────────────────────────────
+    # Several accounts, because each answers a different question and folding two
+    # together makes one of them wrong. ``read_session_file`` sets them on load and
+    # ``SessionManager.save`` -- the only writer of message rows -- brings every one
+    # up to date in one place after its write; a cut or an in-place replacement
+    # marks them stale so that save rewrites. A writer of another record kind (a
+    # metadata patch, a turn_meta) touches none of them and moves only the stamp,
+    # through ``_advance_stamp``.
+    #
+    # - ``_persisted_count`` indexes ``messages``, where the next append starts; it
+    #   counts the reader's synthetic repairs, which sit in the list.
+    # - ``_persisted_file_count`` counts the file's message rows, which never hold
+    #   those repairs; a save compares it with the file's own count.
+    # - ``_persisted_revision`` is the (log_id, generation) the file carried: a
+    #   second writer's undo followed by an append of the same length keeps the
+    #   count and moves this.
+    # - ``_persisted_truncations`` and ``_refile_rows`` say the file still holds
+    #   rows this copy cut or replaced; either makes the next save a rewrite.
+    # - ``_persisted_metadata`` is what a fold measures this copy's changes against.
+    # - ``_file_stamp`` is the cheap test of whether the file changed at all, made
+    #   before any of the above is read back from disk.
+    #
+    # The turn keeps two of its own (``live["persisted"]`` and ``live["filed_ids"]``
+    # in ``turn_path``): where its incremental writes stopped, and which rows the
+    # current attempt appended -- the set a rerun takes off the file.
+    #
     # Messages already on disk; save() appends only past this index.
     _persisted_count: int = field(default=0, repr=False)
     # Message rows the file held as this copy last read or wrote it. The
@@ -778,24 +837,26 @@ def append_turn_meta(session_path: Path, patches: list[dict], *, session: Sessio
     The turn's rows are appended as it produces them; the stamps filed at its
     end -- the reply's provenance, the hook observers -- arrive later. One record
     per turn carries them, and the reader applies it in file order. ``session``
-    is the copy that wrote them: its stamp is moved past this record, which
-    changed no row and no metadata.
+    is the copy that wrote them. Its stamp moves past this record only when
+    nothing else was written since (``_advance_stamp``): the record folds nothing
+    in, so another client's metadata record has to stay ahead of the stamp for
+    the save that does.
     """
     if not patches:
         return
     payload = json.dumps({"_type": "turn_meta", "patches": patches}, ensure_ascii=False)
     with write_transaction(session_path):
-        if session is not None and session._file_stamp != _stamp(session_path):
-            # The file moved since this copy last wrote it. A metadata-only
-            # patch is not a second writer and the stamp may still land; a
-            # message write is, and filing into its rows would make the
-            # conflict invisible to the save that follows.
+        held = session is not None and session._file_stamp == _stamp(session_path)
+        if session is not None and not held:
+            # A message write since is a second writer, and filing into its rows
+            # would be this copy's first write past them. A metadata-only record
+            # is not, and the append goes ahead.
             last, count, *_rest = SessionManager._scan_file(session_path)
             if _message_rows_moved(session, last, count):
                 return
         locked_append(session_path, [payload])
         if session is not None:
-            session._file_stamp = _stamp(session_path)
+            _advance_stamp(session, session_path, held=held)
 
 
 def _cut_since_persisted(session: Session) -> bool:
@@ -1291,10 +1352,11 @@ class SessionManager:
             # These keys are on disk now, so they are no longer this copy's
             # unsaved opinion: left out of the baseline the patch reads as a
             # local change on every later save and is asserted again over
-            # whatever anybody wrote in between. ``_file_stamp`` deliberately
-            # stays stale -- the file also carries the record this merged into,
-            # and a stale stamp is what makes the next save re-read it.
+            # whatever anybody wrote in between.
             cached._persisted_metadata.update(patch)
+            # Not held: the file also carries the record this merged into, and a
+            # stale stamp is what makes the next save re-read it.
+            _advance_stamp(cached, path, held=False)
             # Clean stays clean; a copy with changes of its own keeps them unsaved.
             if unchanged:
                 cached._clean_fingerprint = _fingerprint(cached)
@@ -1397,7 +1459,7 @@ class SessionManager:
                 lines += [json.dumps(m, ensure_ascii=False) for m in new_messages]
                 locked_append(path, lines)
                 session._persisted_file_count += len(new_messages)
-            session._file_stamp = _stamp(path)
+            _advance_stamp(session, path, held=True)
             session._persisted_metadata = dict(session.metadata)
             session._persisted_revision = (session.log_id, session.log_generation)
 
@@ -1428,12 +1490,25 @@ class SessionManager:
         # reload and nothing else would: the copy stays cached otherwise, and
         # every later save of it is refused for the rest of the process's life.
         # The next ``get_or_create`` reads the transcript the other writer left.
-        self.invalidate(session.key)
+        self._forget(session)
         raise SessionWriterConflictError(
             f"session {session.key!r} changed on disk since this copy loaded it: "
             "another process is writing this session. This copy is stale: the next read "
             "of the session returns the transcript the other writer left."
         )
+
+    def _forget(self, session: Session) -> None:
+        """Drop ``session`` from the cache and the held map, and not a copy that replaced it.
+
+        A refused copy can be refused again -- a turn keeps it until its closing
+        save -- after the next load has cached a fresh copy under the same key.
+        Dropping by key evicted that one, and the load after it made a second
+        copy beside the first, each refusing the other's saves.
+        """
+        if self._cache.get(session.key) is session:
+            self._cache.pop(session.key, None)
+        if self._held.get(session.key) is session:
+            self._held.pop(session.key, None)
 
     def drop_filed_rows(self, session: Session, row_ids: Collection[str]) -> bool:
         """Take the rows filed under ``row_ids`` off the transcript.
@@ -1658,7 +1733,9 @@ class SessionManager:
         has not seen yet, such as one whose own save failed. Returns False only
         when a save was attempted and failed (the failure is swallowed); True
         otherwise, including the no-op cases (key not in memory / nothing
-        unpersisted).
+        unpersisted). A :class:`SessionWriterConflictError` is raised rather than
+        swallowed: the copy has been dropped with what it had not saved, which a
+        False would report as a write that may still land.
         """
         cached = self._live(key)
         if cached is None:
@@ -1666,6 +1743,8 @@ class SessionManager:
         if len(cached.messages) > cached._persisted_count or _cut_since_persisted(cached):
             try:
                 self.save(cached)
+            except SessionWriterConflictError:
+                raise
             except Exception:
                 logger.warning("flush: failed to persist session {}", key)
                 return False

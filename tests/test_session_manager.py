@@ -679,6 +679,132 @@ def test_a_rewrite_that_keeps_the_size_and_the_count_is_refused_when_the_log_mov
         first.save(session)
 
 
+def _a_saved_turn(tmp_path: Path, key: str) -> tuple[SessionManager, Session, Path]:
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create(key)
+    session.add_message("user", "q")
+    session.add_message("assistant", "a")
+    manager.save(session)
+    return manager, session, manager.session_path(key)
+
+
+def test_a_turn_meta_leaves_another_clients_metadata_record_for_the_next_save(tmp_path: Path):
+    """A late stamp filed after another client's metadata patch must not hide that patch.
+
+    The patch is the one record a second process may add without being a second
+    writer, and the next save folds it in because the file no longer matches this
+    copy's stamp. A ``turn_meta`` appended in between used to move the stamp past
+    the patch, so the closing save took the file for unchanged and wrote this
+    copy's metadata over the archive flag.
+    """
+    from raven.session.manager import append_turn_meta
+
+    key = "tui:20260610_100000_lateflag"
+    manager, session, path = _a_saved_turn(tmp_path, key)
+
+    assert SessionManager(tmp_path).append_metadata_patch(key, {"archived": True})
+    append_turn_meta(path, [{"row_id": "r1", "keys": {"duration_ms": 3}}], session=session)
+    session.add_message("user", "next")
+    manager.save(session)
+
+    assert read_session_file(path, key).metadata.get("archived") is True, (
+        "the save after the late stamp wrote over another client's archive flag"
+    )
+
+
+def test_a_turn_meta_is_not_filed_over_rows_another_writer_added(tmp_path: Path):
+    """A late stamp is not filed into a transcript a second writer has moved.
+
+    Filing it would also be the first write this copy makes past the other
+    writer's rows. Refused here, the file is untouched and the stamp stays where
+    it was, so the save that follows still sees the conflict and raises.
+    """
+    from raven.session.manager import append_turn_meta
+
+    key = "tui:20260610_100000_lateover"
+    manager, session, path = _a_saved_turn(tmp_path, key)
+    other = SessionManager(tmp_path)
+    theirs = other.get_or_create(key)
+    theirs.add_message("user", "from the second terminal")
+    other.save(theirs)
+    before, stamp = path.read_bytes(), session._file_stamp
+
+    append_turn_meta(path, [{"row_id": "r1", "keys": {"duration_ms": 3}}], session=session)
+
+    assert path.read_bytes() == before, "a late stamp was filed over another writer's rows"
+    assert session._file_stamp == stamp, "the stamp moved past rows this copy never read"
+    session.add_message("assistant", "the first terminal's answer")
+    with pytest.raises(SessionWriterConflictError):
+        manager.save(session)
+
+
+def test_a_cut_that_could_not_be_written_leaves_the_copy_as_it_was(tmp_path: Path, monkeypatch):
+    """A failed cut changes nothing: the caller is told False and keeps the copy it had.
+
+    The rerun reads False as "do not run again", so the in-memory list must still
+    hold the rows the file holds. A copy left cut would save a rewrite that drops
+    them on its next save, which is the cut the caller just declined to make.
+    """
+    key = "tui:20260610_100000_cutfails"
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create(key)
+    for row_id, role, content in [("r1", "user", "q"), ("r2", "assistant", "attempt"), ("r3", "tool", "result")]:
+        session.record({"role": role, "content": content, "_row_id": row_id})
+    manager.save(session)
+    rows, truncations, persisted = session.messages, session.truncations, session._persisted_count
+
+    def _refuse(_session):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(manager, "save", _refuse)
+    assert manager.drop_filed_rows(session, {"r2", "r3"}) is False
+
+    assert session.messages is rows, "the failed cut left the copy cut"
+    assert [m["content"] for m in session.messages] == ["q", "attempt", "result"]
+    assert (session.truncations, session._persisted_count) == (truncations, persisted)
+
+
+def test_a_refused_copy_saving_again_leaves_the_reloaded_copy_cached(tmp_path: Path):
+    """Dropping the refused copy must not drop the copy that replaced it.
+
+    A turn whose cut was refused keeps its stale copy and reaches its closing
+    save, which is refused again. By then something else may have loaded the
+    transcript afresh; dropping the cache entry by key evicted that copy, the
+    next load made a second one beside it, and the two refused each other.
+    """
+    key = "tui:20260610_100000_twocopies"
+    manager, stale, _path = _a_saved_turn(tmp_path, key)
+    other = SessionManager(tmp_path)
+    theirs = other.get_or_create(key)
+    theirs.add_message("user", "from the second terminal")
+    other.save(theirs)
+
+    stale.add_message("assistant", "stale")
+    with pytest.raises(SessionWriterConflictError):
+        manager.save(stale)
+    fresh = manager.get_or_create(key)
+    with pytest.raises(SessionWriterConflictError):
+        manager.save(stale)
+
+    assert manager.get_or_create(key) is fresh, "the refused copy's second save evicted the copy that replaced it"
+    fresh.add_message("assistant", "answer")
+    manager.save(fresh)
+
+
+def test_flush_reports_a_transcript_another_process_wrote(tmp_path: Path):
+    """Like every other save, a flush that loses the transcript says so."""
+    key = "tui:20260610_100000_flushlost"
+    manager, session, _path = _a_saved_turn(tmp_path, key)
+    other = SessionManager(tmp_path)
+    theirs = other.get_or_create(key)
+    theirs.add_message("user", "from the second terminal")
+    other.save(theirs)
+
+    session.add_message("assistant", "unsaved")
+    with pytest.raises(SessionWriterConflictError):
+        manager.flush(key)
+
+
 def test_an_undo_moves_the_append_boundary_and_keeps_the_next_turn(tmp_path: Path):
     """Undo cuts the list; the append boundary has to follow it.
 

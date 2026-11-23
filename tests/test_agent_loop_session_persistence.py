@@ -311,6 +311,49 @@ async def test_a_failed_turn_meta_write_does_not_fail_the_turn(tmp_path, monkeyp
     assert "message" in calls, "the answer's call is on disk"
 
 
+@pytest.mark.asyncio
+async def test_another_clients_metadata_patch_survives_the_turns_late_stamps(tmp_path):
+    """A flag another process sets while the turn finishes is still on disk after it.
+
+    The late stamps are filed after the turn's last incremental write, which is
+    the window in which another client archives, pins or renames the session. That
+    patch is not a second writer, so the closing save folds it in -- unless the
+    late stamps moved this copy's stamp past it, which made the closing save take
+    the file for unchanged and write this copy's metadata over the flag.
+    """
+    from raven.agent.tools.message import MessageTool
+    from raven.session.manager import SessionManager, read_session_file
+
+    class ArchivedElsewhere(AgentHook):
+        async def after_send(self, ctx):
+            ctx.metadata.setdefault("observers", {})["send_gate"] = {"fired": 1}
+            assert SessionManager(tmp_path).append_metadata_patch("cli:c", {"archived": True})
+            return HookDecision()
+
+    loop = _loop(
+        tmp_path,
+        _ScriptedProvider([_tool_call("message", {"content": "hello"}), _text("")]),
+        [ArchivedElsewhere()],
+    )
+    message = loop.tools.get("message")
+    assert isinstance(message, MessageTool)
+    message.set_context("cli", "c")
+
+    async def _send(_content: str, _media: list[str]) -> None:
+        return None
+
+    message.set_send_callback(_send)
+
+    await loop._process_message(_req())
+
+    path = loop.sessions.session_path("cli:c")
+    kinds = [json.loads(line).get("_type") for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert "turn_meta" in kinds, "the turn filed no late stamp, so the window was not under test"
+    assert read_session_file(path, "cli:c").metadata.get("archived") is True, (
+        "the closing save wrote over the archive flag another client set"
+    )
+
+
 def test_a_turn_meta_restates_a_row_by_its_identifier(tmp_path):
     """A stamp filed after the row was written is merged on the way in."""
     from raven.session.manager import read_session_file

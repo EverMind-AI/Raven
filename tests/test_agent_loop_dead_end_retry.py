@@ -900,6 +900,46 @@ async def test_the_rerun_takes_the_failed_attempt_s_rows_off_disk(tmp_path):
     assert any(m.get("content") == "Alice Smith won it." for m in filed), "the rerun's answer was not filed"
 
 
+@pytest.mark.asyncio
+async def test_a_cut_that_could_not_be_written_is_not_followed_by_a_rerun(tmp_path, monkeypatch):
+    """No rerun runs over an attempt whose rows are still on disk.
+
+    The rerun's answer would be appended behind the wreckage it exists to clear,
+    and the next turn would read the discarded attempt as history. A failed cut
+    ends the turn on the attempt it has instead.
+    """
+    from raven.session.manager import SessionManager
+
+    cuts: list[set[str]] = []
+
+    def _cannot_cut(self, session, row_ids):
+        cuts.append(set(row_ids))
+        return False
+
+    monkeypatch.setattr(SessionManager, "drop_filed_rows", _cannot_cut)
+    provider = _Scripted(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="call-kept", name="list_dir", arguments={"path": "."})],
+                finish_reason="tool_calls",
+            ),
+            *_dead(),
+            *_dead(),
+        ],
+        _answers("Alice Smith won it."),
+    )
+    agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1)])
+
+    await _run_answerless(agent, _req("look around"))
+
+    assert cuts, "the rerun was never asked for, so the refusal was not under test"
+    filed = _persisted(tmp_path)
+    assert not any(m.get("content") == "Alice Smith won it." for m in filed), (
+        "a rerun ran although the attempt's rows could not be taken off disk"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # The budget reader: a loop reading a dict a plugin wrote must not break on it  #
 # --------------------------------------------------------------------------- #
