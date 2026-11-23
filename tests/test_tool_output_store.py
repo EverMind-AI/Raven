@@ -20,6 +20,7 @@ from raven.session.tool_output import (
 )
 
 BYTES = ToolOutputLimits(max_lines=2_000, max_bytes=1_000, max_chars=0)
+FIFTY_KIB = ToolOutputLimits(max_lines=2_000, max_bytes=50 * 1024, max_chars=0)
 LONG_BODY = "\n".join(["x" * 100] * 50)
 
 
@@ -181,6 +182,58 @@ def test_a_single_cjk_line_is_cut_on_a_utf8_boundary(tmp_path: Path) -> None:
     assert preview
     assert len(preview.encode("utf-8")) <= 1_000
     assert "�" not in preview
+
+
+def test_a_blank_first_line_still_keeps_the_head_of_the_over_budget_line(tmp_path: Path) -> None:
+    """``kept == [""]`` is not a preview: the blank line fits, the content does not."""
+    body = "\n" + "x" * (60 * 1024)
+
+    bounded = bound_tool_result(wrap_untrusted(body, source="web_fetch"), tmp_path, limits=FIFTY_KIB)
+
+    preview = _body(bounded).removesuffix(TOOL_RESULT_TRUNCATION_MARKER)
+    assert len(preview) == 50 * 1024
+    assert preview == "x" * (50 * 1024)
+    # The whole body is 61,441 bytes; 50 KiB of it is shown.
+    assert "10,241 bytes omitted" in bounded
+    assert _files(tmp_path)[0].read_text(encoding="utf-8") == body
+
+
+def test_a_blank_last_line_still_keeps_the_tail_of_the_over_budget_line(tmp_path: Path) -> None:
+    """The same shape at the cut end exec reads from."""
+    body = "y" * (60 * 1024) + "\n"
+
+    bounded = bound_tool_result(wrap_untrusted(body, source="exec"), tmp_path, limits=FIFTY_KIB, direction="tail")
+
+    visible = _body(bounded)
+    assert visible.startswith(TOOL_RESULT_TRUNCATION_MARKER)
+    preview = visible.removeprefix(TOOL_RESULT_TRUNCATION_MARKER).lstrip("\n")
+    assert len(preview) == 50 * 1024
+    assert preview == "y" * (50 * 1024)
+    assert "10,241 bytes omitted" in bounded
+    assert "the preview shows the end" in bounded
+    assert _files(tmp_path)[0].read_text(encoding="utf-8") == body
+
+
+def test_a_kept_short_line_does_not_invent_a_preview_of_the_next_one(tmp_path: Path) -> None:
+    """The line that did not fit is cut only when no line at all was kept."""
+    body = "header\n" + "x" * (60 * 1024)
+
+    bounded = bound_tool_result(wrap_untrusted(body, source="web_fetch"), tmp_path, limits=FIFTY_KIB)
+
+    preview = _body(bounded).removesuffix(TOOL_RESULT_TRUNCATION_MARKER)
+    assert preview == "header"
+    assert len(preview) == len("header")
+    # 61,447 bytes in the body; the header line is the only whole line kept.
+    assert "61,441 bytes omitted" in bounded
+
+
+def test_a_body_with_a_lone_surrogate_is_bounded_instead_of_raising(tmp_path: Path) -> None:
+    body = "\ud800" * 20_000
+
+    bounded = bound_tool_result(wrap_untrusted(body, source="web_fetch"), tmp_path, limits=FIFTY_KIB)
+
+    assert is_truncated(bounded)
+    assert "bytes omitted" in bounded
 
 
 def test_the_filed_body_preserves_its_line_endings(tmp_path: Path) -> None:

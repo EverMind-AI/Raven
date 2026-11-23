@@ -84,6 +84,10 @@ def bound_tool_result(
     """
     if not isinstance(content, str) or not limits.enabled():
         return content
+    # A lone surrogate cannot be encoded to UTF-8, so measuring, cutting or
+    # filing the body would raise. Every consumer of this string needs valid
+    # UTF-8; replacing the unencodable code points keeps the rest intact.
+    content = _utf8_safe(content)
 
     span = fence_span(content)
     opening, body, closing = span if span is not None else ("", content, "")
@@ -140,6 +144,15 @@ def prune_tool_outputs(directory: Path, *, now: datetime | None = None) -> int:
     return removed
 
 
+def _utf8_safe(text: str) -> str:
+    """``text`` with any lone surrogate replaced, so every later encode succeeds."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return text.encode("utf-8", "surrogatepass").decode("utf-8", "replace")
+    return text
+
+
 def _bounded_preview(body: str, limits: ToolOutputLimits, direction: str) -> tuple[str, int, str] | None:
     """``(preview, omitted, unit)`` for a body over a limit, or ``None`` under all."""
     lines = body.split("\n")
@@ -173,11 +186,14 @@ def _bounded_preview(body: str, limits: ToolOutputLimits, direction: str) -> tup
         kept_bytes += line_bytes
         kept_chars += line_chars
 
-    if not kept and ordered and unit in ("bytes", "characters"):
-        # A single line that is itself over budget has no whole line to keep.
-        # Keep the head or tail of that line, applying the character cap first
-        # and then the byte cap so a UTF-8 cut never splits a character.
-        first = ordered[0]
+    if ordered and unit in ("bytes", "characters") and not any(line.strip() for line in kept):
+        # A line that is itself over budget has no whole line to keep, and a
+        # preview of blank lines alone is empty in everything but size. Keep the
+        # head or tail of the line the budget stopped at -- ``ordered[len(kept)]``,
+        # not ``ordered[0]``: the lines before it were kept, and the one that did
+        # not fit is the one to cut. The character cap applies before the byte cap
+        # so a UTF-8 cut never splits a character.
+        first = ordered[len(kept)]
         if limits.max_chars:
             first = first[: limits.max_chars] if direction == "head" else first[-limits.max_chars :]
         if limits.max_bytes:
