@@ -361,3 +361,122 @@ def test_a_charter_restriction_is_not_reported_as_a_settings_switch(tmp_path: Pa
             notes = loop._tool_notices()
 
     assert not any(notice_key(note) == ("tool", "exec") for note in notes), notes
+
+
+def _announce_then_withdraw_web_search(loop, monkeypatch: pytest.MonkeyPatch) -> tuple[list[str], list[str]]:
+    """Capture without a search key, add one, then take it away again."""
+    announced: list[str] = []
+    monkeypatch.setenv("SERPER_API_KEY", "test-key")
+    with loop.tools.session_scope_for("s1"):
+        announced = loop._tool_notices()
+    monkeypatch.delenv("SERPER_API_KEY")
+    with loop.tools.session_scope_for("s1"):
+        withdrawn = loop._tool_notices()
+    return announced, withdrawn
+
+
+def test_a_tool_withdrawn_again_is_reported_unavailable_not_available_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reverse flip has a sentence of its own.
+
+    Falling out of the announcement leaves a hole in the array's lane (capture
+    never put the name there) and in the announcement's (the switch is off
+    again), and the notice machinery would fill it with the cleared line, which
+    says the tool is available when dispatch refuses it.
+    """
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    loop = _loop(tmp_path)
+    _capture_without_web_search(loop)
+
+    with loop.tools.session_scope_for("s1"):
+        before = loop._tool_notices()
+    assert not any(notice_key(note) == ("tool", "web_search") for note in before), before
+
+    announced, withdrawn = _announce_then_withdraw_web_search(loop, monkeypatch)
+
+    announced_keys = {notice_key(note) for note in announced if notice_key(note) is not None}
+    assert announced_keys == {("tool", "web_search")}, f"only the tool that changed: {announced}"
+
+    by_key = {notice_key(note): note for note in withdrawn}
+    line = by_key[("tool", "web_search")]
+    assert "currently unavailable" in line, line
+    assert "no search key" in line, "the reason is the operator's setting, not a guess"
+    assert "available again" not in line, "the cleared line would claim a tool dispatch refuses"
+    assert "now available" not in line, line
+
+
+def test_a_tool_withdrawn_again_is_refused_with_the_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The refusal is what makes "available again" a false statement.
+
+    The call does not run, and the answer names the switch instead of reading
+    as an unloading or a misspelt name: the model holds this schema from the
+    announcement, so "not found" would send it hunting for the wrong fault.
+    """
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    loop = _loop(tmp_path)
+    _capture_without_web_search(loop)
+    announced, _ = _announce_then_withdraw_web_search(loop, monkeypatch)
+    assert any("now available" in note for note in announced), announced
+
+    with loop.tools.session_scope_for("s1"):
+        answer = asyncio.run(loop.tools.execute("web_search", {"query": "x"}))
+
+    assert answer.startswith("Error:"), answer
+    assert "currently unavailable" in answer, answer
+    assert "no search key" in answer, "the refusal carries the reason, not a generic absence"
+    assert "not available" not in answer, answer
+    assert "Results for" not in answer, answer
+
+
+def test_the_withdrawn_again_notice_is_not_resent_while_it_still_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The line stays true for the rest of the window, so it is returned again;
+    the notice machinery sends it only when the replayed history lacks it."""
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    loop = _loop(tmp_path)
+    _capture_without_web_search(loop)
+    _, withdrawn = _announce_then_withdraw_web_search(loop, monkeypatch)
+
+    told = {notice_key(note): note for note in withdrawn if notice_key(note) is not None}
+    with loop.tools.session_scope_for("s1"):
+        again = loop._tool_notices()
+
+    assert any("currently unavailable" in note for note in again), "still withheld inside the window"
+    assert notice_changes(again, told) == [], "an unchanged withdrawal must not be sent again"
+
+
+def test_the_withdrawn_again_notice_stops_at_the_next_refresh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The refresh re-judges availability; after it the array speaks alone."""
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    loop = _loop(tmp_path)
+    _capture_without_web_search(loop)
+    _, withdrawn = _announce_then_withdraw_web_search(loop, monkeypatch)
+    assert any("currently unavailable" in note for note in withdrawn), withdrawn
+
+    loop.tools.bind_session_revision("s1", "log-b")
+
+    with loop.tools.session_scope_for("s1"):
+        notes = loop._tool_notices()
+
+    assert not any("currently unavailable" in note for note in notes), notes
+    assert "s1" not in loop.tools._session_announced_available, "the refresh resets the announcement set"
+    reasons = frozenset(loop._withheld_tool_reasons())
+    assert loop.tools.announced_withheld_again(reasons) == []
+
+
+def test_a_tool_never_announced_is_never_reported_as_withdrawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only a real flip is reported. A tool that was off at capture and stayed
+    off was never available, and a line per turn for each of them is the spam
+    the change detection exists to avoid."""
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    loop = _loop(tmp_path)
+    _capture_without_web_search(loop)
+
+    for _ in range(3):
+        with loop.tools.session_scope_for("s1"):
+            notes = loop._tool_notices()
+        keys = {notice_key(note) for note in notes}
+        for name in ("image_generate", "knowledge_search", "text_to_speech", "video_generate", "web_search"):
+            assert ("tool", name) not in keys, f"{name} never changed and must stay silent: {notes}"

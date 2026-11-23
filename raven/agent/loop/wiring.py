@@ -70,6 +70,22 @@ _PERSONALIZATION_KEY = "agents.defaults.enablePersonalization"
 _WEB_VENDORS_KEY = "tools.web.providers"
 
 
+def _unavailable_tool_notice(name: str, reason: str) -> str:
+    """The one sentence a refusal and both directions of an availability flip use.
+
+    ``_tool_availability_notices`` speaks for a name in the frozen array and
+    ``_tool_withdrawn_again_notices`` for one the session was told about; a
+    model reading either must get the same fact in the same words, so the text
+    lives here rather than in two literals that could drift.
+    """
+    from raven.context_engine.runtime_context import tool_notice
+
+    return tool_notice(
+        name,
+        f"currently unavailable -- {reason}; calls to it are refused until it is enabled again.",
+    )
+
+
 class WiringMixin:
     """Construction-time wiring: providers, bindings, tool registration, playbooks,
     workdir and sinks."""
@@ -239,8 +255,6 @@ class WiringMixin:
         server: a server's whole set goes away together, and one line per tool
         would repeat the same fact.
         """
-        from raven.context_engine.runtime_context import tool_notice
-
         names = self.tools.session_definition_names()
         if not names:
             return []
@@ -254,19 +268,34 @@ class WiringMixin:
         for name in sorted(set(reasons) & names):
             if self.tools.session_definition_origin(name) is not None:
                 continue
-            lines.append(
-                tool_notice(
-                    name,
-                    f"currently unavailable -- {reasons[name]}; calls to it are refused until it is enabled again.",
-                )
-            )
+            lines.append(_unavailable_tool_notice(name, reasons[name]))
         return lines
+
+    def _tool_withdrawn_again_notices(self) -> list[str]:
+        """One line per tool that was announced as callable and is withheld again.
+
+        The reverse of :meth:`_tool_became_available_notices`, inside the same
+        window. Such a name never entered the array, so the array's own lane
+        cannot explain it; and its switch being back off stops the announcement,
+        so without this line the notice machinery would clear the announcement
+        as "available again" while a call is refused. The sentence is the
+        refusal's own (see ``_unavailable_tool_notice``), reason included.
+
+        Returned for the rest of the window, like the announcement it replaces:
+        the fact still holds, and dropping it early would clear a true note.
+        """
+        reasons = self._withheld_tool_reasons()
+        return [
+            _unavailable_tool_notice(name, reasons[name])
+            for name in self.tools.announced_withheld_again(frozenset(reasons))
+        ]
 
     def _tool_notices(self) -> list[str]:
         """The host's tool-surface facts for this turn's runtime context."""
         return [
             *self._mcp_tool_notices(),
             *self._tool_availability_notices(),
+            *self._tool_withdrawn_again_notices(),
             *self._tool_became_available_notices(),
         ]
 
@@ -289,6 +318,9 @@ class WiringMixin:
         still applies -- and sent only once, because the machinery keeps a line
         the replayed history already holds. The next capture puts the schema in
         the array and this line stops (see ``ToolRegistry.newly_available``).
+
+        Each announced name is recorded, so the reverse flip can be reported by
+        :meth:`_tool_withdrawn_again_notices` -- the array does not carry it.
         """
         from raven.context_engine.runtime_context import tool_notice
 
@@ -297,6 +329,7 @@ class WiringMixin:
             schema = self.tools.definition_of(name)
             if schema is None:
                 continue
+            self.tools.note_announced_available(name)
             lines.append(
                 tool_notice(
                     name,

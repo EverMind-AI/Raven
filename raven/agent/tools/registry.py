@@ -439,6 +439,16 @@ class ToolRegistry:
         # Reset with the array, so a refresh point never re-announces a tool it
         # has just captured.
         self._session_unavailable_at_capture: dict[str, frozenset[str]] = {}
+        # Names this session's runtime context has told the model are callable
+        # even though the frozen array lacks them (see :meth:`newly_available`).
+        # The reverse transition needs it: capture excluded the name, so it is
+        # not among the array's names and ``_tool_availability_notices`` cannot
+        # speak for it; the switch being back off empties ``newly_available``'s
+        # difference, so the forward lane cannot either. Without this set both
+        # lanes fall silent and the notice machinery clears the announcement as
+        # "available again" while dispatch refuses the call.
+        # Reset with the array: after a refresh the array is the only signal.
+        self._session_announced_available: dict[str, set[str]] = {}
         # Placed at assembly, not by registering late: an MCP server connects,
         # and a session brings its own tools, after the host wired its own, so
         # registration order cannot keep anything at the end. See ``list_last``.
@@ -752,6 +762,7 @@ class ToolRegistry:
         self._session_tools.pop(session_key, None)
         self._session_definitions.pop(session_key, None)
         self._session_unavailable_at_capture.pop(session_key, None)
+        self._session_announced_available.pop(session_key, None)
         self._session_log_ids.pop(session_key, None)
         self._definitions_refresh_pending.discard(session_key)
 
@@ -1105,6 +1116,7 @@ class ToolRegistry:
         """
         self._session_definitions.pop(session_key, None)
         self._session_unavailable_at_capture.pop(session_key, None)
+        self._session_announced_available.pop(session_key, None)
 
     def schedule_definitions_refresh(self, session_key: str) -> None:
         """Mark the array for recapture at the session's next assembly.
@@ -1177,6 +1189,52 @@ class ToolRegistry:
             fresh.append(name)
         return fresh
 
+    def note_announced_available(self, name: str) -> None:
+        """Record that this session's runtime context announced ``name`` as callable.
+
+        Called where the announcement is actually produced, not from
+        :meth:`newly_available`, because a name whose definition could not be
+        read is never announced -- and must not be reported as withdrawn later.
+        Idempotent: the announcement is produced every turn of its window.
+        """
+        session = self._definition_session.get()
+        if session is None:
+            return
+        self._session_announced_available.setdefault(session, set()).add(name)
+
+    def announced_withheld_again(self, withheld_now: "frozenset[str]") -> list[str]:
+        """Names announced as callable this window and withheld again now.
+
+        The other half of :meth:`newly_available`, over the same window. Such a
+        name is not in the frozen array, so ``_tool_availability_notices`` --
+        which speaks for the array's names -- cannot report it; and the switch
+        being back off empties ``newly_available``'s difference, so the forward
+        lane cannot either. Without this, both lanes fall silent and the notice
+        machinery clears the announcement as "available again" while dispatch
+        refuses the call.
+
+        ``withheld_now`` is the operator axis, as in :meth:`newly_available`: a
+        charter narrowing or the turn freeze is a restriction on this turn, not
+        an availability fact, and a sentence naming a setting would be false.
+
+        The name stays reported for the rest of the window, like the
+        announcement it replaces: the line is still true, so dropping it early
+        would make the machinery clear a note that still applies. A refresh
+        resets the set; after it the array is the only signal.
+        """
+        session = self._definition_session.get()
+        if session is None:
+            return []
+        announced = self._session_announced_available.get(session)
+        if not announced:
+            return []
+        array = self._session_definitions_for(session).origins
+        return [
+            name
+            for name in sorted(announced & withheld_now)
+            if name not in array and self._visible(name) is not None and self._origins.get(name) is None
+        ]
+
     def definition_of(self, name: str) -> dict[str, Any] | None:
         """One tool's definition, in the shape the array serves, or ``None``.
 
@@ -1237,22 +1295,29 @@ class ToolRegistry:
         return frozenset(ref.server for ref in cached.origins.values() if ref is not None)
 
     def unavailable_reason(self, name: str) -> str | None:
-        """Why a name in the frozen array cannot run right now, or ``None``.
+        """Why a name the session was told about cannot run right now, or ``None``.
 
-        ``None`` when the name is not withheld, is outside a session, never
-        made the array (a hard-withheld name is answered as absent, the way an
-        unregistered one is), or is withheld by an axis the reason source does
-        not speak for -- a charter narrowing this dispatch, or the turn freeze.
-        Those are restrictions on *this turn*, not an operator setting, and
-        inventing a settings sentence for them is a fact the model would act
-        on wrongly.
+        The session was told about a name either because capture put it in the
+        frozen array, or because :meth:`newly_available` announced it and its
+        definition was handed to the model. Both are schemas the model holds, so
+        both refusals name the reason; a name that was neither is answered as
+        absent.
+
+        ``None`` when the name is not withheld, is outside a session, was
+        neither in the array nor announced (a hard-withheld name is answered as
+        absent, the way an unregistered one is), or is withheld by an axis the
+        reason source does not speak for -- a charter narrowing this dispatch,
+        or the turn freeze. Those are restrictions on *this turn*, not an
+        operator setting, and inventing a settings sentence for them is a fact
+        the model would act on wrongly.
         """
         if name not in self.withheld_names():
             return None
         session = self._definition_session.get()
         if session is None:
             return None
-        if name not in self._session_definitions_for(session).origins:
+        announced = name in self._session_announced_available.get(session, ())
+        if name not in self._session_definitions_for(session).origins and not announced:
             return None
         if self._withheld_reason is None:
             return None
