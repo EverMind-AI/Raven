@@ -188,18 +188,29 @@ def absent_tool_error(name: str, *, tail: str = "") -> str:
     return f"Error: tool '{name}' is not available. It may have been unloaded, or the name may be wrong{tail}."
 
 
-def unavailable_tool_error(name: str, reason: str) -> str:
-    """What a call to an advertised-but-withheld tool gets.
+def unavailable_tool_error(name: str, reason: str, *, listed: bool = True) -> str:
+    """What a call to a withheld tool the model holds a schema for gets.
 
-    Distinct from :func:`absent_tool_error`: the model can see this schema in
-    the session's frozen array, so "not found" would send it looking for a name
-    problem that does not exist. Naming the reason is what makes the refusal
-    actionable instead of a retry loop.
+    Distinct from :func:`absent_tool_error`: the model holds this schema, from
+    the session's frozen array or from a notice, so "not found" would send it
+    looking for a name problem that does not exist. Naming the reason is what
+    makes the refusal actionable instead of a retry loop.
+
+    ``listed`` says which of the two it is. Only a name in the frozen array
+    stays in the tool list; one a notice handed over (announced, then withdrawn)
+    or one a refresh dropped is absent from it, and saying otherwise is the
+    same false sentence the MCP notice stopped saying after a refresh.
     """
     why = f" ({reason})" if reason else ""
+    if listed:
+        return (
+            f"Error: tool '{name}' is currently unavailable{why}. It stays in this conversation's tool list "
+            "and can be called again once it is enabled; do not retry it in this turn."
+        )
     return (
-        f"Error: tool '{name}' is currently unavailable{why}. It stays in this conversation's tool list "
-        "and can be called again once it is enabled; do not retry it in this turn."
+        f"Error: tool '{name}' is currently unavailable{why}. It is absent from this conversation's tool "
+        "list; it can be called again once it is enabled, and joins the list at the next compaction or new "
+        "conversation. Do not retry it in this turn."
     )
 
 
@@ -440,12 +451,13 @@ class ToolRegistry:
         # has just captured.
         self._session_unavailable_at_capture: dict[str, frozenset[str]] = {}
         # Names whose availability this session's runtime context has spoken
-        # for and the frozen array does not carry. A refresh folds the old
-        # array's names in before recapturing, so a name the new array drops
-        # while its switch is still off keeps its line; capture then prunes
-        # the set to names that are still withheld. One set, because the
+        # for and the frozen array does not carry. A compaction refresh folds
+        # the old array's names in before recapturing, so a name the new array
+        # drops while its switch is still off keeps its line; capture then
+        # prunes the set to names that are still withheld. One set, because the
         # notice consumer treats a missing key as "resolved": a subject leaves
-        # ``current`` only when the array carries it again.
+        # ``current`` only when the array carries it again. It records what one
+        # log was told, so a new log (``/clear``) and a release drop it.
         self._session_notified_tools: dict[str, set[str]] = {}
         # The same standing subject for the per-server MCP notice: a server
         # whose tools the session was told about and the array no longer
@@ -763,12 +775,21 @@ class ToolRegistry:
         leave a snapshot behind for a later key reuse to inherit.
         """
         self._session_tools.pop(session_key, None)
+        self._forget_session_log(session_key)
+        self._session_log_ids.pop(session_key, None)
+        self._definitions_refresh_pending.discard(session_key)
+
+    def _forget_session_log(self, session_key: str) -> None:
+        """Drop the array and everything the session's log has been told.
+
+        For a log the model will never read again: a release, and a ``/clear``,
+        which starts a log with no history. The standing sets record what one
+        log was told, so they go with it rather than speaking into the next.
+        """
         self._session_definitions.pop(session_key, None)
         self._session_unavailable_at_capture.pop(session_key, None)
         self._session_notified_tools.pop(session_key, None)
         self._session_notified_mcp.pop(session_key, None)
-        self._session_log_ids.pop(session_key, None)
-        self._definitions_refresh_pending.discard(session_key)
 
     @contextmanager
     def session_scope(self, tools: "Mapping[str, Tool] | None") -> Iterator[None]:
@@ -1124,15 +1145,16 @@ class ToolRegistry:
     def invalidate_session_definitions(self, session_key: str) -> None:
         """Drop the frozen array; the next read captures a fresh one.
 
-        Called by :meth:`bind_session_revision` at the refresh points that are
-        not a new session: a context compaction (cashed there from the previous
-        turn's mark) and a log id change. Costs one rebuilt prefix, which the
-        caller has already paid for by rebuilding the history.
+        Called by :meth:`bind_session_revision` when it cashes a context
+        compaction marked by the previous turn. Costs one rebuilt prefix, which
+        the caller has already paid for by rebuilding the history.
 
         The names the old array carried move into the standing-notice sets
-        before the array is dropped. A name the new capture still withholds is
-        then still spoken for, so its key does not vanish from one assembly to
-        the next; capture prunes the set again once the new array is known.
+        before the array is dropped. A compaction keeps the conversation and
+        retells its notes, so a name the new capture still withholds is still
+        spoken for, and its key does not vanish from one assembly to the next;
+        capture prunes the set again once the new array is known. A log id
+        change is not this: see :meth:`bind_session_revision`.
         """
         cached = self._session_definitions.pop(session_key, None)
         if cached is not None:
@@ -1165,10 +1187,16 @@ class ToolRegistry:
         same log keeps the array it already has. A refresh scheduled by the
         previous turn's compaction is cashed here, at the start of the next
         assembly.
+
+        The two refreshes differ in what the model has been told. A compaction
+        keeps the log, so the standing notices carry over
+        (:meth:`invalidate_session_definitions`). A new log has no history: the
+        notices the old one held go with it, as at a release, or a tool the new
+        conversation never saw would be reported to it as unavailable.
         """
         known = self._session_log_ids.get(session_key, _MISSING)
         if known is not _MISSING and known != log_id:
-            self.invalidate_session_definitions(session_key)
+            self._forget_session_log(session_key)
         if session_key in self._definitions_refresh_pending:
             self._definitions_refresh_pending.discard(session_key)
             self.invalidate_session_definitions(session_key)
@@ -1381,6 +1409,20 @@ class ToolRegistry:
         except Exception:  # noqa: BLE001 - a bad read must not cost the refusal
             return None
 
+    def unavailable_refusal(self, name: str) -> str | None:
+        """The refusal for a withheld name the session holds a schema for, or ``None``.
+
+        :meth:`unavailable_reason` decides whether the name is answered with a
+        reason at all; this adds whether the frozen array still lists it, so
+        dispatch and ``tool_call`` word the two cases the same way.
+        """
+        reason = self.unavailable_reason(name)
+        if reason is None:
+            return None
+        session = self._definition_session.get()
+        listed = session is not None and name in self._session_definitions_for(session).origins
+        return unavailable_tool_error(name, reason, listed=listed)
+
     def hidden_definition(self, name: str) -> dict[str, Any] | None:
         """One schema-hidden tool's definition, in the shape a visible tool gets.
 
@@ -1484,9 +1526,9 @@ class ToolRegistry:
             # advertised: the model can see its schema, so answer with the
             # reason and the fact that it returns, not with "not found".
             if tool is not None and name in withheld:
-                reason = self.unavailable_reason(name)
-                if reason is not None:
-                    return unavailable_tool_error(name, reason)
+                refusal = self.unavailable_refusal(name)
+                if refusal is not None:
+                    return refusal
             # No catalog listing on the end of it. Unfolded, every schema is
             # already in this request and a list only repeats it; folded, a
             # cataloged tool is reached through ``tool_call``, which appends the

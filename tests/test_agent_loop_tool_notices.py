@@ -16,7 +16,8 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop.main import AgentLoop
-from raven.context_engine.runtime_context import notice_changes, notice_key
+from raven.context_engine.runtime_context import notice_changes, notice_key, told_notices
+from raven.session.manager import Session
 from tests._wiring import wire
 
 
@@ -206,6 +207,12 @@ def test_a_constructor_disabled_tool_stays_out_and_gets_no_notice(tmp_path: Path
         notes = loop._tool_notices()
 
     assert not any(notice_key(note) == ("tool", "grep") for note in notes)
+
+
+def _compact(loop: AgentLoop, log_id: str = "log-a") -> None:
+    """The compaction refresh: marked by one turn, cashed by the next on the same log."""
+    loop.tools.schedule_definitions_refresh("s1")
+    loop.tools.bind_session_revision("s1", log_id)
 
 
 def _capture_without_web_search(loop) -> None:
@@ -465,7 +472,7 @@ def test_the_withdrawn_again_notice_survives_a_refresh_while_still_withheld(
     assert any("currently unavailable" in note for note in withdrawn), withdrawn
     told = {notice_key(note): note for note in withdrawn if notice_key(note) is not None}
 
-    loop.tools.bind_session_revision("s1", "log-b")
+    _compact(loop)
 
     with loop.tools.session_scope_for("s1"):
         notes = loop._tool_notices()
@@ -578,7 +585,7 @@ def test_the_reverse_lane_keeps_its_key_across_a_refresh(tmp_path: Path, monkeyp
     assert "currently unavailable" in current[("tool", "web_search")]
     assert "currently unavailable" in _execute(loop, "web_search", query)
 
-    loop.tools.bind_session_revision("s1", "log-b")
+    _compact(loop)
     current = log.turn(loop)
     assert "web_search" not in _session_names(loop), "the refresh re-judged it and kept it out"
     assert "currently unavailable" in current[("tool", "web_search")]
@@ -621,7 +628,7 @@ def test_the_array_lane_keeps_its_key_across_a_refresh(tmp_path: Path, monkeypat
     assert "currently unavailable" in current[("tool", "read_file")]
     assert "currently unavailable" in _execute(loop, "read_file", params)
 
-    loop.tools.bind_session_revision("s1", "log-b")
+    _compact(loop)
     current = log.turn(loop)
     assert "read_file" not in _session_names(loop)
     assert "currently unavailable" in current[("tool", "read_file")]
@@ -636,7 +643,7 @@ def test_the_array_lane_keeps_its_key_across_a_refresh(tmp_path: Path, monkeypat
     assert log.cleared() == []
     assert "hello from the array lane" in _execute(loop, "read_file", params)
 
-    loop.tools.bind_session_revision("s1", "log-c")
+    _compact(loop)
     log.turn(loop)
     assert "read_file" in _session_names(loop)
     assert not loop.tools._session_notified_tools.get("s1"), "the array carries it; the standing name is pruned"
@@ -658,7 +665,7 @@ def test_a_refresh_that_captures_the_tool_clears_the_note_truthfully(
     current = log.turn(loop)
     assert "now available" in current[("tool", "web_search")]
 
-    loop.tools.bind_session_revision("s1", "log-b")
+    _compact(loop)
     current = log.turn(loop)
     assert "web_search" in _session_names(loop), "the refresh captured the now-callable tool"
     assert ("tool", "web_search") not in current
@@ -699,7 +706,7 @@ def test_releasing_the_session_drops_its_standing_notices(tmp_path: Path, monkey
     log.turn(loop)
     _write_switches(cfg, ["read_file"])
     log.turn(loop)
-    loop.tools.bind_session_revision("s1", "log-b")
+    _compact(loop)
     current = log.turn(loop)
     assert "currently unavailable" in current[("tool", "read_file")]
     assert loop.tools._session_notified_tools.get("s1") == {"read_file"}
@@ -715,3 +722,112 @@ def test_releasing_the_session_drops_its_standing_notices(tmp_path: Path, monkey
     current = fresh.turn(loop)
     assert ("tool", "read_file") not in current
     assert "not available" in _execute(loop, "read_file", params)
+
+
+_SWITCHED_OFF = ["edit_file", "grep", "list_dir", "read_file", "write_file"]
+
+
+def _five_switched_off_in_one_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[AgentLoop, Session]:
+    """Five tools in the array, then switched off: five standing lines in this log."""
+    cfg = tmp_path / "config.json"
+    _write_switches(cfg, [])
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    loop = _loop(tmp_path)
+    session = Session(key="s1")
+    loop.tools.bind_session_revision("s1", session.revision.log_id)
+    assert set(_SWITCHED_OFF) <= _session_names(loop)
+    _write_switches(cfg, _SWITCHED_OFF)
+    with loop.tools.session_scope_for("s1"):
+        notes = loop._tool_notices()
+    standing = {key for note in notes if (key := notice_key(note)) is not None}
+    assert standing == {("tool", name) for name in _SWITCHED_OFF}, notes
+    return loop, session
+
+
+def test_a_clear_starts_a_log_with_no_standing_notice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``/clear`` is a new log the model has been told nothing in.
+
+    The old log's standing notices go with it: the new conversation gets no
+    line for a tool it never saw, and a call to one is answered as absent,
+    exactly as on a session key that never existed.
+    """
+    loop, session = _five_switched_off_in_one_log(tmp_path, monkeypatch)
+    old_log = session.revision.log_id
+
+    session.clear()
+    assert session.revision.log_id != old_log and session.messages == []
+    loop.tools.bind_session_revision("s1", session.revision.log_id)
+
+    with loop.tools.session_scope_for("s1"):
+        notes = loop._tool_notices()
+    assert notice_changes(notes, told_notices(session.messages)) == [], notes
+    with loop.tools.session_scope_for("s2"):
+        assert loop._tool_notices() == notes, "a cleared log reads like a new session"
+    names = _session_names(loop)
+    for name in _SWITCHED_OFF:
+        assert name not in names, "the new log's capture re-judged it"
+        answer = _execute(loop, name, {})
+        assert "is not available" in answer, answer
+        assert "currently unavailable" not in answer, "the new log never held this schema"
+
+
+def test_a_compaction_keeps_the_standing_notice_on_the_same_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A compaction keeps the log and retells its notes, so the notices stand.
+
+    The other half of the clear test, on the path a compaction really takes:
+    a refresh marked for the next assembly and cashed under the same log id.
+    """
+    loop, session = _five_switched_off_in_one_log(tmp_path, monkeypatch)
+    log = _NoticeLog()
+    log.turn(loop)
+    log_id = session.revision.log_id
+
+    loop.tools.schedule_definitions_refresh("s1")
+    loop.tools.bind_session_revision("s1", session.revision.log_id)
+    assert session.revision.log_id == log_id, "a compaction keeps the log"
+
+    current = log.turn(loop)
+    names = _session_names(loop)
+    assert log.cleared() == [] and log.sent == [], log.sent
+    for name in _SWITCHED_OFF:
+        assert name not in names, "the refresh re-judged it and kept it out"
+        assert "currently unavailable" in current[("tool", name)]
+        assert "currently unavailable" in _execute(loop, name, {})
+
+
+def test_a_refusal_says_whether_the_tool_list_still_carries_the_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a name in the frozen array stays in the tool list.
+
+    A name announced and withdrawn was never in it, and a name a compaction
+    dropped is no longer in it: both refusals say so, the way the MCP notice
+    moves to "absent" once a refresh drops a server's tools.
+    """
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    loop = _loop(tmp_path)
+    _capture_without_web_search(loop)
+    _announce_then_withdraw_web_search(loop, monkeypatch)
+    withdrawn = _execute(loop, "web_search", {"query": "x"})
+    assert "currently unavailable" in withdrawn and "no search key" in withdrawn
+    assert "stays in this conversation's tool list" not in withdrawn, withdrawn
+    assert "absent from this conversation's tool list" in withdrawn
+
+    cfg = tmp_path / "config.json"
+    _write_switches(cfg, [])
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    loop = _loop(tmp_path)
+    loop.tools.bind_session_revision("s1", "log-a")
+    assert "read_file" in _session_names(loop)
+    _write_switches(cfg, ["read_file"])
+    listed = _execute(loop, "read_file", {})
+    assert "stays in this conversation's tool list" in listed, "the array still carries it"
+
+    _compact(loop)
+    assert "read_file" not in _session_names(loop)
+    dropped = _execute(loop, "read_file", {})
+    assert "currently unavailable" in dropped and "switched off in settings" in dropped
+    assert "stays in this conversation's tool list" not in dropped, dropped
+    assert "absent from this conversation's tool list" in dropped

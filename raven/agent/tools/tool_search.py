@@ -37,7 +37,7 @@ import json
 from itertools import zip_longest
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from raven.agent.tools.registry import absent_tool_error, unavailable_tool_error
+from raven.agent.tools.registry import absent_tool_error
 from raven.agent.tools.tool_index import ToolIndex, rank_tools
 from raven.contracts.token_strategy import TokenStrategy
 from raven.contracts.tool import Tool
@@ -276,9 +276,10 @@ class ToolSearchController:
           same sentence the direct path uses. Withheld is answered as absent
           deliberately for a name that never made the session's array -- "it
           exists but not for you" is itself the way around the filter that
-          keeping it out of the schema was meant to close. A name that IS in
-          the array and withheld gets its reason instead: the model can see the
-          schema, so calling it is a live option, not a name mistake.
+          keeping it out of the schema was meant to close. A withheld name the
+          session holds a schema for (in the array, or handed over by a notice)
+          gets its reason instead: calling it is a live option, not a name
+          mistake.
           Appending where the catalog is is safe for the absent branch because
           ``search`` filters by channel too. It reads as a statement of where
           the truth lives, not an instruction to search again: a model that
@@ -294,9 +295,9 @@ class ToolSearchController:
             return _Target(None, f"Error: '{name}' cannot be invoked via tool_call.")
         tool = self._registry.get(name)
         if tool is None or not self._registry.offers(tool):
-            reason = self._registry.unavailable_reason(name)
-            if reason is not None:
-                return _Target(None, unavailable_tool_error(name, reason))
+            refusal = self._registry.unavailable_refusal(name)
+            if refusal is not None:
+                return _Target(None, refusal)
             tail = " -- tool_search lists what is currently loaded" if self.search_visible() else ""
             return _Target(None, absent_tool_error(name, tail=tail))
         return _Target(tool, None)

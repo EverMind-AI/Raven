@@ -1477,6 +1477,12 @@ def test_the_no_answer_sentinel_survives_the_package_layer(workspace) -> None:
     assert loop._with_package_servers(None) is None
 
 
+def _compact(loop, log_id: str = "log-a") -> None:
+    """The compaction refresh: marked by one turn, cashed by the next on the same log."""
+    loop.tools.schedule_definitions_refresh("s1")
+    loop.tools.bind_session_revision("s1", log_id)
+
+
 def _register_svc_tool(loop) -> None:
     loop.tools.register(
         _FakeTool("mcp_svc_search"), origin=MCPToolRef(name="mcp_svc_search", server="svc", tool="search")
@@ -1502,7 +1508,7 @@ async def test_a_disconnected_server_keeps_its_notice_across_a_refresh(workspace
     assert any("remain in this conversation's tool list" in note for note in before), before
     told = {notice_key(note): note for note in before if notice_key(note) is not None}
 
-    loop.tools.bind_session_revision("s1", "log-b")
+    _compact(loop)
 
     with loop.tools.session_scope_for("s1"):
         after = loop._mcp_tool_notices()
@@ -1534,7 +1540,7 @@ async def test_a_disabled_server_keeps_its_notice_across_a_refresh(workspace) ->
     assert any("disabled in settings" in note for note in before), before
     told = {notice_key(note): note for note in before if notice_key(note) is not None}
 
-    loop.tools.bind_session_revision("s1", "log-b")
+    _compact(loop)
 
     with loop.tools.session_scope_for("s1"):
         after = loop._mcp_tool_notices()
@@ -1562,7 +1568,7 @@ async def test_a_removed_server_keeps_its_notice_across_a_refresh(workspace) -> 
     assert any("no longer loaded" in note for note in before), before
     told = {notice_key(note): note for note in before if notice_key(note) is not None}
 
-    loop.tools.bind_session_revision("s1", "log-b")
+    _compact(loop)
 
     with loop.tools.session_scope_for("s1"):
         after = loop._mcp_tool_notices()
@@ -1588,7 +1594,7 @@ async def test_a_reconnected_server_clears_its_notice_truthfully(workspace) -> N
         loop._mcp_manager = _StatusManager(_snap("svc", "disconnected"))
         loop._mcp_tool_notices()
 
-    loop.tools.bind_session_revision("s1", "log-b")
+    _compact(loop)
     with loop.tools.session_scope_for("s1"):
         joined = loop._mcp_tool_notices()
     told = {notice_key(note): note for note in joined if notice_key(note) is not None}
@@ -1601,7 +1607,7 @@ async def test_a_reconnected_server_clears_its_notice_truthfully(workspace) -> N
     assert "join" in {notice_key(note): note for note in waiting if notice_key(note) is not None}[("mcp", "svc")]
     told = {notice_key(note): note for note in waiting if notice_key(note) is not None}
 
-    loop.tools.bind_session_revision("s1", "log-c")
+    _compact(loop)
     with loop.tools.session_scope_for("s1"):
         final = loop._mcp_tool_notices()
         names = loop.tools.session_definition_names() or frozenset()
@@ -1610,3 +1616,50 @@ async def test_a_reconnected_server_clears_its_notice_truthfully(workspace) -> N
     assert ("mcp", "svc") not in {notice_key(note) for note in final if notice_key(note) is not None}
     sent = notice_changes(final, told)
     assert any("the earlier note about it no longer applies" in note for note in sent), sent
+
+
+async def test_a_clear_drops_a_disconnected_servers_standing_notice(workspace) -> None:
+    """A new log has been told nothing, so a server down since the old log gets
+    no line there -- the same silence a new session gets for a server whose
+    tools it never held."""
+    loop = _loop(workspace)
+    _register_svc_tool(loop)
+    loop.tools.bind_session_revision("s1", "log-a")
+    with loop.tools.session_scope_for("s1"):
+        assert "mcp_svc_search" in (loop.tools.session_definition_names() or ())
+        loop.tools.unregister("mcp_svc_search")
+        loop._mcp_manager = _StatusManager(_snap("svc", "disconnected"))
+        assert any(notice_key(note) == ("mcp", "svc") for note in loop._mcp_tool_notices())
+
+    loop.tools.bind_session_revision("s1", "log-b")
+
+    with loop.tools.session_scope_for("s1"):
+        cleared = loop._mcp_tool_notices()
+    with loop.tools.session_scope_for("s2"):
+        fresh = loop._mcp_tool_notices()
+    assert cleared == [] == fresh, (cleared, fresh)
+
+
+async def test_a_folded_server_with_no_tools_is_forgotten_once_it_connects(workspace) -> None:
+    """With the catalog folded, a server that offers no tools of its own still
+    leaves the standing set when it connects, so a later disconnect does not
+    report tools it never had."""
+    from raven.config.schema import ToolSearchConfig
+
+    loop = _loop(workspace, tool_search_config=ToolSearchConfig(enabled=True, compaction_threshold=0))
+    loop.tools.bind_session_revision("s1", "log-a")
+
+    def keys() -> set:
+        with loop.tools.session_scope_for("s1"):
+            assert loop.tool_search_controller.search_visible(), "the catalog must be folded here"
+            return {notice_key(note) for note in loop._mcp_tool_notices()}
+
+    loop._mcp_manager = _StatusManager(_snap("res", "connecting"))
+    assert ("mcp", "res") in keys(), "a connecting server is spoken for"
+
+    loop._mcp_manager = _StatusManager(_snap("res", "connected"))
+    assert ("mcp", "res") not in keys(), "connected with nothing to offer: the note is resolved"
+
+    _compact(loop)
+    loop._mcp_manager = _StatusManager(_snap("res", "disconnected"))
+    assert ("mcp", "res") not in keys(), "it has no tools to be absent from the list"
