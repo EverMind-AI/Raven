@@ -308,9 +308,10 @@ class TurnBudgetHook(AgentHook):
     """The turn clock this product asks the loop to run under.
 
     Data rather than config the loop reads: the loop serves every agent and
-    must not know any of them, so a product that leaves this unset is bounded
-    exactly as it was before the key existed. The value travels under the
-    shared budget key, which the loop reads once, at turn start.
+    must not know any of them, so a product that declares no clock here runs
+    on the iteration cap its own config asks for -- none at all when it asks
+    for none. The value travels under the shared budget key, which the loop
+    reads once, at turn start.
     """
 
     def __init__(self, wall_clock_seconds: float) -> None:

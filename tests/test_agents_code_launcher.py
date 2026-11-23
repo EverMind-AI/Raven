@@ -1714,3 +1714,48 @@ def test_a_task_deadline_reaches_the_code_flow_as_a_turn_clock(grounded, tmp_pat
         ).read_text()
     )
     assert short["plugins"]["config"]["code-flow"]["wallClockSeconds"] >= 10, "never a negative clock"
+
+
+def test_the_rendered_acp_config_asks_for_no_cap_and_declares_no_clock(grounded):
+    """ACP is the hosting the roster starts, and it passes no deadline.
+
+    So the shipped config must ask for no iteration cap, and the ACP render
+    must cast no wall clock: a turn it serves has neither a clock nor a cap,
+    by design. The rendered pair is what the engine actually reads.
+    """
+    data = json.loads(_render(grounded).read_text())
+    assert data["agents"]["defaults"]["maxToolIterations"] is None, "the shipped config asks for no cap"
+    assert "wallClockSeconds" not in data["plugins"]["config"]["code-flow"], "ACP has no deadline to render"
+
+
+def test_run_task_renders_its_timeout_into_the_turn_clock(grounded, tmp_path, monkeypatch):
+    """The one line that connects ``--timeout`` to the loop's clock.
+
+    ``run_task`` renders the config the child agent process reads; dropping
+    the timeout argument there silently leaves every CLI run clockless while
+    the render-level tests still pass. Exercised through ``run_task`` itself,
+    with only the child process faked.
+    """
+    seen: dict = {}
+
+    def _capture(argv, **_kwargs):
+        config_path = Path(argv[argv.index("--config") + 1])
+        seen["config"] = json.loads(config_path.read_text(encoding="utf-8"))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(grounded.subprocess, "run", _capture)
+    args = SimpleNamespace(
+        prompt_file=None,
+        task="do the thing",
+        session="deadline",
+        job=None,
+        workspace=str(tmp_path / "ws"),
+        config=str(RUN_PY.parent / "config.json"),
+        verbose=False,
+        timeout=900,
+        keep_going=True,
+    )
+
+    grounded.run_task(args)
+
+    assert seen["config"]["plugins"]["config"]["code-flow"]["wallClockSeconds"] == 900 - grounded.WRAPUP_MARGIN_SECONDS

@@ -255,3 +255,27 @@ def test_three_label_wildcards_and_exact_hosts_are_accepted():
     assert network.default == "closed"
     assert [(r.host, r.tier) for r in network.rules][-1] == ("evil.example.com", "deny")
     assert network.rules[0].ports == [] and network.rules[0].binary == ""
+
+
+def test_a_negative_tool_iteration_cap_is_refused_at_load() -> None:
+    """Unbounded is asked for with null or zero; a negative is a mistake.
+
+    Reading -1 as "no cap" was fail-open: an invalid value silently removed
+    every bound. The config door refuses it instead, so the mistake is
+    reported when the config loads rather than at the end of a runaway turn.
+    """
+    with pytest.raises(ValidationError):
+        AgentDefaults(max_tool_iterations=-1)
+    assert AgentDefaults(max_tool_iterations=0).max_tool_iterations == 0
+    assert AgentDefaults(max_tool_iterations=None).max_tool_iterations is None
+
+
+def test_a_negative_mode_cap_is_refused_too() -> None:
+    """The same flaw had a second door: a mode declaration's own cap, which
+    the loop resolves per session and would read as unbounded."""
+    from raven.config.schema import AcpModeConfig
+
+    with pytest.raises(ValidationError):
+        AcpModeConfig(name="fast", max_tool_iterations=-1)
+    assert AcpModeConfig(name="fast", max_tool_iterations=0).max_tool_iterations == 0
+    assert AcpModeConfig(name="fast").max_tool_iterations is None

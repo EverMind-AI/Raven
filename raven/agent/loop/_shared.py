@@ -809,10 +809,11 @@ TURN_BUDGETS_KEY = "turn_budgets"
 """Where a product leaves the bounds it wants a turn run under, on the turn's metadata.
 
 The loop serves every agent and must not know any of them, so bounds arrive as data a
-hook writes rather than as config the loop reads: a hook that writes nothing leaves the
-turn bounded exactly as it was before this key existed, which is what keeps every other
-agent byte-identical. The value is a plain dict, and :func:`turn_budgets` is the only
-reader -- a malformed one leaves the turn unbounded rather than raising inside the loop.
+hook writes rather than as config the loop reads: a hook that writes nothing casts no
+bound of its own, leaving the turn on the cap its own config asks for -- none at all
+when it asks for none -- which is what keeps every other agent byte-identical. The value
+is a plain dict, and :func:`turn_budgets` is the only reader -- a malformed one leaves
+the turn unbounded rather than raising inside the loop.
 """
 
 

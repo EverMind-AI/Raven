@@ -250,11 +250,14 @@ class AgentDefaults(Base):
     # transport phases, and no bound at all on the loop's pre-request awaits,
     # which is the state a turn that never issued a request went unnoticed in.
     llm_first_byte_timeout: int = 120
-    max_tool_iterations: int | None = 40
+    max_tool_iterations: int | None = Field(default=40, ge=0)
     """ReAct iterations one turn may run. ``None`` or ``0`` means unbounded.
 
-    A product with a wall clock of its own (``wallClockSeconds``) leaves this
-    alone and is bounded by that instead; a cap is for a turn with no deadline.
+    A product with a wall clock of its own (``wallClockSeconds``) sets this to
+    ``None`` and is bounded by that clock instead; when its caller names no
+    deadline the turn has neither a clock nor a cap, which is that product's
+    own choice. A negative value is refused at load rather than read as "no
+    cap".
     """
     # Cap on subagent sandboxes running at once, counting spawns and DAG nodes
     # together (excess queues). ge=1: a 0/negative cap would deadlock every
@@ -886,8 +889,9 @@ class AcpModeConfig(Base):
 
     name: str
     description: str = ""
-    max_tool_iterations: int | None = None
-    """``None`` inherits ``agents.defaults.maxToolIterations``."""
+    max_tool_iterations: int | None = Field(default=None, ge=0)
+    """``None`` inherits ``agents.defaults.maxToolIterations``; ``0`` means no
+    cap, and a negative value is refused at load."""
     reasoning_effort: str | None = None
     """``None`` inherits ``agents.defaults.reasoningEffort``; set, every call a
     session in this mode makes asks the provider for this effort instead."""
