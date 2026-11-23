@@ -208,6 +208,49 @@ def test_read_raw_or_raise_empty_file_is_empty_dict(tmp_path: Path) -> None:
     assert read_raw_or_raise(p) == {}  # empty = no data to lose, not malformed
 
 
+def test_a_failed_load_of_another_path_leaves_the_default_cargo_stash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Secret scanning walks candidate config paths through load_config inside
+    a try/except; a malformed candidate must drop only its own cargo slices,
+    not the default config's -- a reader that just loaded the real file would
+    else dispense empty cargo for a credentialed channel."""
+    from raven.config.loader import channel_cargo_slice, get_config_path, load_config
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    cfg = get_config_path()
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(json.dumps({"channels": {"feishu": {"appId": "cli_1"}}}), encoding="utf-8")
+    load_config()
+
+    broken = tmp_path / "candidate.json"
+    broken.write_text("{ nope", encoding="utf-8")
+    load_config(broken)
+
+    assert channel_cargo_slice("feishu").get("appId") == "cli_1"
+
+
+def test_a_valid_load_of_another_path_leaves_the_default_cargo_stash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A candidate path that parses must keep its cargo to itself: a successful
+    load of another file used to clear the default config's slices, so a reader
+    that had just loaded the real file dispensed empty cargo for a channel."""
+    from raven.config.loader import channel_cargo_slice, get_config_path, load_config
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    cfg = get_config_path()
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(json.dumps({"channels": {"feishu": {"appId": "cli_1"}}}), encoding="utf-8")
+    load_config()
+
+    other = tmp_path / "candidate.json"
+    other.write_text(json.dumps({"channels": {"telegram": {"token": "t-other"}}}), encoding="utf-8")
+    load_config(other)
+
+    assert channel_cargo_slice("feishu").get("appId") == "cli_1"
+
+
 def test_read_raw_or_raise_json_null_is_empty_dict(tmp_path: Path) -> None:
     from raven.config.loader import read_raw_or_raise
 

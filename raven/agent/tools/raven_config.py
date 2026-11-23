@@ -1574,25 +1574,20 @@ class RavenConfigTool(Tool):
                 "gateway (`raven gateway`, or `raven web`, which starts one)"
             )
             return out
-        # Two questions, two answers. A channel logs in by scanning only when
-        # it says so: an absent or failed field list is not a declaration, and
-        # reading the list as one told a credentials channel to ask for a code
-        # it does not have. A spec that requires no credentials is a
-        # declaration of its own -- but only a field list that was read.
+        # `connected` is three-valued: True (paired), False (explicitly not
+        # paired yet), or absent/None (no pairing concept reported). A scan
+        # channel is still waiting even when it reports no pairing at all.
         scan = bool(row.get("qr_login"))
-        pairing = scan or (row.get("error") is None and not any(f.get("required") for f in row.get("fields") or []))
-        if row.get("connected"):
+        connected = row.get("connected")
+        if connected is True:
             out["state"] = "connected"
         elif row.get("running"):
-            # `connected` is absent for channels that never report pairing; only a
-            # channel that logs in by scanning, or whose spec requires no
-            # credentials, can honestly be "not connected yet".
-            out["state"] = "running, not connected yet" if pairing else "running"
+            out["state"] = "running, not connected yet" if (connected is False or scan) else "running"
         elif row.get("enabled"):
             out["state"] = "enabled, not running (the gateway starts it within a few seconds, or it failed)"
         else:
             out["state"] = "off"
-        if scan and not row.get("connected"):
+        if scan and connected is not True:
             out["login"] = (
                 f"{name} logs in by scanning a QR code: once it is on, the code appears in Settings > Channels > "
                 f"{name}; ask the user to scan it there. describe channels.{name} again shows when it is connected."

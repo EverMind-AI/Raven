@@ -1374,10 +1374,9 @@ async def test_describe_does_not_call_a_running_non_scan_channel_unconnected(con
 
 
 @pytest.mark.asyncio
-async def test_describe_calls_a_running_channel_with_no_required_fields_unconnected(config_file):
-    """A spec that requires no credentials needs no setup, so a running channel
-    that has not paired yet is still "not connected yet"; only a channel with
-    required fields is trusted as plainly running."""
+async def test_describe_calls_a_running_channel_with_no_required_fields_running(config_file):
+    """When `connected` is absent and `qr_login` is False, no pairing applies
+    even if no fields are required, so a running channel reads as "running"."""
     status = {
         "gateway_running": True,
         "channels": [
@@ -1395,7 +1394,7 @@ async def test_describe_calls_a_running_channel_with_no_required_fields_unconnec
 
     described = json.loads(await _run(tool, action="describe", path="channels.feishu"))
 
-    assert described["state"] == "running, not connected yet"
+    assert described["state"] == "running"
 
 
 @pytest.mark.asyncio
@@ -1405,7 +1404,14 @@ async def test_switching_on_a_scan_channel_says_where_the_code_is(config_file):
     status = {
         "gateway_running": True,
         "channels": [
-            {"name": "weixin", "enabled": True, "running": True, "connected": False, "qr_login": True, "fields": []}
+            {
+                "name": "weixin",
+                "enabled": True,
+                "running": True,
+                "connected": False,
+                "qr_login": True,
+                "fields": [],
+            }
         ],
     }
     tool = RavenConfigTool()
@@ -1434,6 +1440,22 @@ async def test_a_scan_channel_that_reported_pairing_reads_as_connected(config_fi
     described = json.loads(await _run(tool, action="describe", path="channels.weixin"))
 
     assert described["state"] == "connected"
+
+
+@pytest.mark.asyncio
+async def test_a_scan_channel_with_no_pairing_report_is_still_waiting(config_file):
+    """`connected` is absent when the adapter reports no pairing; a scan
+    channel is still waiting for its code even then."""
+    status = {
+        "gateway_running": True,
+        "channels": [{"name": "weixin", "enabled": True, "running": True, "qr_login": True, "fields": []}],
+    }
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"channels.status": status}))
+
+    described = json.loads(await _run(tool, action="describe", path="channels.weixin"))
+
+    assert described["state"] == "running, not connected yet"
 
 
 @pytest.mark.asyncio
@@ -1518,6 +1540,32 @@ async def test_a_channel_whose_field_read_failed_with_no_message_still_names_the
     assert described["error"] == ""
     assert "QR" not in json.dumps(described), f"a failed row must not draw a scan instruction: {described}"
     assert described["state"] == "running", "a row that could not be read cannot claim to be waiting for a scan"
+
+
+@pytest.mark.asyncio
+async def test_a_running_channel_that_reports_no_pairing_is_not_disconnected(config_file):
+    """A live gateway reports `connected` only for QR-login channels; the rest
+    (Feishu's WebSocket among them) never carry the key, and reading that as
+    "not connected yet" told the user a working channel was broken."""
+    status = {
+        "gateway_running": True,
+        "channels": [
+            {
+                "name": "feishu",
+                "enabled": True,
+                "running": True,
+                "qr_login": False,
+                "fields": [{"key": "app_id", "required": True}],
+            }
+        ],
+    }
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"channels.status": status}))
+
+    described = json.loads(await _run(tool, action="describe", path="channels.feishu"))
+
+    assert described["state"] == "running"
+    assert "QR" not in described.get("login", "")
 
 
 @pytest.mark.asyncio
