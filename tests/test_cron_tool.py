@@ -98,12 +98,14 @@ async def test_add_naive_at_with_tz_anchors_to_that_zone() -> None:
     assert schedule.at_ms == expected_ms
 
 
-async def test_add_offset_aware_at_ignores_tz_param() -> None:
+@pytest.mark.parametrize("tz", ["Asia/Shanghai", "Invalid/Zone"])
+async def test_add_offset_aware_at_ignores_tz_param(tz: str) -> None:
     # An offset-aware string already carries its zone; the tz param is ignored.
     from datetime import datetime
 
     tool, cron = _tool()
-    await tool.execute(action="add", message="ping", at="2026-06-24T15:00:00+09:00", tz="Asia/Shanghai")
+    result = await tool.execute(action="add", message="ping", at="2026-06-24T15:00:00+09:00", tz=tz)
+    assert result.startswith("Created job"), result
     schedule = cron.add_job_with_outcome.call_args.kwargs["schedule"]
     expected_ms = int(datetime.fromisoformat("2026-06-24T15:00:00+09:00").timestamp() * 1000)
     assert schedule.at_ms == expected_ms
@@ -126,9 +128,10 @@ async def test_add_cron_expr_with_valid_tz_uses_it() -> None:
     assert schedule.kind == "cron" and schedule.tz == "Asia/Shanghai"
 
 
-async def test_add_cron_expr_with_bad_tz_still_errors() -> None:
+@pytest.mark.parametrize("schedule_args", [{"cron_expr": "0 9 * * *"}, {"at": "2026-06-24T15:00:00"}])
+async def test_add_schedule_with_bad_tz_still_errors(schedule_args: dict[str, str]) -> None:
     tool, cron = _tool()
-    result = await tool.execute(action="add", message="daily", cron_expr="0 9 * * *", tz="Not/AZone")
+    result = await tool.execute(action="add", message="daily", tz="Not/AZone", **schedule_args)
     assert "unknown timezone" in result
     cron.add_job_with_outcome.assert_not_called()
 

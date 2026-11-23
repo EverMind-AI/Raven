@@ -8,6 +8,7 @@ and the runner that owns that channel delivers the fire directly
 
 from contextvars import ContextVar
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from raven.contracts.tool import Tool
 from raven.proactive_engine.schedulers.cron.service import CronService
@@ -220,21 +221,15 @@ class CronTool(Tool):
             )
         if not self._channel or not self._chat_id:
             return "Error: no session context (channel/chat_id)"
-        # tz anchors a cron expression's wall-clock recurrence and a naive `at`
-        # datetime; for an every schedule (a relative interval) it is meaningless
-        # and is ignored rather than erroring (no needless agent retry).
-        if tz and (cron_expr or at):
-            from zoneinfo import ZoneInfo
-
-            try:
-                ZoneInfo(tz)
-            except Exception:
-                return f"Error: unknown timezone '{tz}'"
-
         delete_after = False
         if every_seconds:
             schedule = CronSchedule(kind="every", every_ms=every_seconds * 1000)
         elif cron_expr:
+            if tz:
+                try:
+                    ZoneInfo(tz)
+                except Exception:
+                    return f"Error: unknown timezone '{tz}'"
             schedule = CronSchedule(kind="cron", expr=cron_expr, tz=tz)
         elif at:
             from datetime import datetime
@@ -247,9 +242,10 @@ class CronTool(Tool):
             # .timestamp() does not silently fall back to the host's local zone.
             # An offset-aware string already carries its zone, so tz is ignored.
             if dt.tzinfo is None and tz:
-                from zoneinfo import ZoneInfo
-
-                dt = dt.replace(tzinfo=ZoneInfo(tz))
+                try:
+                    dt = dt.replace(tzinfo=ZoneInfo(tz))
+                except Exception:
+                    return f"Error: unknown timezone '{tz}'"
             at_ms = int(dt.timestamp() * 1000)
             schedule = CronSchedule(kind="at", at_ms=at_ms)
             delete_after = True
