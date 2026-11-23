@@ -540,6 +540,18 @@ def _normalized(messages: list[dict[str, Any]]) -> list[Any]:
     return [json.loads(json.dumps(m, ensure_ascii=False)) for m in messages]
 
 
+def _filed_rows(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The rows a save writes: every message but the repair the reader derived.
+
+    The synthetic results of :func:`repair_dangling_tool_calls` are not part of
+    what happened, and a rewrite (an undo, a clear, a fork) would otherwise
+    turn one into a tool result no tool produced. They stay in memory, where
+    the next model call needs the history to be provider-valid, and the next
+    read derives them from the file again.
+    """
+    return [message for message in messages if not message.get(SYNTHETIC_INTERRUPTED_KEY)]
+
+
 def _legacy_log_id(key: str, created_at: Any, message_count: int) -> str:
     """The log id of a file that stores none.
 
@@ -555,8 +567,25 @@ def _legacy_log_id(key: str, created_at: Any, message_count: int) -> str:
 
 _INTERRUPTED_RESULT = "[interrupted] this call never returned"
 
+SYNTHETIC_INTERRUPTED_KEY = "_synthetic_interrupted"
+"""Marks the result :func:`repair_dangling_tool_calls` invents on read.
 
-def repair_dangling_tool_calls(messages: list[dict]) -> list[dict]:
+The file never holds such a row: it is a reader's repair, re-derived on every
+read, and a rewrite would turn it into a tool result no tool produced. The
+graceful-cancel path builds its own ``[interrupted]`` rows without this mark,
+because those are the turn's real record of what happened."""
+
+_TURN_META_KEYS = frozenset(
+    {"replied_via_tool", "observers", "reasoning_ms", "duration_ms", "context_used", "context_parts"}
+)
+"""The keys a ``turn_meta`` record may restate on a row already written.
+
+The record exists for stamps that land after the row reached disk. Anything
+else in it is malformed or from a newer writer, and applying it would let a
+patch rewrite message content the format never lets it touch."""
+
+
+def repair_dangling_tool_calls(messages: list[dict], *, mark_synthetic: bool = False) -> list[dict]:
     """Give every tool call that never got a result an ``[interrupted]`` one.
 
     An incrementally written transcript can end mid-call: the assistant message
@@ -566,6 +595,11 @@ def repair_dangling_tool_calls(messages: list[dict]) -> list[dict]:
     the file keeps saying what actually happened. Each result is filed directly
     after the call that opened it, and after any results already filed for it,
     so a later restart reloads the same provider-valid order.
+
+    ``mark_synthetic`` tags the inserted rows with
+    :data:`SYNTHETIC_INTERRUPTED_KEY`. The reader passes it, so a later save
+    knows not to write the repair it derived; the cancel path does not, because
+    the rows it builds are what that turn actually leaves behind.
     """
     answered = {str(message.get("tool_call_id") or "") for message in messages if message.get("role") == "tool"}
     repairs: list[tuple[int, list[dict]]] = []
@@ -579,9 +613,15 @@ def repair_dangling_tool_calls(messages: list[dict]) -> list[dict]:
                 continue
             function = call.get("function") if isinstance(call, dict) else getattr(call, "function", None)
             name = function.get("name") if isinstance(function, dict) else getattr(function, "name", None)
-            pending.append(
-                {"role": "tool", "tool_call_id": call_id, "name": str(name or "tool"), "content": _INTERRUPTED_RESULT}
-            )
+            synthetic = {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "name": str(name or "tool"),
+                "content": _INTERRUPTED_RESULT,
+            }
+            if mark_synthetic:
+                synthetic[SYNTHETIC_INTERRUPTED_KEY] = True
+            pending.append(synthetic)
         if pending:
             repairs.append((index, pending))
     if not repairs:
@@ -663,12 +703,12 @@ def read_session_file(path: Path, key: str) -> Session | None:
                 index = positions.get(str(patch.get("row_id")))
                 keys = patch.get("keys")
                 if index is not None and isinstance(keys, dict):
-                    messages[index].update(keys)
+                    messages[index].update({key: value for key, value in keys.items() if key in _TURN_META_KEYS})
         # The identifier is a filing detail: readers get the rows the loop
         # knows, without the key the file is written under.
         for row in messages:
             row.pop("_row_id", None)
-        messages = repair_dangling_tool_calls(messages)
+        messages = repair_dangling_tool_calls(messages, mark_synthetic=True)
         session = Session(
             key=key,
             messages=messages,
@@ -992,7 +1032,9 @@ class SessionManager:
 
         One metadata record is appended per save, so the last reflects
         current state. Message lines are counted without keeping them in
-        memory.
+        memory. A line that is another record kind (``turn_meta`` today) is
+        not a message and is not counted: the count is what the picker shows
+        and what a save compares against its own list length.
 
         The timestamp tracked is the newest readable conversational message:
         ``user`` or ``assistant``. Runtime-origin and delegated entries are
@@ -1047,24 +1089,30 @@ class SessionManager:
                         continue
                     if isinstance(data, dict) and data.get("_type") == "metadata":
                         meta = data
-                    else:
-                        count += 1
-                        if isinstance(data, dict):
-                            step = take_back.read(data)
-                            if step is TakeBackStep.OPENS:
-                                before_runtime_turn = (latest_preview, last_ts)
-                            elif step is TakeBackStep.TAKES_BACK:
-                                latest_preview, last_ts = before_runtime_turn
-                            role = data.get("role")
-                            if role == "user" and not first_user:
-                                first_user = _message_text(data.get("content"))
-                            if role in {"user", "assistant"} and data.get("silent") is not True:
-                                text = _message_text(data.get("content"))
-                                if text:
-                                    latest_preview = text
-                                ts = data.get("timestamp")
-                                if isinstance(ts, str) and ts > last_ts:
-                                    last_ts = ts
+                        continue
+                    if isinstance(data, dict) and data.get("_type"):
+                        # A record kind rather than a message: turn_meta, and
+                        # whatever the format adds next. Counting one here made
+                        # the listing's count disagree with the transcript, and
+                        # made a save compare a count that could never match.
+                        continue
+                    count += 1
+                    if isinstance(data, dict):
+                        step = take_back.read(data)
+                        if step is TakeBackStep.OPENS:
+                            before_runtime_turn = (latest_preview, last_ts)
+                        elif step is TakeBackStep.TAKES_BACK:
+                            latest_preview, last_ts = before_runtime_turn
+                        role = data.get("role")
+                        if role == "user" and not first_user:
+                            first_user = _message_text(data.get("content"))
+                        if role in {"user", "assistant"} and data.get("silent") is not True:
+                            text = _message_text(data.get("content"))
+                            if text:
+                                latest_preview = text
+                            ts = data.get("timestamp")
+                            if isinstance(ts, str) and ts > last_ts:
+                                last_ts = ts
         except OSError:
             return None, 0, "", "", ""
         return meta, count, last_ts, first_user, latest_preview
@@ -1301,10 +1349,10 @@ class SessionManager:
 
             if rewrite:
                 lines = [metadata_line]
-                lines += [json.dumps(m, ensure_ascii=False) for m in session.messages]
+                lines += [json.dumps(m, ensure_ascii=False) for m in _filed_rows(session.messages)]
                 atomic_replace(path, "".join(line + "\n" for line in lines))
             else:
-                new_messages = session.messages[session._persisted_count :]
+                new_messages = _filed_rows(session.messages[session._persisted_count :])
                 lines = [metadata_line]
                 lines += [json.dumps(m, ensure_ascii=False) for m in new_messages]
                 locked_append(path, lines)
@@ -1472,7 +1520,7 @@ class SessionManager:
         channel = source_key.partition(":")[0]
         child = Session(
             key=f"{channel}:{new_chat_id()}",
-            messages=copy.deepcopy(source.messages),
+            messages=[copy.deepcopy(m) for m in _filed_rows(source.messages)],
             last_consolidated=source.last_consolidated,
         )
         if title is not None:

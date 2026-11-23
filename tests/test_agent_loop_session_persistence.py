@@ -223,8 +223,92 @@ async def test_a_turns_closing_row_is_filed_and_never_twice(tmp_path):
     rows = _filed(path)
     answers = [r for r in rows if r.get("role") == "assistant" and r.get("content") == "all done"]
     assert len(answers) == 1, "the closing answer is filed exactly once"
-    ids = [r["_row_id"] for r in rows if r.get("_row_id")]
+    turn_rows = [r for r in rows if r.get("role")]
+    assert turn_rows, "the turn filed no rows at all"
+    assert all(r.get("_row_id") for r in turn_rows), "every turn row is written under an identifier"
+    ids = [r["_row_id"] for r in turn_rows]
     assert len(ids) == len(set(ids)), "no row is written under two identifiers"
+
+
+def test_a_turn_meta_only_restates_known_stamp_keys(tmp_path):
+    """The record is a stamp carrier, not a second way to rewrite a message."""
+    from raven.session.manager import read_session_file
+
+    path = tmp_path / "s.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps({"_type": "metadata", "key": "cli:c", "created_at": "2026-01-01T00:00:00", "metadata": {}}),
+                json.dumps({"role": "assistant", "content": "done", "_row_id": "abc123"}),
+                json.dumps(
+                    {
+                        "_type": "turn_meta",
+                        "patches": [
+                            {
+                                "row_id": "abc123",
+                                "keys": {"content": "rewritten", "replied_via_tool": True, "not_a_stamp": 1},
+                            }
+                        ],
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    session = read_session_file(path, "cli:c")
+
+    assert session is not None
+    assert session.messages[0]["content"] == "done", "a patch may not rewrite message content"
+    assert session.messages[0]["replied_via_tool"] is True
+    assert "not_a_stamp" not in session.messages[0]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_turn_meta_write_does_not_fail_the_turn(tmp_path, monkeypatch):
+    """The reply is already on disk; losing the late stamp is the lesser loss.
+
+    A turn the message tool answered files its call while the turn runs, and the
+    reply's provenance lands on that row afterwards, as a turn_meta record. When
+    filing that record fails, the turn has still produced and filed its answer.
+    """
+    from raven.agent.tools.message import MessageTool
+    from raven.session import manager as manager_mod
+
+    class Counter(AgentHook):
+        async def after_send(self, ctx):
+            ctx.metadata.setdefault("observers", {})["send_gate"] = {"fired": 1}
+            return HookDecision()
+
+    failed: list[list[dict]] = []
+
+    def _boom(_path, patches, **_kwargs):
+        failed.append(patches)
+        raise OSError("disk full")
+
+    loop = _loop(
+        tmp_path,
+        _ScriptedProvider([_tool_call("message", {"content": "hello"}), _text("")]),
+        [Counter()],
+    )
+    message = loop.tools.get("message")
+    assert isinstance(message, MessageTool)
+    message.set_context("cli", "c")
+
+    async def _send(_content: str, _media: list[str]) -> None:
+        return None
+
+    message.set_send_callback(_send)
+    monkeypatch.setattr(manager_mod, "append_turn_meta", _boom)
+
+    out = await loop._process_message(_req())
+
+    assert failed, "the turn filed no late stamp, so the failure path was not exercised"
+    assert out is None, "the message tool answered, so the turn has no reply of its own"
+    rows = _filed(loop.sessions.session_path("cli:c"))
+    calls = [call["function"]["name"] for row in rows for call in (row.get("tool_calls") or [])]
+    assert "message" in calls, "the answer's call is on disk"
 
 
 def test_a_turn_meta_restates_a_row_by_its_identifier(tmp_path):
@@ -280,36 +364,52 @@ def test_a_turn_meta_starts_on_a_fresh_line_after_a_crashed_append(tmp_path):
     assert filed and filed[0]["replied_via_tool"] is True
 
 
-def test_an_incremental_write_stops_before_a_picture():
-    """A picture row waits for the window, which is what names it in the file."""
+def test_an_incremental_write_does_not_wait_for_a_picture():
+    """A picture row is fileable: the writer replaces its bytes with a note.
+
+    The old boundary held every row behind a picture until a window pass
+    rewrote the row, and the newest pictures stay in the window for the whole
+    turn, so a turn whose only picture was recent filed nothing after it.
+    """
     from raven.agent.loop.turn_path import _incremental_upto
 
     text = {"role": "assistant", "content": "looking"}
     picture = {"role": "tool", "content": [{"type": "image_url", "image_url": {"url": "data:,"}}]}
     after = {"role": "assistant", "content": "done"}
 
-    assert _incremental_upto([text, picture, after], 0) == 1
-    assert _incremental_upto([picture, after], 0) is None, "a leading picture leaves nothing to write"
-    assert _incremental_upto([text, after], 0) == 2
+    assert _incremental_upto([text, picture, after], 0) == 3
+    assert _incremental_upto([picture, after], 0) == 2
     assert _incremental_upto([text, after], 2) is None, "nothing new is nothing to write"
 
 
-def test_a_grown_list_is_adopted_and_a_shrunken_one_is_not():
-    """The log follows the record grown at the end, never a window's view of it."""
-    from raven.agent.window.turn_log import TurnLog
+def test_a_multipart_picture_row_is_filed_with_its_text_and_a_placeholder(tmp_path):
+    """The check must read every part: an image after the first one is still an image."""
+    from raven.agent.loop.turn_path import _incremental_upto
 
-    opening = {"role": "user", "content": "hi"}
-    live = [opening]
-    log = TurnLog(live, 1)
+    picture = {
+        "role": "tool",
+        "tool_call_id": "c1",
+        "name": "screenshot",
+        "content": [
+            {"type": "text", "text": "the window"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        ],
+    }
+    after = {"role": "assistant", "content": "done"}
 
-    appended = [opening, {"role": "assistant", "content": "one"}]
-    log.adopt_appended(appended)
-    assert [m.get("content") for m in log.messages()] == ["hi", "one"]
+    assert _incremental_upto([picture, after], 0) == 2
 
-    shorter = [opening]
-    log.adopt_appended(shorter)
-    assert [m.get("content") for m in log.messages()] == ["hi", "one"], "a shrunken view changes nothing"
+    loop = _loop(tmp_path, _ScriptedProvider([_text("unused")]))
+    session = loop.sessions.get_or_create("cli:c")
+    loop._save_turn(session, [picture, after], 0, final=False)
+    loop.sessions.save(session)
 
-    stranger = [{"role": "user", "content": "different"}, {"role": "assistant", "content": "x"}]
-    log.adopt_appended(stranger)
-    assert [m.get("content") for m in log.messages()] == ["hi", "one"], "a list that differs early is a view"
+    path = loop.sessions.session_path("cli:c")
+    rows = _filed(path)
+    filed_picture = next(row for row in rows if row.get("tool_call_id") == "c1")
+    assert filed_picture["content"] == [
+        {"type": "text", "text": "the window"},
+        {"type": "text", "text": "[image]"},
+    ]
+    assert any(row.get("content") == "done" for row in rows), "the row after the picture was filed"
+    assert "base64" not in path.read_text(encoding="utf-8")

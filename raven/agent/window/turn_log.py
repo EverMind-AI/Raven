@@ -139,31 +139,6 @@ class TurnLog:
             self._mark = len(messages)
         self._sync(messages)
 
-    def adopt_appended(self, messages: list[dict[str, Any]]) -> None:
-        """Follow ``messages`` only where it is the log's own list grown at the end.
-
-        The loop's last call may hand back a new list object rather than append
-        to the one the log follows, and that list can also be a window pass's
-        shrunken copy. A grown list is adopted and its appended rows recorded;
-        a shorter one, or one that differs anywhere before the end, is a view of
-        the record rather than the record and is left alone.
-        """
-        prior = self._live
-        if messages is prior:
-            self._sync(messages)
-            return
-        shared = min(len(prior), len(messages))
-        grown = len(messages) > len(prior)
-        same = all(
-            messages[index] is prior[index] or messages[index].get(TURN_LOG_KEY) == prior[index].get(TURN_LOG_KEY)
-            for index in range(shared)
-        )
-        if not (grown and same):
-            return
-        self._live = messages
-        self._mark = shared
-        self._sync(messages)
-
     def messages(self, transient_keys: Iterable[str] = ()) -> list[dict[str, Any]]:
         """The turn as it happened: the opening messages, then every message the
         turn added, in order, each in its latest version that is still itself.

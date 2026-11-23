@@ -1073,6 +1073,45 @@ def test_list_sessions_message_count_excludes_metadata_lines(tmp_path: Path):
     assert entries[0]["message_count"] == 2
 
 
+def test_list_sessions_message_count_excludes_turn_meta_lines(tmp_path: Path):
+    """A turn_meta record is a stamp carrier, not a message the reader saw."""
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create("tui:mc03")
+    for role, text in (("user", "one"), ("assistant", "two"), ("user", "three")):
+        session.add_message(role, text)
+    mgr.save(session)
+    with mgr.session_path("tui:mc03").open("a", encoding="utf-8") as f:
+        f.write(
+            json.dumps({"_type": "turn_meta", "patches": [{"row_id": "x", "keys": {"replied_via_tool": True}}]}) + "\n"
+        )
+
+    entries = mgr.list_sessions()
+    assert entries[0]["message_count"] == 3
+
+
+def test_a_turn_meta_does_not_make_the_next_save_re_read_the_transcript(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The count a turn_meta used to inflate sent every later save into the merge path."""
+    from raven.session.manager import append_turn_meta
+
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create("tui:tmcount")
+    session.add_message("user", "hi")
+    session.add_message("assistant", "hello")
+    mgr.save(session)
+    append_turn_meta(mgr.session_path("tui:tmcount"), [{"row_id": "nope", "keys": {"replied_via_tool": True}}])
+
+    reads: list[Path] = []
+    real = manager_mod.read_session_file
+    monkeypatch.setattr(manager_mod, "read_session_file", lambda *a, **k: reads.append(a[0]) or real(*a, **k))
+
+    session.add_message("assistant", "again")
+    mgr.save(session)
+
+    assert reads == [], "a turn_meta record sent the save into the merge path"
+
+
 def test_a_silent_runtime_turn_is_taken_back_after_a_turn_the_message_tool_answered(tmp_path: Path):
     """A turn the message tool answered does not make the next turn's silence count.
 
@@ -1178,6 +1217,62 @@ def test_a_fork_starts_annotated_through_its_inherited_history(tmp_path: Path):
 
     sm._cache.pop(child.key, None)
     assert sm.get_or_create(child.key).metadata.get("annotated_through") == 6
+
+
+def _seed_dangling_call(mgr: SessionManager, key: str) -> None:
+    """A transcript whose last point is an assistant call with no result."""
+    session = mgr.get_or_create(key)
+    session.record({"role": "user", "content": "go"})
+    session.record(
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "exec", "arguments": "{}"}}],
+        }
+    )
+    mgr.save(session)
+
+
+def test_a_save_does_not_materialize_the_readers_interrupted_repair(tmp_path: Path):
+    """The repair is derived on read, so a rewrite (an undo) must not file it.
+
+    Filing it would put a tool result in the transcript that no tool produced,
+    indistinguishable from one that really was interrupted.
+    """
+    _seed_dangling_call(SessionManager(tmp_path), "cli:repair")
+    reader = SessionManager(tmp_path)
+    session = reader.get_or_create("cli:repair")
+    assert any(m.get("content") == "[interrupted] this call never returned" for m in session.messages)
+    # The dangling call belongs to an earlier turn; cut a later one so the
+    # rewrite keeps the call while dropping the turn that followed it.
+    session.record({"role": "user", "content": "next"})
+    session.record({"role": "assistant", "content": "later"})
+    reader.save(session)
+    reader = SessionManager(tmp_path)
+    session = reader.get_or_create("cli:repair")
+    assert session.undo_last_turn() == 2
+
+    reader.save(session)
+
+    path = reader.session_path("cli:repair")
+    text = path.read_text(encoding="utf-8")
+    assert "[interrupted]" not in text, "the reader's repair was written into the file"
+    reloaded = SessionManager(tmp_path).get_or_create("cli:repair")
+    assert any(m.get("content") == "[interrupted] this call never returned" for m in reloaded.messages), (
+        "the repair is still derived on read"
+    )
+
+
+def test_a_fork_does_not_copy_the_readers_interrupted_repair_into_the_child(tmp_path: Path):
+    """A fork of a crashed transcript keeps the call and lets the reader repair it."""
+    _seed_dangling_call(SessionManager(tmp_path), "cli:forkrepair")
+
+    child = SessionManager(tmp_path).fork("cli:forkrepair")
+
+    assert child is not None
+    assert not any(m.get("role") == "tool" for m in child.messages), "the synthetic result was inherited"
+    path = SessionManager(tmp_path).session_path(child.key)
+    assert "[interrupted]" not in path.read_text(encoding="utf-8")
 
 
 def test_clear_resets_the_episodic_cursor_through_a_save(tmp_path: Path):

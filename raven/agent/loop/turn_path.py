@@ -155,7 +155,7 @@ from raven.spine.turn import AnswerlessTurnError
 from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
 from raven.tracing import config as tracing_config
-from raven.utils.images import is_image_part
+from raven.utils.images import is_inline_image
 from raven.utils.tokens import estimate_message_tokens, estimate_prompt_tokens
 
 if TYPE_CHECKING:
@@ -346,17 +346,13 @@ def _without_scratch(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _incremental_upto(messages: list[dict[str, Any]], start: int) -> int | None:
     """Where an incremental write stops, or None when it has nothing to write.
 
-    A row carrying a picture is not written yet: the writer drops pictures, and
-    the window replaces them with a note only after the step has run. Filing it
-    first left the file a body with neither the picture nor the note.
+    Every row is fileable now. A picture used to hold the whole tail behind it
+    until the window turned the row into a note, and a picture the window keeps
+    (the newest ones) held it for the rest of the turn. The writer files an
+    inline picture as the ``[image]`` placeholder instead (see ``_save_turn``),
+    so the row lands where it happened and nothing after it waits.
     """
-    stop = len(messages)
-    for index in range(start, len(messages)):
-        content = messages[index].get("content")
-        if isinstance(content, list) and any(is_image_part(part) for part in content):
-            stop = index
-            break
-    return stop if stop > start else None
+    return len(messages) if len(messages) > start else None
 
 
 def _stamp_turn_observers(messages: list[dict[str, Any]], metadata: dict[str, Any] | None, turn_base: int) -> None:
@@ -3730,6 +3726,36 @@ class TurnPathMixin:
             live["log"].project_tool_results()
             return live["log"].messages()
 
+        def _drop_attempt_rows() -> bool:
+            """Take the attempt's rows off disk before the rerun writes its own.
+
+            The failed attempt was filed as it ran, so a rerun that only reset
+            the in-memory log left its research in the transcript and appended
+            the rerun's answer behind the wreckage. The rows are matched by the
+            identifier the attempt filed them under rather than by position: a
+            concurrent writer's messages can land among them, and a cut by
+            position would take those with it. The write goes through the
+            manager's transaction, so it cannot race an appending writer.
+
+            False when the cut could not be written; the caller does not rerun
+            then, because the rerun's answer would land on the attempt again.
+            """
+            filed = live["filed_ids"]
+            original = session.messages
+            kept = [row for row in original if str(row.get("_row_id") or "") not in filed]
+            if len(kept) == len(original):
+                return True
+            session.messages = kept
+            session.truncations += 1
+            try:
+                self.sessions.save(session)
+            except Exception:
+                session.messages = original
+                session.truncations -= 1
+                logger.exception("could not drop the failed attempt's rows; the turn will not re-run")
+                return False
+            return True
+
         def _seed_for_the_rerun(msgs: list[dict]) -> list[dict]:
             """The question again, plus whatever the reader said while the attempt ran.
 
@@ -3800,6 +3826,8 @@ class TurnPathMixin:
                 # run, the seam asks whether the attempt it is ending has one after it,
                 # which is what decides that attempt's salvage.
                 while retries_left > 0 and pending["rerun"]:
+                    if not _drop_attempt_rows():
+                        break
                     retries_left -= 1
                     attempt_no += 1
                     logger.info("Dead end ({}); re-running the turn", ", ".join(pending["reasons"]))
@@ -4027,19 +4055,27 @@ class TurnPathMixin:
         if patches:
             from raven.session.manager import append_turn_meta
 
-            append_turn_meta(self.sessions.session_path(session.key), patches)
-            for patch in patches:
-                stored = stored_by_id.get(patch["row_id"])
-                if stored is not None:
-                    stored.update(patch["keys"])
+            try:
+                append_turn_meta(self.sessions.session_path(session.key), patches)
+            except Exception:
+                # The turn already has an answer; a late stamp that could not
+                # be filed is not worth failing it for. The rows keep what the
+                # writer gave them, and a reader just sees no late stamp.
+                logger.exception("could not file the turn's late stamps; the turn keeps its answer")
+            else:
+                for patch in patches:
+                    stored = stored_by_id.get(patch["row_id"])
+                    if stored is not None:
+                        stored.update(patch["keys"])
 
         live["filed_ids"].update(self._save_turn(session, turn_msgs, filed_upto))
-        # Filing detail only: the rows the rest of the turn reads carry no key
-        # the file uses to write them under.
-        for row in getattr(session, "messages", ()):
-            row.pop("_row_id", None)
         turn_entries = session.messages[_turn_start() :]
         self.sessions.save(session)
+        # Filing detail only, and popped after the closing save so the answer
+        # is written under the identifier it was filed by: the rest of the
+        # turn reads rows without the key the file uses.
+        for row in getattr(session, "messages", ()):
+            row.pop("_row_id", None)
         await self.harness.memory.after_turn(
             key,
             {
@@ -4559,6 +4595,14 @@ class TurnPathMixin:
                 continue
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
+            if isinstance(content, list) and any(is_inline_image(part) for part in content):
+                # A multimodal row. Inline images must never reach the JSONL: a
+                # single one adds megabytes that are then replayed on every
+                # resume and re-fed to the model, and unlike a code bug that is
+                # not revertible once written. The placeholder is also what
+                # lets the row be filed where it happened instead of waiting
+                # for a window note that a kept picture never gets.
+                content = entry["content"] = _strip_inline_images(content)
             if first_user_pending and role == "user":
                 entry.setdefault("timestamp", received_at)
                 if trace_id:
@@ -4657,14 +4701,6 @@ class TurnPathMixin:
                 # count of the stored log, can only ever guess.
                 if (took := entry.pop(private_key, None)) is not None:
                     entry[stored_key] = took
-            if role == "tool" and isinstance(content, list):
-                # A multimodal tool result. Images must never reach the JSONL:
-                # a single one adds megabytes that are then replayed on every
-                # resume and re-fed to the model, and unlike a code bug that is
-                # not revertible once written. The char cap below cannot catch
-                # it either — it guards `str` content only.
-                content = _strip_inline_images(content)
-                entry["content"] = content
             if role == "tool":
                 # The loop already bounded what the model read; this is the
                 # fallback for a body that never passed through it.

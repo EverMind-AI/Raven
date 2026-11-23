@@ -826,6 +826,37 @@ async def test_a_cancel_during_the_rerun_files_the_rerun_s_own_work(tmp_path):
     assert set(calls) <= results, "every filed tool call still needs a filed result"
 
 
+@pytest.mark.asyncio
+async def test_the_rerun_takes_the_failed_attempt_s_rows_off_disk(tmp_path):
+    """The rerun starts fresh on disk, not only in memory.
+
+    The failed attempt's call and result were appended as it ran. Resetting the
+    log reset the in-memory record only, so the rerun's answer was appended
+    behind the wreckage and the next turn read the discarded attempt as history.
+    """
+    provider = _Scripted(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="call-wreck", name="list_dir", arguments={"path": "."})],
+                finish_reason="tool_calls",
+            ),
+            *_dead(),
+            *_dead(),
+        ],
+        _answers("Alice Smith won it."),
+    )
+    agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1)])
+
+    await agent._process_message(_req("look around"), session_key="s1")
+
+    filed = _persisted(tmp_path)
+    calls = [call["id"] for m in filed for call in (m.get("tool_calls") or [])]
+    assert "call-wreck" not in calls, "the discarded attempt's call is still on disk"
+    assert not any(m.get("role") == "tool" for m in filed), "the discarded attempt's result is still on disk"
+    assert any(m.get("content") == "Alice Smith won it." for m in filed), "the rerun's answer was not filed"
+
+
 # --------------------------------------------------------------------------- #
 # The budget reader: a loop reading a dict a plugin wrote must not break on it  #
 # --------------------------------------------------------------------------- #
