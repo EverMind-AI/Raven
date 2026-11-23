@@ -429,6 +429,16 @@ class ToolRegistry:
         # session here instead of dropping the array mid-turn: the notices and
         # system-prompt derivations for that turn were already built from it.
         self._definitions_refresh_pending: set[str] = set()
+        # The availability switches as they stood when this session's array was
+        # captured. A name in here that is no longer withheld, while the array
+        # still lacks it, became callable inside the frozen window, which is
+        # what :meth:`newly_available` reports. Held for the window rather than
+        # advanced per turn: the report has to stay true until the refresh
+        # captures the tool, or the notice machinery would clear it a turn early
+        # and tell the model the note no longer applies while it still does.
+        # Reset with the array, so a refresh point never re-announces a tool it
+        # has just captured.
+        self._session_unavailable_at_capture: dict[str, frozenset[str]] = {}
         # Placed at assembly, not by registering late: an MCP server connects,
         # and a session brings its own tools, after the host wired its own, so
         # registration order cannot keep anything at the end. See ``list_last``.
@@ -741,6 +751,7 @@ class ToolRegistry:
         """
         self._session_tools.pop(session_key, None)
         self._session_definitions.pop(session_key, None)
+        self._session_unavailable_at_capture.pop(session_key, None)
         self._session_log_ids.pop(session_key, None)
         self._definitions_refresh_pending.discard(session_key)
 
@@ -1053,6 +1064,10 @@ class ToolRegistry:
         except Exception:  # noqa: BLE001 - a bad read must not cost the session its array
             logger.warning("tools: could not read the availability switches; keeping every name")
             unavailable = frozenset()
+        # The switches as judged here are the baseline a later observation is
+        # compared against: a name off at capture and on later is the one this
+        # session should be told about, once, until the next capture.
+        self._session_unavailable_at_capture[session_key] = frozenset(unavailable)
         entries: list[tuple[str, dict[str, Any]]] = []
         last: dict[str, tuple[str, dict[str, Any]]] = {}
         origins: dict[str, "MCPToolRef | None"] = {}
@@ -1089,6 +1104,7 @@ class ToolRegistry:
         caller has already paid for by rebuilding the history.
         """
         self._session_definitions.pop(session_key, None)
+        self._session_unavailable_at_capture.pop(session_key, None)
 
     def schedule_definitions_refresh(self, session_key: str) -> None:
         """Mark the array for recapture at the session's next assembly.
@@ -1118,6 +1134,62 @@ class ToolRegistry:
             self._definitions_refresh_pending.discard(session_key)
             self.invalidate_session_definitions(session_key)
         self._session_log_ids[session_key] = log_id
+
+    def newly_available(self, withheld_now: "frozenset[str]") -> list[str]:
+        """Names that left the unavailable set since this session's array was captured.
+
+        A tool off at the refresh point never entered the array, so it is absent
+        from what the model was shown; when the switch that kept it out is put
+        back the call runs (``execute`` judges the live switches, not the array),
+        but the model has no way to know a schema it never saw now works. This
+        reports exactly that window -- between two refresh points -- and answers
+        with the names the caller should announce, schema included.
+
+        ``withheld_now`` is the operator axis as it stands this turn; the same
+        map whose presence put the tool out. The baseline is what capture judged,
+        so a name still off is never reported: only a real change answers.
+        The array's names are excluded, because once a refresh captured a tool
+        its schema is already in the array and a note would only repeat it. A
+        name with an MCP origin is left out too -- a server's arrival has its own
+        notice, and two lines for one event is the double report this avoids.
+
+        The answer stays true for the whole window, so the same line is returned
+        every turn until the refresh. That is not spam: the caller's notice
+        machinery sends a line only when it differs from what the replayed
+        history already holds, and dropping it a turn early would make it emit
+        the cleared line while the note still applies.
+
+        Only the operator axis moves it. A charter narrowing or the turn freeze
+        is a per-turn restriction that never reached this set, so neither can
+        announce a tool as newly available.
+        """
+        session = self._definition_session.get()
+        if session is None:
+            return []
+        array = self._session_definitions_for(session).origins
+        baseline = self._session_unavailable_at_capture.get(session)
+        if not baseline:
+            return []
+        fresh: list[str] = []
+        for name in sorted(baseline - withheld_now):
+            if name in array or self._visible(name) is None or self._origins.get(name) is not None:
+                continue
+            fresh.append(name)
+        return fresh
+
+    def definition_of(self, name: str) -> dict[str, Any] | None:
+        """One tool's definition, in the shape the array serves, or ``None``.
+
+        For a name the frozen array lacks: the caller hands the model a schema
+        it was never shown, so it has to be the same JSON the array would have
+        carried, not a second rendering that can drift from it.
+        """
+        tool = self._visible(name)
+        if tool is None:
+            return None
+        spec = self._specs.get(name)
+        schema = tool.to_schema() if spec is None or spec.schema_dynamic else spec.schema
+        return copy.deepcopy(schema)
 
     def session_definition_names(self) -> frozenset[str] | None:
         """Names in the session's frozen array, or ``None`` outside a session.

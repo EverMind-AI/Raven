@@ -5,6 +5,7 @@ workdir and sinks.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import TYPE_CHECKING
 
 from raven.a2a_client.tool import A2aTool
@@ -263,7 +264,49 @@ class WiringMixin:
 
     def _tool_notices(self) -> list[str]:
         """The host's tool-surface facts for this turn's runtime context."""
-        return [*self._mcp_tool_notices(), *self._tool_availability_notices()]
+        return [
+            *self._mcp_tool_notices(),
+            *self._tool_availability_notices(),
+            *self._tool_became_available_notices(),
+        ]
+
+    def _tool_became_available_notices(self) -> list[str]:
+        """One line per tool that left the unavailable set and is not in the array yet.
+
+        A tool off at the refresh point never entered the array, so the model was
+        never shown its schema; when the switch comes back the call runs, but
+        nothing in this turn's definitions says so. The line names the tool, says
+        it is callable now, and carries the definition -- the same JSON the array
+        would have served -- because a model told only "it works" would invent
+        the parameters. It is one line, not a block: the runtime-context reader
+        takes the lines before the first blank line, and a multi-line schema
+        would leave its tail unkeyed and repeat it every turn.
+
+        "now available" and not "available again", which the cleared note uses:
+        the two lines must not read as one fact said twice. The line is returned
+        for the whole window between two refresh points -- dropping it earlier
+        would make the notice machinery emit its cleared line while the note
+        still applies -- and sent only once, because the machinery keeps a line
+        the replayed history already holds. The next capture puts the schema in
+        the array and this line stops (see ``ToolRegistry.newly_available``).
+        """
+        from raven.context_engine.runtime_context import tool_notice
+
+        lines: list[str] = []
+        for name in self.tools.newly_available(frozenset(self._withheld_tool_reasons())):
+            schema = self.tools.definition_of(name)
+            if schema is None:
+                continue
+            lines.append(
+                tool_notice(
+                    name,
+                    "now available -- it was unavailable when this session's tool list was "
+                    "captured, so this turn's definitions do not list it, and calls to it run "
+                    "normally. Its definition, to call it as if it were there: "
+                    f"{json.dumps(schema, separators=(',', ':'))}",
+                )
+            )
+        return lines
 
     def _unconfigured_tool_reasons(self) -> dict[str, str]:
         """Registered tools whose config asks for nothing right now, with why.

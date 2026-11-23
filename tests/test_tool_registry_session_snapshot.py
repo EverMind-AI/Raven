@@ -164,6 +164,42 @@ def test_a_tool_becomes_available_again_at_the_next_refresh_point() -> None:
         assert _defs(reg) == ["exec", "find"]
 
 
+def test_a_tool_registered_after_capture_is_reported_once_until_the_refresh() -> None:
+    """The report is the capture-time baseline against the live switches, so a
+    name still off is silent and the array's names are excluded."""
+    switches = {"find"}
+    reg = _registry("exec", "find")
+    reg.set_withheld_source(lambda: frozenset(switches))
+    reg.bind_session_revision("s1", "log-a")
+
+    with reg.session_scope_for("s1"):
+        assert reg.newly_available(frozenset(switches)) == []
+        switches.discard("find")
+        assert reg.newly_available(frozenset(switches)) == ["find"]
+        assert reg.newly_available(frozenset(switches)) == ["find"], "true for the whole window"
+
+    reg.bind_session_revision("s1", "log-b")
+
+    with reg.session_scope_for("s1"):
+        assert "find" in _defs(reg)
+        assert reg.newly_available(frozenset(switches)) == [], "the refresh captured it"
+
+
+def test_an_mcp_tool_is_left_to_the_server_notice() -> None:
+    """A connecting server has its own join line; this lane must not say it again."""
+    from raven.mcp.naming import MCPToolRef
+
+    switches = {"search"}
+    reg = _registry("exec")
+    reg.register(_Stub("search"), origin=MCPToolRef(name="search", server="svc", tool="search"))
+    reg.set_withheld_source(lambda: frozenset(switches))
+    reg.bind_session_revision("s1", "log-a")
+
+    with reg.session_scope_for("s1"):
+        switches.discard("search")
+        assert reg.newly_available(frozenset(switches)) == []
+
+
 def test_a_charter_is_not_frozen_into_the_session_snapshot() -> None:
     """A charter narrows one dispatch on read; it must never become the
     session's availability, or every later turn of the session inherits it."""

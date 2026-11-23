@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop.main import AgentLoop
-from raven.context_engine.runtime_context import notice_key
+from raven.context_engine.runtime_context import notice_changes, notice_key
 from tests._wiring import wire
 
 
@@ -183,6 +183,141 @@ def test_a_constructor_disabled_tool_stays_out_and_gets_no_notice(tmp_path: Path
         notes = loop._tool_notices()
 
     assert not any(notice_key(note) == ("tool", "grep") for note in notes)
+
+
+def _capture_without_web_search(loop) -> None:
+    loop.tools.bind_session_revision("s1", "log-a")
+    with loop.tools.session_scope_for("s1"):
+        assert "web_search" not in {d["function"]["name"] for d in loop.tools.get_definitions()}
+
+
+def test_a_tool_that_became_available_is_announced_with_its_schema(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    loop = _loop(tmp_path)
+    _capture_without_web_search(loop)
+
+    monkeypatch.setenv("SERPER_API_KEY", "test-key")
+
+    with loop.tools.session_scope_for("s1"):
+        names = {d["function"]["name"] for d in loop.tools.get_definitions()}
+        notes = loop._tool_notices()
+
+    assert "web_search" not in names, "the array is the prefix; a late key must not move it"
+    by_key = {notice_key(note): note for note in notes}
+    assert ("tool", "web_search") in by_key, notes
+    line = by_key[("tool", "web_search")]
+    assert "now available" in line
+    assert "calls to it run normally" in line
+    schema = json.dumps(loop.tools.definition_of("web_search"), separators=(",", ":"))
+    assert schema in line, "the model needs the definition it was never shown"
+    assert "UNTRUSTED" not in line, "this is our own definition, not external data"
+
+
+def test_a_tool_announced_as_available_actually_runs(tmp_path: Path, monkeypatch) -> None:
+    class _Serving:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def __call__(self, *args, **kwargs):
+            return self
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def post(self, url: str, **kwargs):
+            import httpx
+
+            self.calls.append(url)
+            payload = {"organic": [{"title": "Raven", "link": "https://a.example", "snippet": "A bird."}]}
+            return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    loop = _loop(tmp_path)
+    _capture_without_web_search(loop)
+
+    monkeypatch.setenv("SERPER_API_KEY", "test-key")
+    client = _Serving()
+    monkeypatch.setattr("raven.agent.tools.web.httpx.AsyncClient", client)
+
+    with loop.tools.session_scope_for("s1"):
+        notes = loop._tool_notices()
+        answer = asyncio.run(loop.tools.execute("web_search", {"query": "hello"}))
+
+    assert any("now available" in note for note in notes), notes
+    assert "Results for: hello" in answer, answer
+    assert "https://a.example" in answer
+    assert "not available" not in answer, "the announced tool must not be refused as absent"
+    assert "currently unavailable" not in answer
+    assert client.calls, "the call never reached the vendor"
+
+
+def test_the_announcement_stops_at_the_next_refresh(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    loop = _loop(tmp_path)
+    _capture_without_web_search(loop)
+    monkeypatch.setenv("SERPER_API_KEY", "test-key")
+    with loop.tools.session_scope_for("s1"):
+        assert any("now available" in note for note in loop._tool_notices())
+
+    loop.tools.bind_session_revision("s1", "log-b")
+
+    with loop.tools.session_scope_for("s1"):
+        entries = {d["function"]["name"]: d for d in loop.tools.get_definitions()}
+        notes = loop._tool_notices()
+
+    assert "web_search" in entries, "the refresh captures the tool it can now offer"
+    assert entries["web_search"] == loop.tools.definition_of("web_search"), (
+        "the announced definition is the array's own JSON, not a second rendering"
+    )
+    assert not any("now available" in note for note in notes), notes
+    assert not any('"name":"web_search"' in note for note in notes), "the array already carries it"
+
+
+def test_an_unchanged_tool_is_not_announced(tmp_path: Path, monkeypatch) -> None:
+    """Only the tool that changed is reported. A tool off at capture and still
+    off was never available, and a tool the array excludes by design was
+    available all along: announcing either is the every-turn spam the change
+    detection exists to avoid."""
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    loop = _loop(tmp_path)
+    _capture_without_web_search(loop)
+
+    monkeypatch.setenv("SERPER_API_KEY", "test-key")
+
+    with loop.tools.session_scope_for("s1"):
+        notes = loop._tool_notices()
+        array = loop.tools.session_definition_names() or frozenset()
+
+    keys = {notice_key(note) for note in notes}
+    assert ("tool", "web_search") in keys, notes
+    for still_off in ("image_generate", "knowledge_search", "text_to_speech", "video_generate"):
+        assert ("tool", still_off) not in keys, f"{still_off} never changed and must stay silent"
+    for already_available in ("cancel_dag", "dag_status", "resolve_dag_node"):
+        assert loop.tools.has(already_available), "registered"
+        assert already_available not in array, "excluded from the array by design"
+        assert ("tool", already_available) not in keys, f"{already_available} was available all along"
+
+
+def test_the_announcement_is_not_resent_while_it_still_holds(tmp_path: Path, monkeypatch) -> None:
+    """The line stays true until the refresh, so it is returned again; the notice
+    machinery sends it only when the replayed history does not already hold it."""
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    loop = _loop(tmp_path)
+    _capture_without_web_search(loop)
+    monkeypatch.setenv("SERPER_API_KEY", "test-key")
+
+    with loop.tools.session_scope_for("s1"):
+        first = loop._tool_notices()
+    assert first
+
+    with loop.tools.session_scope_for("s1"):
+        second = loop._tool_notices()
+
+    told = {notice_key(note): note for note in first if notice_key(note)}
+    assert notice_changes(second, told) == [], "an unchanged announcement must not be sent again"
 
 
 def test_a_switch_flipped_mid_session_refuses_with_the_reason(tmp_path: Path, monkeypatch) -> None:

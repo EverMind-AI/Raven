@@ -122,7 +122,12 @@ new session, a compaction (cashed by the next assembly), a `/clear`, or a releas
 Availability is judged at each refresh point: a tool the operator's switches have off,
 or whose credential or selected base is missing, does not enter the array then. A switch
 flipped after capture changes availability, not the array, and is reported in the
-runtime context; the next refresh re-judges it. A tool the turn's own `plugin` call
+runtime context; the next refresh re-judges it. The report has both directions: a tool in
+the array that is switched off gets an unavailable line, and a tool the capture excluded
+whose switch is put back is announced as usable with its definition copied from the
+array's own JSON -- the call already runs, because dispatch reads the live switches, but
+the model was never shown a schema it can now send. That announcement is retired by the
+next refresh, whose array carries the schema itself. A tool the turn's own `plugin` call
 connects is admitted to `offers` (reachable through `tool_call`) and joins the array at
 the next refresh.
 
