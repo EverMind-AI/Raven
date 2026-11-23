@@ -17,6 +17,7 @@ from raven.agent.hook import AgentHook, HookDecision
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
 from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
+from raven.session.manager import SessionManager
 from raven.spine import ChatType, Origin, Source, TurnRequest
 
 
@@ -228,6 +229,78 @@ async def test_a_turns_closing_row_is_filed_and_never_twice(tmp_path):
     assert all(r.get("_row_id") for r in turn_rows), "every turn row is written under an identifier"
     ids = [r["_row_id"] for r in turn_rows]
     assert len(ids) == len(set(ids)), "no row is written under two identifiers"
+
+
+class _AnotherWriter(AgentHook):
+    """A second manager on the same home, appending while the turn runs."""
+
+    def __init__(self, workspace: Path, key: str, at_iteration: int) -> None:
+        self._workspace = workspace
+        self._key = key
+        self._at = at_iteration
+        self._seen = 0
+        self.wrote = False
+
+    async def before_iteration(self, ctx):
+        self._seen += 1
+        if self._seen == self._at and not self.wrote:
+            other = SessionManager(self._workspace)
+            session = other.get_or_create(self._key)
+            session.add_message("user", "from elsewhere")
+            other.save(session)
+            self.wrote = True
+        return HookDecision()
+
+
+class _Observer(AgentHook):
+    async def after_send(self, ctx):
+        ctx.metadata.setdefault("observers", {})["send_gate"] = {"fired": 1}
+        return HookDecision()
+
+
+@pytest.mark.asyncio
+async def test_a_merge_does_not_lose_the_turns_late_stamps(tmp_path):
+    """The stamps are built by matching filed rows by identifier.
+
+    A concurrent writer appends while the turn runs, so the next save merges
+    the file into the live list. A merge that hands back rows without their
+    filing keys leaves the turn nothing to match, and the ``turn_meta`` record
+    that restates the reply's provenance and the hook observers is never filed.
+    """
+    from raven.agent.tools.message import MessageTool
+
+    writer = _AnotherWriter(tmp_path, "cli:c", at_iteration=2)
+    loop = _loop(
+        tmp_path,
+        _ScriptedProvider([_tool_call("message", {"content": "hello"}), _text("")]),
+        [writer, _Observer()],
+    )
+    message = loop.tools.get("message")
+    assert isinstance(message, MessageTool)
+    message.set_context("cli", "c")
+
+    async def _send(_content: str, _media: list[str]) -> None:
+        return None
+
+    message.set_send_callback(_send)
+
+    await loop._process_message(_req())
+
+    assert writer.wrote, "the second writer never appended, so no merge was exercised"
+    path = loop.sessions.session_path("cli:c")
+    lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    patches = [patch for line in lines if line.get("_type") == "turn_meta" for patch in line.get("patches") or []]
+    assert patches, "the late stamps never reached the transcript"
+    keys = [set(patch.get("keys") or {}) for patch in patches]
+    assert any("replied_via_tool" in key for key in keys), f"the reply's provenance was not restated: {patches}"
+    assert any("observers" in key for key in keys), f"the hook observers were not restated: {patches}"
+    filed_ids = {str(row.get("_row_id")) for row in lines if row.get("role")}
+    assert all(str(patch.get("row_id")) in filed_ids for patch in patches), "a stamp addresses no filed row"
+    from raven.session.manager import read_session_file
+
+    loaded = read_session_file(path, "cli:c")
+    assert loaded is not None
+    assert any(m.get("replied_via_tool") and m.get("observers") for m in loaded.messages)
 
 
 def test_a_turn_meta_only_restates_known_stamp_keys(tmp_path):

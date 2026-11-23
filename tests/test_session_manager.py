@@ -11,7 +11,14 @@ from pathlib import Path
 import pytest
 
 import raven.session.manager as manager_mod
-from raven.session.manager import Session, SessionManager, new_chat_id, read_session_file
+from raven.session.manager import (
+    Session,
+    SessionManager,
+    append_turn_meta,
+    new_chat_id,
+    read_session_file,
+)
+from raven.session.refs import belongs_to, session_ref
 from raven.session.title import TITLE_STORAGE_MAX
 
 
@@ -638,6 +645,255 @@ def test_a_clear_replaces_the_file_whole(tmp_path: Path):
     loaded = read_session_file(first.session_path(key), key)
     assert loaded is not None
     assert loaded.messages == []
+
+
+def _seed_with_ids(mgr: SessionManager, key: str, *rows: tuple[str, str, str]) -> Session:
+    session = mgr.get_or_create(key)
+    for role, content, row_id in rows:
+        session.record({"role": role, "content": content, "_row_id": row_id})
+    mgr.save(session)
+    return session
+
+
+def _merge_a_concurrent_append(tmp_path: Path, key: str) -> tuple[SessionManager, Session]:
+    """Two rows with filing keys, then another writer's row, then a merge.
+
+    The rows carry ``_row_id`` because that is how the turn writer files them;
+    a merge that drops the keys loses what a later late stamp addresses.
+    """
+    first = SessionManager(tmp_path)
+    session = _seed_with_ids(first, key, ("user", "q", "r1"), ("assistant", "a", "r2"))
+
+    second = SessionManager(tmp_path)
+    other = second.get_or_create(key)
+    other.record({"role": "user", "content": "from elsewhere", "_row_id": "b1"})
+    second.save(other)
+
+    session.record({"role": "assistant", "content": "tail", "_row_id": "r3"})
+    first.save(session)
+    return first, session
+
+
+def test_a_merge_keeps_a_call_open_until_its_real_result_lands(tmp_path: Path):
+    """A call filed before its result must not be repaired into a second result.
+
+    The other writer appends between the call's write and the result's, so the
+    file the merge reads ends on the unanswered call. Repairing that read
+    invents an ``[interrupted]`` result and the real one then lands beside it:
+    two results for one call id, which a provider rejects.
+    """
+    key = "cli:20260610_100000_pending"
+    first = SessionManager(tmp_path)
+    running = first.get_or_create(key)
+    running.record({"role": "user", "content": "run it"})
+    running.record(
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "exec", "arguments": "{}"}}],
+        }
+    )
+    first.save(running)
+
+    second = SessionManager(tmp_path)
+    other = second.get_or_create(key)
+    other.add_message("user", "while you are there")
+    second.save(other)
+
+    running.record({"role": "tool", "tool_call_id": "c1", "name": "exec", "content": "done"})
+    first.save(running)
+
+    results = [m for m in running.messages if m.get("tool_call_id") == "c1"]
+    assert [m["content"] for m in results] == ["done"], f"the call has more than one result: {running.messages}"
+    assert not any(m.get(manager_mod.SYNTHETIC_INTERRUPTED_KEY) for m in running.messages)
+    loaded = read_session_file(first.session_path(key), key)
+    assert [m.get("tool_call_id") for m in loaded.messages].count("c1") == 1
+
+
+def test_a_rewrite_keeps_a_row_appended_while_this_copy_was_loaded(tmp_path: Path):
+    """Append-only: the other writer's row survives a cut this copy makes."""
+    key = "cli:20260610_100000_appendrace"
+    first = SessionManager(tmp_path)
+    session = _seed_with_ids(
+        first, key, ("user", "q1", "r1"), ("assistant", "a1", "r2"), ("user", "q2", "r3"), ("assistant", "a2", "r4")
+    )
+
+    second = SessionManager(tmp_path)
+    held = second.get_or_create(key)
+    held.add_message("user", "from elsewhere")
+    second.save(held)
+
+    assert session.undo_last_turn() == 2
+    first.save(session)
+
+    assert [m["content"] for m in session.messages] == ["q1", "a1", "from elsewhere"]
+    loaded = read_session_file(first.session_path(key), key)
+    assert [m["content"] for m in loaded.messages] == ["q1", "a1", "from elsewhere"]
+
+
+def test_a_rewrite_keeps_a_same_length_undo_and_append_by_the_other_writer(tmp_path: Path):
+    """The other writer undoes a turn and appends one of the same length.
+
+    A rewrite keyed on the file's length sees no growth, drops the new rows,
+    and writes back the rows the other writer cut because they are still in
+    this copy's list.
+    """
+    key = "cli:20260610_100000_equalrace"
+    first = SessionManager(tmp_path)
+    session = _seed_with_ids(
+        first,
+        key,
+        ("user", "q1", "r1"),
+        ("assistant", "a1", "r2"),
+        ("user", "q2", "r3"),
+        ("assistant", "a2", "r4"),
+        ("user", "q3", "r5"),
+        ("assistant", "a3", "r6"),
+    )
+
+    second = SessionManager(tmp_path)
+    held = second.get_or_create(key)
+    assert held.undo_last_turn() == 2
+    held.record({"role": "user", "content": "x", "_row_id": "b1"})
+    held.record({"role": "assistant", "content": "y", "_row_id": "b2"})
+    second.save(held)
+
+    # The image window rewrote a filed row; the next save rewrites the file.
+    session._refile_rows = True
+    first.save(session)
+
+    expected = ["q1", "a1", "q2", "a2", "x", "y"]
+    assert [m["content"] for m in session.messages] == expected
+    loaded = read_session_file(first.session_path(key), key)
+    assert [m["content"] for m in loaded.messages] == expected
+
+
+def test_a_rewrite_keeps_a_shorter_undo_and_append_by_the_other_writer(tmp_path: Path):
+    """The other writer's undo makes the file shorter than this copy last saw."""
+    key = "cli:20260610_100000_shortrace"
+    first = SessionManager(tmp_path)
+    session = _seed_with_ids(
+        first,
+        key,
+        ("user", "q1", "r1"),
+        ("assistant", "a1", "r2"),
+        ("user", "q2", "r3"),
+        ("assistant", "a2", "r4"),
+        ("user", "q3", "r5"),
+        ("assistant", "a3", "r6"),
+    )
+
+    second = SessionManager(tmp_path)
+    held = second.get_or_create(key)
+    assert held.undo_last_turn() == 2
+    held.record({"role": "user", "content": "x", "_row_id": "b1"})
+    second.save(held)
+
+    session._refile_rows = True
+    first.save(session)
+
+    expected = ["q1", "a1", "q2", "a2", "x"]
+    assert [m["content"] for m in session.messages] == expected
+    loaded = read_session_file(first.session_path(key), key)
+    assert [m["content"] for m in loaded.messages] == expected
+
+
+def test_drop_filed_rows_does_not_duplicate_a_concurrent_writer_rows(tmp_path: Path):
+    """The cut adopts the file, whose rows already end where this copy's list does.
+
+    Without the append boundary moved to what the file held before the cut,
+    the other writer's rows land in this copy's unsaved tail and are picked up
+    again as unseen rows, so the rewrite writes them twice.
+    """
+    key = "cli:20260610_100000_droprace"
+    mgr = SessionManager(tmp_path)
+    session = _seed_with_ids(mgr, key, ("user", "q", "r1"), ("assistant", "a", "r2"))
+
+    other = SessionManager(tmp_path)
+    held = other.get_or_create(key)
+    held.record({"role": "user", "content": "from elsewhere", "_row_id": "b1"})
+    held.record({"role": "assistant", "content": "and here", "_row_id": "b2"})
+    other.save(held)
+
+    assert mgr.drop_filed_rows(session, {"r1"}) is True
+    loaded = read_session_file(mgr.session_path(key), key)
+    assert [m["content"] for m in loaded.messages] == ["a", "from elsewhere", "and here"]
+
+
+def test_drop_filed_rows_adopts_the_file_when_the_scan_never_reached_it(tmp_path: Path):
+    """Rows the attempt filed only in memory are stale, not evidence of a drop.
+
+    The file holds none of the cut ids, but this copy does: returning early
+    leaves the stale rows in memory for the rerun to file over the transcript.
+    """
+    key = "cli:20260610_100000_dropstale"
+    mgr = SessionManager(tmp_path)
+    session = _seed_with_ids(mgr, key, ("user", "q", "r1"), ("assistant", "a", "r2"))
+    session.record({"role": "user", "content": "only in memory", "_row_id": "gone"})
+
+    assert mgr.drop_filed_rows(session, {"gone"}) is True
+
+    assert [m["content"] for m in session.messages] == ["q", "a"]
+    loaded = read_session_file(mgr.session_path(key), key)
+    assert [m["content"] for m in loaded.messages] == ["q", "a"]
+
+
+def test_a_merge_keeps_the_ids_a_late_stamp_addresses(tmp_path: Path):
+    """A row's filing key survives the merge, so the turn can still stamp it.
+
+    The late stamps are built by matching the turn's rows to the stored ones by
+    identifier. A merge that hands back the file's rows without their keys
+    leaves nothing to match, and the stamp is silently dropped.
+    """
+    key = "cli:20260610_100000_stampmerge"
+    first, session = _merge_a_concurrent_append(tmp_path, key)
+
+    stored = {str(row.get("_row_id")): row for row in session.messages if row.get("_row_id")}
+    assert "r2" in stored, f"the merge dropped the filing keys: {session.messages}"
+    stored["r2"].update({"replied_via_tool": True, "observers": ["probe"]})
+    append_turn_meta(
+        first.session_path(key),
+        [{"row_id": "r2", "keys": {"replied_via_tool": True, "observers": ["probe"]}}],
+    )
+
+    loaded = read_session_file(first.session_path(key), key)
+    answer = next(m for m in loaded.messages if m.get("content") == "a")
+    assert answer["replied_via_tool"] is True
+    assert answer["observers"] == ["probe"]
+
+
+def test_a_merge_does_not_move_the_log_generation(tmp_path: Path):
+    """A concurrent append changes no ordinal, so a ref's scope must survive it."""
+    key = "cli:20260610_100000_genmerge"
+    _, session = _merge_a_concurrent_append(tmp_path, key)
+
+    assert session.log_generation == 0, "an append another copy made retired this log's refs"
+
+
+@pytest.mark.asyncio
+async def test_a_ref_minted_before_a_merge_still_resolves(tmp_path: Path):
+    """A ref handed out before the merge still names the same message after it."""
+    from raven.agent.tools.context_retrieve import ContextRetrieveTool
+
+    key = "cli:20260610_100000_refmerge"
+    first = SessionManager(tmp_path)
+    session = _seed_with_ids(first, key, ("user", "q", "r1"), ("assistant", "a", "r2"))
+
+    ref = session_ref(session.revision, 1)
+
+    second = SessionManager(tmp_path)
+    other = second.get_or_create(key)
+    other.record({"role": "user", "content": "from elsewhere", "_row_id": "b1"})
+    second.save(other)
+    session.record({"role": "assistant", "content": "tail", "_row_id": "r3"})
+    first.save(session)
+
+    assert belongs_to(ref, session.revision)
+    tool = ContextRetrieveTool(first)
+    tool.set_context("cli", key.partition(":")[2], key)
+    out = await tool.execute(refs=[ref.render()])
+    assert "role=assistant" in out
+    assert "a" in out
 
 
 def test_find_most_recent_reflects_latest_append(tmp_path: Path):

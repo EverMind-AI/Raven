@@ -6,7 +6,7 @@ import json
 import os
 import uuid
 import weakref
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -278,6 +278,9 @@ class Session:
     # the writer can tell a rewrite from the transforms it makes itself. Pruned
     # to the rows the copy still holds.
     _filed_contents: dict[str, str] = field(default_factory=dict, repr=False)
+    # Rows this copy cut since its last save (an undo, or a rerun's drop). A
+    # rewrite must not adopt them back from the file as another writer's rows.
+    _cut_rows: list[dict[str, Any]] = field(default_factory=list, repr=False)
     # What the transcript looked like the last time this copy read or wrote it,
     # as (size, mtime_ns). save() compares it to decide whether anybody else
     # has written since, and only then re-reads the record to merge under.
@@ -388,6 +391,7 @@ class Session:
     def clear(self) -> None:
         """Clear all messages and reset session to initial state."""
         self.messages = []
+        self._cut_rows.clear()
         self.last_consolidated = 0
         # The episodic cursor indexes into ``messages``; left at its old value
         # it would swallow every turn written after the clear until the count
@@ -436,7 +440,11 @@ class Session:
             return 0
         cut_index = user_starts[-n] if n <= len(user_starts) else user_starts[0]
         removed = len(self.messages) - cut_index
+        self._cut_rows.extend(self.messages[cut_index:])
         self.messages = self.messages[:cut_index]
+        # The append boundary cannot stay past rows this copy no longer holds:
+        # a later message would land behind it and look persisted already.
+        self._persisted_count = min(self._persisted_count, cut_index)
         cursor = self.metadata.get("annotated_through")
         if isinstance(cursor, int) and cursor > cut_index:
             self.metadata["annotated_through"] = cut_index
@@ -560,6 +568,85 @@ def _filed_rows(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [message for message in messages if not message.get(SYNTHETIC_INTERRUPTED_KEY)]
 
 
+def _row_identity(row: dict[str, Any]) -> str:
+    """What a message says, without the filing key or the stamps put on it later.
+
+    The fallback identity for a row written before filing keys existed. A late
+    stamp or a timestamp can differ between this copy and the file without
+    making the two different messages, so neither is part of it.
+    """
+    return json.dumps(
+        [row.get("role"), row.get("content"), row.get("tool_calls"), row.get("tool_call_id")],
+        ensure_ascii=False,
+        default=str,
+    )
+
+
+def _carry_file_rows(
+    messages: list[dict[str, Any]],
+    file_rows: list[dict[str, Any]],
+    cut_rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The rows of this copy the file still holds, and the file's rows it never saw.
+
+    A rewrite writes this copy's list over the file, so it has to decide what
+    of the file is somebody else's work. Position cannot answer that: another
+    writer can undo a turn and append another of the same length, leaving the
+    count untouched while every row past the cut changed. Identity can: a row
+    the file still holds under this copy's identifier is the same row, a row
+    it holds under an identifier this copy never saw is new, and a row of this
+    copy the file no longer holds was cut by another writer and must not be
+    written back.
+
+    Rows without an identifier -- written before filing keys existed -- match
+    by what they say, with multiplicity so two identical messages stay two.
+    A row this copy cut is never adopted back as somebody else's new row.
+    """
+    by_id = {str(row["_row_id"]): index for index, row in enumerate(file_rows) if row.get("_row_id")}
+    by_content: dict[str, list[int]] = {}
+    for index, row in enumerate(file_rows):
+        by_content.setdefault(_row_identity(row), []).append(index)
+    taken: dict[str, int] = {}
+    claimed = [False] * len(file_rows)
+    kept: list[dict[str, Any]] = []
+    for row in messages:
+        row_id = row.get("_row_id")
+        index = by_id.get(str(row_id)) if row_id else None
+        if index is not None and claimed[index]:
+            index = None
+        if index is None:
+            identity = _row_identity(row)
+            candidates = by_content.get(identity, ())
+            at = taken.get(identity, 0)
+            while at < len(candidates) and claimed[candidates[at]]:
+                at += 1
+            if at < len(candidates):
+                index = candidates[at]
+                taken[identity] = at + 1
+        if index is None:
+            continue
+        claimed[index] = True
+        kept.append(row)
+
+    cut_ids = {str(row["_row_id"]) for row in cut_rows if row.get("_row_id")}
+    cut_content = Counter(_row_identity(row) for row in cut_rows if not row.get("_row_id"))
+    unseen: list[dict[str, Any]] = []
+    for index, row in enumerate(file_rows):
+        if claimed[index]:
+            continue
+        row_id = row.get("_row_id")
+        if row_id:
+            if str(row_id) in cut_ids:
+                continue
+        else:
+            identity = _row_identity(row)
+            if cut_content[identity] > 0:
+                cut_content[identity] -= 1
+                continue
+        unseen.append(row)
+    return kept, unseen
+
+
 def _legacy_log_id(key: str, created_at: Any, message_count: int) -> str:
     """The log id of a file that stores none.
 
@@ -643,7 +730,7 @@ def repair_dangling_tool_calls(messages: list[dict], *, mark_synthetic: bool = F
     return out
 
 
-def read_session_file(path: Path, key: str, *, keep_row_id: bool = False) -> Session | None:
+def read_session_file(path: Path, key: str, *, keep_row_id: bool = False, repair: bool = True) -> Session | None:
     """The session stored in the transcript at ``path``, read as ``key``.
 
     None when the file is absent or cannot be read. Public because a transcript
@@ -655,6 +742,13 @@ def read_session_file(path: Path, key: str, *, keep_row_id: bool = False) -> Ses
     A reader that has to address a row *on disk* -- a cut that must not touch a
     concurrent writer's rows -- asks for it; the rows handed to a model or a
     front end never carry it.
+
+    ``repair`` inserts the synthetic ``[interrupted]`` result for a call the
+    file ends without answering. A caller about to merge these rows into a live
+    list asks for False: the live copy may hold the real result the file was
+    read too early to see, and the repair inserted here would survive beside it
+    as a second result for the same call. The merged list is repaired once at
+    the end instead.
     """
     if not path.exists():
         return None
@@ -723,7 +817,8 @@ def read_session_file(path: Path, key: str, *, keep_row_id: bool = False) -> Ses
         if not keep_row_id:
             for row in messages:
                 row.pop("_row_id", None)
-        messages = repair_dangling_tool_calls(messages, mark_synthetic=True)
+        if repair:
+            messages = repair_dangling_tool_calls(messages, mark_synthetic=True)
         session = Session(
             key=key,
             messages=messages,
@@ -1321,6 +1416,7 @@ class SessionManager:
             _merge_revision(session, disk)
             merged: list[dict[str, Any]] | None = None
             unseen: list[dict[str, Any]] = []
+            messages: list[dict[str, Any]] = []
             if rewrite:
                 # The file is about to hold exactly this copy's list, so neither
                 # the scope it last saw nor the one on disk may name it.
@@ -1329,11 +1425,17 @@ class SessionManager:
                 # lose; it says nothing about rows another writer appended
                 # after that read. A clear is the exception: it mints a new
                 # log, so the file it replaces belongs to the old one and goes
-                # whole.
+                # whole. The file is read unrepaired: this copy may hold the
+                # result a call on the file has not answered yet, and the
+                # merged list is repaired once below.
+                count = session._persisted_count
+                head = _filed_rows(session.messages[:count])
+                tail = _filed_rows(session.messages[count:])
                 if written is not None and (disk_scope is None or disk_scope[0] == session.log_id):
-                    on_disk = read_session_file(path, session.key, keep_row_id=True)
-                    if on_disk is not None and len(on_disk.messages) > session._persisted_count:
-                        unseen = on_disk.messages[session._persisted_count :]
+                    on_disk = read_session_file(path, session.key, keep_row_id=True, repair=False)
+                    if on_disk is not None:
+                        head, unseen = _carry_file_rows(head, on_disk.messages, session._cut_rows)
+                messages = head + tail
             elif written is not None and (
                 written[1] != session._persisted_count or disk_scope != session._persisted_revision
             ):
@@ -1345,18 +1447,23 @@ class SessionManager:
                 # otherwise. Where the persisted part agrees, this copy's own
                 # entries are kept by identity, which is what lets a turn find
                 # its own messages again after the merge.
-                on_disk = read_session_file(path, session.key)
+                on_disk = read_session_file(path, session.key, keep_row_id=True, repair=False)
                 count = session._persisted_count
-                kept = on_disk is not None and len(on_disk.messages) >= count
-                kept = kept and _normalized(session.messages[:count]) == _normalized(on_disk.messages[:count])
+                # The repair rows a load derived are in this copy's list but
+                # never on disk, so the file's prefix ends that many rows sooner.
+                on_disk_count = count - sum(1 for row in session.messages[:count] if row.get(SYNTHETIC_INTERRUPTED_KEY))
+                kept = on_disk is not None and len(on_disk.messages) >= on_disk_count
+                kept = kept and _normalized(_filed_rows(session.messages[:count])) == _normalized(
+                    on_disk.messages[:on_disk_count]
+                )
                 if on_disk is not None:
-                    head = session.messages[:count] if kept else on_disk.messages[:count]
-                    merged = head + on_disk.messages[count:] + session.messages[count:]
+                    head = session.messages[:count] if kept else on_disk.messages[:on_disk_count]
+                    merged = head + on_disk.messages[on_disk_count:] + session.messages[count:]
                 if not kept and (session.log_id, session.log_generation) == before:
                     _move_past(session, before, disk_scope)
                 # Indices into this copy's unsaved tail move when the other
                 # writer's messages land ahead of it.
-                moved = on_disk is not None and len(on_disk.messages) > count and len(session.messages) > count
+                moved = on_disk is not None and len(on_disk.messages) > on_disk_count and len(session.messages) > count
                 if merged is None or not kept or moved:
                     session.truncations += 1
             metadata_line = json.dumps(
@@ -1377,24 +1484,21 @@ class SessionManager:
             )
 
             if rewrite:
-                rows = _filed_rows(session.messages)
-                if unseen:
-                    rows += _filed_rows(unseen)
                 lines = [metadata_line]
-                lines += [json.dumps(m, ensure_ascii=False) for m in rows]
+                lines += [json.dumps(m, ensure_ascii=False) for m in messages + unseen]
                 atomic_replace(path, "".join(line + "\n" for line in lines))
-                if unseen:
-                    # The file now holds them after this copy's list, so this
-                    # copy's list holds them too; otherwise the next append
-                    # would be written past a prefix it never read.
-                    session.messages = session.messages + unseen
+                # The file now holds these rows, so this copy's list holds them
+                # too; otherwise the next append would be written past a prefix
+                # it never read. The repair is applied once, after a call still
+                # open on the file can meet its result in this copy's tail.
+                session.messages = repair_dangling_tool_calls(messages + unseen, mark_synthetic=True)
             else:
                 new_messages = _filed_rows(session.messages[session._persisted_count :])
                 lines = [metadata_line]
                 lines += [json.dumps(m, ensure_ascii=False) for m in new_messages]
                 locked_append(path, lines)
             if merged is not None:
-                session.messages = merged
+                session.messages = repair_dangling_tool_calls(merged, mark_synthetic=True)
             session._file_stamp = _stamp(path)
             session._persisted_metadata = dict(session.metadata)
             session._persisted_revision = (session.log_id, session.log_generation)
@@ -1405,6 +1509,7 @@ class SessionManager:
         # previous listing is the unsafe direction.
         self._scan_cache.pop(path, None)
         session._refile_rows = False
+        session._cut_rows.clear()
         session._persisted_count = len(session.messages)
         session._persisted_truncations = session.truncations
         session._clean_fingerprint = _fingerprint(session)
@@ -1431,9 +1536,10 @@ class SessionManager:
         original = session.messages
         original_truncations = session.truncations
         original_count = session._persisted_count
+        original_cuts = list(session._cut_rows)
         try:
             with write_transaction(path):
-                on_disk = read_session_file(path, session.key, keep_row_id=True)
+                on_disk = read_session_file(path, session.key, keep_row_id=True, repair=False)
                 kept: list[dict[str, Any]]
                 if on_disk is not None:
                     kept = [row for row in on_disk.messages if str(row.get("_row_id") or "") not in row_ids]
@@ -1451,9 +1557,13 @@ class SessionManager:
                         return True
                 session.messages = kept
                 session.truncations += 1
+                # The rows this cut removes are not another writer's new rows:
+                # the rewrite below must not adopt them back from the file.
+                cut = on_disk.messages if on_disk is not None else original
+                session._cut_rows.extend(row for row in cut if str(row.get("_row_id") or "") in row_ids)
                 # What the file holds right now, before this rewrite lands:
-                # the save's own unseen-row check must not mistake the rows
-                # this cut is removing for a concurrent writer's.
+                # the save splits its list at this boundary, and a row the
+                # other writer appended is already on the file side of it.
                 session._persisted_count = len(on_disk.messages) if on_disk is not None else len(original)
                 self.save(session)
             return True
@@ -1461,6 +1571,7 @@ class SessionManager:
             session.messages = original
             session.truncations = original_truncations
             session._persisted_count = original_count
+            session._cut_rows[:] = original_cuts
             logger.exception("could not drop the filed rows from {}; the caller must not append over them", session.key)
             return False
 
