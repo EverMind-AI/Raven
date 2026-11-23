@@ -925,7 +925,12 @@ def main() -> int:
     # No wall-clock cap by default: a real coding task has no predictable
     # length, and a killed run produces nothing at all. The per-LLM-call and
     # per-command limits stay: those bound a stall, not a long task.
-    parser.add_argument("--timeout", type=int, default=0, help="seconds; 0 (default) means no limit")
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=0,
+        help="seconds; 0 (default) means no time limit and no tool-iteration cap",
+    )
     parser.add_argument("--keep-going", action="store_true", help="do not fail when no answer was committed")
     parser.add_argument("--verbose", action="store_true", help="mirror diagnostics to stderr; never when spawned")
     args = parser.parse_args()

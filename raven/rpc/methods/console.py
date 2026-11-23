@@ -1256,6 +1256,7 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     # which is what an unset key means and what the settings page offers.
     "agents.defaults.reasoningEffort": _chk_enum_or_null("agents.defaults.reasoningEffort", *REASONING_EFFORTS),
     "permissions.mode": _chk_enum("permissions.mode", "ask", "smart", "full"),
+    # The page keeps 1-200; unbounded (null or 0) is a config-file setting.
     "agents.defaults.maxToolIterations": _chk_int("agents.defaults.maxToolIterations", 1, 200),
     "agents.defaults.contextWindowTokens": _chk_int_or_null("agents.defaults.contextWindowTokens", 1024, 100_000_000),
     # The three media tools share one config shape; speech's has no provider,

@@ -1693,7 +1693,7 @@ def test_a_task_deadline_reaches_the_code_flow_as_a_turn_clock(grounded, tmp_pat
         ).read_text()
     )
     slice_ = rendered["plugins"]["config"]["code-flow"]
-    assert slice_["wallClockSeconds"] == 900 - grounded.WRAPUP_MARGIN_SECONDS
+    assert slice_["wallClockSeconds"] == 780, "900 seconds minus a 120 second wrap-up margin"
 
     rendered = json.loads(
         grounded.render_config(
@@ -1714,6 +1714,25 @@ def test_a_task_deadline_reaches_the_code_flow_as_a_turn_clock(grounded, tmp_pat
         ).read_text()
     )
     assert short["plugins"]["config"]["code-flow"]["wallClockSeconds"] >= 10, "never a negative clock"
+
+
+def test_the_timeout_flag_defaults_to_no_deadline(grounded, monkeypatch):
+    """``--timeout`` absent is 0, not a hidden clock.
+
+    The shipped config asks for no iteration cap. A nonzero default would
+    silently put every CLI turn back on a wall clock the caller never named.
+    """
+    seen: dict[str, int] = {}
+
+    def _capture(args):
+        seen["timeout"] = args.timeout
+        return 0
+
+    monkeypatch.setattr(grounded, "run_task", _capture)
+    monkeypatch.setattr(sys, "argv", ["run.py", "--task", "do the thing"])
+
+    assert grounded.main() == 0
+    assert seen["timeout"] == 0
 
 
 def test_the_rendered_acp_config_asks_for_no_cap_and_declares_no_clock(grounded):
@@ -1758,4 +1777,4 @@ def test_run_task_renders_its_timeout_into_the_turn_clock(grounded, tmp_path, mo
 
     grounded.run_task(args)
 
-    assert seen["config"]["plugins"]["config"]["code-flow"]["wallClockSeconds"] == 900 - grounded.WRAPUP_MARGIN_SECONDS
+    assert seen["config"]["plugins"]["config"]["code-flow"]["wallClockSeconds"] == 780

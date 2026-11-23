@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 
 from raven.agent.hook import AgentHook, HookDecision
-from raven.agent.loop import AgentLoop
+from raven.agent.loop import TURN_BUDGETS_KEY, AgentLoop, turn_path
 from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
 from raven.agent.loop.turn_path import _stamp_turn_observers
 from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
@@ -629,17 +629,105 @@ def test_the_loop_wires_this_sessions_tier_into_the_subagent_manager(tmp_path):
 async def test_an_unbounded_turn_keeps_working_past_the_built_in_cap(tmp_path):
     """No cap is a real setting, not a fallback to the loop's default.
 
-    A run with a task budget hands the turn a wall clock instead; the tool
-    iteration cap it used to stop at must not fire first.
+    The built-in cap is 40, so the turn has to run more than 40 tool rounds
+    before it answers. A run with a task budget hands the turn a wall clock
+    instead; the tool iteration cap it used to stop at must not fire first.
     """
-    script = [_tool_call("list_dir", {"path": "."}) for _ in range(8)] + [_text("answered")]
+    for index in range(45):
+        (tmp_path / f"d{index}").mkdir()
+    script = [_tool_call("list_dir", {"path": f"d{index}"}) for index in range(45)] + [_text("answered")]
     provider = _ScriptedProvider(script)
     loop = _loop(tmp_path, provider, None, max_iterations=None)
 
     out = await loop._process_message(_req())
 
     assert out is not None and "answered" in str(out)
-    assert len(provider.calls) == len(script), "the loop stopped on the answer, not on an iteration cap"
+    assert len(provider.calls) == 46, "45 tool rounds plus the answer; the built-in 40-call cap did not fire"
+
+
+@pytest.mark.asyncio
+async def test_an_unbounded_turn_stopped_by_its_clock_wraps_up_instead_of_raising(tmp_path, monkeypatch):
+    """The unbounded path with a deadline must take the wall-clock exit.
+
+    ``iteration_cap`` is None here, so the exhaustion test cannot compare the
+    iteration count against it: doing so raises ``TypeError`` before the clock
+    branch can select the wrap-up. The loop's own clock seam is pinned rather
+    than waited on.
+    """
+    monkeypatch.setattr(turn_path, "monotonic", lambda: 10_000.0)
+    provider = _ScriptedProvider([_text("")])
+    loop = _loop(tmp_path, provider, None, max_iterations=None)
+    meta: dict = {TURN_BUDGETS_KEY: {"wall_clock_seconds": 0.001}}
+
+    final, _used, _msgs, outcome = await loop._run_agent_loop(
+        [{"role": "user", "content": "hi"}], hook_metadata=meta, turn_started_at=0.0
+    )
+
+    assert outcome.status == "interrupted"
+    assert final and "time limit" in final, "the wall-clock static fallback is the answer"
+    assert "iterations" not in final, "the iteration-cap text would be the wrong reason"
+
+
+@pytest.mark.asyncio
+async def test_a_zero_session_cap_means_unbounded_rather_than_inheriting(tmp_path):
+    """A mode's explicit ``0`` is the new spelling for no cap.
+
+    Before this change ``0`` was falsy and inherited the global cap. It now
+    means what null means, which is the semantics the schema documents.
+    """
+    for index in range(5):
+        (tmp_path / f"d{index}").mkdir()
+    script = [_tool_call("list_dir", {"path": f"d{index}"}) for index in range(5)] + [_text("answered")]
+    provider = _ScriptedProvider(script)
+    loop = _loop(tmp_path, provider, None, max_iterations=2)
+    loop.set_session_policy("cli:c", max_iterations=0)
+
+    out = await loop._process_message(_req(), session_key="cli:c")
+
+    assert out is not None and "answered" in str(out)
+    assert len(provider.calls) == 6, "five tool rounds plus the answer; a zero pin did not inherit the cap of 2"
+
+
+@pytest.mark.asyncio
+async def test_a_negative_session_cap_falls_back_instead_of_lifting_the_cap(tmp_path):
+    """A negative pin is a bad value, not a request for no cap.
+
+    The config gate refuses negatives, so a direct session policy is the only
+    way one arrives; the loop must clamp it to its own cap rather than read it
+    as unbounded.
+    """
+    for index in range(6):
+        (tmp_path / f"d{index}").mkdir()
+    script = [_tool_call("list_dir", {"path": f"d{index}"}) for index in range(6)] + [_text("answered")]
+    provider = _ScriptedProvider(script)
+    loop = _loop(tmp_path, provider, None, max_iterations=3)
+    loop.set_session_policy("cli:c", max_iterations=-1)
+
+    out = await loop._process_message(_req(), session_key="cli:c")
+
+    assert out is not None and "iterations (3)" in str(out), "the loop's own cap names the stop"
+    assert "answered" not in str(out)
+    assert len(provider.calls) == 4, "three loop calls plus the wrap-up; the negative pin lifted every bound"
+
+
+@pytest.mark.asyncio
+async def test_a_pinned_cap_names_itself_in_the_exhaustion_fallback(tmp_path):
+    """The wrap-up text names the cap the turn actually hit.
+
+    The loop-wide config is unbounded here and the mode pins 2, so reading the
+    loop default would print "unbounded" for a turn stopped at two iterations.
+    """
+    for index in range(2):
+        (tmp_path / f"d{index}").mkdir()
+    script = [_tool_call("list_dir", {"path": f"d{index}"}) for index in range(2)] + [_text("")]
+    provider = _ScriptedProvider(script)
+    loop = _loop(tmp_path, provider, None, max_iterations=None)
+    loop.set_session_policy("cli:c", max_iterations=2)
+
+    out = await loop._process_message(_req(), session_key="cli:c")
+
+    assert out is not None and "iterations (2)" in str(out)
+    assert "unbounded" not in str(out), "the turn had a cap, and the text has to name it"
 
 
 @pytest.fixture(autouse=True)
