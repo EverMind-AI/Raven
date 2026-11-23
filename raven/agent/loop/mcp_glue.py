@@ -170,11 +170,13 @@ class McpGlueMixin:
         offer only tools, and advertising ``read_mcp_resource`` to them spends
         context on calls that can only fail.
 
-        Gating moves the tool array when a server connects or disconnects, which
-        costs the prompt-cache prefix. That is not a new cost: the server's own
-        tools appear and disappear at exactly those moments, so the array was
-        already moving. What it buys is that the array does not carry these five
-        the rest of the time.
+        Gating no longer moves a session's tool array: the array is frozen per
+        session, so these five enter or leave it only at a refresh point, like
+        any other registration. Registering and unregistering here still keeps
+        the live view correct -- the next capture sees the current answer -- and
+        a captured array keeps their names (calls to them fail) until that
+        refresh. What it buys is that a fresh array does not carry these five
+        when no server serves them.
 
         Called after every connect and after every config apply, because both can
         change the answer -- and idempotent, so calling it when nothing moved

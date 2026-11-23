@@ -274,6 +274,7 @@ class TestTheFrozenArrayAtRefresh:
         array keeps its names until a refresh point -- the same contract as a
         server's own tools. After the refresh they must not come back."""
         loop = _loop(workspace)
+        loop.tools.bind_session_revision("s1", "log-a")
         with patch(_PATCH, new=_connect(_Caps(resources=object()))):
             await loop.apply_mcp_config({"svc": _cfg()})
             with loop.tools.session_scope_for("s1"):
@@ -284,7 +285,7 @@ class TestTheFrozenArrayAtRefresh:
                 still = {d["function"]["name"] for d in loop.tools.get_definitions()}
                 assert RESOURCE_TOOL_NAMES <= still, "the session keeps its array until a refresh"
 
-                loop.tools.invalidate_session_definitions("s1")
+                loop.tools.bind_session_revision("s1", "log-b")
                 refreshed = {d["function"]["name"] for d in loop.tools.get_definitions()}
 
         assert not (RESOURCE_TOOL_NAMES & refreshed)

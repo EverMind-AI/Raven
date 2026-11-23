@@ -118,9 +118,11 @@ different things: a new way to produce, or a new rule for adjudicating what the 
 Frozen per Session: the tool array is the prompt-cache prefix, so the set a session
 assembles with does not move between its model calls or between its turns. It is
 captured on the session's first assembly and recaptured only at a refresh point -- a
-new session, a compaction (cashed by the next assembly), a `/clear`, or a release. A
-live switch, a missing credential, or a selected base changes availability, not the
-array, and is reported in the runtime context; a tool the turn's own `plugin` call
+new session, a compaction (cashed by the next assembly), a `/clear`, or a release.
+Availability is judged at each refresh point: a tool the operator's switches have off,
+or whose credential or selected base is missing, does not enter the array then. A switch
+flipped after capture changes availability, not the array, and is reported in the
+runtime context; the next refresh re-judges it. A tool the turn's own `plugin` call
 connects is admitted to `offers` (reachable through `tool_call`) and joins the array at
 the next refresh.
 
@@ -726,9 +728,10 @@ says, because it carries no capability bias and a line about it would prohibit t
 reading it from doing its own work. And the section is withheld entirely on a turn holding
 no dispatch tool — a hard-subset deploy or a charter narrowing can leave the array without
 `spawn` and `run_subagent_dag`, and a prohibition outliving every means of handing the work
-over leaves a request with no compliant action at all. A live `tools.disabledTools` switch
-keeps the schema and reports the tool unavailable in the runtime context instead. Only the
-paths the turn does hold are named.
+over leaves a request with no compliant action at all. A `tools.disabledTools` switch
+flipped after capture keeps the schema and reports the tool unavailable in the runtime
+context instead; a tool off at the capture point never enters the array, and the next
+refresh re-judges it. Only the paths the turn does hold are named.
 _Avoid_: putting it in `description` — that copy is spliced into the tool descriptions, where
 the model reads it only once it is already choosing an agent.
 
@@ -932,10 +935,12 @@ Which interchangeable backend each web tool calls: `tools.web.search.provider` s
 `tavily`, `exa`, `firecrawl`, `keenable` or `deepseek`. Every endpoint is a literal in the tool,
 so a selection names a vendor and never a URL. `web_search` is registered whatever the config
 holds and *withheld* from the offered set while the selected vendor's key does not resolve
-(Keenable searches without one and is offered keyless, as Jina reads pages keyless), so a key
-pasted mid-run makes it callable again without a restart -- the schema was already in the
-session's frozen array, and the runtime context clears the notice -- read live from the vendor
-slot and, for Serper, from the pre-vendor leaf, in the order `WebToolsConfig.vendor_key`
+(Keenable searches without one and is offered keyless, as Jina reads pages keyless). Whether
+its schema is in the session's frozen array is decided at the capture point: a key that
+resolved then put it there, and a key pasted after that capture makes it callable again
+without a restart -- the runtime context clears the notice -- but only joins the array at the
+next refresh. The key is read live from the vendor slot and, for Serper, from the pre-vendor
+leaf, in the order `WebToolsConfig.vendor_key`
 resolves them, and an empty
 slot is a revocation rather than a miss (except for a borrowing vendor, whose empty slot is the
 ordinary state and whose LLM provider key answers instead); `web_fetch` is always offered,

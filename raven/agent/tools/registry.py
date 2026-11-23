@@ -395,14 +395,17 @@ class ToolRegistry:
         # a preference read once at startup is one the operator cannot change.
         # See ``set_withheld_source``.
         # ``_withheld``, ``_schema_hidden`` and the turn freeze below are
-        # distinct axes: the first is an operator off switch (a withheld tool is
-        # unreachable everywhere), the second a design property (a hidden tool
-        # stays callable -- ``tool_call`` resolves by registry, never by schema
-        # -- it is just not advertised), and the freeze is per turn (a mid-turn
-        # arrival is unreachable through every surface until the next turn,
-        # unless the turn's own call admits it -- ``admit_to_this_turn`` --
-        # and ``offers`` consults it for schema and tool-search, and ``execute``
-        # consults it for dispatch, so the three cannot disagree).
+        # distinct axes. The first is an operator off switch: a withheld tool
+        # is unreachable everywhere, refused on dispatch at once when flipped
+        # after capture, while the frozen array it was captured into drops it
+        # only at the next refresh. The second is a design property (a hidden
+        # tool stays callable -- ``tool_call`` resolves by registry, never by
+        # schema -- it is just not advertised). The freeze is per turn (a
+        # mid-turn arrival is unreachable through every surface until the next
+        # turn, unless the turn's own call admits it -- ``admit_to_this_turn``
+        # -- and ``offers`` consults it for schema and tool-search, and
+        # ``execute`` consults it for dispatch, so the three cannot disagree);
+        # the session array adds a further wait, joining only at a refresh.
         self._withheld: Callable[[], frozenset[str]] | None = None
         self._schema_hidden: set[str] = set()
         # A name the constructor's own list takes off for the life of the
@@ -466,9 +469,11 @@ class ToolRegistry:
         """Install the answer to "which tools has the operator switched off".
 
         A callable rather than a set, because the point is that it can change
-        while the process runs. It is asked once per assembly (see
-        :meth:`get_definitions`), so it is free to be a cached read of a file
-        whose mtime it watches.
+        while the process runs. It is read whenever availability is judged: at
+        each capture (refresh point) for the array, and on every live offer or
+        refusal, so a switch flipped after capture takes effect on dispatch at
+        once and on the array only at the next refresh. It is therefore free to
+        be a cached read of a file whose mtime it watches.
 
         This replaces unregistering the tool. Unregistering expressed the
         preference by destroying the thing it was a preference about, so turning a
@@ -780,11 +785,13 @@ class ToolRegistry:
 
         A tool that registers while the turn runs -- an MCP handshake finishing
         in the background is the ordinary case since ``prewarm_mcp`` -- joins the
-        next turn instead of appearing in this one's tool array between two model
-        calls. The array is the first segment of the prompt-cache prefix, so a
-        mid-turn arrival rebuilds the whole cached prompt; the arrival loses
-        nothing by waiting, because ``_mcp_tool_notices`` already tells the model
-        the server is still connecting.
+        next refresh instead of appearing in this one's tool array between two
+        model calls. The array is the first segment of the prompt-cache prefix, so
+        a mid-turn arrival rebuilds the whole cached prompt; capture re-checks
+        this freeze, so even a refresh inside the turn leaves it out until a
+        later turn. The arrival loses nothing by waiting, because
+        ``_mcp_tool_notices`` already tells the model the server is still
+        connecting.
 
         The freeze is against ADDITIONS to the array, whatever their mechanism:
         a registration that lands mid-turn, and equally an off switch that turns
@@ -957,7 +964,9 @@ class ToolRegistry:
         The live view is assembled per LLM call, which is what makes an off
         switch take effect on the next turn rather than the next restart: the
         list is computed here, so the only thing a preference has to do is be
-        readable by the time this runs.
+        readable by the time this runs. Inside a session the array is frozen; a
+        switch flipped after capture is refused on dispatch at once, and the
+        array drops the tool only at the next refresh.
 
         Inside a session the snapshot is narrowed on read by the turn's
         charter. That is a per-dispatch restriction, not a session availability
@@ -1021,13 +1030,18 @@ class ToolRegistry:
         switch later in the session changes only whether calls run, reported by
         the runtime context -- because the array is the prompt-cache prefix.
 
-        Only the operator axis is consulted. The turn freeze and a dispatch's
-        charter are per-turn restrictions applied on read (see
-        :meth:`get_definitions` and :meth:`withheld_names`); freezing either
-        into the session would turn one turn's narrowing into the session's
-        availability. The constructor's hard subset and the schema-hidden
-        declarations are also kept out: neither can move while the process
-        runs, so keeping them out costs no cache.
+        The operator axis and this turn's own visibility are consulted here. A
+        tool the operator has off, or whose credential or selected base is
+        missing, does not enter. So does a name this turn cannot see: the
+        current channel's restriction and the turn freeze (see
+        :meth:`offers_on_this_channel` and :meth:`_visible_to_this_turn`) are
+        checked here too, so a registration that lands mid-turn stays out even
+        when a refresh re-captures inside that turn. A dispatch's charter is
+        still not frozen into the session: it is applied on read (see
+        :meth:`get_definitions`), because freezing it would turn one turn's
+        narrowing into the session's availability. The constructor's hard subset
+        and the schema-hidden declarations are also kept out: neither can move
+        while the process runs, so keeping them out costs no cache.
         """
         try:
             hard = self._hard_withheld() if self._hard_withheld is not None else frozenset()
@@ -1069,8 +1083,9 @@ class ToolRegistry:
     def invalidate_session_definitions(self, session_key: str) -> None:
         """Drop the frozen array; the next read captures a fresh one.
 
-        Called at the refresh points that are not a new session: a context
-        compaction and a log id change. Costs one rebuilt prefix, which the
+        Called by :meth:`bind_session_revision` at the refresh points that are
+        not a new session: a context compaction (cashed there from the previous
+        turn's mark) and a log id change. Costs one rebuilt prefix, which the
         caller has already paid for by rebuilding the history.
         """
         self._session_definitions.pop(session_key, None)
@@ -1098,10 +1113,10 @@ class ToolRegistry:
         """
         known = self._session_log_ids.get(session_key, _MISSING)
         if known is not _MISSING and known != log_id:
-            self._session_definitions.pop(session_key, None)
+            self.invalidate_session_definitions(session_key)
         if session_key in self._definitions_refresh_pending:
             self._definitions_refresh_pending.discard(session_key)
-            self._session_definitions.pop(session_key, None)
+            self.invalidate_session_definitions(session_key)
         self._session_log_ids[session_key] = log_id
 
     def session_definition_names(self) -> frozenset[str] | None:

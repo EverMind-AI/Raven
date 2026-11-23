@@ -151,13 +151,14 @@ def test_a_tool_becomes_available_again_at_the_next_refresh_point() -> None:
     switches = {"find"}
     reg = _registry("exec", "find")
     reg.set_withheld_source(lambda: frozenset(switches))
+    reg.bind_session_revision("s1", "log-a")
 
     with reg.session_scope_for("s1"):
         assert _defs(reg) == ["exec"]
         switches.discard("find")
         assert _defs(reg) == ["exec"], "a switch turned on mid-session must not move the array"
 
-    reg.invalidate_session_definitions("s1")
+    reg.bind_session_revision("s1", "log-b")
 
     with reg.session_scope_for("s1"):
         assert _defs(reg) == ["exec", "find"]

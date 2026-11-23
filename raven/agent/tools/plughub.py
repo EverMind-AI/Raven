@@ -396,7 +396,8 @@ class PluginTool(Tool):
                 f"Authorization URL: {url}\n"
                 f"Give the user that link and stop here - this call did not wait for them, and the "
                 f"link is good for about {OAUTH_FLOW_TIMEOUT / 60:.0f} minutes. Once they finish, "
-                f"'{name}'s tools register on their own and show up on a later turn. If they say it "
+                f"'{name}'s tools register on their own and join this conversation's tool list at "
+                f"the next compaction or new conversation. If they say it "
                 f"failed, plugin(action='authorize', name='{name}')."
             )
 

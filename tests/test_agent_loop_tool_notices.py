@@ -77,12 +77,13 @@ def test_the_five_unconfigured_tools_stay_out_of_the_array(tmp_path: Path, monke
 def test_a_key_added_after_capture_joins_at_the_next_refresh(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
     loop = _loop(tmp_path)
+    loop.tools.bind_session_revision("s1", "log-a")
 
     with loop.tools.session_scope_for("s1"):
         assert "web_search" not in {d["function"]["name"] for d in loop.tools.get_definitions()}
 
     monkeypatch.setenv("SERPER_API_KEY", "test-key")
-    loop.tools.invalidate_session_definitions("s1")
+    loop.tools.bind_session_revision("s1", "log-b")
 
     with loop.tools.session_scope_for("s1"):
         assert "web_search" in {d["function"]["name"] for d in loop.tools.get_definitions()}
@@ -122,6 +123,54 @@ def test_a_credential_withdrawn_after_capture_gets_a_notice(tmp_path: Path, monk
     by_key = {notice_key(note): note for note in notes}
     assert ("tool", "web_search") in by_key, notes
     assert "no search key" in by_key[("tool", "web_search")]
+
+
+def test_an_unselected_knowledge_base_after_capture_gets_a_notice(tmp_path: Path, monkeypatch) -> None:
+    """A base the session selected at capture is in the array; unselecting it
+    afterwards must leave the schema in place and explain the refusal."""
+    from raven.agent import knowledge_scope
+
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    loop = _loop(tmp_path)
+
+    with knowledge_scope.bind(("kb-1",), "s1"):
+        with loop.tools.session_scope_for("s1"):
+            names = {d["function"]["name"] for d in loop.tools.get_definitions()}
+            assert "knowledge_search" in names
+
+    with loop.tools.session_scope_for("s1"):
+        names = {d["function"]["name"] for d in loop.tools.get_definitions()}
+        notes = loop._tool_notices()
+        answer = asyncio.run(loop.tools.execute("knowledge_search", {"query": "x"}))
+
+    assert "knowledge_search" in names, "the array is the prefix; unselecting must not move it"
+    by_key = {notice_key(note): note for note in notes}
+    assert ("tool", "knowledge_search") in by_key, notes
+    assert "no knowledge base is selected" in by_key[("tool", "knowledge_search")]
+    assert "no knowledge base is selected" in answer
+
+
+def test_a_tool_switched_off_after_capture_leaves_at_the_next_refresh(tmp_path: Path, monkeypatch) -> None:
+    """The refresh point re-applies the availability filter; it does not merely
+    recapture the names of the array it replaces."""
+    cfg = tmp_path / "config.json"
+    _write_switches(cfg, [])
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    loop = _loop(tmp_path)
+    loop.tools.bind_session_revision("s1", "log-a")
+
+    with loop.tools.session_scope_for("s1"):
+        names = {d["function"]["name"] for d in loop.tools.get_definitions()}
+        assert "grep" in names
+        _write_switches(cfg, ["grep"])
+        names = {d["function"]["name"] for d in loop.tools.get_definitions()}
+        assert "grep" in names, "the array is the prefix; a switch must not move it"
+
+    loop.tools.bind_session_revision("s1", "log-b")
+
+    with loop.tools.session_scope_for("s1"):
+        names = {d["function"]["name"] for d in loop.tools.get_definitions()}
+    assert "grep" not in names, "the next refresh re-applies the availability filter"
 
 
 def test_a_constructor_disabled_tool_stays_out_and_gets_no_notice(tmp_path: Path, monkeypatch) -> None:
