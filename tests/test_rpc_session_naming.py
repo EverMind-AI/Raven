@@ -329,6 +329,39 @@ def _ended_reasons(emitter: _Emitter) -> list[str]:
 
 
 @pytest.mark.asyncio
+async def test_a_title_the_transcript_refused_is_not_announced(tmp_path: Path) -> None:
+    """A title another writer kept off the file raises, and no title is announced.
+
+    The refused copy leaves the cache with the title on it, so nothing in this
+    process holds the name any more: ``session.titled`` would show the reader a
+    title no reload finds. The client is told no title is coming instead.
+    """
+    from raven.session.manager import SessionWriterConflictError, read_session_file
+
+    mgr = SessionManager(tmp_path)
+    mgr.save(mgr.get_or_create("tui:name01"))
+
+    class _Contended(_Provider):
+        async def chat_with_retry(self, **kwargs: object) -> _Response:
+            other = SessionManager(tmp_path)
+            theirs = other.get_or_create("tui:name01")
+            theirs.add_message("user", "from another process")
+            other.save(theirs)
+            return await super().chat_with_retry(**kwargs)
+
+    emitter = _Emitter()
+    task = _start(mgr, _Contended(), emitter)
+    assert task is not None
+    with pytest.raises(SessionWriterConflictError):
+        await task
+
+    assert _ended_reasons(emitter) == ["error"]
+    assert not any(event["type"] == "session.titled" for _key, event in emitter.events)
+    stored = read_session_file(mgr.session_path("tui:name01"), "tui:name01")
+    assert stored.metadata.get("title") != "Cut a release", "a refused title reached the file anyway"
+
+
+@pytest.mark.asyncio
 async def test_a_model_that_never_calls_the_tool_says_so(tmp_path: Path) -> None:
     """The quiet ending that actually happens, and the reason the event exists."""
     mgr = SessionManager(tmp_path)

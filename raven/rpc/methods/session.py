@@ -719,6 +719,10 @@ async def session_close(
     mgr = manager_for(agent_loop, config)
     try:
         mgr.flush(session_key)
+    except SessionWriterConflictError:
+        # The tail this close was for is gone with the refused copy, so it is
+        # reported, as a refused clear or undo is, rather than closed as saved.
+        raise
     except Exception:
         logger.warning("session.close: failed to flush {}", session_key)
     return {"ok": True}
@@ -1474,6 +1478,10 @@ async def session_compress(
     if compacted and mgr.exists(session_key):
         try:
             mgr.save(session)
+        except SessionWriterConflictError:
+            # The boundary the consolidator moved lives only on the copy the
+            # conflict drops; a summary of it would be undone by the next read.
+            raise
         except Exception:
             logger.warning("session.compress: failed to persist {}", session_key)
 
