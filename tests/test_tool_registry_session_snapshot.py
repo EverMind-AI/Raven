@@ -19,6 +19,7 @@ preserves the eval-harness contract.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from raven.agent.tools.registry import ToolRegistry
@@ -171,6 +172,8 @@ def test_a_charter_is_not_frozen_into_the_session_snapshot() -> None:
     with charter_scope(Charter(tools=("grep",))):
         with reg.session_scope_for("s1"):
             assert _defs(reg) == ["grep"]
+            answer = asyncio.run(reg.execute("exec", {}))
+            assert "not available" in answer, "the charter still refuses at dispatch"
 
     with reg.session_scope_for("s1"):
         assert _defs(reg) == ["exec", "grep"], "the charter leaked into the captured array"
