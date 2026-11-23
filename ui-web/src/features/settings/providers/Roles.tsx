@@ -505,7 +505,7 @@ function ChatParams(): JSX.Element {
           : <Stepper value={iters.value} unit={t('gui.settings.roles.times')} onBump={bump} />}
       </Row>
       {iters.unlimited && (
-        <div className="settings-cfnote">{t('gui.settings.roles.iterations_unbounded_note')}</div>
+        <div className="settings-addhint">{t('gui.settings.roles.iterations_unbounded_note')}</div>
       )}
       <Row label={t('gui.settings.roles.ctx')}>
         <span className="settings-taglist">
