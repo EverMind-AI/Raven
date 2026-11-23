@@ -413,10 +413,10 @@ class CharterParticipant(AgentParticipant):
     __slots__ = ()
 
     async def intake(self, text: str, step: StepView) -> Any:
-        return _generated_answer("intake", text, _step_payload(step))
+        return _generated_step_answer("intake", step, text)
 
     async def advise(self, step: StepView) -> Any:
-        answer = _generated_answer("advise", _step_payload(step))
+        answer = _generated_step_answer("advise", step)
         if isinstance(answer, str) and answer and _transcript_says(getattr(step, "transcript", ()), answer):
             # The function is stateless: asked at every phase, it answers the
             # same words. They have been delivered once the transcript carries
@@ -427,7 +427,7 @@ class CharterParticipant(AgentParticipant):
         return answer
 
     async def salvage(self, step: StepView) -> Any:
-        return _generated_answer("salvage", _step_payload(step))
+        return _generated_step_answer("salvage", step)
 
     def judge(
         self,
@@ -492,9 +492,32 @@ policy that has to decide *which* entry to drop is more machinery than the
 thing it manages."""
 
 
-def _generated_answer(name: str, *args: Any) -> Any:
+def _generated_source(name: str) -> str:
+    """The source of the generated function for one verb, or none.
+
+    Read before the step is turned into a payload: a verb this dispatch did
+    not generate answers nothing, and the payload it would have been handed
+    copies the transcript, the history and the tool list, so building it for
+    a verb that cannot answer is a turn paid for nothing.
+    """
     charter = current_charter()
     source = dict(charter.functions).get(name) if charter is not None else None
+    return source or ""
+
+
+def _generated_step_answer(name: str, step: Any, *extra: Any) -> Any:
+    """What one generated function answers for a step, or nothing.
+
+    The step reaches the function as plain data, and the plain data is built
+    only once the verb is known to have a function to read it.
+    """
+    if not _generated_source(name):
+        return None
+    return _generated_answer(name, *extra, _step_payload(step))
+
+
+def _generated_answer(name: str, *args: Any) -> Any:
+    source = _generated_source(name)
     if not source:
         return None
     key = (name, source)

@@ -570,6 +570,46 @@ async def test_a_generated_advise_reads_nested_call_arguments() -> None:
         assert await participant.advise(_step(dry_run=False)) is None
 
 
+async def test_the_step_payload_is_not_built_for_a_verb_with_no_function(monkeypatch) -> None:
+    """A verb this dispatch generated nothing for answers nothing, and the
+    payload it would have been handed copies the whole transcript and history."""
+    import raven.agent.subagent.charter as charter_mod
+    from raven.agent.subagent.charter import CharterParticipant
+    from raven.contracts.participant import StepView
+
+    built = 0
+    original = charter_mod._step_payload
+
+    def counting(step: Any) -> dict[str, Any]:
+        nonlocal built
+        built += 1
+        return original(step)
+
+    monkeypatch.setattr(charter_mod, "_step_payload", counting)
+
+    step = StepView(
+        session_key="s1",
+        iteration=1,
+        response=None,
+        transcript=(),
+        history=(),
+        turn_base=0,
+        question="write the report",
+        rollbacks=0,
+        mode=None,
+        mode_overlay=None,
+        phase="after_iteration",
+    )
+
+    participant = CharterParticipant()
+    with charter_scope(Charter(functions=(("advise", ADVISE_ON_DRY_RUN),))):
+        assert await participant.intake("some text", step) is None
+        assert await participant.salvage(step) is None
+        assert built == 0
+        await participant.advise(step)
+        assert built == 1
+
+
 # --------------------------------------------------------------------------- #
 # The deadline: tighter, never looser                                           #
 # --------------------------------------------------------------------------- #
