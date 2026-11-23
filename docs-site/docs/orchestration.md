@@ -41,6 +41,17 @@ work before dispatch; a generation failure logs a warning and falls back to
 the unconfigured turn. It neither selects a task graph by itself nor removes
 the main agent's own tools. The model still decides what to delegate.
 
+Which fields and functions a generated worker may carry is decided by the
+capability catalogue checked in at `raven/playbook/harness_generation.json`.
+A switch the catalogue leaves off is not emitted, and a switch it turns on but
+this build does not serve is a refusal rather than a silent drop. A missing or
+malformed catalogue is a corrupt installation, not a reason to fall back to
+defaults: the loader raises a `RuntimeError` that names the file, and the turn
+that needed it logs `agent playbook: resolution failed; running unconfigured`
+and runs unconfigured, exactly as any other generation failure does. So a
+worker missing a field you expected is the catalogue saying no, and a table
+that never appeared is that warning line naming the file.
+
 | Layer | Lifetime | Meaning |
 | --- | --- | --- |
 | Roster agent | Registered configuration | Which backend can execute work |
