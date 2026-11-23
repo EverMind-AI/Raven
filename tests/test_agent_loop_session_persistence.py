@@ -413,3 +413,48 @@ def test_a_multipart_picture_row_is_filed_with_its_text_and_a_placeholder(tmp_pa
     ]
     assert any(row.get("content") == "done" for row in rows), "the row after the picture was filed"
     assert "base64" not in path.read_text(encoding="utf-8")
+
+
+def test_a_row_rewritten_after_it_was_filed_is_filed_in_its_new_form(tmp_path):
+    """A filed row can be rewritten in place: the image window turns a picture
+    into a note. The latest version is what the file holds, once, under the
+    identifier it was filed by."""
+    from raven.agent.window.images import filed_image_note, withdrawn_image_note
+
+    loop = _loop(tmp_path, _ScriptedProvider([_text("unused")]))
+    session = loop.sessions.get_or_create("cli:c")
+    path = loop.sessions.session_path("cli:c")
+    picture = {
+        "role": "tool",
+        "tool_call_id": "c1",
+        "name": "screenshot",
+        "content": [
+            {"type": "text", "text": "the window"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        ],
+    }
+    after = {"role": "assistant", "content": "done"}
+
+    loop._save_turn(session, [picture, after], 0, final=False)
+    loop.sessions.save(session)
+    filed = next(row for row in _filed(path) if row.get("tool_call_id") == "c1")
+    assert filed["content"][-1]["text"] == "[image]"
+    row_id = filed["_row_id"]
+
+    note = withdrawn_image_note(
+        {"caption": "the window", "tool": "screenshot", "iteration": 1},
+        index=1,
+        total=1,
+        reason="budget",
+        keep=0,
+    )
+    picture["content"][-1] = {"type": "text", "text": note}
+
+    loop._save_turn(session, [picture, after], len(session.messages), final=False)
+    loop.sessions.save(session)
+
+    rows = [row for row in _filed(path) if row.get("tool_call_id") == "c1"]
+    assert len(rows) == 1, "the rewritten row is replaced, not appended beside the old one"
+    assert rows[0]["_row_id"] == row_id, "the row keeps the identifier a late stamp addresses"
+    assert rows[0]["content"][-1]["text"] == filed_image_note(note)
+    assert "[image]" not in json.dumps(rows[0]["content"])

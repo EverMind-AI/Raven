@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import hashlib
 from typing import TYPE_CHECKING
 
 from raven.agent import turn_clock
@@ -341,6 +342,13 @@ def _without_scratch(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             m = {k: v for k, v in m.items() if k != TURN_SCRATCH_KEY} | {"content": strip_turn_scratch(m) or ""}
         out.append(m)
     return out
+
+
+def _content_digest(content: Any) -> str:
+    """What a row said when it was filed, so a rewrite can be told from the
+    transforms a save makes on its own (a truncated body, a stripped envelope)."""
+    payload = json.dumps(content, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _incremental_upto(messages: list[dict[str, Any]], start: int) -> int | None:
@@ -4569,8 +4577,13 @@ class TurnPathMixin:
         written_ids: list[str] = []
         # A row already on disk is never written twice: the incremental writer
         # and this one can disagree about where the filed prefix ends when the
-        # record was rewritten mid-turn, and the identifier settles it.
-        already_filed = {str(row.get("_row_id")) for row in getattr(session, "messages", ()) if row.get("_row_id")}
+        # record was rewritten mid-turn, and the identifier settles it. The
+        # stored row rides along, so a row the window rewrote after it was
+        # filed can be told from the form that reached the file.
+        already_filed = {str(row.get("_row_id")): row for row in getattr(session, "messages", ()) if row.get("_row_id")}
+        if session._filed_contents:
+            for stale in set(session._filed_contents) - set(already_filed):
+                session._filed_contents.pop(stale, None)
         first_user_pending = received_at is not None
         # The turn's first user entry is the inbound message; hooks may have
         # rewritten what the model saw (a memo prepended, a reminder appended),
@@ -4578,14 +4591,21 @@ class TurnPathMixin:
         # Same rule as the runtime-context strip below: history keeps the words
         # the user sent. Block-shaped inbounds pass through as built.
         inbound_rewrite_pending = inbound_original is not None
-        for m in messages[skip:]:
+        batch = list(messages[skip:])
+        if skip and already_filed:
+            # The append boundary is behind a row the turn may still rewrite in
+            # place: the image window withdraws a picture and puts a note where
+            # it was. Such a row is prepared again beside the new ones, so its
+            # latest version reaches the file instead of the first one staying.
+            batch = [m for m in messages[:skip] if str(m.get("_row_id") or "") in already_filed] + batch
+        for m in batch:
             # The identifier a later turn_meta names this row by. Kept on the
             # live dict too: the turn's stamps land on these objects, and the
             # file already holds a copy.
             if not m.get("_row_id"):
                 m["_row_id"] = uuid4().hex[:16]
-            if m.get("_row_id") and str(m["_row_id"]) in already_filed:
-                continue
+            row_id = str(m["_row_id"])
+            stored = already_filed.get(row_id)
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
             if isinstance(content, list) and any(is_inline_image(part) for part in content):
@@ -4736,12 +4756,39 @@ class TurnPathMixin:
                 # the strip above left in place are not filed, or they would be
                 # sent twice.
                 entry[RUNTIME_CONTEXT_FIELD] = runtime_lines
+            if stored is not None:
+                if self._refile_stored_row(session, row_id, entry, stored):
+                    written_ids.append(row_id)
+                continue
             entry.setdefault("timestamp", self._now_fn().isoformat())
             session.record(entry)
+            session._filed_contents[row_id] = _content_digest(entry.get("content"))
             if entry.get("_row_id"):
                 written_ids.append(str(entry["_row_id"]))
         session.updated_at = self._now_fn()
         return written_ids
+
+    def _refile_stored_row(self, session: Session, row_id: str, entry: dict, stored: dict) -> bool:
+        """Replace a filed row whose turn-side content has changed.
+
+        The image window rewrites a row in place after it reached disk -- a
+        withdrawn picture becomes a note -- so an append boundary past it would
+        keep the first version in the transcript. The stored row is replaced by
+        its new form under the same identifier, and the file is rewritten on the
+        next save. False when the content is unchanged or the stored copy is no
+        longer in this session.
+        """
+        digest = _content_digest(entry.get("content"))
+        if session._filed_contents.get(row_id) == digest:
+            return False
+        at = next((index for index, row in enumerate(session.messages) if row is stored), None)
+        if at is None:
+            return False
+        entry.setdefault("timestamp", stored.get("timestamp") or self._now_fn().isoformat())
+        session.messages[at] = entry
+        session._filed_contents[row_id] = digest
+        session._refile_rows = True
+        return True
 
     async def _run_turn(
         self,

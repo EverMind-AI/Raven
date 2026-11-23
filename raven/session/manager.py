@@ -270,6 +270,14 @@ class Session:
     # leaves the file holding the messages that were cut, which only a rewrite
     # drops, however far the list has grown back.
     _persisted_truncations: int = field(default=0, repr=False)
+    # A row was rewritten after it reached disk (the image window turned a
+    # picture into a note). An append would leave the stale row in the
+    # transcript, so the next save rewrites the file; the save clears this.
+    _refile_rows: bool = field(default=False, repr=False)
+    # What each filed row's content was when it was written, by identifier, so
+    # the writer can tell a rewrite from the transforms it makes itself. Pruned
+    # to the rows the copy still holds.
+    _filed_contents: dict[str, str] = field(default_factory=dict, repr=False)
     # What the transcript looked like the last time this copy read or wrote it,
     # as (size, mtime_ns). save() compares it to decide whether anybody else
     # has written since, and only then re-reads the record to merge under.
@@ -761,7 +769,7 @@ def _cut_since_persisted(session: Session) -> bool:
 
 
 def _is_clean(session: Session) -> bool:
-    if len(session.messages) != session._persisted_count or _cut_since_persisted(session):
+    if len(session.messages) != session._persisted_count or _cut_since_persisted(session) or session._refile_rows:
         return False
     current = _fingerprint(session)
     # None is "could not tell", never "unchanged": two failures must not read as a match.
@@ -1302,7 +1310,11 @@ class SessionManager:
             written = self._record_written_since(session, path)
             last = None if written is None else written[0]
             session.metadata = self._metadata_to_write(session, last)
-            rewrite = len(session.messages) < session._persisted_count or _cut_since_persisted(session)
+            rewrite = (
+                len(session.messages) < session._persisted_count
+                or _cut_since_persisted(session)
+                or session._refile_rows
+            )
             disk = None if last is None else _stored_revision(last)
             disk_scope = None if disk is None else disk[:2]
             before = (session.log_id, session.log_generation)
@@ -1392,6 +1404,7 @@ class SessionManager:
         # can land in the same mtime tick (observed on NTFS), and serving the
         # previous listing is the unsafe direction.
         self._scan_cache.pop(path, None)
+        session._refile_rows = False
         session._persisted_count = len(session.messages)
         session._persisted_truncations = session.truncations
         session._clean_fingerprint = _fingerprint(session)
