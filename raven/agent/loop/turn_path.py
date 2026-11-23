@@ -363,6 +363,33 @@ def _incremental_upto(messages: list[dict[str, Any]], start: int) -> int | None:
     return len(messages) if len(messages) > start else None
 
 
+def _filing_batch(session: Any, messages: list[dict[str, Any]], skip: int) -> tuple[dict[str, dict], list[dict]]:
+    """The rows a write prepares, and the stored row behind each one already filed.
+
+    A row already on disk is never written twice: the incremental writer and the
+    closing one can disagree about where the filed prefix ends when the record
+    was rewritten mid-turn, and the identifier settles it. The stored row rides
+    along, so a row the window rewrote after it was filed can be told from the
+    form that reached the file. The per-row filing state is pruned here to the
+    rows the copy still holds.
+
+    The append boundary can sit behind a row the turn may still rewrite in place:
+    the image window withdraws a picture and puts a note where it was. Every such
+    row is prepared again beside the new ones, so its latest version reaches the
+    file instead of the first one staying. That makes each write cost the rows
+    the turn has filed so far, and a turn's writes together grow with the square
+    of its length -- the price of noticing a rewrite wherever it lands.
+    """
+    already_filed = {str(row.get("_row_id")): row for row in getattr(session, "messages", ()) if row.get("_row_id")}
+    for state in (getattr(session, "_filed_contents", None), getattr(session, "_inbound_filed", None)):
+        for stale in set(state or ()) - set(already_filed):
+            state.pop(stale, None)
+    batch = list(messages[skip:])
+    if skip and already_filed:
+        batch = [m for m in messages[:skip] if str(m.get("_row_id") or "") in already_filed] + batch
+    return already_filed, batch
+
+
 def _stamp_turn_observers(messages: list[dict[str, Any]], metadata: dict[str, Any] | None, turn_base: int) -> None:
     """File the turn's observer record onto its last substantive assistant message.
 
@@ -4523,7 +4550,7 @@ class TurnPathMixin:
         if not self.sessions.append_metadata_patch(session.key, {"annotated_through": n}):
             logger.debug("episodic cursor for {} not persisted: no session file yet", session.key)
 
-    def _save_turn(  # noqa: C901 (cc 45: one pass over the rows a turn files)
+    def _save_turn(
         self,
         session: Session,
         messages: list[dict],
@@ -4573,20 +4600,9 @@ class TurnPathMixin:
         if final and not _taken_back_whole(messages, skip):
             _file_unanswered(messages)
         written_ids: list[str] = []
-        # A row already on disk is never written twice: the incremental writer
-        # and this one can disagree about where the filed prefix ends when the
-        # record was rewritten mid-turn, and the identifier settles it. The
-        # stored row rides along, so a row the window rewrote after it was
-        # filed can be told from the form that reached the file.
-        already_filed = {str(row.get("_row_id")): row for row in getattr(session, "messages", ()) if row.get("_row_id")}
+        already_filed, batch = _filing_batch(session, messages, skip)
         filed_contents = getattr(session, "_filed_contents", None)
-        if filed_contents:
-            for stale in set(filed_contents) - set(already_filed):
-                filed_contents.pop(stale, None)
         inbound_filed = getattr(session, "_inbound_filed", None)
-        if inbound_filed:
-            for stale in set(inbound_filed) - set(already_filed):
-                inbound_filed.pop(stale, None)
         first_user_pending = received_at is not None
         # The turn's first user entry is the inbound message; hooks may have
         # rewritten what the model saw (a memo prepended, a reminder appended),
@@ -4594,13 +4610,6 @@ class TurnPathMixin:
         # Same rule as the runtime-context strip below: history keeps the words
         # the user sent. Block-shaped inbounds pass through as built.
         inbound_rewrite_pending = inbound_original is not None
-        batch = list(messages[skip:])
-        if skip and already_filed:
-            # The append boundary is behind a row the turn may still rewrite in
-            # place: the image window withdraws a picture and puts a note where
-            # it was. Such a row is prepared again beside the new ones, so its
-            # latest version reaches the file instead of the first one staying.
-            batch = [m for m in messages[:skip] if str(m.get("_row_id") or "") in already_filed] + batch
         for m in batch:
             # The identifier a later turn_meta names this row by. Kept on the
             # live dict too: the turn's stamps land on these objects, and the
