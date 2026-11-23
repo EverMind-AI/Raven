@@ -981,9 +981,14 @@ def _gateway_argv(port: int) -> list[str]:
 def _spawn_supervisor(port: int) -> None:
     """Start the detached supervisor, with its output going to ``web.log``.
 
-    ``start_new_session`` is what makes it resident: without its own session the
-    supervisor stays in the terminal's process group and takes the same SIGHUP
-    the shell does when the window closes -- taking the page's engine with it.
+    ``start_new_session`` is what makes it resident on Unix: without its own
+    session the supervisor stays in the terminal's process group and takes the
+    same SIGHUP the shell does when the window closes -- taking the page's
+    engine with it.
+
+    On Windows, ``creationflags`` with ``DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    | CREATE_NO_WINDOW`` detaches from the parent console so closing the terminal
+    tab does not kill the child.
 
     ``-P`` for the reason ``_gateway_argv`` gives: this is the process that
     keeps the working directory it was started from.
@@ -995,22 +1000,42 @@ def _spawn_supervisor(port: int) -> None:
     log.parent.mkdir(parents=True, exist_ok=True)
     handle = open(log, "a", encoding="utf-8")  # noqa: SIM115 - handed to the child, closed with it
     try:
-        subprocess.Popen(  # noqa: S603 - argv is this interpreter plus literals
-            [
-                sys.executable,
-                "-P",
-                "-m",
-                "raven",
-                "web",
-                "--supervise",
-                "--port",
-                str(port),
-            ],
-            stdout=handle,
-            stderr=handle,
-            stdin=subprocess.DEVNULL,
-            start_new_session=(sys.platform != "win32"),
-        )
+        if sys.platform == "win32":
+            subprocess.Popen(  # noqa: S603 - argv is this interpreter plus literals
+                [
+                    sys.executable,
+                    "-P",
+                    "-m",
+                    "raven",
+                    "web",
+                    "--supervise",
+                    "--port",
+                    str(port),
+                ],
+                stdout=handle,
+                stderr=handle,
+                stdin=subprocess.DEVNULL,
+                creationflags=subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NEW_PROCESS_GROUP
+                | subprocess.CREATE_NO_WINDOW,
+            )
+        else:
+            subprocess.Popen(  # noqa: S603 - argv is this interpreter plus literals
+                [
+                    sys.executable,
+                    "-P",
+                    "-m",
+                    "raven",
+                    "web",
+                    "--supervise",
+                    "--port",
+                    str(port),
+                ],
+                stdout=handle,
+                stderr=handle,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            )
     finally:
         handle.close()
 
@@ -1101,16 +1126,18 @@ def _supervise(port: int) -> None:
         while True:
             started = time.monotonic()
             try:
-                proc = subprocess.Popen(  # noqa: S603 - see _gateway_argv
-                    _gateway_argv(target),
-                    # A session of its own, so the tree is the gateway's to keep
-                    # and this supervisor's to end. Sharing one group, the only
-                    # group-wide signal available to the cleanup below is the one
-                    # that also reaches this process: `_stop_child` could kill the
-                    # gateway's pid and nothing else, and a descendant that
-                    # ignores SIGTERM outlived both the stop and `web.json`.
-                    start_new_session=(sys.platform != "win32"),
-                )
+                if sys.platform == "win32":
+                    proc = subprocess.Popen(  # noqa: S603 - see _gateway_argv
+                        _gateway_argv(target),
+                        creationflags=subprocess.DETACHED_PROCESS
+                        | subprocess.CREATE_NEW_PROCESS_GROUP
+                        | subprocess.CREATE_NO_WINDOW,
+                    )
+                else:
+                    proc = subprocess.Popen(  # noqa: S603 - see _gateway_argv
+                        _gateway_argv(target),
+                        start_new_session=True,
+                    )
             except OSError as exc:
                 print(f"raven web: could not start the gateway: {exc}", flush=True)
                 return
