@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { setTranslator } from '../../i18n/t'
+import * as prose from '../../lib/prose'
 import * as confirmStore from '../../state/confirm'
 import * as settingsDialog from '../../state/settings'
 import { resetSources, setSources } from '../../state/sources'
@@ -291,6 +292,35 @@ describe('memory island', () => {
        its markup is text, the same as prose. */
     expect(sec.querySelector('img')).toBeNull()
     expect(sec.textContent).toContain('<img src=x onerror=1>')
+  })
+
+  it('parses a body once, not again on every redraw of the column', async () => {
+    install({
+      list: async () => ({
+        items: [
+          item({ id: 'a', kind: 'agent_skill', subject: 'skill a', body: '## Alpha' }),
+          item({ id: 'b', kind: 'agent_skill', subject: 'skill b', body: '## Beta' }),
+        ],
+        total: 2,
+      }),
+    })
+    await mount()
+    await act(async () => {
+      row('skill a').click()
+    })
+    const parse = vi.spyOn(prose, 'md')
+    /* What a keystroke in the find box does before its debounced reload: the
+       query lands in the store and the store notifies, so the open body redraws.
+       store.search itself would leave its reload timer running past this test. */
+    act(() => {
+      store.set({ q: 'skill' })
+    })
+    expect(parse).not.toHaveBeenCalled()
+    /* Another pick redraws the same column, and the body it shows is the new one. */
+    await act(async () => {
+      row('skill b').click()
+    })
+    expect(document.querySelector('.pmsec .prose h2')?.textContent).toBe('Beta')
   })
 
   it('switches kind through a stat and reloads with it', async () => {

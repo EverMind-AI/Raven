@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from 'react'
+import { useMemo, useState, useSyncExternalStore } from 'react'
 
 import {
   TwoPane, TwoPaneFind, TwoPaneHead, TwoPaneList, TwoPaneNoHit, TwoPaneNone, TwoPaneRow, TwoPaneWait,
@@ -441,6 +441,9 @@ function Pager({ s }: { s: store.MemoryState }): JSX.Element | null {
 }
 
 function Section({ label, text }: { label: string; text: string }): JSX.Element {
+  /* The column redraws on every store notify, a keystroke in the find box
+     included, and a long body is a parse each time: only the text decides it. */
+  const html = useMemo(() => md(text), [text])
   return (
     <div className="pmsec">
       <div className="cap">{label}</div>
@@ -449,7 +452,7 @@ function Section({ label, text }: { label: string; text: string }): JSX.Element 
          so a skill reads as the document it is rather than as the source of
          one -- a heading is a heading, and a list is a list. The renderer's
          own escaping is what keeps the body a text and not markup. */}
-      <div className="mempre prose" dangerouslySetInnerHTML={{ __html: md(text) }} />
+      <div className="mempre prose" dangerouslySetInnerHTML={{ __html: html }} />
     </div>
   )
 }
