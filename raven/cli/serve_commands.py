@@ -595,8 +595,30 @@ def _refuse_incomplete_install(label: str = "raven serve") -> None:
     raise typer.Exit(INCOMPLETE_INSTALL_EXIT)
 
 
+def _refuse_unusable_launch_dir(label: str = "raven serve") -> None:
+    """Refuse a launch directory ``validate_override`` would reject.
+
+    ``serve`` roots sessions at ``Path.cwd()``; deciding it now names the
+    directory, instead of every sub-agent dispatch failing in its own panel.
+    """
+    from raven.agent.workdir import validate_override
+    from raven.config.loader import load_config
+
+    workspace = load_config().workspace_path
+    try:
+        validate_override(Path.cwd(), workspace)
+    except ValueError as exc:
+        typer.echo(
+            f"{label}: {exc}. Sessions started here would fail on their first sub-agent "
+            "dispatch; start it from a project directory instead.",
+            err=True,
+        )
+        raise typer.Exit(1) from None
+
+
 def _run(port: int, open_browser: bool) -> None:
     _refuse_incomplete_install()
+    _refuse_unusable_launch_dir()
     try:
         bounded_asyncio.run(_serve_main(port, open_browser))
     except KeyboardInterrupt:
@@ -821,22 +843,39 @@ def _web_log_path() -> Path:
     return raven_home() / "web.log"
 
 
-def _write_web_state(port: int) -> None:
+def _write_web_state(port: int, surface: Optional[str] = None) -> None:
     """Record this supervisor's pid, so ``--stop`` has something to stop.
 
     Separate from ``serve.json``: that one names the gateway, this one names what
     keeps bringing the gateway back. Stopping the gateway alone would just make
     the supervisor start another.
+
+    ``surface`` names this launch's child; it can change between restarts, and
+    the terminal that started ``raven web`` reads it back to say which engine runs.
     """
     import json
     import os
 
     from raven.utils.atomic_io import atomic_replace
 
+    record = {"pid": os.getpid(), "port": port}
+    if surface is not None:
+        record["surface"] = surface
     try:
-        atomic_replace(_web_state_path(), json.dumps({"pid": os.getpid(), "port": port}))
+        atomic_replace(_web_state_path(), json.dumps(record))
     except OSError as exc:
         typer.echo(f"warning: could not record the supervisor at {_web_state_path()}: {exc}")
+
+
+def _read_web_surface() -> Optional[str]:
+    """The engine the supervisor last launched, if it said so."""
+    import json
+
+    try:
+        value = json.loads(_web_state_path().read_text(encoding="utf-8")).get("surface")
+    except (OSError, ValueError, TypeError):
+        return None
+    return value if value in _SURFACE_COST else None
 
 
 def _read_web_state() -> Optional[int]:
@@ -978,6 +1017,22 @@ def _gateway_argv(port: int) -> list[str]:
     return [sys.executable, "-P", "-m", "raven", "gateway", "--page-port", str(port)]
 
 
+_SURFACE_COST = {
+    "gateway": "IM channel adapters run; sessions group by channel",
+    "serve": "no IM channel adapters; sessions use this directory",
+}
+
+
+def _surface_of(argv: list[str]) -> str:
+    """The engine an argv launches: ``serve`` carries the word, ``gateway`` does not."""
+    return "serve" if "serve" in argv else "gateway"
+
+
+def _surface_line(surface: str) -> str:
+    """One line naming the engine and what choosing it costs."""
+    return f"raven web: raven {surface} -- {_SURFACE_COST[surface]}"
+
+
 def _spawn_supervisor(port: int) -> None:
     """Start the detached supervisor, with its output going to ``web.log``.
 
@@ -1097,12 +1152,18 @@ def _supervise(port: int) -> None:
         # exists to prevent. `raven web` followed straight away by `--stop` is
         # exactly that timing.
         _write_web_state(port)
-        print(f"raven web: supervising the gateway on port {port} (pid {os.getpid()})", flush=True)
+        print(f"raven web: supervising the page's engine on port {port} (pid {os.getpid()})", flush=True)
         while True:
             started = time.monotonic()
+            argv = _gateway_argv(target)
+            surface = _surface_of(argv)
+            if surface == "serve":
+                _refuse_unusable_launch_dir("raven web")
+            _write_web_state(target, surface)
+            print(_surface_line(surface), flush=True)
             try:
                 proc = subprocess.Popen(  # noqa: S603 - see _gateway_argv
-                    _gateway_argv(target),
+                    argv,
                     # A session of its own, so the tree is the gateway's to keep
                     # and this supervisor's to end. Sharing one group, the only
                     # group-wide signal available to the cleanup below is the one
@@ -1678,6 +1739,9 @@ def _web(
     if print_url:
         typer.echo(url)
         return
+    surface = _read_web_surface()
+    if surface is not None:
+        say(_surface_line(surface))
     say(f"raven is running at {url.split('/auth#')[0]} (stop it with `raven web --stop`)")
     _open(url)
 
@@ -1694,8 +1758,13 @@ def _run_foreground(port: int) -> None:
     import subprocess
 
     _refuse_incomplete_install()
+    argv = _gateway_argv(port)
+    surface = _surface_of(argv)
+    if surface == "serve":
+        _refuse_unusable_launch_dir("raven web")
+    typer.echo(_surface_line(surface))
     try:
-        proc = subprocess.Popen(_gateway_argv(port))  # noqa: S603 - see _gateway_argv
+        proc = subprocess.Popen(argv)  # noqa: S603 - see _gateway_argv
     except OSError as exc:
         typer.echo(f"could not start the engine: {exc}")
         raise typer.Exit(1) from None

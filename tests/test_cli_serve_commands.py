@@ -1476,6 +1476,122 @@ class TestTheSupervisor:
 
         assert serve_commands._gateway_holds_the_lock() is True
 
+    def test_it_names_the_engine_it_launched(self, home: Path, instant, monkeypatch, capsys) -> None:
+        monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: True)
+        self._run(monkeypatch, [0])
+
+        serve_commands._supervise(18999)
+
+        out = capsys.readouterr().out
+        assert "raven serve" in out and "no IM channel adapters" in out
+        assert "raven gateway" not in out
+
+    @pytest.mark.parametrize("call", ["_supervise", "_run_foreground"])
+    def test_it_refuses_a_launch_directory_the_sessions_cannot_live_in(
+        self, home: Path, monkeypatch, capsys, call: str
+    ) -> None:
+        import subprocess
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda *_a, **_k: None)
+        monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: True)
+        monkeypatch.chdir(home.parent)
+        monkeypatch.setattr(
+            "raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=home / "workspace")
+        )
+        spawned: list[list[str]] = []
+        monkeypatch.setattr(subprocess, "Popen", lambda argv, **_k: spawned.append(list(argv)))
+
+        with pytest.raises(typer.Exit) as exit_info:
+            getattr(serve_commands, call)(18999)
+
+        assert exit_info.value.exit_code == 1
+        assert spawned == [], "it started the engine whose cwd it had already rejected"
+        err = capsys.readouterr().err
+        assert "must not contain the agent home directory" in err
+        assert "start it from a project directory" in err
+
+
+class TestTheChosenSurface:
+    """The engine a launch chooses, and the directory it may run from."""
+
+    @pytest.mark.parametrize(
+        "held, verb, cost",
+        [(True, "serve", "no IM channel adapters"), (False, "gateway", "IM channel adapters run")],
+    )
+    def test_the_foreground_run_names_what_it_launched(
+        self, home: Path, monkeypatch, capsys, held: bool, verb: str, cost: str
+    ) -> None:
+        import subprocess
+        from types import SimpleNamespace
+
+        child = SimpleNamespace(poll=lambda: 0, wait=lambda: 0, returncode=0)
+        monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: child)
+        monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda *_a, **_k: None)
+        monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: held)
+        monkeypatch.setattr(serve_commands, "_await_attach", lambda *_a, **_k: None)
+
+        serve_commands._run_foreground(18999)
+
+        out = capsys.readouterr().out
+        assert f"raven {verb}" in out and cost in out
+
+    def test_standalone_serve_refuses_the_same_directory(self, home: Path, monkeypatch, capsys) -> None:
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda *_a, **_k: None)
+        monkeypatch.chdir(home.parent)
+        monkeypatch.setattr(
+            "raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=home / "workspace")
+        )
+        ran: list[object] = []
+        monkeypatch.setattr(serve_commands.bounded_asyncio, "run", lambda coro: ran.append(coro) or coro.close())
+
+        with pytest.raises(typer.Exit) as exit_info:
+            serve_commands._run(18999, False)
+
+        assert exit_info.value.exit_code == 1
+        assert ran == [], "it built the session stack under a directory it had already rejected"
+        assert "must not contain the agent home directory" in capsys.readouterr().err
+
+    def test_the_record_carries_the_surface_beside_the_pid(self, home: Path, monkeypatch) -> None:
+        import os
+
+        monkeypatch.setattr(serve_commands, "_pid_alive", lambda _pid: True)
+        monkeypatch.setattr(serve_commands, "looks_like_raven", lambda _pid: True)
+
+        serve_commands._write_web_state(18999, "serve")
+
+        assert serve_commands._read_web_surface() == "serve"
+        assert serve_commands._read_web_state() == os.getpid()
+
+    @pytest.mark.parametrize("record", [{"pid": 111, "port": 18999}, {"pid": 111, "surface": "wat"}])
+    def test_a_record_without_a_known_surface_reads_as_none(self, home: Path, record: dict) -> None:
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "web.json").write_text(json.dumps(record), encoding="utf-8")
+
+        assert serve_commands._read_web_surface() is None
+
+    @pytest.mark.parametrize("print_url", [False, True])
+    def test_the_detached_parent_repeats_what_the_supervisor_recorded(
+        self, home: Path, a_built_page, opened: list[str], monkeypatch, capsys, print_url: bool
+    ) -> None:
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "web.json").write_text(json.dumps({"pid": 111, "port": 18999, "surface": "serve"}), encoding="utf-8")
+        monkeypatch.setattr(serve_commands, "_read_web_state", lambda: 111)
+        monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
+        monkeypatch.setattr(serve_commands, "_await_attach", lambda *_a, **_k: "http://127.0.0.1:18999/auth#z")
+
+        serve_commands._web(port=18999, print_url=print_url)
+
+        captured = capsys.readouterr()
+        if print_url:
+            assert captured.out.strip() == "http://127.0.0.1:18999/auth#z"
+            assert "raven serve" not in captured.err
+        else:
+            assert "raven serve" in captured.out and "no IM channel adapters" in captured.out
+            assert opened == ["http://127.0.0.1:18999/auth#z"]
+
 
 @pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX")
 class TestStopping:
