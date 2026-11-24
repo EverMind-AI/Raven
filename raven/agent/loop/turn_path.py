@@ -1628,8 +1628,6 @@ class TurnPathMixin:
                 )
                 break
             iteration += 1
-            if on_step is not None:
-                on_step()
             logger.info(
                 "Iteration {}/{} model={}",
                 iteration,
@@ -1795,6 +1793,12 @@ class TurnPathMixin:
             # session filed the preview. The transcript keeps the full body;
             # only this payload carries the preview.
             projected_messages = _model_facing(messages)
+            # The turn's rows reach the file here, not at the top of the
+            # iteration: every tool row this call carries now has the form it is
+            # sent in, so the write files the bytes the model reads, and the
+            # previous round's results are on disk before the call that reads them.
+            if on_step is not None:
+                on_step()
             call_messages, call_tools, call_model = await first_call.stage(
                 "the before_llm_call strategies",
                 self.strategies.before_llm_call(
@@ -3737,7 +3741,9 @@ class TurnPathMixin:
             """
             log = live["log"]
             skip = live["persisted"]
-            messages_now = log.messages()
+            # As the calls carried it: the record keeps a tool row's full body
+            # for the hooks, and the file takes the preview a call sent.
+            messages_now = log.filed_messages()
             upto = _incremental_upto(messages_now, skip)
             if upto is None:
                 return

@@ -125,6 +125,25 @@ class TurnLog:
             if preview is not None:
                 entry["content"] = preview
 
+    def filed_messages(self) -> list[dict[str, Any]]:
+        """:meth:`messages`, with each tool body in the form the bound projection files it.
+
+        For a write made while the turn runs. The record keeps the full body for
+        the hooks and observers that read it until the turn ends, so the
+        projection is applied to the copies handed out here and the record is
+        left as it was; :meth:`project_tool_results` is the rewrite at the end.
+        """
+        self._sync(self._live)
+        rows = []
+        for entry in self._entries:
+            row = _unstamped(entry)
+            if self._projection is not None and entry.get("role") == "tool":
+                preview = self._projection(entry)
+                if preview is not None:
+                    row["content"] = preview
+            rows.append(row)
+        return [*self._head, *rows]
+
     def follow(self, messages: list[dict[str, Any]]) -> None:
         """Adopt ``messages`` as the list the loop works on from here.
 

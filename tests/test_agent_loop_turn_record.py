@@ -745,6 +745,65 @@ async def test_a_cache_strategy_marks_the_preview_not_the_full_tool_body(workspa
     assert replayed == filed
 
 
+class _FileWatchingProvider(_ScriptProvider):
+    """Reads the session's tool rows off disk at every main call, before it answers."""
+
+    def __init__(self, script: list[Any], path) -> None:
+        super().__init__(script)
+        self._path = path
+        self.on_disk: list[list[dict[str, Any]]] = []
+
+    async def chat(self, messages, tools=None, *args, **kwargs):
+        summary = messages and messages[0].get("content") == compaction.SUMMARY_INSTRUCTIONS
+        if tools is not None and not summary:
+            import json
+
+            path = self._path()
+            lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+            rows = [json.loads(line) for line in lines if line.strip()]
+            self.on_disk.append([row for row in rows if not row.get("_type") and row.get("role") == "tool"])
+        return await super().chat(messages, tools, *args, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_a_tool_body_written_while_the_turn_runs_is_the_one_its_call_carried(workspace):
+    """The writes made while the turn runs file each tool body as a call carried it.
+
+    The record keeps the full body for the hooks that read it, and the turn's
+    incremental writes reach the file before its end. Written from the record
+    as it stood, a 60 KB result went to disk whole ahead of the call that sent
+    its preview, so a turn killed before its end left the session holding bytes
+    no model read. The write lands where the call's projection is settled: the
+    result is on disk before the next call, in the form that call carries.
+    """
+    agent: AgentLoop | None = None
+    provider = _FileWatchingProvider(
+        [_big_step(i) for i in range(3)] + [LLMResponse(content="done", finish_reason="stop")],
+        lambda: agent.sessions.session_path(_KEY),
+    )
+    agent = _agent(workspace, provider, compact=False)
+    agent.tools.register(_SixtyKTool())
+
+    await agent._process_message(_turn("go"), session_key=_KEY)
+
+    assert {row["tool_call_id"] for row in provider.on_disk[1]} >= {"c0"}, (
+        "the first result was not on disk before the call that read it"
+    )
+    carried: dict[str, set[str]] = {}
+    for call in provider.main_calls:
+        for row in _tool_rows(call):
+            carried.setdefault(row["tool_call_id"], set()).add(_wire_body(row))
+    for snapshot in provider.on_disk:
+        for row in snapshot:
+            assert _wire_body(row) in carried.get(row["tool_call_id"], set()), (
+                "a write made while the turn ran filed a tool body no call carried"
+            )
+    agent.sessions.invalidate(_KEY)
+    assert agent.sessions.get_or_create(_KEY).log_generation == 0, (
+        "the closing write rewrote rows the turn had filed in another form"
+    )
+
+
 @pytest.mark.asyncio
 async def test_a_body_a_shrink_elided_is_filed_as_the_preview_its_call_sent(workspace):
     """The record keeps a body the window elided; it must keep it bounded.
