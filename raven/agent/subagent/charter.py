@@ -492,32 +492,16 @@ policy that has to decide *which* entry to drop is more machinery than the
 thing it manages."""
 
 
-def _generated_source(name: str) -> str:
-    """The source of the generated function for one verb, or none.
+def _generated_function(name: str) -> Any:
+    """The compiled function for one verb, or none.
 
-    Read before the step is turned into a payload: a verb this dispatch did
-    not generate answers nothing, and the payload it would have been handed
-    copies the transcript, the history and the tool list, so building it for
-    a verb that cannot answer is a turn paid for nothing.
+    Resolved before the step is turned into a payload. A verb this dispatch
+    generated nothing for answers nothing, and a source the gate refuses can
+    never read a payload either -- it is cached as refused and stays refused --
+    so building the payload for either is a turn paid for nothing.
     """
     charter = current_charter()
     source = dict(charter.functions).get(name) if charter is not None else None
-    return source or ""
-
-
-def _generated_step_answer(name: str, step: Any, *extra: Any) -> Any:
-    """What one generated function answers for a step, or nothing.
-
-    The step reaches the function as plain data, and the plain data is built
-    only once the verb is known to have a function to read it.
-    """
-    if not _generated_source(name):
-        return None
-    return _generated_answer(name, *extra, _step_payload(step))
-
-
-def _generated_answer(name: str, *args: Any) -> Any:
-    source = _generated_source(name)
     if not source:
         return None
     key = (name, source)
@@ -535,9 +519,21 @@ def _generated_answer(name: str, *args: Any) -> Any:
         _COMPILED[key] = compiled
     if compiled is False:
         return None
+    return compiled
+
+
+def _generated_step_answer(name: str, step: Any, *extra: Any) -> Any:
+    """What one generated function answers for a step, or nothing.
+
+    The step reaches the function as plain data, and the plain data is built
+    only once the verb is known to have a function that can read it.
+    """
+    compiled = _generated_function(name)
+    if compiled is None:
+        return None
     from raven.agent.subagent.charter_code import run_function
 
-    return run_function(compiled, *args)
+    return run_function(compiled, *extra, _step_payload(step))
 
 
 def _code_refusals(

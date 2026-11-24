@@ -610,6 +610,142 @@ async def test_the_step_payload_is_not_built_for_a_verb_with_no_function(monkeyp
         assert built == 1
 
 
+INTAKE_AND_ADVISE = """
+def intake(text, step):
+    return "hold the line"
+
+def advise(step):
+    return "keep the next action read-only"
+"""
+"""A source that defines both verbs, so a lookup that fell back to some other
+verb's function would find a source that compiles under this one too."""
+
+
+def _step() -> Any:
+    from raven.contracts.participant import StepView
+
+    return StepView(
+        session_key="s1",
+        iteration=1,
+        response=None,
+        transcript=(),
+        history=(),
+        turn_base=0,
+        question="write the report",
+        rollbacks=0,
+        mode=None,
+        mode_overlay=None,
+        phase="after_iteration",
+    )
+
+
+async def test_a_dispatch_with_no_charter_builds_no_step_payload(monkeypatch) -> None:
+    """The loop seats the participant on every turn, including a turn that
+    carried no brief at all, so the no-charter path is the one that runs most."""
+    import raven.agent.subagent.charter as charter_mod
+    from raven.agent.subagent.charter import CharterParticipant
+
+    built = 0
+    original = charter_mod._step_payload
+
+    def counting(step: Any) -> dict[str, Any]:
+        nonlocal built
+        built += 1
+        return original(step)
+
+    monkeypatch.setattr(charter_mod, "_step_payload", counting)
+
+    participant = CharterParticipant()
+    step = _step()
+    assert await participant.intake("some text", step) is None
+    assert await participant.advise(step) is None
+    assert await participant.salvage(step) is None
+    assert built == 0
+
+
+async def test_an_absent_advise_builds_no_step_payload(monkeypatch) -> None:
+    """``advise`` is asked at every phase, so a charter that generated only
+    ``intake`` asks it on every turn and it has to answer nothing."""
+    import raven.agent.subagent.charter as charter_mod
+    from raven.agent.subagent.charter import CharterParticipant
+
+    built = 0
+    original = charter_mod._step_payload
+
+    def counting(step: Any) -> dict[str, Any]:
+        nonlocal built
+        built += 1
+        return original(step)
+
+    monkeypatch.setattr(charter_mod, "_step_payload", counting)
+
+    participant = CharterParticipant()
+    step = _step()
+    with charter_scope(Charter(functions=(("intake", INTAKE_AND_ADVISE),))):
+        assert await participant.advise(step) is None
+        assert await participant.salvage(step) is None
+        assert built == 0
+        assert charter_mod._generated_function("review") is None
+        assert await participant.intake("some text", step) == "hold the line"
+        assert built == 1
+
+
+async def test_a_verb_spelled_differently_is_not_the_verb(monkeypatch) -> None:
+    """The lookup is by name, exactly: a brief that generated ``Advise`` has
+    generated no ``advise``, and one that generated nothing has generated
+    nothing under any spelling."""
+    import raven.agent.subagent.charter as charter_mod
+    from raven.agent.subagent.charter import CharterParticipant
+
+    built = 0
+    original = charter_mod._step_payload
+
+    def counting(step: Any) -> dict[str, Any]:
+        nonlocal built
+        built += 1
+        return original(step)
+
+    monkeypatch.setattr(charter_mod, "_step_payload", counting)
+
+    participant = CharterParticipant()
+    step = _step()
+    with charter_scope(Charter(functions=(("Advise", INTAKE_AND_ADVISE),))):
+        assert await participant.advise(step) is None
+        assert built == 0
+
+
+async def test_a_refused_source_builds_no_step_payload(monkeypatch) -> None:
+    """A source the gate refuses is cached as refused and stays refused, so
+    the payload it could never read is not rebuilt on every call for that verb."""
+    import raven.agent.subagent.charter as charter_mod
+    from raven.agent.subagent.charter import CharterParticipant
+
+    built = 0
+    original = charter_mod._step_payload
+
+    def counting(step: Any) -> dict[str, Any]:
+        nonlocal built
+        built += 1
+        return original(step)
+
+    monkeypatch.setattr(charter_mod, "_step_payload", counting)
+
+    participant = CharterParticipant()
+    step = _step()
+    with charter_scope(Charter(functions=(("advise", REFUSED_SOURCE),))):
+        assert await participant.advise(step) is None
+        assert await participant.advise(step) is None
+        assert built == 0
+
+
+REFUSED_SOURCE = """
+import os
+
+def advise(step):
+    return os.getcwd()
+"""
+
+
 # --------------------------------------------------------------------------- #
 # The deadline: tighter, never looser                                           #
 # --------------------------------------------------------------------------- #
@@ -728,8 +864,8 @@ def test_a_refused_generated_function_is_cached_as_silence(monkeypatch) -> None:
     monkeypatch.setattr(charter_mod, "MAX_COMPILED", 0)
     try:
         with charter_scope(Charter(functions=(("advise", source),))):
-            assert charter_mod._generated_answer("advise", {}) is None
-            assert charter_mod._generated_answer("advise", {}) is None
+            assert charter_mod._generated_function("advise") is None
+            assert charter_mod._generated_function("advise") is None
         assert charter_mod._COMPILED[("advise", source)] is False
     finally:
         charter_mod._COMPILED.clear()
