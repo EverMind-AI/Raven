@@ -62,11 +62,15 @@ def _load_ledger():
     return PackageLedger.load(_ledger_path())
 
 
-def _mcp_report(package):
+def _mcp_report(package, *, reserved):
     """What the package's ``mcp.json`` yields, read without starting anything."""
     from raven.agent_plugins.mcp import package_mcp_report
 
-    return package_mcp_report(package, plugin_data=_package_data_dir(package.name))
+    return package_mcp_report(
+        package,
+        plugin_data=_package_data_dir(package.name),
+        reserved_names=reserved,
+    )
 
 
 def _package_data_dir(name: str) -> Path:
@@ -87,6 +91,7 @@ def list_packages(
 ) -> None:
     """List the Agent Plugin packages this build can see."""
     from raven.agent_plugins import discover_packages
+    from raven.agent_plugins.mcp import host_mcp_server_names
 
     config = _load_config(config_path)
     packages, problems = discover_packages(
@@ -95,7 +100,8 @@ def list_packages(
     )
     workspace = _workspace_path()
     ledger = _load_ledger()
-    running = set(config.agent_plugins.mcp_packages)
+    allowed = set(config.agent_plugins.mcp_packages)
+    host_servers = host_mcp_server_names(config.base.tools.mcp_servers)
 
     def install_state(name: str) -> tuple[bool, str]:
         """Whether a verified install stands here, and what the record says.
@@ -108,26 +114,34 @@ def list_packages(
         return state == "verified", state
 
     states = {package.name: install_state(package.name) for package in packages}
+    reports = {package.name: _mcp_report(package, reserved=host_servers) for package in packages}
 
     if as_json:
+        rows = []
+        for package in packages:
+            report = reports[package.name]
+            rows.append(
+                {
+                    "name": package.name,
+                    "version": package.version,
+                    "source": str(package.root),
+                    "notes": list(package.notes),
+                    "imported": states[package.name][0],
+                    "install": states[package.name][1],
+                    "mcp": {
+                        "servers": list(report.servers),
+                        "allowed": package.name in allowed,
+                        # Deprecated alias for ``allowed``; removed after one release.
+                        "running": package.name in allowed,
+                        "problems": [{"server": item.server, "reason": item.reason} for item in report.problems],
+                        "disabled": report.disabled,
+                    },
+                }
+            )
         console.print_json(
             json.dumps(
                 {
-                    "packages": [
-                        {
-                            "name": package.name,
-                            "version": package.version,
-                            "source": str(package.root),
-                            "notes": list(package.notes),
-                            "imported": states[package.name][0],
-                            "install": states[package.name][1],
-                            "mcp": {
-                                "servers": list(_mcp_report(package).servers),
-                                "running": package.name in running,
-                            },
-                        }
-                        for package in packages
-                    ],
+                    "packages": rows,
                     "problems": [{"path": problem.path, "reason": problem.reason} for problem in problems],
                 }
             )
@@ -157,13 +171,16 @@ def list_packages(
     table.add_column("MCP")
     for package in packages:
         status = status_labels[states[package.name][1]]
-        mcp_servers = len(_mcp_report(package).servers)
+        report = reports[package.name]
+        mcp_servers = len(report.servers)
         if not mcp_servers:
             mcp = "[dim]none[/dim]"
-        elif package.name in running:
-            mcp = f"[green]{mcp_servers} running[/green]"
+        elif package.name in allowed:
+            mcp = f"[green]{mcp_servers} enabled[/green]"
         else:
             mcp = f"[yellow]{mcp_servers} not enabled[/yellow]"
+        if report.problems:
+            mcp += f" [yellow]({len(report.problems)} skipped)[/yellow]"
         table.add_row(package.name, package.version or "(none)", str(package.root), status, mcp)
     console.print(table)
 
@@ -179,10 +196,12 @@ def inspect_package(
 ) -> None:
     """Validate a package and report what it holds, importing nothing."""
     from raven.agent_plugins import discover_packages, discover_skills
+    from raven.agent_plugins.mcp import host_mcp_server_names
 
     config = _load_config(config_path)
     entry = Path(path).expanduser()
     packages, discovery_problems = discover_packages([entry], disabled=config.agent_plugins.disabled)
+    host_servers = host_mcp_server_names(config.base.tools.mcp_servers)
 
     reports: list[dict] = []
     problems: list[dict] = [{"path": item.path, "reason": item.reason} for item in discovery_problems]
@@ -192,7 +211,7 @@ def inspect_package(
             console.print(f"[red]{escape(item['path'])}[/red]: {escape(item['reason'])}", highlight=False)
     for package in packages:
         skills, skill_problems = discover_skills(package)
-        mcp_report = _mcp_report(package)
+        mcp_report = _mcp_report(package, reserved=host_servers)
         reports.append(
             {
                 "name": package.name,

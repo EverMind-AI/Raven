@@ -215,6 +215,41 @@ def test_the_runtime_entry_reports_a_data_root_loop(tmp_path: Path, monkeypatch)
     assert "cannot be resolved" in notes[0]
 
 
+def test_the_runtime_reserves_the_hosts_server_names(tmp_path: Path, monkeypatch) -> None:
+    """A composed name the host already configures never reaches the loop."""
+    from types import SimpleNamespace
+
+    from raven.config.raven import RavenConfig
+    from raven.config.schema import Config, MCPServerConfig
+    from raven.core import plugin_stack, runtime
+
+    monkeypatch.setattr(
+        plugin_stack,
+        "plugin_discovery_sources",
+        lambda: {
+            "bundled_dir": tmp_path / "none",
+            "user_dir": tmp_path / "none",
+            "project_dir": tmp_path / "none",
+            "entry_points_group": None,
+        },
+    )
+    monkeypatch.setattr(runtime.token_wise_stack, "install_from_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runtime.token_wise_stack, "caching_probe", lambda *args, **kwargs: False)
+
+    root = _package(tmp_path, mcp=_mcp({"search": _http()}), name="acme")
+    composed = f"acme{PACKAGE_SERVER_SEPARATOR}search"
+    host_server = MCPServerConfig(command="host-own")
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "ws")
+    config.tools.mcp_servers = {composed: host_server}
+    ec_config = RavenConfig(agent_plugins={"packages": [str(root)], "mcpPackages": ["acme"]})
+
+    built = runtime.build_runtime(config, ec_config, provider=SimpleNamespace(get_default_model=lambda: "fake/default"))
+
+    assert built.loop.package_mcp_server_names == frozenset()
+    assert built.loop._mcp_servers[composed] is host_server
+
+
 def test_an_uncreatable_package_data_dir_reports_its_package(tmp_path: Path) -> None:
     """An allowed package whose data directory cannot be created is skipped, not fatal."""
     root = _package(tmp_path, mcp=_mcp({"remote": _http()}))
