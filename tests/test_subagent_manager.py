@@ -4841,6 +4841,22 @@ async def test_spawn_accepts_the_old_task_spelling() -> None:
     assert manager.calls[-1]["task"] == "do the thing"
 
 
+async def test_spawn_advertises_cancel_for_an_instance_it_announced() -> None:
+    """A run with a handle is interruptible, and the receipt says how: the model
+    reaches the controls through a tool call, so an unadvertised control is one
+    it never calls."""
+    from raven.agent.subagent.spawn_tool import SpawnTool
+
+    manager = _stub_manager()
+    tool = SpawnTool(manager=manager, control_advert=lambda: "cancellation is available")
+    result = await tool.execute(node_id="n-cancel", task_summary="s", prompt_template="do it", instance="refactor-auth")
+
+    assert manager.calls[-1]["instance"] == "refactor-auth"
+    assert '"cancel_subagent"' in result
+    assert '"call_id": "n-cancel"' in result
+    assert "cancellation is available" in result
+
+
 async def test_spawn_refuses_a_path_form_for_a_no_local_files_agent() -> None:
     from raven.agent.subagent.spawn_tool import SpawnTool
 

@@ -1638,6 +1638,64 @@ class TestCancel:
         assert response["result"] == {"stopReason": "cancelled"}
         assert rig.stack.params_for("turn.cancel") == {"session_key": session_id}
 
+    async def test_a_cancel_stops_a_bound_report_from_answering_early(self, rig):
+        """A report prompt outlives the turn it was bound to while the session is
+        held. A cancel arrives in that window too, and a held prompt that still
+        sends its closing turn afterwards would answer a request the client has
+        already given up on."""
+        await rig.handshake()
+        session_id = await rig.new_session()
+        task = asyncio.create_task(
+            rig.call(
+                "session/prompt",
+                {
+                    "sessionId": session_id,
+                    "prompt": [{"type": "text", "text": "a"}],
+                    "_meta": {protocol.REPORT_NOW_PROMPT_KEY: "prompt-1"},
+                },
+            )
+        )
+        for _ in range(4):
+            await asyncio.sleep(0)
+        bound = rig.methods._report_prompts[session_id][1]
+
+        await rig.notify("session/cancel", {"sessionId": session_id})
+        response = await task
+
+        assert response["result"] == {"stopReason": "cancelled"}
+        assert bound.stopping is True
+
+    async def test_a_second_report_prompt_while_one_is_bound_is_refused(self, rig):
+        """One report prompt owns the session's finish control; a second would
+        race the first's closing turn."""
+        await rig.handshake()
+        session_id = await rig.new_session()
+        first = asyncio.create_task(
+            rig.call(
+                "session/prompt",
+                {
+                    "sessionId": session_id,
+                    "prompt": [{"type": "text", "text": "a"}],
+                    "_meta": {protocol.REPORT_NOW_PROMPT_KEY: "prompt-1"},
+                },
+            )
+        )
+        for _ in range(4):
+            await asyncio.sleep(0)
+
+        second = await rig.call(
+            "session/prompt",
+            {
+                "sessionId": session_id,
+                "prompt": [{"type": "text", "text": "b"}],
+                "_meta": {protocol.REPORT_NOW_PROMPT_KEY: "prompt-2"},
+            },
+        )
+
+        assert second["error"]["code"] == protocol.INVALID_REQUEST
+        await rig.notify("session/cancel", {"sessionId": session_id})
+        assert (await first)["result"] == {"stopReason": "cancelled"}
+
     async def test_a_cancel_that_finds_nothing_still_answers_the_prompt(self, rig):
         """The window between opening the turn and the scheduler accepting it:
         ``turn.cancel`` reports nothing cancelled, and the prompt still has to be
@@ -2178,6 +2236,98 @@ class TestPromptCompletion:
             if not prompt.done():
                 prompt.cancel()
                 await asyncio.gather(prompt, return_exceptions=True)
+
+    async def test_a_held_turn_reaps_a_real_background_command_before_its_early_reply(self, spine_rig, monkeypatch):
+        """The hold itself only sends the closing turn; that turn is the active
+        turn, and it reaps before it synthesizes. Real processes, because a
+        stubbed ``running()`` cannot show one ending or its tail reaching the
+        prompt -- the gap the previous test's mocks left open.
+        """
+        import raven.providers.litellm_provider as litellm_provider
+        from raven.agent.hook import AgentHook, HookDecision
+        from raven.agent.tools import background_exec
+
+        class Hold(AgentHook):
+            def __init__(self) -> None:
+                self.task = None
+
+            @property
+            def name(self) -> str:
+                return "HoldForEarlyReply"
+
+            async def after_send(self, ctx):
+                if self.task is None:
+                    # Ignores SIGTERM so the force-kill arm of `reap_execution`
+                    # runs; the outer shell must stay to carry the trap.
+                    task = background_exec.start("trap '' TERM; sleep 30; echo done")
+                    Path(task.log_path).write_text("partial output from build\n", encoding="utf-8")
+                    self.task = task
+                    ctx.metadata.setdefault("observers", {})["acp_meta"] = {
+                        "raven.holdTurn": {
+                            "why": "waiting for a background command this turn started",
+                            "background": True,
+                            "tasks": [{"task_id": task.task_id, "command": task.command, "log_path": task.log_path}],
+                        }
+                    }
+                return HookDecision()
+
+        rig = spine_rig
+        hook = Hold()
+        rig.engine.hooks.append(hook)
+        await rig.handshake()
+        session_id = await rig.new_session()
+
+        synthesis: list[str] = []
+        original = litellm_provider.acompletion
+
+        async def capture(**kwargs):
+            synthesis.extend(str(message.get("content", "")) for message in kwargs.get("messages", []))
+            return await original(**kwargs)
+
+        monkeypatch.setattr(litellm_provider, "acompletion", capture)
+        rig.scripts.extend([_ScriptedStream("started the build"), _ScriptedStream("final summary")])
+        prompt = asyncio.create_task(
+            rig.call(
+                "session/prompt",
+                {
+                    "sessionId": session_id,
+                    "prompt": [{"type": "text", "text": "build it"}],
+                    "_meta": {protocol.REPORT_NOW_PROMPT_KEY: "prompt-1"},
+                },
+            )
+        )
+        try:
+            held = None
+            for _ in range(100):
+                await asyncio.sleep(0.05)
+                held = [
+                    update
+                    for update in rig.updates()
+                    if update.get("sessionUpdate") == "tool_call"
+                    and "waiting for a background command" in str(update.get("title"))
+                ]
+                if held or prompt.done():
+                    break
+            assert held, f"the prompt was never held; done={prompt.done()}"
+            task = hook.task
+            assert task is not None and task.execution_id, "the held task is tagged with the report's execution"
+            assert background_exec.status(task.task_id)["running"], "the command should still be alive at the hold"
+            ack = await rig.call(
+                "_raven/session/steer", {"sessionId": session_id, "intent": "report_now", "promptId": "prompt-1"}
+            )
+            assert ack["result"] == {"status": "report_requested"}
+            result = (await asyncio.wait_for(prompt, 15))["result"]
+        finally:
+            if hook.task is not None:
+                background_exec.reap(hook.task.task_id, force=True)
+            if not prompt.done():
+                prompt.cancel()
+                await asyncio.gather(prompt, return_exceptions=True)
+
+        assert result["stopReason"] == "end_turn"
+        assert result["_meta"][protocol.REPORTED_EARLY_KEY] is True
+        assert not background_exec.status(task.task_id)["running"], "the held command outlived the early reply"
+        assert any("partial output from build" in text for text in synthesis), "the log tail never reached synthesis"
 
 
 async def test_prompt_usage_owner_is_persisted_per_session(rig):
