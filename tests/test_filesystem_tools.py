@@ -136,11 +136,42 @@ async def test_a_file_url_is_answered_with_the_path_it_means(tmp_path: Path):
     target = tmp_path / "notes.md"
     target.write_text("facts", encoding="utf-8")
 
-    answer = await ReadFileTool(workspace=tmp_path).execute(path=f"file://{target}")
+    answer = await ReadFileTool(workspace=tmp_path).execute(path=target.as_uri())
 
     assert isinstance(answer, str)
     assert str(target) in answer
     assert "web_fetch" not in answer
+
+
+@pytest.mark.asyncio
+async def test_a_file_url_is_answered_with_a_path_the_caller_can_open(tmp_path: Path):
+    """The answer names a path, so the path has to be one the tool can open.
+
+    A file URL escapes what a path cannot carry, and the URL's own spelling is
+    not a path on this machine: the drive of a Windows URL sits behind a
+    leading slash, and a name with a space arrives percent-encoded. Handing
+    the URL's spelling back sent the caller after a file that is not there.
+    """
+    target = tmp_path / "notes and facts.md"
+    target.write_text("facts", encoding="utf-8")
+
+    answer = await ReadFileTool(workspace=tmp_path).execute(path=target.as_uri())
+
+    assert isinstance(answer, str)
+    assert str(target) in answer
+    assert answer.split("-- try ")[-1] == str(target), f"the answer must name the path, not the URL: {answer}"
+
+
+@pytest.mark.asyncio
+async def test_a_file_url_for_another_machine_names_no_local_path(tmp_path: Path):
+    """A URL with a host names somebody else's file, so there is no path to try."""
+    read = ReadFileTool(workspace=tmp_path)
+
+    answer = await read.execute(path="file://fileserver/share/notes.md")
+
+    assert isinstance(answer, str)
+    assert "file://" in answer
+    assert "-- try" not in answer, f"no local path may be named: {answer}"
 
 
 @pytest.mark.asyncio

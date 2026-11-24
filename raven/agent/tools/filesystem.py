@@ -8,6 +8,8 @@ import re
 import unicodedata
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from raven.agent import workdir
 from raven.agent.tools import remote_files, tree_walk
@@ -304,6 +306,26 @@ def _elsewhere(path: str) -> str:
     return missing_here_note([path.strip()])
 
 
+def _file_url_path(url: str) -> str | None:
+    """The local path a ``file://`` URL names, or ``None`` when it names another machine.
+
+    ``url2pathname`` is the platform-aware inverse of ``Path.as_uri()``: it
+    percent-decodes the path, and on Windows it turns ``file:///C:/work/a.md``
+    into ``C:\\work\\a.md``, where a bare strip of the scheme leaves
+    ``/C:/work/a.md`` -- a path Windows cannot open. A URL with an authority
+    names a host -- somebody else's machine, or a UNC share -- so it is not a
+    path on this one.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        # urlparse raises on a bracketed host that is not a valid IPv6 literal.
+        return None
+    if parsed.netloc or not parsed.path:
+        return None
+    return url2pathname(parsed.path)
+
+
 def _missing(path: str) -> str:
     """The refusal for a path that is not there, naming the tool that can reach it.
 
@@ -319,7 +341,12 @@ def _missing(path: str) -> str:
     raw = path.strip()
     if match := _URL_SCHEME_RE.match(raw):
         if match.group("scheme").lower() == "file":
-            return f"Error: {path} is a file:// URL; read_file takes a plain path -- try {raw[7:] or '/'}"
+            # The path the URL names, spelled the way this platform spells a
+            # path -- the caller is about to pass it back to the tool, and a
+            # URL's own spelling is not one it can open.
+            local = _file_url_path(raw)
+            hint = f" -- try {local}" if local else ""
+            return f"Error: {path} is a file:// URL; read_file takes a plain path{hint}"
         return (
             f"Error: {path} is a URL, not a path on this machine. read_file only reads the "
             "filesystem; fetch it with web_fetch, which returns the page as text."
