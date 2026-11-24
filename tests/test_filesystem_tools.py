@@ -4,6 +4,7 @@ A whole-file write is the only change no UI can reconstruct afterwards -- the
 previous content is gone the moment it lands -- so the tool has to hand it over.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -81,7 +82,11 @@ async def test_the_model_text_of_a_write_is_unchanged_by_the_diff(tmp_path: Path
     out = await WriteFileTool(workspace=tmp_path).execute(path=str(target), content="hi\n")
 
     assert isinstance(out, ToolResult)
-    assert out.model_text.startswith("Successfully wrote 3 bytes to ")
+    # The write goes through a text layer, so a CRLF platform holds four bytes
+    # for "hi\n" -- the count the tool reports is the count that landed.
+    written = target.stat().st_size
+    assert written == len("hi\n".replace("\n", os.linesep).encode("utf-8"))
+    assert out.model_text.startswith(f"Successfully wrote {written} bytes to ")
 
 
 @pytest.mark.asyncio
