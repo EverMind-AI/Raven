@@ -311,7 +311,20 @@ class ContextCompactionConfig(_Base):
 
     retain_ratio: float = Field(default=0.10, gt=0.0, lt=1.0)
     """Share of the window a compaction aims to come back down to. Lower means
-    fewer compactions, each discarding more."""
+    fewer compactions, each discarding more. The target never falls below
+    ``minRetainTokens``."""
+
+    min_retain_tokens: int = Field(default=32_768, ge=0)
+    """Floor on the target, in estimated tokens.
+
+    A pure share stops describing a reachable target once the fixed part of a
+    prompt -- system, tools and the checkpoint that replaces removed messages
+    -- is a large fraction of it: at 128K a 10% target is 12,800 tokens, under
+    the roughly 20K measured fixed cost, so no removal can reach it and every
+    compaction reports itself exhausted. The floor keeps the target above that
+    incompressible mass; the ``minReclaimTokens`` clamp still lowers it on a
+    window too small to fund the floor. ``0`` restores a pure share.
+    """
 
     min_reclaim_tokens: int = Field(default=16_384, ge=0)
     """Least a compaction may reclaim to be worth running.
@@ -343,6 +356,12 @@ class ContextCompactionConfig(_Base):
     floor, one semantic and one budgetary, and taking the larger of the two
     satisfies both. A count alone leaves nothing behind when recent messages
     are huge; a share alone can leave half a message when they are huger.
+
+    The shipped 4% is the largest two-decimal share that still clears the
+    target at every tabulated window once ``minRetainTokens`` floors it. The
+    fixed prompt and the checkpoint are roughly constant, so a larger share
+    pushes the protected tail past the target on the smaller windows and no
+    compaction can reach it: 0.05 fails at 262K, 0.09 at 512K and 1M.
     """
 
     boundary: Literal["tool_pair", "turn"] = "tool_pair"

@@ -23,6 +23,7 @@ DEFAULTS = [
     ("triggerRefWindow", _COMPACTING.trigger_ref_window, 128_000),
     ("triggerSlope", _COMPACTING.trigger_slope, 0.03),
     ("retainRatio", _COMPACTING.retain_ratio, 0.10),
+    ("minRetainTokens", _COMPACTING.min_retain_tokens, 32_768),
     ("minReclaimTokens", _COMPACTING.min_reclaim_tokens, 16_384),
     ("headKeepMessages", _COMPACTING.head_keep_messages, 2),
     ("headKeepDecays", _COMPACTING.head_keep_decays, True),
