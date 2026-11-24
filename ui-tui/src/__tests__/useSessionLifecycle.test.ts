@@ -9,9 +9,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GatewayRpc } from '../app/interfaces.js'
 
 import { getOverlayState, patchOverlayState, resetOverlayState } from '../app/overlayStore.js'
-import { getUiState, resetUiState } from '../app/uiStore.js'
+import { getUiState, patchUiState, resetUiState } from '../app/uiStore.js'
 import { performDeleteWithFallback, useSessionLifecycle, writeActiveSessionFile } from '../app/useSessionLifecycle.js'
 import { hydrateDagRuns, toTranscriptMessages } from '../domain/messages.js'
+import { SessionLockedError } from '../rpc/errors.js'
 
 describe('writeActiveSessionFile', () => {
   let dir = ''
@@ -218,6 +219,7 @@ describe('useSessionLifecycle resumeById staleness guard', () => {
   // react-compiler/react-compiler to flag.
   const mountLifecycle = (rpc: ProbeRpc, gwRequest: ProbeRpc) => {
     const setHistoryItems = vi.fn()
+    const sys = vi.fn()
     const actionsRef: { current: null | ReturnType<typeof useSessionLifecycle> } = { current: null }
 
     const Probe = () => {
@@ -233,7 +235,7 @@ describe('useSessionLifecycle resumeById staleness guard', () => {
         setSessionStartedAt: vi.fn(),
         setVoiceProcessing: vi.fn(),
         setVoiceRecording: vi.fn(),
-        sys: vi.fn()
+        sys
       })
 
       return null
@@ -241,7 +243,7 @@ describe('useSessionLifecycle resumeById staleness guard', () => {
 
     const app = renderSync(React.createElement(Probe), { stdout: new PassThrough() as never })
 
-    return { actionsRef, app, setHistoryItems }
+    return { actionsRef, app, setHistoryItems, sys }
   }
 
   beforeEach(() => {
@@ -442,6 +444,124 @@ describe('useSessionLifecycle resumeById staleness guard', () => {
     // resuming here closes the session the newer resume just made active --
     // a backend session torn down under a conversation still on screen.
     expect(rpc).not.toHaveBeenCalledWith('session.close', { session_id: 'session-b' })
+
+    app.unmount()
+  })
+
+  // What the store says when another process is writing the session being left.
+  const lockedClose = () =>
+    new SessionLockedError({
+      code: -32002,
+      data: { detail: 'another process is writing this session' },
+      message: 'session_locked'
+    })
+
+  const LEFT_BEHIND = 'warning: another process is writing the session you left'
+
+  it('reports a refused close and resolves, so a caller that voids it is covered', async () => {
+    const rpc = vi.fn(async (method: string) => {
+      if (method === 'session.close') {
+        throw lockedClose()
+      }
+
+      return {}
+    })
+
+    const { actionsRef, app, sys } = mountLifecycle(
+      rpc,
+      vi.fn(async () => null)
+    )
+
+    await expect(actionsRef.current!.closeSession('session-old')).resolves.toBeNull()
+
+    // quiet, so the failure reaches closeSession instead of being printed as a
+    // bare code by the shared rpc wrapper and swallowed there.
+    expect(rpc).toHaveBeenCalledWith('session.close', { session_id: 'session-old' }, { quiet: true })
+    expect(sys).toHaveBeenCalledWith(expect.stringContaining(LEFT_BEHIND))
+
+    app.unmount()
+  })
+
+  it('opens the new session when the close of the old one is refused, and says why', async () => {
+    const rpc = vi.fn(async (method: string) => {
+      if (method === 'setup.status') {
+        return { provider_configured: true }
+      }
+
+      if (method === 'session.close') {
+        throw lockedClose()
+      }
+
+      if (method === 'session.create') {
+        return { info: null, session_id: 'session-new' }
+      }
+
+      return {}
+    })
+
+    const { actionsRef, app, sys } = mountLifecycle(
+      rpc,
+      vi.fn(async () => null)
+    )
+    patchUiState({ sid: 'session-old' })
+
+    await actionsRef.current!.newSession()
+
+    expect(getUiState().sid).toBe('session-new')
+    expect(sys).toHaveBeenCalledWith(expect.stringContaining(LEFT_BEHIND))
+
+    app.unmount()
+  })
+
+  it('resumes the chosen session when the close of the old one is refused, and says why', async () => {
+    const rpc = vi.fn(async (method: string) => {
+      if (method === 'setup.status') {
+        return { provider_configured: true }
+      }
+
+      if (method === 'session.close') {
+        throw lockedClose()
+      }
+
+      return {}
+    })
+
+    const gwRequest = vi.fn(async (method: string, params?: Record<string, unknown>) =>
+      method === 'session.resume' && params?.session_id === 'session-b'
+        ? { messages: ROWS_PLAIN, session_id: 'session-b' }
+        : null
+    )
+
+    const { actionsRef, app, sys } = mountLifecycle(rpc, gwRequest)
+    patchUiState({ sid: 'session-old' })
+
+    actionsRef.current!.resumeById('session-b')
+
+    await vi.waitFor(() => expect(getUiState().sid).toBe('session-b'))
+    expect(getUiState().status).toBe('ready')
+    expect(sys).toHaveBeenCalledWith(expect.stringContaining(LEFT_BEHIND))
+
+    app.unmount()
+  })
+
+  it('ends a resume whose first request fails on ready, with the error, rather than resuming forever', async () => {
+    const rpc = vi.fn(async (method: string) => {
+      if (method === 'setup.status') {
+        throw new Error('gateway went away')
+      }
+
+      return {}
+    })
+
+    const { actionsRef, app, sys } = mountLifecycle(
+      rpc,
+      vi.fn(async () => null)
+    )
+
+    actionsRef.current!.resumeById('session-b')
+
+    await vi.waitFor(() => expect(getUiState().status).toBe('ready'))
+    expect(sys).toHaveBeenCalledWith('error: gateway went away')
 
     app.unmount()
   })
