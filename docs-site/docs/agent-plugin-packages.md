@@ -169,15 +169,15 @@ machine. The servers a package contributes are named
 own `tools.mcpServers`, yours wins: the package's server is skipped and
 reported rather than replacing it.
 
-A package's servers run with the package root as the working directory
+A package's stdio servers run with the package root as the working directory
 (unless the entry names another one), and with `PLUGIN_ROOT` and
 `PLUGIN_DATA` in their environment: the first is the package directory,
 the second is a directory Raven keeps for that package across updates
-(`<home>/plugin-data/<package>/`). The format's two placeholders,
-`${PLUGIN_ROOT}` and `${PLUGIN_DATA}`, are expanded in a server's
-arguments and environment values. A working directory is not expanded
-that way: it must be a plugin-relative path (`./...`) or a path under one
-of the two placeholders, and it has to stay inside the directory it is
+(`<home>/plugin-data/<package>/`). HTTP servers get neither. The format's
+two placeholders, `${PLUGIN_ROOT}` and `${PLUGIN_DATA}`, are expanded in a
+server's arguments and environment values. A working directory is not expanded
+that way: it must be a plugin-relative path (`./...`), or equal to or under
+one of the two placeholders, and it has to stay inside the directory it is
 anchored to.
 
 After expansion, an argument or environment value that carries a `..` path
