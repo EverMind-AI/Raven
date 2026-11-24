@@ -883,16 +883,25 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         # picture, or a reference it cannot read, is that picture's answer -- the seven
         # the caller waited for alongside it still come back.
         answers = await asyncio.gather(*(one(spec, stem) for spec, stem in zip(wanted, stems)), return_exceptions=True)
-        return self._batch_answer(wanted, answers, model)
+        return self._batch_answer(wanted, answers, model, batch_config)
 
     def _batch_answer(
-        self, wanted: list[dict[str, Any]], answers: list[str | BaseException], model: str | None = None
+        self,
+        wanted: list[dict[str, Any]],
+        answers: list[str | BaseException],
+        model: str | None = None,
+        config: "MediaToolConfig | None" = None,
     ) -> str:
         """Fold the per-picture answers into one, keeping every path under `paths`.
 
         A picture that failed takes its reason with it instead of the batch: the
         caller asks again for those and forwards the rest, which is the whole point
         of asking for eight at once.
+
+        ``config`` is the snapshot the batch was dispatched under. The model the
+        answer is named with may come from it when no picture answered, so it has
+        to be the same Settings every attempt used, not a fresh read of a section
+        that may have been rewritten mid-flight.
         """
         results: list[dict[str, Any]] = []
         paths: list[str] = []
@@ -927,10 +936,16 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                 item["selection"] = reply["selection"]
             results.append(item)
         failed = [item for item in results if item.get("error")]
+        snapshot = config if config is not None else self._config
         # The batch is named by the model a picture's answer carries when one
         # does -- and when none does (every picture failed), by the model the
         # batch's own call named, which is what its requests were built with.
-        batch_model = next((item["model"] for item in results if item.get("model")), None) or self._model(model)
+        batch_model = (
+            next((item["model"] for item in results if item.get("model")), None)
+            or getattr(snapshot, "model", "")
+            or model
+            or self.default_model
+        )
         answer_body: dict[str, Any] = {
             "success": bool(paths),
             "model": batch_model,
@@ -982,11 +997,25 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         body = json.loads(answer)
         selection: dict[str, Any] = {}
         settings_model = getattr(config, "model", "")
-        if model and settings_model and not _same_model_as_sent(model, settings_model):
-            selection["model"] = {"requested": model, "sent": body.get("model") or settings_model, "source": "settings"}
+        # Compare on the wire spelling the request was actually sent under:
+        # a named provider's section spells its model with the provider's own
+        # prefix stripped before the request is built, and the Settings
+        # entry that matches the call's model after that strip is the call's
+        # own model, not an override worth a line.
+        from raven.config.schema import media_provider
+
+        runs_on = media_provider(config)
+        sent_model = wire_model(settings_model, client_provider=runs_on) if runs_on else settings_model
+        if model and settings_model and not _same_model_as_sent(model, sent_model):
+            selection["model"] = {
+                "requested": model,
+                "sent": body.get("model") or settings_model,
+                "source": "settings",
+            }
         settings_quality = getattr(config, "quality", "")
-        if spec.get("quality") and settings_quality and spec["quality"] != settings_quality:
-            selection["quality"] = {"requested": spec["quality"], "sent": settings_quality, "source": "settings"}
+        sent_quality = body.get("quality") if isinstance(body.get("quality"), str) else None
+        if spec.get("quality") and settings_quality and spec["quality"] != settings_quality and sent_quality is not None:
+            selection["quality"] = {"requested": spec["quality"], "sent": sent_quality, "source": "settings"}
         if not selection:
             return answer
         body["selection"] = selection

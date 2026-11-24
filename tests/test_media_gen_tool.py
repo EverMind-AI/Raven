@@ -1715,6 +1715,65 @@ async def test_a_settings_model_equal_to_the_call_s_is_not_reported_as_an_overri
     assert "selection" not in out
 
 
+async def test_a_batch_that_lost_every_picture_is_named_by_its_call_not_by_a_live_read(monkeypatch, tmp_path):
+    """The one gap left: a batch where every picture failed before an answer
+    carried the attempted model had nothing left to name but a live Settings
+    read, so the batch reported the model the section held after the flight."""
+    from raven.config.schema import ImageToolConfig
+
+    first = ImageToolConfig(model="openai/gpt-image-2", api_key="k")
+    second = ImageToolConfig(model="openai/gpt-image-9", api_key="k")
+    state = {"first": True}
+
+    def source():
+        return first if state["first"] else second
+
+    def handler(request):
+        # The section is rewritten while the requests are in flight, and a
+        # directory failure answers nothing the batch can name the model from.
+        state["first"] = False
+        raise RuntimeError("output_dir is refused")
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+
+    tool = ImageGenerateTool(source, workspace=tmp_path)
+    out = json.loads(
+        await tool.execute(prompts=[{"prompt": "a cat"}, {"prompt": "a dog"}], model="openai/gpt-image-2.5-sunburst")
+    )
+
+    assert out["model"] == "openai/gpt-image-2"
+
+
+async def test_a_batch_where_every_picture_failed_to_write_is_named_by_its_attempts_not_by_a_live_read(
+    monkeypatch, tmp_path
+):
+    """An output-directory refusal is a failure no request answer can carry a
+    model back from, so a batch where every picture hit it had only a live
+    Settings read to name itself by -- the model the requests were built with
+    must come from the batch's own snapshot instead."""
+    from raven.config.schema import ImageToolConfig
+
+    first = ImageToolConfig(model="openai/gpt-image-2", api_key="k")
+    second = ImageToolConfig(model="openai/gpt-image-9", api_key="k")
+    state = {"first": True}
+
+    def source():
+        return first if state["first"] else second
+
+    async def refuse_output_dir(self, spec, stem, model, output_dir, config):
+        state["first"] = False
+        raise PermissionError("output_dir is refused")
+
+    monkeypatch.setattr(ImageGenerateTool, "_generate_one_answer", refuse_output_dir)
+
+    tool = ImageGenerateTool(source, workspace=tmp_path)
+    out = json.loads(await tool.execute(prompts=[{"prompt": "a cat"}, {"prompt": "a dog"}]))
+
+    assert out["model"] == "openai/gpt-image-2"
+
+
 async def test_the_request_is_built_from_the_snapshot_the_answer_names(monkeypatch, tmp_path):
     """The in-flight test asserts the answer; this pins the request beside it:
     the model the answer attributes to Settings is the one the outgoing body
