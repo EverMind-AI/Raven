@@ -2185,9 +2185,7 @@ def test_a_minimax_image_schema_follows_the_model_family_and_the_default_is_unch
     reference and warns about its 2013 refusal, H3 edits from up to sixteen and is
     held to that route's limit, and elsewhere an image is still an edit input. Off
     MiniMax the served shape is the class's own, untouched."""
-    section = SimpleNamespace(
-        provider="minimax", api_base="https://api.minimax.io/v1", api_key="k", model="image-01"
-    )
+    section = SimpleNamespace(provider="minimax", api_base="https://api.minimax.io/v1", api_key="k", model="image-01")
     legacy = ImageGenerateTool(section, workspace=tmp_path).to_schema()["function"]
     section.model = "MiniMax-H3-Image"
     h3 = ImageGenerateTool(section, workspace=tmp_path).to_schema()["function"]
