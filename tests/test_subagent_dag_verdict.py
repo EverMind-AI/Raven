@@ -125,6 +125,25 @@ async def test_judge_returns_the_models_verdict():
     assert verdict.evidence == "401 Unauthorized"
 
 
+async def test_judge_is_told_when_the_answer_was_requested_early():
+    """The host already sent a partial answer, so an accomplished verdict has to
+    mean the original task was done, not that the excerpt reads finishable."""
+    provider = _Provider(_accomplished())
+
+    await judge(provider, prompt="p", output="o", evidence="e", evidence_complete=True, reported_early=True)
+
+    instruction = provider.calls[0]["messages"][0]["content"]
+    assert "The host requested this answer early." in instruction
+
+
+async def test_judge_makes_no_early_claim_on_an_ordinary_verdict():
+    provider = _Provider(_accomplished())
+
+    await judge(provider, prompt="p", output="o", evidence="e", evidence_complete=True)
+
+    assert "The host requested this answer early." not in provider.calls[0]["messages"][0]["content"]
+
+
 async def test_judge_fails_open_when_the_call_raises():
     provider = _Provider(error=RuntimeError("provider down"))
     verdict = await judge(provider, prompt="p", output="o", evidence="e", evidence_complete=True)

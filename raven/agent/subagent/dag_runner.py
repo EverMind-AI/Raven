@@ -2218,7 +2218,7 @@ async def _apply_verdict(
             error=errors.get(node.id, ""),
             crashed=crashed,
             output_limited=output_limited,
-            **(optional_keyword(judge_node, "reported_early", True) if reported_early else {}),
+            **({"reported_early": True} if reported_early else {}),
         )
     except RouteUndeterminedError as exc:
         # Ahead of the fail-open below, which is an ordinary node's: there is no route
