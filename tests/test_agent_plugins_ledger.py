@@ -9,6 +9,7 @@ touches anything it should not.
 
 from __future__ import annotations
 
+import builtins
 import json
 import os
 import shutil
@@ -499,6 +500,91 @@ def test_a_save_leaves_no_file_beside_the_ledger(tmp_path: Path) -> None:
     ledger.save()
 
     assert sorted(entry.name for entry in tmp_path.iterdir() if entry.is_file()) == ["ledger.json"]
+
+
+def test_the_new_ledger_is_renamed_into_place(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The file written beside the ledger becomes the ledger by a rename.
+
+    Writing the next ledger beside the old one is only half of what keeps a
+    concurrent reader whole; the swap is the other half. A save that copied
+    the new bytes into the target would rewrite the very file a reader is
+    looking at, so the entry on disk must move from the file written beside
+    the ledger to the ledger itself in one step.
+    """
+    path = tmp_path / "ledger.json"
+    ledger = PackageLedger(path)
+    _record_install(ledger, tmp_path)
+    ledger.save()
+    before = path.read_bytes()
+
+    replacements: list[tuple[Path, Path, bytes]] = []
+    original_replace = os.replace
+
+    def recording_replace(
+        source: str | os.PathLike[str],
+        destination: str | os.PathLike[str],
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        source_path = Path(source)
+        replacements.append((source_path, Path(destination), source_path.read_bytes()))
+        original_replace(source, destination, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+
+    monkeypatch.setattr(os, "replace", recording_replace)
+
+    ledger.forget(PACKAGE_NAME, workspace=tmp_path)
+    ledger.save()
+
+    assert len(replacements) == 1
+    source, destination, source_bytes = replacements[0]
+    assert destination == path
+    assert source.parent == path.parent
+    assert source != path
+    assert source_bytes != before
+    assert source_bytes == path.read_bytes()
+    assert not source.exists()
+
+
+def test_a_save_never_opens_the_ledger_for_writing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ledger on disk is replaced, never rewritten through an open handle.
+
+    A reader that shares the file sees every byte a write puts through an
+    open handle, so a save must put its bytes somewhere else and only then
+    move the result over the ledger. Opening the ledger in a writing mode is
+    that rewrite, whichever API the save reaches for.
+    """
+    path = tmp_path / "ledger.json"
+    ledger = PackageLedger(path)
+    _record_install(ledger, tmp_path)
+    ledger.save()
+    before = path.read_text(encoding="utf-8")
+
+    original_path_open = Path.open
+    original_open = builtins.open
+
+    def opens_for_writing(mode: str) -> bool:
+        return any(flag in mode for flag in "wax+")
+
+    def guarded_path_open(self: Path, mode: str = "r", *args: object, **kwargs: object) -> object:
+        if self == path and opens_for_writing(mode):
+            raise AssertionError(f"the save opened the ledger for writing ({mode})")
+        return original_path_open(self, mode, *args, **kwargs)
+
+    def guarded_open(file: object, mode: str = "r", *args: object, **kwargs: object) -> object:
+        if isinstance(file, (str, os.PathLike)) and Path(file) == path and opens_for_writing(mode):
+            raise AssertionError(f"the save opened the ledger for writing ({mode})")
+        return original_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", guarded_path_open)
+    monkeypatch.setattr(builtins, "open", guarded_open)
+
+    ledger.forget(PACKAGE_NAME, workspace=tmp_path)
+    ledger.save()
+
+    after = path.read_text(encoding="utf-8")
+    assert after != before
+    assert json.loads(after)["workspaces"] == {}
 
 
 def test_a_damaged_v2_entry_loads_as_an_unverified_record(tmp_path: Path) -> None:
