@@ -19,7 +19,7 @@ def isolated_config(tmp_path: Path):
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(json.dumps({"agents": {"defaults": {"workspace": str(tmp_path / "ws")}}}))
     set_config_path(cfg_path)
-    yield
+    yield cfg_path
     raven_home_module._current_config_path = previous
 
 
@@ -136,3 +136,115 @@ async def test_qr_passes_the_gateways_answer_through(monkeypatch: pytest.MonkeyP
     assert r["qr"] == "data:image/png;base64,AAA"
     assert r["connected"] is False
     assert r["running"] is True
+
+
+async def test_status_reads_camelcase_extras_written_by_the_web_ui(
+    isolated_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Web UI stores channel cargo under camelCase keys (`appId`); a lookup by
+    the snake_case spec name alone reported configured credentials as missing."""
+    import json
+
+    from raven.gateway import live_probe
+
+    live_probe.reset_cache()
+    monkeypatch.setattr(live_probe, "_endpoint", lambda: None)
+    isolated_config.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"workspace": str(isolated_config.parent / "ws")}},
+                "channels": {
+                    "feishu": {
+                        "enabled": True,
+                        "appId": "cli_x",
+                        "appSecret": "s3cret",
+                        "encryptKey": "enc",
+                    }
+                },
+            }
+        )
+    )
+
+    status = await console_module.channels_status({})
+    row = next(c for c in status["channels"] if c["name"] == "feishu")
+    sets = {f["key"]: f["set"] for f in row["fields"]}
+
+    assert row["missing"] == []
+    assert row["configured"] is True
+    assert sets["app_id"] is True
+    assert sets["app_secret"] is True
+    assert sets["encrypt_key"] is True, "an optional camelCase field is set just as a required one is"
+
+
+async def test_status_reads_snake_case_values_from_the_config(
+    isolated_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The camelCase spelling is a fallback, not a replacement: a channel already
+    configured under the snake_case spec names must keep reading as configured."""
+    import json
+
+    from raven.gateway import live_probe
+
+    live_probe.reset_cache()
+    monkeypatch.setattr(live_probe, "_endpoint", lambda: None)
+    isolated_config.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"workspace": str(isolated_config.parent / "ws")}},
+                "channels": {"feishu": {"enabled": True, "app_id": "cli_x", "app_secret": "s3cret"}},
+            }
+        )
+    )
+
+    status = await console_module.channels_status({})
+    row = next(c for c in status["channels"] if c["name"] == "feishu")
+    sets = {f["key"]: f["set"] for f in row["fields"]}
+
+    assert row["missing"] == []
+    assert row["configured"] is True
+    assert sets["app_id"] is True
+    assert sets["app_secret"] is True
+
+
+async def test_snake_case_keeps_priority_when_both_spellings_are_present(
+    isolated_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A snake_case value wins over the camelCase fallback when both are written.
+    Two filled spellings leave `missing` empty either way, so precedence is read
+    through `set`: the snake_case group policy is written at its declared
+    default, which reads as not-set only if that is the value the walk reached."""
+    import json
+
+    from raven.config.update_channels import channel_field_specs
+    from raven.gateway import live_probe
+
+    live_probe.reset_cache()
+    monkeypatch.setattr(live_probe, "_endpoint", lambda: None)
+    default_policy = channel_field_specs("feishu")["group_policy"]["default"]
+    other_policy = "open" if default_policy != "open" else "mention"
+    isolated_config.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"workspace": str(isolated_config.parent / "ws")}},
+                "channels": {
+                    "feishu": {
+                        "enabled": True,
+                        "app_id": "snake_x",
+                        "app_secret": "snake_s",
+                        "appId": "camel_x",
+                        "appSecret": "camel_s",
+                        "group_policy": default_policy,
+                        "groupPolicy": other_policy,
+                    }
+                },
+            }
+        )
+    )
+
+    status = await console_module.channels_status({})
+    row = next(c for c in status["channels"] if c["name"] == "feishu")
+    sets = {f["key"]: f["set"] for f in row["fields"]}
+
+    assert row["missing"] == [] and row["configured"] is True
+    assert sets["app_id"] is True and sets["app_secret"] is True
+    assert sets["group_policy"] is False, "the snake_case value at its default was read, not the camelCase one"

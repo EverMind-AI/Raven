@@ -1926,13 +1926,19 @@ async def channels_status(params: dict, *, agent_loop_factory=None) -> dict:
             for field, spec in channel_field_specs(name).items():
                 if field == "enabled":
                     continue
-                # A walk, not one getattr: three of the twelve channels spec
-                # nested keys (`dm.policy`, `mention.require_in_groups`), and a
-                # flat lookup returns None for those -- so a configured slack DM
-                # policy drew as an empty box in the configure form, forever.
+                # A walk over the flat keys, not one getattr, so the camelCase
+                # fallback can reach a field spelled either way. Nested cargo
+                # (slack's dm.policy) is a dict, so this walk does not reach it;
+                # that gap predates this change.
                 current: Any = model
                 for part in field.split("."):
-                    current = getattr(current, part, None)
+                    value = getattr(current, part, None)
+                    if value is None:
+                        # The Web UI writes cargo under camelCase keys, which the
+                        # socket model keeps as extras; the spec names are snake_case.
+                        head, *rest = part.split("_")
+                        value = getattr(current, head + "".join(w.title() for w in rest), None)
+                    current = value
                     if current is None:
                         break
                 is_set = current not in (None, "", []) and current != spec.get("default")
