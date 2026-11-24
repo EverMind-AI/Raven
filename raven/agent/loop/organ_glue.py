@@ -155,8 +155,8 @@ class OrganGlueMixin:
         blocks, read back the way the engine reads them when it decides what to
         send (``told_notices``). Handing the registry those subjects at every
         assembly, rather than letting it keep its own record, is what keeps the
-        two from disagreeing after a release, a restart, a ``/clear`` or a merge
-        that adopts another writer's log.
+        two from disagreeing after a release, a restart, a ``/clear`` or a log id
+        that moved while the log kept its turns.
         """
         from raven.context_engine.runtime_context import told_notices  # deferred -- see module note
 

@@ -1176,8 +1176,8 @@ class ToolRegistry:
         messages). They replace the standing sets outright, every time: the
         log is the only record of what the model was told, so a ``/clear``
         (an empty log) speaks for nothing, while a restart, a reopen after a
-        release, or a log id adopted from another writer together with this
-        copy's unsaved turns speaks for exactly what those turns hold.
+        release, or a log id that moved while the log kept its turns speaks for
+        exactly what those turns hold.
         """
         known = self._session_log_ids.get(session_key, _MISSING)
         if known is not _MISSING and known != log_id:
