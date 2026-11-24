@@ -248,6 +248,7 @@ def test_a_page_whose_tables_cannot_be_found_still_reads_as_prose() -> None:
 # -- what it looks like --------------------------------------------
 
 
+@pytest.mark.slow(reason="Rasterises a blank page through PDFium twice; a first render cold-imports PIL and numpy.")
 def test_a_page_renders_at_the_scale_it_is_asked_for() -> None:
     def build(document, pymupdf):
         document.new_page(width=200, height=100)
