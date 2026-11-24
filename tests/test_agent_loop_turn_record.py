@@ -372,7 +372,7 @@ def test_a_restored_opening_carries_no_picture_the_window_no_longer_holds():
     log = TurnLog(base, len(base))
     base += _call_rows()
     log.follow(base)
-    shrink.window_images(base, 0, reason="refused", any_role=True)
+    base[1] = shrink.without_pictures(base[1], reason="refused")
     log.follow(base)
     summary = {"role": "user", "content": f"{compaction.SUMMARY_MARKER}\n\nbrief"}
     window = [base[0], summary, *base[3:]]
@@ -406,7 +406,7 @@ def test_a_restored_opening_keeps_the_form_the_window_last_sent():
         }
     )
     log.follow(base)
-    shrink.window_images(base, 1, any_role=True)
+    base[1] = shrink.without_pictures(base[1], reason="superseded", keep=1)
     log.follow(base)
     summary = {"role": "user", "content": f"{compaction.SUMMARY_MARKER}\n\nbrief"}
     window = [base[0], summary, *base[2:]]
@@ -443,7 +443,7 @@ def test_a_restored_opening_loses_a_picture_withdrawn_after_the_summary():
     summary = {"role": "user", "content": f"{compaction.SUMMARY_MARKER}\n\nbrief"}
     window = [base[0], summary, *base[2:]]
     log.follow(window)
-    shrink.window_images(window, 0, reason="refused", any_role=True)
+    shrink.window_images(window, 0, reason="refused")
     log.follow(window)
 
     cut = log.cut_to_turn(window)
@@ -493,7 +493,7 @@ def test_the_cut_keeps_the_windows_copy_of_an_opening_whose_picture_was_withdraw
     log = TurnLog(base, len(base))
     base.append({"role": "assistant", "content": "a cat"})
     log.follow(base)
-    shrink.window_images(base, 0, reason="refused", any_role=True)
+    base[1] = shrink.without_pictures(base[1], reason="refused")
     log.follow(base)
 
     cut = log.cut_to_turn(base)
@@ -523,7 +523,7 @@ def test_the_cut_keeps_an_opening_withdrawn_while_a_later_picture_stays():
         }
     )
     log.follow(base)
-    shrink.window_images(base, 1, any_role=True)
+    base[1] = shrink.without_pictures(base[1], reason="superseded", keep=1)
     log.follow(base)
 
     cut = log.cut_to_turn(base)

@@ -28,6 +28,7 @@ from typing import Any, Callable
 from raven.context_engine.runtime_context import replayed_content
 from raven.contracts.llm_provider import LLMProvider
 from raven.providers.binding import ModelBinding, active_window, resolve
+from raven.providers.capabilities import replay_gates
 from raven.utils.tokens import estimate_prompt_tokens_chain, reuse_prompt_tokenization
 
 # Provider-safe message keys. Anything else on a session message
@@ -164,13 +165,22 @@ class HistoryTrimmer:
         return []
 
     @staticmethod
-    def history_from_ids(messages: list[dict[str, Any]], ids: list[int]) -> list[dict[str, Any]]:
+    def history_from_ids(
+        messages: list[dict[str, Any]],
+        ids: list[int],
+        *,
+        can_see_images: bool = True,
+        tool_images_ok: bool = True,
+    ) -> list[dict[str, Any]]:
         """Project the selected messages down to provider-safe keys.
 
         A user message is replayed with the runtime-context lines it was sent
         with (:mod:`raven.context_engine.runtime_context`): the session keeps the
         user's words and the lines apart, and the request has to carry them
         joined as they were sent for the provider's cached prefix to match.
+
+        Archived pictures are expanded only when the receiving model and
+        transport can take them; a false gate leaves the archived placeholder.
 
         An arrival the reader typed mid-turn keeps its mark, so the call seam
         folds the run into the one message the turn was sent with.
@@ -180,7 +190,11 @@ class HistoryTrimmer:
             clean = {k: v for k, v in messages[mid].items() if k in _ALLOWED_KEYS}
             if clean.get("role"):
                 if "content" in clean:
-                    clean["content"] = replayed_content(messages[mid])
+                    clean["content"] = replayed_content(
+                        messages[mid],
+                        can_see_images=can_see_images,
+                        tool_images_ok=tool_images_ok,
+                    )
                 if messages[mid].get(STORED_MID_TURN_KEY):
                     clean[STORED_MID_TURN_KEY] = True
                 history.append(clean)
@@ -352,7 +366,13 @@ class HistoryTrimmer:
         :class:`TrimOutcome`.
         """
         canon = self.canonical_ids(session_messages, ids)
-        history = self.history_from_ids(session_messages, canon)
+        can_see_images, tool_images_ok = replay_gates(self.provider, self.model)
+        history = self.history_from_ids(
+            session_messages,
+            canon,
+            can_see_images=can_see_images,
+            tool_images_ok=tool_images_ok,
+        )
         messages = build_messages(history)
 
         estimated, source = estimate_prompt_tokens_chain(
@@ -376,7 +396,12 @@ class HistoryTrimmer:
             for mid in sorted(set(remaining) - set(reclosed)):
                 warnings.append(f"dropped message {mid}: nothing before the first remaining user message is kept")
             trimmed_ids = reclosed
-            history = self.history_from_ids(session_messages, trimmed_ids)
+            history = self.history_from_ids(
+                session_messages,
+                trimmed_ids,
+                can_see_images=can_see_images,
+                tool_images_ok=tool_images_ok,
+            )
             messages = build_messages(history)
             estimated, source = estimate_prompt_tokens_chain(
                 self.provider,
@@ -393,7 +418,12 @@ class HistoryTrimmer:
             trimmed_ids = [mid for mid in trimmed_ids if mid not in offenders]
             for mid in sorted(offenders):
                 warnings.append(f"dropped message {mid}: its tool call or result is not in the selection")
-            history = self.history_from_ids(session_messages, trimmed_ids)
+            history = self.history_from_ids(
+                session_messages,
+                trimmed_ids,
+                can_see_images=can_see_images,
+                tool_images_ok=tool_images_ok,
+            )
             messages = build_messages(history)
             estimated, source = estimate_prompt_tokens_chain(
                 self.provider,

@@ -29,7 +29,7 @@ from raven.agent.window.images import (
 )
 from raven.agent.window.turn_log import STAND_IN_KEY
 from raven.config.raven import PRUNE_LINE_MAX_CHARS
-from raven.context_engine.history.markers import HISTORY_PINNED_KEY
+from raven.context_engine.history.markers import HISTORY_CHECKPOINT_KEY, HISTORY_PINNED_KEY
 from raven.providers.capabilities import image_placeholder_text
 from raven.utils.images import is_image_part
 from raven.utils.refs import REF_PATTERN
@@ -51,9 +51,10 @@ MAX_IMAGE_STRIP_RETRIES = 2
 # The image window. Pictures a tool showed stay in the request while all of
 # them together fit the configured budget (``agents.defaults.imageWindowBudgetBytes``,
 # base64 bytes as they travel, carried on ``RecoveryLimits``); when they do not,
-# every image-bearing message but the newest ``IMAGE_WINDOW_RECENT_MESSAGES``
-# loses its pictures at once, each replaced by a note saying what it showed and
-# how to see it again. Pictures stay for as long as a turn runs otherwise, and
+# every older tool/attached message and every other user picture loses its
+# pictures at once, each replaced by a note saying what it showed and how to see
+# it again. The picture on the current question counts toward the budget but is
+# never withdrawn. Pictures stay for as long as a turn runs otherwise, and
 # one deck build reached 75 of them in a single request (26.6 MB decoded, 35.5 MB
 # encoded) before OpenRouter refused it with 413, four times across two runs; the
 # refusals were measured to start at about 26.3 MB decoded, i.e. 35.1 MB on the
@@ -97,8 +98,9 @@ def emergency_shrink(messages: list[dict]) -> tuple[list[dict], int]:
     there was nothing worth eliding (caller should not bother retrying).
 
     Three passes, cheapest loss first: the pictures tools showed, then older
-    tool bodies, then -- only when those two freed nothing -- the pictures
-    the user sent, all but the newest.
+    tool bodies, then -- only when those two freed nothing -- the pictures from
+    earlier turns. That last pass can take the current question's picture too,
+    keeping only the newest ``SHRINK_KEEP_RECENT_IMAGES``.
     """
     messages, elided = elide_older_images(messages)
 
@@ -129,12 +131,13 @@ def emergency_shrink(messages: list[dict]) -> tuple[list[dict], int]:
                 shrunk.append(m)
     if elided:
         return shrunk, elided
-    # Nothing a result picture or a tool body could give back. The pictures the
-    # user sent go last, newest kept: a turn that is nothing but pasted
-    # screenshots overflows on them alone, and this path could reach them
-    # before the standing window narrowed the first pass to results.
+    # Nothing a result picture or a tool body could give back. The pictures
+    # from earlier turns go last: a turn that is nothing but pasted screenshots
+    # overflows on them alone, and this path could reach them before the
+    # standing window narrowed the first pass to results. The current question's
+    # picture is not a candidate until this pass, which has nothing else to give.
     out = list(shrunk)
-    changed, _ = window_images(out, SHRINK_KEEP_RECENT_IMAGES, reason="context", any_role=True)
+    changed, _ = window_images(out, SHRINK_KEEP_RECENT_IMAGES, reason="context", last_resort=True)
     return (out, changed) if changed else (shrunk, 0)
 
 
@@ -202,22 +205,42 @@ def demote_tool_images(messages: list[dict]) -> tuple[list[dict], int]:
     return out, demoted
 
 
+_QUESTION_SKIP_KEYS = (
+    "mid_turn",
+    "_mid_turn_user",
+    ATTACHED_IMAGE_KEY,
+    "_recovery_synthetic",
+    "_hook_injected",
+    HISTORY_CHECKPOINT_KEY,
+)
+
+
+def _question_index(messages: list[dict]) -> int | None:
+    """The index of this turn's question: the last plain user message."""
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.get("role") == "user" and not any(message.get(key) for key in _QUESTION_SKIP_KEYS):
+            return index
+    return None
+
+
 def window_images(
     messages: list[dict],
     keep: int,
     *,
     budget: int | None = None,
     reason: str = "superseded",
-    any_role: bool = False,
+    last_resort: bool = False,
 ) -> tuple[int, int]:
     """Withdraw the pictures the request should no longer carry, in place.
 
-    Two modes. Without ``budget``, every image-bearing message but the newest
-    ``keep`` loses its pictures: the shape the overflow path and the refusal
-    ladder want. With ``budget`` (base64 bytes, the size the pictures have on the
-    wire and what the request body is charged), nothing happens while the pictures
-    still live in the transcript fit under it, and the moment they do not, every
-    message but the newest ``keep`` loses its pictures at once.
+    Two modes. Without ``budget``, every image-bearing tool/attached message but
+    the newest ``keep`` loses its pictures: the shape the overflow path and the
+    refusal ladder want. With ``budget`` (base64 bytes, the size the pictures
+    have on the wire and what the request body is charged), nothing happens while
+    the pictures still live in the transcript fit under it, and the moment they do
+    not, the older tool/attached messages and every other user picture lose
+    theirs at once.
     A collapse rather than a slide because each withdrawal is a break in the
     prefix an upstream cache can match: sliding one message out per new batch
     broke the prefix on 16 of 60 calls in one measured run (19 of 41 in the
@@ -238,22 +261,43 @@ def window_images(
 
     The pictures tools showed, on either transport: a ``tool`` message where
     the endpoint carries them there, the following ``user`` message the loop
-    attached where it does not. A picture the user sent is the subject of the
-    turn rather than a result, and stays -- unless ``any_role``, which is for
-    the request the endpoint has already refused, when there is nothing else
-    left to take out. Remote references count toward ``keep`` but weigh
-    nothing in the budget: their size is unknowable without fetching them.
+    attached where it does not. A picture the user sent on another turn, or
+    after the question, is a result like those: it counts toward the budget and
+    is withdrawn with the older tool pictures when the budget is crossed. The
+    picture on this turn's question is the subject of the turn: it counts toward
+    the budget and is not withdrawn while anything else can go. Remote
+    references count toward ``keep`` but weigh nothing in the budget: their size
+    is unknowable without fetching them.
+
+    ``last_resort`` is for what is left after everything else: the request the
+    endpoint has refused, or the overflow with no tool picture or earlier turn
+    left to give. The current question's picture is then a candidate too,
+    because a text answer beats a failed turn; ``keep`` still protects the
+    newest ``keep`` image-bearing messages, and at zero every picture goes.
 
     Returns ``(messages_changed, pictures_withdrawn)``; ``(0, 0)`` means
     nothing had to go.
     """
+    question = _question_index(messages)
     bearing = [
         i
         for i, m in enumerate(messages)
-        if (any_role or m.get("role") == "tool" or m.get(ATTACHED_IMAGE_KEY))
-        and isinstance(m.get("content"), list)
-        and any(is_image_part(p) for p in m["content"])
+        if isinstance(m.get("content"), list) and any(is_image_part(p) for p in m["content"])
     ]
+    tools = [i for i in bearing if messages[i].get("role") == "tool" or messages[i].get(ATTACHED_IMAGE_KEY)]
+    user_pictures = [
+        i
+        for i in bearing
+        if messages[i].get("role") == "user" and not messages[i].get(ATTACHED_IMAGE_KEY) and i != question
+    ]
+    earlier = {
+        i
+        for i in bearing
+        if messages[i].get("role") == "user"
+        and not messages[i].get(ATTACHED_IMAGE_KEY)
+        and question is not None
+        and i < question
+    }
     if budget is not None:
         live = sum(wire_image_bytes(p) for i in bearing for p in messages[i]["content"])
         if live <= budget:
@@ -261,11 +305,18 @@ def window_images(
     # ``max`` because a negative keep would slice from the other end and
     # withdraw the newest pictures instead of the oldest.
     keep = max(0, keep)
-    stale = bearing[:-keep] if keep else bearing
+    if last_resort:
+        stale = bearing[:-keep] if keep else bearing
+    else:
+        stale = (tools[:-keep] if keep else tools) + user_pictures
     pictures = 0
     for i in stale:
         pictures += sum(1 for p in messages[i]["content"] if is_image_part(p))
-        messages[i] = without_pictures(messages[i], reason=reason, keep=keep)
+        messages[i] = without_pictures(
+            messages[i],
+            reason="history" if i in earlier else reason,
+            keep=keep,
+        )
     return len(stale), pictures
 
 

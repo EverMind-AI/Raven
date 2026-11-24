@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from raven.utils.image_store import IMAGE_REFS_KEY
 from raven.utils.images import is_image_part, is_inline_image
 
 # Marks the synthetic user message that carries images a transport cannot put in
@@ -29,8 +30,10 @@ ATTACHED_IMAGE_KEY = "_attached_image"
 #: transcript and read when it leaves it, so the note that stands in for a withdrawn
 #: picture can say which tool showed which page in which round. Not sent (the
 #: provider allow-list drops it) and not filed in the session (``_save_turn`` pops
-#: it): the picture lives for the turn only, and so does its provenance. The
-#: tracing ``llm.input`` artifact records the request as handed to the provider,
+#: it): the provenance lives for the turn only, while the picture itself is
+#: archived in the message's private refs and replayed from them. The tracing
+#: ``llm.input`` artifact
+#: records the request as handed to the provider,
 #: before the allow-list, so on a stock install the entries do appear there,
 #: beside the pictures they describe.
 IMAGE_SOURCES_KEY = "_image_sources"
@@ -86,7 +89,8 @@ _REFUSED = "The endpoint refused"
 _ELIDED = "It was elided"
 _OUTGREW = "This turn's pictures"
 _SEEN = "You looked at it"
-_WITHDRAWAL_OPENINGS = (_REFUSED, _ELIDED, _OUTGREW, _SEEN)
+_HISTORY = "It came from an earlier turn"
+_WITHDRAWAL_OPENINGS = (_REFUSED, _ELIDED, _OUTGREW, _SEEN, _HISTORY)
 _WITHDRAWN_NOTE_FACTS = re.compile(
     r"^(\[image no longer in context: .*?)\. (?:" + "|".join(map(re.escape, _WITHDRAWAL_OPENINGS)) + r").*\]$",
     re.DOTALL,
@@ -114,10 +118,11 @@ def withdrawn_image_note(source: dict[str, Any], *, index: int, total: int, reas
     for it again" rather than a bare "elided" it has to guess about. ``reason`` is
     ``budget`` (the turn's pictures outgrew their byte budget and collapsed to the
     newest few), ``superseded`` (a fixed count moved past it), ``refused`` (the
-    endpoint would not take the request's pictures), ``context`` (an overflow) or
-    ``summary`` (a head summary took the place of the message that showed it).
-    Written once, when the picture leaves; the same inputs always give the same
-    text.
+    endpoint would not take the request's pictures), ``context`` (an overflow),
+    ``summary`` (a head summary took the place of the message that showed it) or
+    ``history`` (a picture from an earlier turn lost its place to the picture
+    budget). Written once, when the picture leaves; the same inputs always give
+    the same text.
     """
     caption = source.get("caption")
     tool = source.get("tool")
@@ -134,6 +139,9 @@ def withdrawn_image_note(source: dict[str, Any], *, index: int, total: int, reas
         why = f"{_ELIDED} with the start of this turn, which a summary now stands for."
     elif reason == "budget":
         why = f"{_OUTGREW} outgrew their byte budget, so only the {keep} newest image-bearing result(s) keep theirs."
+    elif reason == "history":
+        why = f"{_HISTORY} and was withdrawn to fit this request's picture budget."
+        again = "ask the user to send it again"
     elif keep == 0:
         why = f"{_REFUSED} this turn's pictures as too large, so none are kept in context now."
     else:
@@ -160,4 +168,5 @@ def without_pictures(message: dict[str, Any], *, reason: str = "superseded", kee
         parts.append({"type": "text", "text": note})
     clean = dict(message)
     clean["content"] = parts
+    clean.pop(IMAGE_REFS_KEY, None)
     return clean

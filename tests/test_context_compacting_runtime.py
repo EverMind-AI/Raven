@@ -1344,3 +1344,26 @@ class TestTheTurnsOwnWords:
         assert "MID-TURN only the auth module" in contents
         assert len(outcome.messages) < len(messages), "tool exchanges between them still go"
         assert HistoryTrimmer.structural_errors(outcome.messages) == []
+
+
+def test_the_summary_gate_uses_the_summary_model(tmp_path: Path, monkeypatch) -> None:
+    """A pinned summary model decides the summary request's image gates, not the
+    turn's model it is summarising for."""
+    import raven.context_engine.history.compacting.runtime as runtime_module
+
+    config = ContextConfig(
+        history=ContextHistoryConfig(
+            compacting=ContextCompactionConfig(summary=ContextSummaryConfig(model="blind-summary"))
+        )
+    )
+    builder = _builder(tmp_path, config=config)
+    seen: list[str] = []
+
+    def gates(provider, model):
+        seen.append(model)
+        return (model != "blind-summary", True)
+
+    monkeypatch.setattr(runtime_module, "replay_gates", gates)
+
+    assert builder._summary_gates() == (False, True)
+    assert seen == ["blind-summary"]
