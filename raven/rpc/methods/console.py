@@ -963,6 +963,7 @@ _MERGED_KEYS = frozenset(
         "tools.media.video",
         "sessionTitle",
         "translate",
+        "decisionModel",
         "knowledge",
     }
 )
@@ -1252,6 +1253,10 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "sessionTitle.provider": _chk_pin_provider("sessionTitle.provider"),
     "translate.model": _chk_pin_model("translate.model"),
     "translate.provider": _chk_pin_provider("translate.provider"),
+    "decisionModel.model": _chk_pin_model("decisionModel.model"),
+    "decisionModel.provider": _chk_pin_provider("decisionModel.provider"),
+    "decisionModel.useForSkills": _chk_bool("decisionModel.useForSkills"),
+    "decisionModel.useForSpecialists": _chk_bool("decisionModel.useForSpecialists"),
     "embedding.model": _chk_pin_model("embedding.model"),
     "embedding.provider": _chk_pin_provider("embedding.provider"),
     "vision.model": _chk_pin_model("vision.model"),
@@ -1260,6 +1265,7 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     # leaves in sequence.
     "sessionTitle": _chk_pin_pair("sessionTitle", "model", "provider"),
     "translate": _chk_pin_pair("translate", "model", "provider"),
+    "decisionModel": _chk_pin_pair("decisionModel", "model", "provider"),
     "embedding": _chk_pin_pair("embedding", "model", "provider"),
     "vision": _chk_pin_pair("vision", "model", "provider"),
     "agents.defaults.enablePersonalization": _chk_bool("agents.defaults.enablePersonalization"),

@@ -8951,6 +8951,34 @@
       "en": "The default model configuration a new session starts on",
       "zh": "新开会话时的默认模型配置"
     },
+    "gui.settings.roles.decision": {
+      "en": "Decision model",
+      "zh": "决策模型"
+    },
+    "gui.settings.roles.decision_use": {
+      "en": "Fast model for routing skills and specialist tasks; when unset, the chat model decides",
+      "zh": "用于路由技能和分派专家任务的快速模型；未设置时由主对话模型决定"
+    },
+    "gui.settings.roles.decision_skills": {
+      "en": "Use for skills",
+      "zh": "用于技能路由"
+    },
+    "gui.settings.roles.decision_skills_use": {
+      "en": "Find and pick relevant skills during a session",
+      "zh": "在会话中查找并选用相关技能"
+    },
+    "gui.settings.roles.decision_specialists": {
+      "en": "Use for specialists",
+      "zh": "用于专家分派"
+    },
+    "gui.settings.roles.decision_specialists_use": {
+      "en": "Assign delegated tasks to specialist agents",
+      "zh": "将委派任务分配给合适的专家代理"
+    },
+    "gui.settings.roles.decision_pick_first": {
+      "en": "Select a decision model above to enable these routing options",
+      "zh": "请先在上方选择决策模型，再启用这些路由选项"
+    },
     "gui.settings.roles.title": {
       "en": "Session naming",
       "zh": "会话命名"

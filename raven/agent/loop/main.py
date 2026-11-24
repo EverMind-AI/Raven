@@ -495,11 +495,13 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 skill_forge_router_config=skill_forge_router_config,
                 skill_forge_config=skill_forge_config,
                 skill_hub_client=self._skill_hub_client,
+                provider_pool=self._provider_pool,
                 # The same reader the catalog gets: the pool drop and the
                 # scent menu screen against the list on disk now, so a skill
                 # switched off -- or back on -- reaches the next turn.
                 blocklist_reader=lambda: skill_blocklist(self._live_config),
                 task_board=self._task_board_config.enabled,
+                live_config=self._live_config,
             )
 
         # The four strategy roles this generation runs on. Assembled here
@@ -589,6 +591,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             task_board=self._task_board_config.enabled,
             long_run_notice_seconds=subagents.long_run_notice_seconds,
             control_reachable=self.subagent_control_reachable,
+            live_config=self._live_config,
         )
         # Reads the live direct chats through a lambda for the reason the identity
         # segment does: the manager is rebuilt on a hot config apply.

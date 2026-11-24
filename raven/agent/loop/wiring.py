@@ -1720,8 +1720,9 @@ class WiringMixin:
             None,
         )
         if skill_registry is not None or self._skill_hub_client is not None:
+            from raven.agent.decision_model import resolve_decision_binding
             from raven.agent.tools.skill_hub import FindSkillTool, ReadSkillTool, UseSkillTool, router_held_hit
-            from raven.config.live import project_skills_enabled, skill_hub_enabled
+            from raven.config.live import decision_for_skills, project_skills_enabled, skill_hub_enabled
             from raven.memory_engine import ProjectSkills
 
             def skills_router():
@@ -1763,6 +1764,11 @@ class WiringMixin:
                     min_safety=self._skill_min_safety,
                     blocklist=self._skill_blocklist,
                     blocklist_reader=self._skill_blocklist_reader,
+                    decision_binding=lambda: (
+                        resolve_decision_binding(self._live_config, self._provider_pool)
+                        if decision_for_skills(self._live_config)
+                        else None
+                    ),
                 ),
             )
             self.tools.register(
@@ -1829,12 +1835,21 @@ class WiringMixin:
         refuse, rather than a condition repeated over six registrations that a
         seventh would quietly not get.
         """
+        from raven.agent.decision_model import resolve_decision_binding
+        from raven.config.live import decision_for_specialists
+
+        def _specialist_decision_binding() -> ModelBinding | None:
+            if not decision_for_specialists(self._live_config):
+                return None
+            return resolve_decision_binding(self._live_config, self._provider_pool)
+
         self.tools.register(
             SpawnTool(
                 manager=self.subagents,
                 control_advert=lambda: (
                     self.dag_control_advert("cancel_subagent") if self.subagent_control_reachable() else None
                 ),
+                decision_binding=_specialist_decision_binding,
             )
         )
         # Outbound A2A: hands work to an external agent rather than one this
@@ -1889,6 +1904,7 @@ class WiringMixin:
                 binding_for=self._turn_binding,
                 spawn_offered=lambda: self.tools.offers_by_name("spawn"),
                 verdict_config=self.subagent_dag_config,
+                decision_binding=_specialist_decision_binding,
             )
         )
         # The host's own record of the conversation's matters. Host-only for the

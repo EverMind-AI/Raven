@@ -48,7 +48,9 @@ from typing import TYPE_CHECKING, Any, Protocol
 from loguru import logger
 
 from raven.agent import workdir
+from raven.agent.decision_model import select_specialist_with_decision_model
 from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN, optional_keyword
+from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.dag_adjudication import (
     ABANDON,
     REASSIGN,
@@ -112,6 +114,7 @@ if TYPE_CHECKING:
     from raven.agent.subagent.delegate import DelegateTable, Worker
     from raven.agent.subagent.registry import AgentRegistry
     from raven.playbook.agent_spec import AgentPlaybookSpec
+    from raven.providers.binding import ModelBinding
 
 # Sink: (conversation_id, event_name, payload) -> awaitable. Late-bound by the
 # host (the page mount wires it to the page's emitter).
@@ -742,6 +745,7 @@ class SubAgentDagTool(Tool):
         sandbox_for: "Callable[[Path], Any] | None" = None,
         verdict_config: "SubagentDagConfig | None" = None,
         stint_driver: StintDriver | None = None,
+        decision_binding: "Callable[[], ModelBinding | None] | None" = None,
     ) -> None:
         # Read through to SubagentManager's flag rather than mirroring it: this
         # tool dispatches to its own backends without ever calling ``spawn``, so
@@ -828,6 +832,7 @@ class SubAgentDagTool(Tool):
         # keeps node exec on the host exactly as before this seam existed.
         self._sandbox_for = sandbox_for
         self._verdict_config = verdict_config if verdict_config is not None else SubagentDagConfig()
+        self._decision_binding = decision_binding
         self._cancels: dict[str, asyncio.Event] = {}
         self._desks: dict[str, AdjudicationDesk] = {}
         self._outboxes: dict[str, Outbox] = {}
@@ -1655,6 +1660,55 @@ class SubAgentDagTool(Tool):
         """
         return super().to_schema()
 
+    def _active_decision_binding(self) -> "ModelBinding | None":
+        if self._decision_binding is None or self._worker_table_for():
+            return None
+        return self._decision_binding()
+
+    async def _resolve_auto_subagents(self, nodes: list[dict], task_summary: str = "") -> list[dict]:
+        binding = self._active_decision_binding()
+        if binding is None:
+            return nodes
+        enabled_names = self._registry.names()
+        if not enabled_names:
+            return nodes
+        roster_text = self._registry.roster_text()
+        resolved: list[dict] = []
+        for raw in nodes:
+            if not isinstance(raw, dict):
+                resolved.append(raw)
+                continue
+            val = raw.get("subagent")
+            if isinstance(val, str):
+                val = val.strip()
+            if val is not None and val != "" and val != "auto":
+                resolved.append(raw)
+                continue
+            summary = str(raw.get("node_summary") or raw.get("nodeSummary") or "").strip()
+            prompt = str(raw.get("prompt_template") or raw.get("promptTemplate") or "").strip()
+            parts = [p for p in (task_summary.strip(), summary, prompt) if p]
+            task_text = "\n\n".join(parts)
+            chosen = await select_specialist_with_decision_model(
+                binding,
+                task_text,
+                roster_text,
+                enabled_names,
+            )
+            if chosen is not None and chosen not in enabled_names:
+                chosen = None
+            if chosen is None and GENERIC_AGENT in enabled_names:
+                chosen = GENERIC_AGENT
+            if chosen is not None:
+                updated = dict(raw)
+                updated["subagent"] = chosen
+                resolved.append(updated)
+            else:
+                updated = dict(raw)
+                if isinstance(updated.get("subagent"), str) and updated["subagent"].strip() == "auto":
+                    updated["subagent"] = ""
+                resolved.append(updated)
+        return resolved
+
     def _node_schema(self) -> dict[str, Any]:
         """Node schema with ``subagent`` constrained to the agent table.
 
@@ -1672,14 +1726,23 @@ class SubAgentDagTool(Tool):
         schema = deepcopy(_NODE_SCHEMA)
         table = self._worker_table_for()
         names = table.labels() if table else self._registry.names()
+        auto_routing = not table and self._active_decision_binding() is not None
         if names:
             subagent = schema["properties"]["subagent"]
-            subagent["enum"] = names
             if table:
+                subagent["enum"] = names
                 subagent["description"] = (
                     "Which worker runs this node. Required: pass one of the labels in the list -- "
                     "the label itself, not the agent it runs on."
                 )
+            elif auto_routing:
+                subagent["enum"] = ["auto", *names]
+                subagent["description"] = (
+                    "Name of the agent that runs this node, from the roster, or 'auto' (or omit) to auto-select."
+                )
+                schema["required"] = [field for field in schema["required"] if field != "subagent"]
+            else:
+                subagent["enum"] = names
         return schema
 
     def node_schema(self) -> dict[str, Any]:
@@ -1933,6 +1996,7 @@ class SubAgentDagTool(Tool):
         # enough for the model to just fix and re-submit. Backgrounding must not
         # turn a malformed graph into an announcement that arrives a turn later.
         try:
+            nodes = await self._resolve_auto_subagents(nodes, task_summary=task_summary)
             submitted = parse_dag_spec({"task_summary": task_summary, "nodes": nodes, "confirm": confirm})
             spec = submitted
             # A dependency on a node an earlier run completed is checked against

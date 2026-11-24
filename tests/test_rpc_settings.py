@@ -1883,6 +1883,7 @@ async def test_settings_leaf_write_follows_the_non_null_alias(cfg, snake_active,
     "camel,snake,model_field,provider_field,keep",
     [
         ("sessionTitle", "session_title", "model", "provider", {"enabled": False}),
+        ("decisionModel", "decision_model", "model", "provider", {"useForSkills": True}),
     ],
 )
 async def test_settings_pin_merge_follows_the_non_null_alias(
@@ -1981,7 +1982,10 @@ async def test_settings_set_media_speech_selection_merges(cfg):
 
 @pytest.mark.parametrize(
     "parent,model_field,provider_field",
-    [("sessionTitle", "model", "provider")],
+    [
+        ("sessionTitle", "model", "provider"),
+        ("decisionModel", "model", "provider"),
+    ],
 )
 async def test_settings_set_pin_pairs_write_as_one_merged_object(cfg, parent, model_field, provider_field):
     cfg.write_text(json.dumps({parent: {"keep": True}}), encoding="utf-8")
@@ -1995,6 +1999,67 @@ async def test_settings_set_pin_pairs_write_as_one_merged_object(cfg, parent, mo
     assert _read(cfg)[parent] == {"keep": True, model_field: None, provider_field: None}
     with pytest.raises(ConfigValidationError):
         await rpc_console.settings_set({"key": parent, "value": {model_field: "m"}})
+
+
+async def test_settings_set_decision_model_round_trip(cfg):
+    from raven.config.raven import load_raven_config
+
+    await rpc_console.settings_set(
+        {"key": "decisionModel", "value": {"model": "openai/gpt-5-mini", "provider": "openai"}}
+    )
+    await rpc_console.settings_set({"key": "decisionModel.useForSkills", "value": True})
+    await rpc_console.settings_set({"key": "decisionModel.useForSpecialists", "value": True})
+
+    got = await rpc_console.settings_get({})
+    assert got["settings"]["decisionModel"] == {
+        "model": "openai/gpt-5-mini",
+        "provider": "openai",
+        "useForSkills": True,
+        "useForSpecialists": True,
+    }
+    loaded = load_raven_config(config_path=cfg).decision_model
+    assert loaded.model == "openai/gpt-5-mini"
+    assert loaded.provider == "openai"
+    assert loaded.use_for_skills is True
+    assert loaded.use_for_specialists is True
+
+    await rpc_console.settings_set({"key": "decisionModel.model", "value": "anthropic/claude-haiku-4-5"})
+    await rpc_console.settings_set({"key": "decisionModel.provider", "value": "anthropic"})
+    await rpc_console.settings_set({"key": "decisionModel.useForSkills", "value": False})
+    loaded = load_raven_config(config_path=cfg).decision_model
+    assert loaded.model == "anthropic/claude-haiku-4-5"
+    assert loaded.provider == "anthropic"
+    assert loaded.use_for_skills is False
+    assert loaded.use_for_specialists is True
+
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_set({"key": "decisionModel.useForSkills", "value": "yes"})
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_set({"key": "decisionModel.useForSpecialists", "value": 1})
+
+
+async def test_settings_set_decision_model_clear_preserves_flags(cfg):
+    from raven.config.raven import load_raven_config
+
+    await rpc_console.settings_set(
+        {"key": "decisionModel", "value": {"model": "openai/gpt-5-mini", "provider": "openai"}}
+    )
+    await rpc_console.settings_set({"key": "decisionModel.useForSkills", "value": True})
+    await rpc_console.settings_set({"key": "decisionModel.useForSpecialists", "value": True})
+
+    await rpc_console.settings_set({"key": "decisionModel", "value": {"model": None, "provider": None}})
+
+    raw = _read(cfg)["decisionModel"]
+    assert raw["model"] is None
+    assert raw["provider"] is None
+    assert raw["useForSkills"] is True
+    assert raw["useForSpecialists"] is True
+
+    loaded = load_raven_config(config_path=cfg).decision_model
+    assert loaded.model is None
+    assert loaded.provider is None
+    assert loaded.use_for_skills is True
+    assert loaded.use_for_specialists is True
 
 
 # ---------------------------------------------------------------------------

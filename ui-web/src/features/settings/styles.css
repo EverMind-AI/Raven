@@ -475,6 +475,17 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 .settings-row.settings-open,.settings-xrow.settings-open {border-bottom:0}
 .settings-xrow.settings-open + .settings-cfg {border-bottom:1px solid var(--line-soft)}
 .settings-xrow.settings-open + .settings-cfg:last-child {border-bottom:0}
+.settings-decision-cfg {position:relative; margin:0; padding:0 15px 12px 31px; background:transparent}
+.settings-decision-cfg::before {content:""; position:absolute; left:15px; top:2px; bottom:14px; width:2px; border-radius:2px;
+  background:var(--faint); opacity:.45}
+.settings-decision-cfg .settings-row {display:grid; grid-template-columns:minmax(0,1fr) auto; gap:0 14px; min-height:34px; padding:1px 0;
+  border:0; align-items:center}
+.settings-decision-cfg .settings-row .settings-k {font-size:13px; color:var(--muted)}
+.settings-decision-cfg .settings-row .settings-ctl {justify-self:end; margin:0}
+.settings-decision-cfg .settings-cfnote {font-size:12px; color:var(--clay); text-align:right; padding:0 0 4px}
+.settings-decision-cfg .settings-swi {width:34px; height:20px}
+.settings-decision-cfg .settings-swi::after {width:14px; height:14px}
+.settings-decision-cfg .settings-swi[aria-checked="true"]::after {transform:translateX(14px)}
 /* The add-a-provider block opts back out to a box: it is a standalone form with
    its own edges, not a row's dependents, so it keeps the border, the ground and
    the label column, and drops the rail. These outrank the rules above by

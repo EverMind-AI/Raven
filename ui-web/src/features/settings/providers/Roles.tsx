@@ -1,12 +1,12 @@
 /* The model roles: which model each job runs on, and the picker that changes
-   it. Nine rows; each knows where its pair is written and which providers
+   it. Ten rows; each knows where its pair is written and which providers
    may serve it. The media tools' rows on the Tools page draw the same pill. */
 import { useRef } from 'react'
 
 import { t } from '../../../i18n/t'
 import { openPicker } from '../../model/source'
 import { statedTags } from '../../model/types'
-import { Card, Row, Rov, Seg, Stepper } from '../Fields'
+import { Card, Row, Rov, Seg, Stepper, Switch } from '../Fields'
 import { dig } from '../source'
 import * as store from '../store'
 
@@ -15,7 +15,7 @@ import type { ProviderRow, SettingsSnapshot } from '../types'
 import type { JSX } from 'react'
 
 export type RoleId =
-  | 'chat' | 'title' | 'memllm'
+  | 'chat' | 'decisionModel' | 'title' | 'memllm'
   | 'embedding' | 'rerank' | 'multimodal' | 'image' | 'speech' | 'video'
 
 /* What each slot may be filled with. The one consumer of a model's kind: an
@@ -25,7 +25,7 @@ export type RoleId =
    a model that also reads pictures is text, and the multimodal slot -- which
    wants exactly that -- takes text too. */
 export const ROLE_KIND: Record<RoleId, Kind> = {
-  chat: 'text', title: 'text', memllm: 'text', multimodal: 'text',
+  chat: 'text', decisionModel: 'text', title: 'text', memllm: 'text', multimodal: 'text',
   embedding: 'embedding', rerank: 'reranker', image: 'image', speech: 'audio', video: 'video',
 }
 
@@ -33,6 +33,8 @@ export interface Role {
   id: RoleId
   /* settings.set keys for the model and the provider. */
   keys?: [string, string]
+  /* Atomic settings.set key accepting { model, provider } in one call. */
+  pairKey?: string
   /* An EverOS section, written through settings.everosSet. */
   everos?: string
   /* tools.media.<kind>, and the tool that exists to run it. */
@@ -43,6 +45,7 @@ export interface Role {
 
 export const ROLES: Role[] = [
   { id: 'chat' },
+  { id: 'decisionModel', keys: ['decisionModel.model', 'decisionModel.provider'], pairKey: 'decisionModel', optional: true },
   { id: 'title', keys: ['sessionTitle.model', 'sessionTitle.provider'] },
   { id: 'memllm', everos: 'llm' },
   { id: 'embedding', everos: 'embedding', optional: true },
@@ -55,13 +58,15 @@ export const ROLES: Role[] = [
 
 /* Literal keys, for the i18n gate. */
 const NAME: Record<RoleId, string> = {
-  chat: 'gui.settings.roles.chat', title: 'gui.settings.roles.title',
+  chat: 'gui.settings.roles.chat', decisionModel: 'gui.settings.roles.decision',
+  title: 'gui.settings.roles.title',
   memllm: 'gui.settings.roles.memllm', embedding: 'gui.settings.roles.embedding',
   rerank: 'gui.settings.roles.rerank', multimodal: 'gui.settings.roles.multimodal', image: 'gui.settings.roles.image',
   speech: 'gui.settings.roles.speech', video: 'gui.settings.roles.video',
 }
 const USE: Record<RoleId, string> = {
-  chat: 'gui.settings.roles.chat_use', title: 'gui.settings.roles.title_use',
+  chat: 'gui.settings.roles.chat_use', decisionModel: 'gui.settings.roles.decision_use',
+  title: 'gui.settings.roles.title_use',
   memllm: 'gui.settings.roles.memllm_use', embedding: 'gui.settings.roles.embedding_use',
   rerank: 'gui.settings.roles.rerank_use', multimodal: 'gui.settings.roles.multimodal_use', image: 'gui.settings.roles.image_use',
   speech: 'gui.settings.roles.speech_use', video: 'gui.settings.roles.video_use',
@@ -157,7 +162,7 @@ export function everosLocked(r: Role, snap: SettingsSnapshot): 'foreign' | 'env'
    memory LLM does when the server says so -- it cannot when the chat model's
    provider has no key raven can hand EverOS, and then unset means memory off. */
 export function followsChat(r: Role, snap: SettingsSnapshot): boolean {
-  if (r.keys) return true
+  if (r.keys) return !r.optional
   return !!r.everos && !!snap.everos?.sections?.[r.everos]?.follows_main
 }
 
@@ -213,6 +218,7 @@ async function setRole(r: Role, model: string, provider: string, typed: boolean,
     if (await src.pickModel(model, provider)) store.set({ needsRestart: true })
     return src.load()
   }
+  if (r.pairKey) return src.set(r.pairKey, { model, provider })
   if (r.keys) { await src.set(r.keys[0], model); return src.set(r.keys[1], provider) }
   if (r.everos) return src.everosSet(r.everos, model, provider)
   if (r.media) {
@@ -236,6 +242,7 @@ function mediaSelection(kind: string, model: string, provider?: string): { model
 
 async function clearRole(r: Role): Promise<SettingsSnapshot | void> {
   const src = store.source()
+  if (r.pairKey) return src.set(r.pairKey, { model: null, provider: null })
   if (r.keys) { await src.set(r.keys[0], null); return src.set(r.keys[1], null) }
   if (r.everos) return src.everosSet(r.everos, null)
   if (r.media) {
@@ -534,6 +541,44 @@ function ChatParams(): JSX.Element {
   )
 }
 
+const decisionFlag = (raw: Record<string, unknown>, camel: string, snake: string): boolean => {
+  const v = dig(raw, `decisionModel.${camel}`)
+  if (typeof v === 'boolean') return v
+  const s = dig(raw, `decisionModel.${snake}`)
+  return typeof s === 'boolean' ? s : false
+}
+
+function DecisionToggles({ role }: { role: Role }): JSX.Element {
+  const s = store.get()
+  const raw = s.snap.raw
+  const hasModel = !!roleValue(role, s.snap)
+  const useForSkills = decisionFlag(raw, 'useForSkills', 'use_for_skills')
+  const useForSpecialists = decisionFlag(raw, 'useForSpecialists', 'use_for_specialists')
+  const skillsLabel = t('gui.settings.roles.decision_skills')
+  const specialistsLabel = t('gui.settings.roles.decision_specialists')
+  return (
+    <div className="settings-decision-cfg">
+      <Row label={skillsLabel} sub={t('gui.settings.roles.decision_skills_use')}>
+        <Switch
+          on={useForSkills}
+          label={skillsLabel}
+          onChange={(next) => void store.write('decisionModel.useForSkills', next, { remount: false })}
+        />
+      </Row>
+      <Row label={specialistsLabel} sub={t('gui.settings.roles.decision_specialists_use')}>
+        <Switch
+          on={useForSpecialists}
+          label={specialistsLabel}
+          onChange={(next) => void store.write('decisionModel.useForSpecialists', next, { remount: false })}
+        />
+      </Row>
+      {!hasModel && (useForSkills || useForSpecialists) && (
+        <div className="settings-cfnote">{t('gui.settings.roles.decision_pick_first')}</div>
+      )}
+    </div>
+  )
+}
+
 /* A few role rows with no card around them, for a page that needs only those
    (the wizard's data-sync step asks for its embedding model in place).
    `needed` drops the "optional" tag: the page drawing the row requires it. */
@@ -563,12 +608,13 @@ export function Roles({ setup }: { setup?: boolean }): JSX.Element {
     <Card title={t('gui.settings.roles.title_card')}>
       {ROLES.filter((r) => !(other && r.everos && !(r.everos in (everos?.sections ?? {})))).map((r) => (
         <div key={r.id}>
-          <Row open={r.id === 'chat' && s.chatCfg} k={(
+          <Row open={(r.id === 'chat' && s.chatCfg) || r.id === 'decisionModel'} k={(
             <RoleLabel role={r} extra={r.id === 'chat' ? <ParamsDisc /> : undefined} />
           )}>
             <RolePill role={r} setup={setup} />
           </Row>
           {r.id === 'chat' && s.chatCfg && <ChatParams />}
+          {r.id === 'decisionModel' && <DecisionToggles role={r} />}
         </div>
       ))}
     </Card>

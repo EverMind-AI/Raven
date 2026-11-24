@@ -21,16 +21,18 @@ import asyncio
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
+from raven.agent.decision_model import select_skills_with_decision_model
 from raven.i18n import zh_lexicon
 from raven.security.trust import wrap_untrusted
 from raven.skill_hub.policy import SkillPolicy, is_blocked, refuses_low_safety
 
 if TYPE_CHECKING:
     from raven.memory_engine import SkillForgeRouter
+    from raven.providers.binding import ModelBinding
 
 _MIN_CHARS = 8
 _MIN_CORE_CHARS = 4
@@ -198,20 +200,24 @@ class ScentMenu:
         policy: SkillPolicy | None = None,
         top_k: int = 3,
         desc_chars: int = 60,
+        decision_binding: "Callable[[], ModelBinding | None] | None" = None,
     ) -> None:
         self._router = router
         self._policy = policy
         self._top_k = top_k
         self._desc_chars = desc_chars
+        self._decision_binding = decision_binding
 
     async def build(self, current_message: str, session_messages: list[dict[str, Any]]) -> ScentResult:
         window = recent_user_window(session_messages)
         if not is_fat(current_message, window):
             return _SILENT
         query = build_scent_query(current_message, window)
+        binding = self._decision_binding() if self._decision_binding is not None else None
+        fetch_k = max(self._top_k * 2, self._top_k) if binding is not None else self._top_k
         try:
             hits = await asyncio.wait_for(
-                self._router.select(query, history=[], k=self._top_k), timeout=_BUILD_TIMEOUT_S
+                self._router.select(query, history=[], k=fetch_k), timeout=_BUILD_TIMEOUT_S
             )
         except TimeoutError:
             logger.warning("scent menu lookup timed out after {}s; skipping this turn", _BUILD_TIMEOUT_S)
@@ -219,18 +225,33 @@ class ScentMenu:
         except Exception:  # noqa: BLE001 - a scent failure must never break assembly
             logger.opt(exception=True).warning("scent menu lookup failed; skipping this turn")
             return _SILENT
-        lines = []
-        ids: list[str] = []
+        entries: list[tuple[str, str]] = []
         for h in hits or []:
             if self._policy is not None and _refused_by_policy(h, self._policy):
                 continue
             desc = _first_line(h.meta.get("description") or h.content)[: self._desc_chars]
             if not desc:
                 continue
-            lines.append(f"- {h.qualified_id}: {desc}")
-            ids.append(h.qualified_id)
-        if not lines:
+            entries.append((h.qualified_id, desc))
+        if not entries:
             return _SILENT
+        if binding is not None:
+            chosen = await select_skills_with_decision_model(
+                binding,
+                query,
+                entries,
+                max_skills=self._top_k,
+                timeout=3.0,
+            )
+            if chosen is not None:
+                by_id = dict(entries)
+                entries = [(skill_id, by_id[skill_id]) for skill_id in chosen if skill_id in by_id]
+            else:
+                entries = entries[: self._top_k]
+        if not entries:
+            return _SILENT
+        lines = [f"- {skill_id}: {desc}" for skill_id, desc in entries]
+        ids = [skill_id for skill_id, _ in entries]
         shown_query = query.replace("\n", " / ")[:80]
         header = f"Possibly relevant skills (matched for: {shown_query!r}):"
         footer = "(If irrelevant, ignore. Read one with read_skill(id); search differently with find_skill.)"

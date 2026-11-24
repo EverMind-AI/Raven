@@ -645,3 +645,97 @@ describe('another memory backend', () => {
     expect(screen.getAllByText('gui.settings.roles.everos_missing').length).toBe(4)
   })
 })
+
+describe('decision model role and toggles', () => {
+  it('renders decision model role picker and both routing switches', async () => {
+    install()
+    await mount('model')
+
+    const pickerBtn = pill('gui.settings.roles.decision')
+    expect(pickerBtn.textContent).toContain('gui.settings.roles.unset')
+
+    const skillsSwitch = screen.getByRole('switch', { name: 'gui.settings.roles.decision_skills' })
+    const specialistsSwitch = screen.getByRole('switch', { name: 'gui.settings.roles.decision_specialists' })
+    expect(skillsSwitch.getAttribute('aria-checked')).toBe('false')
+    expect(specialistsSwitch.getAttribute('aria-checked')).toBe('false')
+    expect(screen.queryByText('gui.settings.roles.decision_pick_first')).toBe(null)
+  })
+
+  it('picks and clears decisionModel atomically through decisionModel pair key', async () => {
+    const data = snap()
+    const { calls } = install(data, {
+      set: async (key, value) => {
+        calls.push(['set', { key, value }])
+        if (key === 'decisionModel') {
+          const pair = value as { model: string | null; provider: string | null }
+          data.raw.decisionModel = {
+            ...(data.raw.decisionModel as Record<string, unknown> | undefined),
+            model: pair.model,
+            provider: pair.provider,
+          }
+        }
+        return { ...data, raw: { ...data.raw } }
+      },
+    })
+    await mount('model')
+
+    await pick('gui.settings.roles.decision', 'claude-sonnet-4-5')
+    expect(sets(calls)).toEqual([
+      { key: 'decisionModel', value: { model: 'claude-sonnet-4-5', provider: 'anthropic' } },
+    ])
+
+    calls.length = 0
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('gui.settings.roles.clear {"role":"gui.settings.roles.decision"}'))
+    })
+    expect(sets(calls)).toEqual([
+      { key: 'decisionModel', value: { model: null, provider: null } },
+    ])
+  })
+
+  it('writes decisionModel.useForSkills and decisionModel.useForSpecialists when toggled and hides warning when model is set', async () => {
+    const data = snap()
+    data.raw.decisionModel = { model: 'claude-sonnet-4-5', provider: 'anthropic', useForSkills: false, useForSpecialists: true }
+    const { calls } = install(data)
+    await mount('model')
+
+    const skillsSwitch = screen.getByRole('switch', { name: 'gui.settings.roles.decision_skills' })
+    const specialistsSwitch = screen.getByRole('switch', { name: 'gui.settings.roles.decision_specialists' })
+    expect(skillsSwitch.getAttribute('aria-checked')).toBe('false')
+    expect(specialistsSwitch.getAttribute('aria-checked')).toBe('true')
+    expect(screen.queryByText('gui.settings.roles.decision_pick_first')).toBe(null)
+
+    await act(async () => { fireEvent.click(skillsSwitch) })
+    await act(async () => { fireEvent.click(specialistsSwitch) })
+    expect(sets(calls)).toEqual([
+      { key: 'decisionModel.useForSkills', value: true },
+      { key: 'decisionModel.useForSpecialists', value: false },
+    ])
+  })
+
+  it('shows helper hint when a routing toggle is enabled without a decision model selected, and clears it once picked', async () => {
+    const data = snap()
+    data.raw.decision_model = { use_for_skills: true, use_for_specialists: false }
+    const { calls } = install(data, {
+      set: async (key, value) => {
+        calls.push(['set', { key, value }])
+        if (key === 'decisionModel') {
+          const pair = value as { model: string | null; provider: string | null }
+          data.raw.decision_model = {
+            ...(data.raw.decision_model as Record<string, unknown>),
+            model: pair.model,
+            provider: pair.provider,
+          }
+        }
+        return { ...data, raw: { ...data.raw } }
+      },
+    })
+    await mount('model')
+
+    expect(screen.getByRole('switch', { name: 'gui.settings.roles.decision_skills' }).getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByText('gui.settings.roles.decision_pick_first')).toBeTruthy()
+
+    await pick('gui.settings.roles.decision', 'claude-sonnet-4-5')
+    expect(screen.queryByText('gui.settings.roles.decision_pick_first')).toBe(null)
+  })
+})
