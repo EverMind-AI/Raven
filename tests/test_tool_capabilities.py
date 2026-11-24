@@ -374,6 +374,38 @@ def test_no_borrow_is_claimed_when_there_is_nothing_to_borrow(attr, tool, tmp_pa
     ("attr", "tool"),
     [("image", "image_generate"), ("speech", "text_to_speech"), ("video", "video_generate")],
 )
+def test_a_borrow_claim_reads_the_env_reference_the_section_holds(
+    attr, tool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``apiKey`` is empty for a section that names a variable instead, and the
+    row must still name the key the tool would actually borrow."""
+    monkeypatch.setenv("PROVIDER_KEY", "sk-held-by-env")
+    config = _config(tmp_path)
+    config.providers.openrouter.api_key_env = "PROVIDER_KEY"
+    cap = next(c for c in CAPABILITIES if c.tool == tool)
+    assert not config.providers.openrouter.api_key, "the variable must be the only source"
+
+    assert borrowable_credential(cap, config) == "providers.openrouter.apiKey"
+
+
+@pytest.mark.parametrize(
+    ("attr", "tool"),
+    [("image", "image_generate"), ("speech", "text_to_speech"), ("video", "video_generate")],
+)
+def test_a_named_but_unset_env_reference_claims_no_borrow(attr, tool, tmp_path: Path) -> None:
+    """A variable that names nothing is nothing to borrow: the row must not
+    claim "reuse the key you have" when no key exists."""
+    config = _config(tmp_path)
+    config.providers.openrouter.api_key_env = "PROVIDER_KEY_THAT_IS_NOT_SET"
+    cap = next(c for c in CAPABILITIES if c.tool == tool)
+
+    assert borrowable_credential(cap, config) == ""
+
+
+@pytest.mark.parametrize(
+    ("attr", "tool"),
+    [("image", "image_generate"), ("speech", "text_to_speech"), ("video", "video_generate")],
+)
 def test_an_exported_key_is_reusable_too(attr, tool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A deployment that exports the key and configures nothing needs the model
     and nothing else, so telling it to go and set a key is the same misreport in
