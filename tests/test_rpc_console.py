@@ -1661,6 +1661,35 @@ async def test_channels_status_rows_carry_their_field_specs(isolated_config: Non
     assert "value" not in token
 
 
+async def test_a_channel_whose_field_read_fails_is_not_drawn_as_configured(
+    isolated_config: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row whose field enumeration raised left the loop as an all-clear.
+
+    The guard around the read swallowed the exception, so the row shipped with
+    no fields and nothing missing -- and `configured` reads "nothing missing"
+    as ready. The Settings page then drew no configure form for a channel it
+    called configured, and nothing anywhere named the failure.
+    """
+    from raven.config import update_channels
+
+    existed = update_channels.channel_field_specs
+
+    def refuse(name: str):
+        if name == "telegram":
+            raise RuntimeError("this channel's schema cannot be flattened")
+        return existed(name)
+
+    monkeypatch.setattr(update_channels, "channel_field_specs", refuse)
+
+    r = await console_module.channels_status({})
+
+    tg = next(c for c in r["channels"] if c["name"] == "telegram")
+    assert tg["fields"] == []
+    assert tg["configured"] is False, "an unreadable channel is not a configured one"
+    assert tg.get("error"), "the row has to say the read failed, not only that it is unconfigured"
+
+
 async def test_channels_configure_stores_the_field_and_status_says_so(isolated_config: None) -> None:
     import json as _json
 
