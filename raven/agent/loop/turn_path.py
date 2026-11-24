@@ -1644,6 +1644,9 @@ class TurnPathMixin:
                 # Flush before publishing, so a sub-agent asking a second time
                 # this turn sees what raven already answered for the first.
                 self._flush_autofill(messages, auto.pending_rows())
+                # The flush appends after both window passes followed the list;
+                # unstamped rows would reach this iteration's call whole.
+                log.follow(messages)
                 # Every iteration, not once: the overflow and image-demotion
                 # recoveries below rebind ``messages`` to a fresh list, so the
                 # object published last time can stop being the one the turn is

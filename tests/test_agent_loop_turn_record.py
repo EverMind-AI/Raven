@@ -1078,3 +1078,61 @@ async def test_a_history_row_reusing_a_call_id_is_not_projected(workspace):
 
     reloaded = _tool_rows(_reloaded(agent))
     assert [m["content"] for m in reloaded] == [body, last_read[1]["content"]]
+
+
+class _OneAnsweredQuestion:
+    """A turn's autofill holding one answered question, handed over once as the real one does."""
+
+    def __init__(self, summary: str) -> None:
+        self._rows = [{"agent": "codex", "instance": "codex-1", "summary": summary}]
+
+    def pending_rows(self) -> list[dict[str, Any]]:
+        rows, self._rows = self._rows, []
+        return rows
+
+    def set_snapshot(self, messages: list[dict[str, Any]]) -> None:
+        return None
+
+
+def _autofill_rows(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [m for m in _tool_rows(messages) if str(m.get("tool_call_id", "")).startswith("autofill-")]
+
+
+@pytest.mark.asyncio
+async def test_an_autofill_row_is_sent_as_the_preview_the_session_files(workspace):
+    """The autofill flush appends its rows after the window passes followed the list.
+
+    The log stamps a row when it follows the list, and the projection bounds
+    only a row the log owns. A row appended after the last follow went out
+    unstamped: the first call carried the full summary, and the end of the turn
+    stamped it and filed a preview no call had sent.
+    """
+    from raven.acp_client.asker import start_ask_turn
+    from raven.config.raven import ContextConfig
+
+    summary = "\n".join(f"question {i}: answered yes on the user's behalf" for i in range(200))
+    provider = _ScriptProvider([_tool_step(1), LLMResponse(content="done", finish_reason="stop")])
+    agent = AgentLoop(
+        provider=provider,
+        workspace=workspace,
+        model="stub",
+        policy=TurnPolicy(max_iterations=4),
+        tools=ToolWiring(restrict_to_workspace=True),
+        engine=EngineWiring(context_config=ContextConfig(tool_result_max_bytes=1_000, tool_result_max_chars=0)),
+    )
+    start_ask_turn(None, _OneAnsweredQuestion(summary), conversation_id=_KEY)
+
+    await agent._process_message(_turn("go"), session_key=_KEY)
+
+    [filed] = _autofill_rows(_reloaded(agent))
+    assert "Full output saved to:" in filed["content"], "the session files the bounded preview"
+    assert len(filed["content"]) < len(summary)
+    assert len(provider.main_calls) == 2
+    for call in provider.main_calls:
+        sent = [_wire_body(m) for m in _autofill_rows(call)]
+        assert sent == [filed["content"]], "every call carries the bytes the session files"
+
+    files = _managed(workspace)
+    assert len(files) == 1
+    assert str(files[0].resolve()) in filed["content"], "no managed file is orphaned"
+    assert summary in files[0].read_text(encoding="utf-8")
