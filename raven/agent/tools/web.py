@@ -14,8 +14,10 @@ import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+import re
+import ssl
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 import httpx
 from loguru import logger
@@ -214,6 +216,68 @@ def refusal_text(
     return error, detail
 
 
+_DNS_FAILURE_MARKERS = (
+    "name or service not known",
+    "nodename nor servname",
+    "temporary failure in name resolution",
+    "no address associated",
+    "getaddrinfo failed",
+    "name resolution",
+)
+
+
+def _scrub_urls(text: str) -> str:
+    """``text`` with every URL cut down to its scheme and host.
+
+    An exception's text can repeat the request URL, and SerpApi carries its key
+    as a query parameter while a proxy URL can carry credentials: only where a
+    request went is kept, never what it carried.
+    """
+
+    def host_only(match: "re.Match[str]") -> str:
+        try:
+            parts = urlsplit(match.group(0))
+            host = parts.hostname or ""
+        except ValueError:
+            return "<url>"
+        return f"{parts.scheme}://{host}" + (f":{parts.port}" if parts.port else "")
+
+    return re.sub(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s'\"<>]+", host_only, text)
+
+
+def describe_transport_failure(exc: BaseException, *, target: str, proxy: str | None) -> str:
+    """What went wrong with one request, in words a model can act on. Never empty.
+
+    httpx's timeouts carry no message (``str(ConnectTimeout())`` is ``""``), so a
+    tool that reported ``str(e)`` told the model "Error: " and nothing else. This
+    names the class, what kind of failure it is (timeout, DNS, refused, TLS, the
+    proxy), the host and the route, then any message the exception has.
+    """
+    text = " ".join(_scrub_urls(str(exc)).split())[:200]
+    low = text.lower()
+    if isinstance(exc, httpx.ConnectTimeout):
+        kind = "timed out while connecting"
+    elif isinstance(exc, httpx.ReadTimeout):
+        kind = "timed out waiting for the response"
+    elif isinstance(exc, (httpx.TimeoutException, TimeoutError, asyncio.TimeoutError)):
+        kind = "timed out"
+    elif isinstance(exc, httpx.ProxyError):
+        kind = "the web proxy refused or failed the request"
+    elif any(marker in low for marker in _DNS_FAILURE_MARKERS):
+        kind = "DNS lookup failed"
+    elif isinstance(exc, ssl.SSLError) or "ssl" in low or "certificate" in low:
+        kind = "TLS handshake failed"
+    elif isinstance(exc, httpx.RemoteProtocolError):
+        kind = "the server closed the connection without a valid response"
+    elif isinstance(exc, httpx.ConnectError):
+        kind = "the connection failed"
+    else:
+        kind = "the request failed"
+    route = "through the configured web proxy" if proxy else "on a direct connection"
+    said = f": {text}" if text else ""
+    return f"{type(exc).__name__} -- {kind} ({target}, {route}){said}"
+
+
 class _ProviderPageError(RuntimeError):
     """A fetch backend answered, but not with a page."""
 
@@ -380,12 +444,13 @@ class WebSearchTool(Tool):
                 error, detail = refusal_text(spec, status, kind="search", sent=True)
                 return f"Error: {error}. {detail}"
             return f"Error: {spec.label} answered HTTP {status}"
-        except httpx.ProxyError as e:
-            logger.error("WebSearch proxy error: {}", e)
-            return f"Proxy error: {e}"
         except Exception as e:
-            logger.error("WebSearch error: {}", e)
-            return f"Error: {e}"
+            # Never ``str(e)`` alone: an httpx timeout's text is empty, and the model
+            # was left with "Error: " and nothing to decide on.
+            reason = describe_transport_failure(e, target=spec.label, proxy=self.proxy)
+            logger.error("WebSearch error: {}", reason)
+            prefix = "Proxy error" if isinstance(e, httpx.ProxyError) else "Error"
+            return f"{prefix}: {spec.label} search did not complete: {reason}"
 
     async def probe(self, query: str = "raven ai agent") -> tuple[bool, str]:
         """One real search, to learn whether the key is live.
@@ -1017,7 +1082,11 @@ class WebFetchTool(Tool):
 
     async def execute(self, url: str, maxChars: int | None = None, **kwargs: Any) -> str:  # noqa: N803  (LLM tool schema uses camelCase)
         max_chars = maxChars or self.max_chars
-        is_valid, error_msg = validate_url_target(url)
+        # Through a proxy the proxy resolves the name: a local answer judges an address
+        # the connection never uses, and this container's resolver may be poisoned or
+        # unable to resolve the name at all (see raven.security.network.judge_url_target).
+        # Without one the call is exactly what it was.
+        is_valid, error_msg = validate_url_target(url, **self._unresolved())
         if not is_valid:
             # The same rule as the handlers below: most of these reasons name the
             # hostname, and a reader whose every target is refused is one cause.
@@ -1031,7 +1100,8 @@ class WebFetchTool(Tool):
         except _ProviderPageError as exc:
             direct_error = str(exc)
         except (httpx.RequestError, TimeoutError) as exc:
-            direct_error = f"Direct fetch failed: {type(exc).__name__}"
+            target = urlparse(url).hostname or url
+            direct_error = f"Direct fetch failed: {describe_transport_failure(exc, target=target, proxy=self.proxy)}"
         if direct is not None and self._is_raw_content(direct):
             return self._direct_result(url, direct, max_chars)
 
@@ -1089,7 +1159,10 @@ class WebFetchTool(Tool):
             logger.error("WebFetch proxy error for {}: {}", url, e)
             if direct is not None:
                 return self._direct_result(url, direct, max_chars)
-            return json.dumps({"error": "Proxy error", "detail": str(e), "url": url}, ensure_ascii=False)
+            return json.dumps(
+                {"error": "Proxy error", "detail": self._failure_detail(e, spec, direct_error), "url": url},
+                ensure_ascii=False,
+            )
         except _ProviderPageError as e:
             # Not folded into the transport case below: this type exists to say the
             # vendor answered without a page, and its message is composed here from a
@@ -1106,12 +1179,27 @@ class WebFetchTool(Tool):
             logger.error("WebFetch error for {}: {}", url, e)
             if direct is not None:
                 return self._direct_result(url, direct, max_chars)
-            return json.dumps({"error": type(e).__name__, "detail": str(e), "url": url}, ensure_ascii=False)
+            return json.dumps(
+                {"error": type(e).__name__, "detail": self._failure_detail(e, spec, direct_error), "url": url},
+                ensure_ascii=False,
+            )
+
+    def _unresolved(self) -> dict[str, bool]:
+        """``resolve=False`` for the URL judges when a proxy resolves names, else nothing."""
+        return {"resolve": False} if self.proxy else {}
+
+    def _failure_detail(self, exc: BaseException, spec: FetchProviderSpec, direct_error: str) -> str:
+        """Both routes' failures, the reader's first: never empty (an httpx timeout's text is)."""
+        reader = describe_transport_failure(exc, target=spec.label, proxy=self.proxy)
+        detail = f"{spec.label} could not read the page: {reader}"
+        if direct_error:
+            detail += f". {direct_error}"
+        return detail
 
     async def _direct_fetch(self, url: str) -> httpx.Response:
         async with asyncio.timeout(DIRECT_FETCH_TIMEOUT_S):
             async with httpx.AsyncClient(timeout=DIRECT_FETCH_TIMEOUT_S, proxy=self.proxy) as client:
-                response = await guarded_fetch(_DirectFetcher(client), url, what="web_fetch")
+                response = await guarded_fetch(_DirectFetcher(client), url, what="web_fetch", **self._unresolved())
         if response is None:
             raise _ProviderPageError("Direct fetch blocked by URL or redirect validation")
         response.raise_for_status()
