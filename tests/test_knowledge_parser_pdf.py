@@ -207,6 +207,7 @@ def _scanned(document, pymupdf) -> None:
     page.insert_image(pymupdf.Rect(60, 60, 400, 400), pixmap=pixmap)
 
 
+@pytest.mark.slow(reason="Rasterises a page with no text through PDFium; a first render cold-imports PIL and numpy.")
 def test_a_page_with_no_text_is_read_by_the_model() -> None:
     """The only path to what a scan says, and the reason there is no OCR
     engine here."""
@@ -219,6 +220,7 @@ def test_a_page_with_no_text_is_read_by_the_model() -> None:
     assert sections[0].metadata[ELEMENTS][0][PAGE_NUMBER] == 1
 
 
+@pytest.mark.slow(reason="Rasterises a page with no text through PDFium; a first render cold-imports PIL and numpy.")
 def test_only_the_pages_that_need_it_are_sent() -> None:
     """A model call per page of a readable document would be a bill for
     nothing: the text layer is already there."""
@@ -246,6 +248,7 @@ def test_no_vision_model_leaves_a_note_rather_than_a_silent_gap(monkeypatch) -> 
     assert any("no vision model is configured" in n for n in notes)
 
 
+@pytest.mark.slow(reason="Rasterises a page with no text through PDFium; a first render cold-imports PIL and numpy.")
 def test_a_page_the_model_refuses_costs_only_that_page() -> None:
     def build(document, pymupdf):
         _prose(document, pymupdf, heading="Report", body=["This page has text on it."])
@@ -321,6 +324,7 @@ def test_a_sparse_page_is_not_mistaken_for_a_scan() -> None:
     assert "Chapter 3" in sections[0].content.text
 
 
+@pytest.mark.slow(reason="Rasterises a page with text through PDFium, which reads the system fonts on first use.")
 def test_a_picture_page_with_a_caption_is_still_read_as_a_scan() -> None:
     """The other half of the rule: a scan routinely carries a watermark or a
     header from whatever produced it, and indexing those instead of the page

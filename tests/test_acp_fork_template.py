@@ -291,7 +291,7 @@ async def test_an_agent_configured_with_its_own_llm_environment_makes_its_own_ca
         await close_pool()
 
 
-@pytest.mark.slow(reason="Forks a real interpreter and waits for the child to start and exit.")
+@pytest.mark.slow(reason="Launches a real child process and waits for it to start and exit.")
 async def test_switching_both_off_launches_a_raven_agent_as_before(tmp_path: Path, monkeypatch) -> None:
     from raven.acp_client.client import AcpClient
     from raven.config import live as live_mod

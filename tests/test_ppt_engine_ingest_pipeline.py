@@ -179,6 +179,7 @@ def test_a_figure_the_page_never_captions_arrives_unlabelled(tmp_path: Path, noi
     assert asset.source_label is None and asset.caption is None
 
 
+@pytest.mark.slow(reason="Rasterises the plot's page region with PyMuPDF; the rasteriser cannot be faked.")
 def test_a_vector_plot_is_rendered_and_a_full_page_frame_is_not(tmp_path: Path) -> None:
     """Academic-PDF blind spot: plots are drawing commands, not embedded
     bitmaps. Large drawing clusters render to PNG; a decorative page frame
@@ -266,6 +267,7 @@ def test_a_soft_masked_figure_keeps_its_transparency(tmp_path: Path) -> None:
         assert extracted.getpixel((extracted.width // 2, extracted.height // 2))[3] == 255
 
 
+@pytest.mark.slow(reason="Rasterises the table's page region with PyMuPDF; the rasteriser cannot be faked.")
 def test_a_piece_of_an_extracted_region_never_reaches_the_catalogue(tmp_path: Path, noise_png) -> None:
     """A logo printed inside a table is inside a region already extracted whole.
     The predecessor handed it over graded "avoid"; four of the five assets it
@@ -291,6 +293,7 @@ def test_a_piece_of_an_extracted_region_never_reaches_the_catalogue(tmp_path: Pa
 # --- tables -----------------------------------------------------------------
 
 
+@pytest.mark.slow(reason="Rasterises the table's page region with PyMuPDF; the rasteriser cannot be faked.")
 def test_a_printed_table_is_registered_as_an_asset_and_as_markdown(tmp_path: Path) -> None:
     doc = fitz.open()
     page = doc.new_page(width=612, height=792)
@@ -313,6 +316,7 @@ def test_a_printed_table_is_registered_as_an_asset_and_as_markdown(tmp_path: Pat
     assert "11.4" in text
 
 
+@pytest.mark.slow(reason="Rasterises both tables' page regions with PyMuPDF; the rasteriser cannot be faked.")
 def test_two_stacked_tables_keep_separate_labels_and_regions(tmp_path: Path) -> None:
     """One paper page had Table 1 running to y=264 while Table 2's caption began
     at y=249, so Table 1's image carried Table 2's header rows."""

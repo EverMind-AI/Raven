@@ -121,7 +121,7 @@ def test_a_chunk_with_no_position_claims_nothing(metadata) -> None:
 # ── the cutting ──────────────────────────────────────────────────
 
 
-@pytest.mark.slow(reason="Renders a real PDF page to an image; the rasteriser cannot be faked.")
+@pytest.mark.slow(reason="Crops a page with text drawn by PDFium, which reads the system fonts on first use.")
 def test_a_chunk_gets_an_image_of_its_own_region() -> None:
     chunks = [_chunk({"page_number": 1, "bbox": _box()})]
     ids = chunk_ids_for("d1", [c.text for c in chunks])
@@ -134,7 +134,7 @@ def test_a_chunk_gets_an_image_of_its_own_region() -> None:
     assert 500 < width < 540 and 170 < height < 210
 
 
-@pytest.mark.slow(reason="Renders a real PDF page to an image; the rasteriser cannot be faked.")
+@pytest.mark.slow(reason="Crops a page with text drawn by PDFium, which reads the system fonts on first use.")
 def test_two_regions_are_stacked_into_one_image() -> None:
     """RAGFlow's shape, and the reason a merged chunk is showable at all: one
     picture a chunk, however many pages it was cut from."""
@@ -159,7 +159,7 @@ def test_two_regions_are_stacked_into_one_image() -> None:
     assert stacked[1] > single[1] * 1.9, "and both regions' height, plus the gap between them"
 
 
-@pytest.mark.slow(reason="Renders a real PDF page to an image; the rasteriser cannot be faked.")
+@pytest.mark.slow(reason="Crops a page with text drawn by PDFium, which reads the system fonts on first use.")
 def test_a_chunk_with_no_position_gets_no_image() -> None:
     """Absent rather than blank. A text file's chunks have nowhere to point,
     and an empty rectangle would say the page was blank, which is a different
@@ -172,7 +172,7 @@ def test_a_chunk_with_no_position_gets_no_image() -> None:
     assert set(cut) == {ids[1]}
 
 
-@pytest.mark.slow(reason="Renders a real PDF page to an image; the rasteriser cannot be faked.")
+@pytest.mark.slow(reason="Crops a page with text drawn by PDFium, which reads the system fonts on first use.")
 def test_a_full_page_crop_is_scaled_down_to_the_cap() -> None:
     """A chunk that swallowed a whole page must not cost twenty times what a
     paragraph costs."""
@@ -184,7 +184,7 @@ def test_a_full_page_crop_is_scaled_down_to_the_cap() -> None:
     assert max(width, height) == _crops.MAX_EDGE
 
 
-@pytest.mark.slow(reason="Renders a real PDF page to an image; the rasteriser cannot be faked.")
+@pytest.mark.slow(reason="Crops a page with text drawn by PDFium, which reads the system fonts on first use.")
 def test_a_region_on_a_page_that_is_not_there_is_skipped() -> None:
     """A page number out of range is a parser bug or a truncated file, and
     neither is a reason to fail the whole document's crops."""
@@ -196,7 +196,7 @@ def test_a_region_on_a_page_that_is_not_there_is_skipped() -> None:
     assert set(cut) == {ids[1]}
 
 
-@pytest.mark.slow(reason="Renders a real PDF page to an image; the rasteriser cannot be faked.")
+@pytest.mark.slow(reason="Crops a page with text drawn by PDFium, which reads the system fonts on first use.")
 def test_a_chunk_missing_one_of_its_regions_gets_none_of_them() -> None:
     """Showing part of a chunk's region with nothing saying which part is worse
     than showing none: a reader comparing the text to the picture would be
@@ -247,7 +247,7 @@ async def _indexed(manager, filename: str = "report.pdf", content: bytes | None 
     return base, await manager.index_document(document.id)
 
 
-@pytest.mark.slow(reason="Renders a real PDF page to an image; the rasteriser cannot be faked.")
+@pytest.mark.slow(reason="Crops a page with text drawn by PDFium, which reads the system fonts on first use.")
 async def test_indexing_a_pdf_writes_a_crop_for_its_pieces(manager) -> None:
     _, document = await _indexed(manager)
     held, _ = await manager.document_chunks(document.id)
@@ -266,7 +266,7 @@ async def test_a_format_with_no_pages_writes_none(manager) -> None:
     assert not any(manager.crop_path(document.id, piece.chunk_id) for piece in held)
 
 
-@pytest.mark.slow(reason="Renders a real PDF page to an image; the rasteriser cannot be faked.")
+@pytest.mark.slow(reason="Crops a page with text drawn by PDFium, which reads the system fonts on first use.")
 async def test_reindexing_replaces_the_crops(manager) -> None:
     """Ids are derived from chunk text, so a document that changed leaves its
     old pictures under ids nothing lists any more."""
@@ -281,7 +281,7 @@ async def test_reindexing_replaces_the_crops(manager) -> None:
     assert not any(manager.crop_path(document.id, gone) for gone in before - after)
 
 
-@pytest.mark.slow(reason="Renders a real PDF page to an image; the rasteriser cannot be faked.")
+@pytest.mark.slow(reason="Crops a page with text drawn by PDFium, which reads the system fonts on first use.")
 async def test_deleting_the_document_takes_its_crops(manager) -> None:
     _, document = await _indexed(manager)
     held, _ = await manager.document_chunks(document.id)
@@ -293,7 +293,7 @@ async def test_deleting_the_document_takes_its_crops(manager) -> None:
     assert not any(manager.crop_path(document.id, chunk_id) for chunk_id in kept)
 
 
-@pytest.mark.slow(reason="Renders a real PDF page to an image; the rasteriser cannot be faked.")
+@pytest.mark.slow(reason="Crops a page with text drawn by PDFium, which reads the system fonts on first use.")
 async def test_deleting_the_base_takes_them_too(manager) -> None:
     base, document = await _indexed(manager)
     held, _ = await manager.document_chunks(document.id)
@@ -305,7 +305,7 @@ async def test_deleting_the_base_takes_them_too(manager) -> None:
     assert not any(manager.crop_path(document.id, chunk_id) for chunk_id in kept)
 
 
-@pytest.mark.slow(reason="Renders a real PDF page to an image; the rasteriser cannot be faked.")
+@pytest.mark.slow(reason="Crops a page with text drawn by PDFium, which reads the system fonts on first use.")
 async def test_a_chunk_id_is_checked_before_it_becomes_a_path(manager, tmp_path) -> None:
     """It arrives from the page, and it is about to be a path segment.
 
@@ -324,7 +324,7 @@ async def test_a_chunk_id_is_checked_before_it_becomes_a_path(manager, tmp_path)
         assert manager.crop_path(document.id, hostile) is None
 
 
-@pytest.mark.slow(reason="Renders a real PDF page to an image; the rasteriser cannot be faked.")
+@pytest.mark.slow(reason="Crops a page with text drawn by PDFium, which reads the system fonts on first use.")
 async def test_a_document_id_is_checked_the_same_way(manager) -> None:
     """The other half of the path, and the one that was trusted.
 
