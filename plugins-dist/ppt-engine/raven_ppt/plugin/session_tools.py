@@ -60,6 +60,14 @@ class SessionTool(Tool):
     def parameters(self) -> dict[str, Any]:
         return self._prototype.parameters
 
+    def to_schema(self) -> dict[str, Any]:
+        # Authored so the registry marks the wrapper dynamic and serves the
+        # schema live: an inherited ``Tool.to_schema`` reads as static, the
+        # registry freezes whatever the wrapper answered at admit time, and a
+        # prototype whose schema follows its deployment (the image generator's
+        # follows the provider it runs on) would be served that frozen shape.
+        return self._prototype.to_schema()
+
     def configured(self) -> bool:
         """The prototype's answer where it declares one; a tool that does not is
         always offered. Asked of the prototype rather than an engine because the

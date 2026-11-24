@@ -516,6 +516,8 @@ def _unfetchable_answer(what: str, model_id: str, url: str, detail: str) -> str:
 _MINIMAX_PROVIDERS = frozenset({"minimax", "minimax_cn_api"})
 _MINIMAX_IMAGE_MODEL = "image-01"
 _MINIMAX_H3_IMAGE_MODELS = frozenset({"MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed"})
+# The H3 image-editing route takes one to sixteen reference images per call.
+_MINIMAX_H3_MAX_REFERENCES = 16
 _MINIMAX_VIDEO_MODEL = "MiniMax-Hailuo-2.3"
 # The video models MiniMax serves on /v2, which take a content array; every
 # other one is a /v1 model, with its query and file handoff.
@@ -740,21 +742,21 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         },
     }
 
-    # MiniMax keeps the character an input image shows rather than editing it, and
-    # takes one per request. H3 ignores references on its side, so what a reference
-    # does depends on the model the section names, not on the provider alone.
+    # MiniMax's image routes split by model family: H3 edits from up to sixteen
+    # references, while the legacy models keep one character per request and
+    # refuse a request naming more.
     _MINIMAX_DESCRIPTION = _DESCRIPTION.replace(
         "(optionally editing/varying input images)",
-        "(reference images depend on the selected model: H3 ignores them, the legacy models keep a reference character)",
+        "(reference images depend on the selected model: H3 edits from up to 16, the legacy models keep a reference character)",
     )
     _MINIMAX_PARAMETERS = copy.deepcopy(_PARAMETERS)
     _MINIMAX_PARAMETERS["properties"]["images"]["description"] = (
-        "Model-dependent: H3 ignores reference images, and this tool refuses them before sending so the call "
-        "is not billed; the legacy models keep the character from the first reference. A local file path, "
-        "http(s) URL, or data: URI"
+        "Model-dependent: H3 edits from 1 to 16 reference images, sent to its image-editing route; the legacy "
+        "models keep the character from one reference per picture and refuse a request naming more with MiniMax "
+        "status 2013. A local file path, http(s) URL, or data: URI"
     )
     _MINIMAX_PARAMETERS["properties"]["prompts"]["items"]["properties"]["images"]["description"] = (
-        "Reference image for this picture only: H3 ignores references, so this tool refuses the call before sending"
+        "Reference image for this picture only; H3 edits from up to 16, the legacy models take one per picture"
     )
     # H3's endpoint takes `auto` or any `W:H` whose sides run 1 to 300 and whose
     # ratio sits between 1:3 and 3:1, which the fixed enum above cannot spell:
@@ -1066,13 +1068,20 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         output_dir: str | None,
         stem: str,
     ) -> str:
-        """Generate an H3 picture, which ignores reference images, or a legacy image
-        with an optional character reference."""
+        """MiniMax's own image routes: H3 draws a text-only picture at
+        ``/v1/images/generations`` and edits from up to sixteen references at
+        ``/v1/images/edits``; the legacy models keep a character from
+        ``subject_reference`` on ``/v1/image_generation`` and refuse a request
+        naming more than one with a status of its own, so every one named is sent
+        and that refusal travels back to the caller."""
         h3 = model_id in _MINIMAX_H3_IMAGE_MODELS
         root = _minimax_root(self.api_base)
         if h3 and root == "https://api.minimaxi.com":
             root = "https://api.minimax.cn"
-        route = "/v1/images/generations" if h3 else "/v1/image_generation"
+        if h3:
+            route = "/v1/images/edits" if images else "/v1/images/generations"
+        else:
+            route = "/v1/image_generation"
         body: dict[str, Any] = {
             "model": model_id,
             "prompt": prompt,
@@ -1084,18 +1093,25 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         if aspect_ratio:
             body["aspect_ratio"] = aspect_ratio
         if images:
-            if h3:
+            if h3 and len(images) > _MINIMAX_H3_MAX_REFERENCES:
                 return json.dumps(
                     {
-                        "error": "H3 image generation ignores reference images, so this call was refused before sending",
+                        "error": (
+                            f"H3 image editing takes 1 to {_MINIMAX_H3_MAX_REFERENCES} reference images, "
+                            f"so this call naming {len(images)} was refused before sending"
+                        ),
                         "model": model_id,
-                    }
+                    },
+                    ensure_ascii=False,
                 )
             try:
-                ref = self._image_part(images[0])["image_url"]["url"]
+                refs = [self._image_part(ref)["image_url"]["url"] for ref in images]
             except OSError as e:
                 return json.dumps({"error": "could not read input image", "detail": str(e)}, ensure_ascii=False)
-            body["subject_reference"] = [{"type": "character", "image_file": ref}]
+            if h3:
+                body["images"] = [{"image_url": ref} for ref in refs]
+            else:
+                body["subject_reference"] = [{"type": "character", "image_file": ref} for ref in refs]
         pictures: list[tuple[str, bytes]] = []
         errors: list[dict[str, Any]] = []
         try:
