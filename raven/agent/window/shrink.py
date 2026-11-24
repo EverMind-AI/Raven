@@ -16,6 +16,8 @@ what an upstream cache matches.
 
 from __future__ import annotations
 
+import os
+
 from typing import Any
 
 from loguru import logger
@@ -33,6 +35,12 @@ from raven.utils.tokens import estimate_prompt_tokens
 
 # Max emergency context shrinks per turn before a context overflow is fatal.
 MAX_COMPRESS_RETRIES = 2
+# [WORK PATCH r2] RAVEN_UNLIMITED_COMPACTION=1 (the code domain's switch): an office task is one long turn, and a
+# third overflow in it is fatal with the count at 2. The shrink / summary mechanics stay v0.2.4's own -- tool output
+# is elided first, then the head is summarized, thinking is never cleared -- only the per-turn count is lifted (1000,
+# a bound against a loop that makes no progress). Off by default.
+if os.environ.get("RAVEN_UNLIMITED_COMPACTION") == "1":
+    MAX_COMPRESS_RETRIES = 1000
 
 # Max image demotions per turn. One is enough: a refusal is deterministic for
 # the model, and the first retry also caches the verdict, so a second attempt

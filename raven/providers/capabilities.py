@@ -80,6 +80,23 @@ GATEWAY_TARGETS = frozenset({"openrouter"})
 GATEWAY_IMAGE_TOOL_RESULT_PREFIXES = ("anthropic/claude-", "google/gemini-")
 
 
+def _keep_tool_result_images_on_the_wire() -> None:
+    """[WORK PATCH r2] Stop LiteLLM moving tool-result pictures into a role=user message.
+
+    LiteLLM's OpenAI chat transformation (1.105.0, what the work image carries; v0.2.4 locks 1.85.0, which has no
+    such step) rewrites every request: a picture in a role=tool message goes to a role=user message added after the
+    run of tool messages, behind a line of its own text. That is the shape RAVEN_IMAGE_IN_TOOL_RESULT is there to
+    avoid, so with the switch on the step is replaced by the identity. Measured 2026-11-13: without this the picture
+    left the container in a role=user message although the loop had put it in the tool result.
+    """
+    try:
+        from litellm.llms.openai.chat import gpt_transformation
+    except Exception:  # a LiteLLM without this module has no such step to turn off
+        return
+    if hasattr(gpt_transformation, "hoist_images_from_tool_messages"):
+        gpt_transformation.hoist_images_from_tool_messages = lambda messages: messages
+
+
 def supports_image_tool_result(provider: Any, model: str, spec: "ProviderSpec | None" = None) -> bool:
     """Whether a tool result sent to ``provider``/``model`` may carry an image.
 
@@ -93,6 +110,19 @@ def supports_image_tool_result(provider: Any, model: str, spec: "ProviderSpec | 
     image at all is separate, and a gateway backend that cannot will reject the
     request rather than pretend.
     """
+    # [WORK PATCH r2] RAVEN_IMAGE_IN_TOOL_RESULT=1: a picture a tool returns stays in that tool result instead of
+    # following in a synthetic role=user message (the same switch as the code domain's Raven-Code build). A custom
+    # endpoint gets the fail-safe False below, and for a Qwen template every such role=user message is a new user
+    # query: thinking before it is dropped unless preserve_thinking is set. Measured 2026-11-13 with
+    # tools/endpoint_probe.py, two solid-colour pictures each: vLLM 0.32.0 serving Qwen3.6-35B-A3B and DeepSeek's
+    # Chat Completions (deepseek-flash) both show the model a picture sent inside a role=tool message. An endpoint
+    # that drops it does so silently, so probe a new endpoint before turning this on. Off by default.
+    import os
+
+    if os.environ.get("RAVEN_IMAGE_IN_TOOL_RESULT") == "1":
+        _keep_tool_result_images_on_the_wire()
+        return True
+
     if spec is not None and spec.image_tool_result_override is not None:
         return spec.image_tool_result_override
 

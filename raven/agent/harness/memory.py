@@ -236,6 +236,10 @@ class DefaultMemory:
         if (
             compaction.should_compact(projected, limit, reserved, cfg.trigger_ratio)
             and state.compress_retries < shrink.MAX_COMPRESS_RETRIES
+            # [WORK PATCH r2] The count above is also what kept a summary that fails from being paid for on every
+            # step. With RAVEN_UNLIMITED_COMPACTION it is lifted, so failures keep the bound it gave them (2); with
+            # the switch unset this adds nothing, failures never exceed the count.
+            and state.head_summary_failures < 2
         ):
             summarized, verdict = await self._summarize_head(messages, model, cfg)
             if verdict != "skipped":
@@ -296,7 +300,10 @@ class DefaultMemory:
             )
             return ShrinkResult(shrunk, True)
         cfg = self._compaction()
-        if cfg.enabled and not state.reactive_summary_tried:
+        # [WORK PATCH r2] with RAVEN_UNLIMITED_COMPACTION=1 (shrink.MAX_COMPRESS_RETRIES lifted) the reactive summary
+        # is not once per turn either; the shared retry budget above still bounds it.
+        unlimited = shrink.MAX_COMPRESS_RETRIES > 2
+        if cfg.enabled and (unlimited or not state.reactive_summary_tried):
             state.reactive_summary_tried = True
             summarized, verdict = await self._summarize_head(messages, model, cfg)
             if verdict == "failed":
