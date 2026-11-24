@@ -26,7 +26,9 @@ from raven.rpc.errors import (
     METHOD_NOT_FOUND,
     PARSE_ERROR,
     RpcError,
+    SessionLockedError,
 )
+from raven.session.manager import SessionWriterConflictError
 
 Handler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 # Runs before every registered handler with the method name and its params;
@@ -112,19 +114,13 @@ class Dispatcher:
                 guard(method, params)
             result = await handler(params)
         except RpcError as exc:
-            err_payload: dict[str, Any] = {
-                "code": exc.code,
-                "message": exc.message,
-            }
-            if exc.data is not None:
-                # Clients read the sentence from ``data.detail``; structured
-                # ``data`` used to replace it, so the page showed only the code.
-                err_payload["data"] = (
-                    {**exc.data, "detail": exc.detail} if exc.detail and "detail" not in exc.data else exc.data
-                )
-            elif exc.detail:
-                err_payload["data"] = {"detail": exc.detail}
-            return {"jsonrpc": "2.0", "id": frame_id, "error": err_payload}
+            return _rpc_error_frame(frame_id, exc)
+        except SessionWriterConflictError as exc:
+            # The store refusing a second writer is a state a client can act on,
+            # not a crash: reported as an internal error, it reached the reader
+            # as a code and a traceback instead of the sentence that says another
+            # process is writing the session.
+            return _rpc_error_frame(frame_id, SessionLockedError(str(exc)))
         except SystemExit as exc:
             # Click/Typer can leak SystemExit even with standalone_mode=False;
             # treat as internal error rather than crashing the dispatcher.
@@ -169,6 +165,19 @@ def _err_frame(
     if data is not None:
         err["data"] = data
     return {"jsonrpc": "2.0", "id": frame_id, "error": err}
+
+
+def _rpc_error_frame(frame_id: Any, exc: RpcError) -> dict[str, Any]:
+    err_payload: dict[str, Any] = {"code": exc.code, "message": exc.message}
+    if exc.data is not None:
+        # Clients read the sentence from ``data.detail``; structured
+        # ``data`` used to replace it, so the page showed only the code.
+        err_payload["data"] = (
+            {**exc.data, "detail": exc.detail} if exc.detail and "detail" not in exc.data else exc.data
+        )
+    elif exc.detail:
+        err_payload["data"] = {"detail": exc.detail}
+    return {"jsonrpc": "2.0", "id": frame_id, "error": err_payload}
 
 
 def _truncate_traceback(tb: str, max_lines: int = 12) -> str:

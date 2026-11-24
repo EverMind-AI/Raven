@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import hashlib
 from typing import TYPE_CHECKING
 
 from raven.agent import turn_clock
@@ -145,7 +146,7 @@ from raven.providers import usage_record
 from raven.providers.base import bound_llm_detail, canonical_llm_error, llm_error_summary, parse_llm_error
 from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
-from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT
+from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT, SessionWriterConflictError
 from raven.session.refs import cap_tool_result, tool_result_view
 from raven.session.tool_output import bound_tool_result, direction_for
 from raven.session.turn_shape import REPLIED_VIA_TOOL, TakeBack, TakeBackStep
@@ -155,6 +156,7 @@ from raven.spine.turn import AnswerlessTurnError
 from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
 from raven.tracing import config as tracing_config
+from raven.utils.images import is_inline_image
 from raven.utils.tokens import estimate_message_tokens, estimate_prompt_tokens
 
 if TYPE_CHECKING:
@@ -342,6 +344,52 @@ def _without_scratch(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _content_digest(content: Any) -> str:
+    """What a row said when it was filed, so a rewrite can be told from the
+    transforms a save makes on its own (a truncated body, a stripped envelope)."""
+    payload = json.dumps(content, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _incremental_upto(messages: list[dict[str, Any]], start: int) -> int | None:
+    """Where an incremental write stops, or None when it has nothing to write.
+
+    Every row is fileable now. A picture used to hold the whole tail behind it
+    until the window turned the row into a note, and a picture the window keeps
+    (the newest ones) held it for the rest of the turn. The writer files an
+    inline picture as the ``[image]`` placeholder instead (see ``_save_turn``),
+    so the row lands where it happened and nothing after it waits.
+    """
+    return len(messages) if len(messages) > start else None
+
+
+def _filing_batch(session: Any, messages: list[dict[str, Any]], skip: int) -> tuple[dict[str, dict], list[dict]]:
+    """The rows a write prepares, and the stored row behind each one already filed.
+
+    A row already on disk is never written twice: the incremental writer and the
+    closing one can disagree about where the filed prefix ends when the record
+    was rewritten mid-turn, and the identifier settles it. The stored row rides
+    along, so a row the window rewrote after it was filed can be told from the
+    form that reached the file. The per-row filing state is pruned here to the
+    rows the copy still holds.
+
+    The append boundary can sit behind a row the turn may still rewrite in place:
+    the image window withdraws a picture and puts a note where it was. Every such
+    row is prepared again beside the new ones, so its latest version reaches the
+    file instead of the first one staying. That makes each write cost the rows
+    the turn has filed so far, and a turn's writes together grow with the square
+    of its length -- the price of noticing a rewrite wherever it lands.
+    """
+    already_filed = {str(row.get("_row_id")): row for row in getattr(session, "messages", ()) if row.get("_row_id")}
+    for state in (getattr(session, "_filed_contents", None), getattr(session, "_inbound_filed", None)):
+        for stale in set(state or ()) - set(already_filed):
+            state.pop(stale, None)
+    batch = list(messages[skip:])
+    if skip and already_filed:
+        batch = [m for m in messages[:skip] if str(m.get("_row_id") or "") in already_filed] + batch
+    return already_filed, batch
+
+
 def _stamp_turn_observers(messages: list[dict[str, Any]], metadata: dict[str, Any] | None, turn_base: int) -> None:
     """File the turn's observer record onto its last substantive assistant message.
 
@@ -378,6 +426,20 @@ _TURN_TRANSIENT_KEYS = ("_recovery_synthetic", ATTACHED_IMAGE_KEY)
 # unbounded: both would otherwise arrive as ``None``, and the fallback text has
 # to say which one the reader got.
 _ITERATION_CAP_FROM_LOOP = object()
+
+#: Keys this loop adds to a row after that row may already be on disk. A
+#: turn_meta restates these and nothing else: a stored row is not always the
+#: row the loop holds (tool bodies are truncated on the way in).
+#: Loop name -> stored name. A row is written under the stored spelling, so a
+#: patch restates the key the file (and every reader) knows.
+_LATE_STAMP_KEYS = {
+    "_replied_via_tool": REPLIED_VIA_TOOL,
+    "observers": "observers",
+    _REASONING_MS_KEY: "reasoning_ms",
+    _TOOL_DURATION_MS_KEY: "duration_ms",
+    _CONTEXT_USED_KEY: "context_used",
+    _CONTEXT_PARTS_KEY: "context_parts",
+}
 
 
 def _stamp_context_used_on_kept(
@@ -534,6 +596,7 @@ def _taken_back_whole(messages: list[dict], skip: int) -> bool:
     under the live names. ``skip`` is where the turn's new rows start; the row that opened it may be
     older, filed by the opening write.
     """
+    skip = min(skip, len(messages))
     # Every user row sets the rule's state afresh, so reading from the last one before the turn's new
     # rows reads what the whole transcript would, without walking a long session on every save.
     start = next(
@@ -1029,6 +1092,7 @@ class TurnPathMixin:
         turn_start_idx: int = 0,
         session_effort: str | None = None,
         surface: str | None = None,
+        on_step: Callable[[], None] | None = None,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
@@ -1729,6 +1793,12 @@ class TurnPathMixin:
             # session filed the preview. The transcript keeps the full body;
             # only this payload carries the preview.
             projected_messages = _model_facing(messages)
+            # The turn's rows reach the file here, not at the top of the
+            # iteration: every tool row this call carries now has the form it is
+            # sent in, so the write files the bytes the model reads, and the
+            # previous round's results are on disk before the call that reads them.
+            if on_step is not None:
+                on_step()
             call_messages, call_tools, call_model = await first_call.stage(
                 "the before_llm_call strategies",
                 self.strategies.before_llm_call(
@@ -2071,6 +2141,10 @@ class TurnPathMixin:
                 )
                 _stamp_reasoning_ms(messages, response)
                 _stamp_context_used(messages, response, measured_parts)
+                # The call is on disk before it runs: a kill during the tool
+                # leaves a call readers can repair, not a step nobody can see.
+                if on_step is not None:
+                    on_step()
 
                 for tool_call_index, tool_call in enumerate(response.tool_calls):
                     tools_used.append(tool_call.name)
@@ -3520,9 +3594,8 @@ class TurnPathMixin:
         # all, so it was absent from every listing, and a reader who left the
         # page could not find their way back to the turn still running in it.
         # Everything below that slices "what this turn added" off the session
-        # counts from this turn's own first entry. Counted after the save, not
-        # before it: a save can merge another writer's messages in ahead of the
-        # question, which it leaves last.
+        # counts from this turn's own first entry. The save appends it last, so
+        # the rows past this index are the question.
         question_at = len(session.messages)
         self._save_turn(
             session,
@@ -3537,7 +3610,7 @@ class TurnPathMixin:
         prev_len = len(session.messages) - len(question)
 
         def _turn_start() -> int:
-            """Where this turn's entries start now; a later save may have merged more in ahead of them."""
+            """Where this turn's entries start now; a later save can replace the question in place."""
             if question:
                 for index in range(len(session.messages) - 1, -1, -1):
                     if session.messages[index] is question[0]:
@@ -3607,9 +3680,12 @@ class TurnPathMixin:
             # what the cancel filed. A record rather than the list the attempt
             # appends to, because the window passes replace that list mid-turn.
             live["log"] = TurnLog(seed, persist_from)
+            live["persisted"] = persist_from
+            live["filed_ids"] = set()
             return await self._run_agent_loop(
                 seed,
                 on_progress=on_progress,
+                on_step=_persist_progress,
                 session_key=key,
                 model=routed_model,
                 fallback_models=fallback_models,
@@ -3650,7 +3726,38 @@ class TurnPathMixin:
         retry_seed = [dict(m) for m in initial_messages] if retries_left else None
         turn_t0 = monotonic()
         pending: dict[str, Any] = {"rerun": False, "reasons": []}
-        live: dict[str, TurnLog] = {"log": TurnLog(initial_messages, persist_from)}
+        live: dict[str, Any] = {
+            "log": TurnLog(initial_messages, persist_from),
+            "persisted": persist_from,
+            "filed_ids": set(),
+        }
+
+        def _persist_progress() -> None:
+            """Append what this turn has produced so far, so a kill loses one step, not all of it.
+
+            A copy goes to the writer: the end-of-turn filing appends a notice to
+            the list it is given, and a mid-turn notice in the live list would
+            change what the model reads next.
+            """
+            log = live["log"]
+            skip = live["persisted"]
+            # As the calls carried it: the record keeps a tool row's full body
+            # for the hooks, and the file takes the preview a call sent.
+            messages_now = log.filed_messages()
+            upto = _incremental_upto(messages_now, skip)
+            if upto is None:
+                return
+            try:
+                live["filed_ids"].update(self._save_turn(session, list(messages_now[:upto]), skip, final=False))
+                live["persisted"] = upto
+                self.sessions.save(session)
+            except SessionWriterConflictError:
+                # Another process took the transcript. Retrying every step
+                # would file a turn nobody can read; the turn stops here with
+                # the conflict the save raised.
+                raise
+            except Exception:
+                logger.exception("incremental session write failed; the turn keeps running")
 
         def _attempt_record() -> list[dict]:
             """The attempt's record as the model read it.
@@ -3663,6 +3770,21 @@ class TurnPathMixin:
             """
             live["log"].project_tool_results()
             return live["log"].messages()
+
+        def _drop_attempt_rows() -> bool:
+            """Take the attempt's rows off the transcript before the rerun writes its own.
+
+            The failed attempt was filed as it ran, so a rerun that only reset
+            the in-memory log left its research in the transcript and appended
+            the rerun's answer behind the wreckage. The rows are matched by the
+            identifier the attempt filed them under rather than by position: the
+            window can drop a row from the turn record, and a cut by position
+            would take a neighbour with it.
+
+            False when the cut could not be written; the caller does not rerun
+            then, because the rerun's answer would land on the attempt again.
+            """
+            return self.sessions.drop_filed_rows(session, live["filed_ids"])
 
         def _seed_for_the_rerun(msgs: list[dict]) -> list[dict]:
             """The question again, plus whatever the reader said while the attempt ran.
@@ -3734,6 +3856,8 @@ class TurnPathMixin:
                 # run, the seam asks whether the attempt it is ending has one after it,
                 # which is what decides that attempt's salvage.
                 while retries_left > 0 and pending["rerun"]:
+                    if not _drop_attempt_rows():
+                        break
                     retries_left -= 1
                     attempt_no += 1
                     logger.info("Dead end ({}); re-running the turn", ", ".join(pending["reasons"]))
@@ -3769,7 +3893,7 @@ class TurnPathMixin:
                 if turn_hook_meta.get("output_limited"):
                     session.metadata[OUTPUT_LIMIT_TURN_AT] = _turn_start()
                 else:
-                    # None rather than dropping the key: a save merges its
+                    # None rather than dropping the key: a save folds its
                     # metadata over the record on disk, so a key left unsaid is
                     # kept rather than cleared (SessionManager._metadata_to_write).
                     # The reader asks whether this is an int, which None is not.
@@ -3902,6 +4026,20 @@ class TurnPathMixin:
         # body or a dropped stretch of the turn is the window's business, and
         # filing it would replay it to every later turn as what happened.
         turn_msgs = live["log"].messages(_TURN_TRANSIENT_KEYS)
+        # The log hands back what it kept of the turn, which can be shorter than
+        # the run of rows already filed: the count is clamped to this list so the
+        # stamps below read and restate only rows that are here.
+        # Where the filed prefix ends in the record as it stands now. A count
+        # would be wrong: the record can be shorter than when it was written (a
+        # continuation merges its row into the step it continues), so the
+        # boundary is read from the ids that actually reached disk.
+        filed_ids: set[str] = live["filed_ids"]
+        # The question was filed before the attempt started; a turn with no
+        # incremental write still begins after it, never at the head.
+        filed_upto = min(persist_from, len(turn_msgs))
+        for index, row in enumerate(turn_msgs):
+            if str(row.get("_row_id") or "") in filed_ids:
+                filed_upto = index + 1
         message_tool = self.tools.get("message")
         sent_by_tool = isinstance(message_tool, MessageTool) and message_tool.sent_in_turn
         if outcome.silent and not silent and not sent_by_tool:
@@ -3916,11 +4054,58 @@ class TurnPathMixin:
             silence["delivered_files"] = True
         if len(self.hooks) > 0:
             _stamp_turn_observers(turn_msgs, turn_hook_meta, turn_start_idx)
+        # Two stamps land after a turn's rows are already on disk, and only
+        # these two: the reply's provenance (``replied_via_tool``) and the hook
+        # observers. Comparing whole rows would also restate what the writer
+        # deliberately rewrote -- a truncated tool body, a cut field -- so the
+        # comparison is limited to the keys that are stamps.
+        # Rows already on disk for this turn, matched by their identifier rather
+        # than by position: the record the log hands back can be shorter than the
+        # list that was written (synthetic scaffolding is left out of it). Only
+        # the stamp keys are compared -- a stored row is not always the row the
+        # loop holds, because tool bodies are truncated on the way in.
+        stored_by_id = {
+            str(row.get("_row_id")): row
+            for row in getattr(session, "messages", ())
+            if str(row.get("_row_id") or "") in filed_ids
+        }
+        patches = []
+        for row in turn_msgs[turn_start_idx:]:
+            row_id = str(row.get("_row_id") or "")
+            stored = stored_by_id.get(row_id)
+            if stored is None:
+                continue
+            changed = {
+                _LATE_STAMP_KEYS[key]: row[key]
+                for key in _LATE_STAMP_KEYS
+                if key in row and stored.get(_LATE_STAMP_KEYS[key]) != row[key]
+            }
+            if changed:
+                patches.append({"row_id": row_id, "keys": changed})
+        if patches:
+            from raven.session.manager import append_turn_meta
 
-        self._save_turn(session, turn_msgs, persist_from)
-        # Taken before the save, which may merge another writer's messages in.
+            try:
+                append_turn_meta(self.sessions.session_path(session.key), patches, session=session)
+            except Exception:
+                # The turn already has an answer; a late stamp that could not
+                # be filed is not worth failing it for. The rows keep what the
+                # writer gave them, and a reader just sees no late stamp.
+                logger.exception("could not file the turn's late stamps; the turn keeps its answer")
+            else:
+                for patch in patches:
+                    stored = stored_by_id.get(patch["row_id"])
+                    if stored is not None:
+                        stored.update(patch["keys"])
+
+        live["filed_ids"].update(self._save_turn(session, turn_msgs, filed_upto))
         turn_entries = session.messages[_turn_start() :]
         self.sessions.save(session)
+        # Filing detail only, and popped after the closing save so the answer
+        # is written under the identifier it was filed by: the rest of the
+        # turn reads rows without the key the file uses.
+        for row in getattr(session, "messages", ()):
+            row.pop("_row_id", None)
         await self.harness.memory.after_turn(
             key,
             {
@@ -4195,27 +4380,9 @@ class TurnPathMixin:
         """
         try:
             tail: list[dict] = [dict(m) for m in messages[skip:]]
-            open_calls: dict[str, str] = {}
-            for m in tail:
-                if m.get("role") == "assistant":
-                    for tc in m.get("tool_calls") or []:
-                        cid = str(getattr(tc, "id", None) or (tc.get("id") if isinstance(tc, dict) else "") or "")
-                        if cid:
-                            name = getattr(getattr(tc, "function", None), "name", None) or (
-                                (tc.get("function") or {}).get("name") if isinstance(tc, dict) else None
-                            )
-                            open_calls[cid] = str(name or "tool")
-                elif m.get("role") == "tool":
-                    open_calls.pop(str(m.get("tool_call_id") or ""), None)
-            for cid, name in open_calls.items():
-                tail.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": cid,
-                        "name": name,
-                        "content": "[interrupted] this call never returned",
-                    }
-                )
+            from raven.session.manager import repair_dangling_tool_calls
+
+            tail = repair_dangling_tool_calls(tail)
             text = (streamed.get("text") or "").strip()
             # A recovery row does not count as committed: it is scaffolding that is
             # dropped below, and the partial of a cut answer is one -- a continuation
@@ -4398,7 +4565,8 @@ class TurnPathMixin:
         inbound_original: str | None = None,
         received_at: str | None = None,
         trace_id: str | None = None,
-    ) -> None:
+        final: bool = True,
+    ) -> list[str]:
         """Save new-turn messages into session, cutting any tool result still over the char cap.
 
         The loop hands this method the persisted view of the turn: an over-budget
@@ -4408,6 +4576,11 @@ class TurnPathMixin:
         attempt died before its last iteration, or an entry a caller files
         directly -- so the model and the replay still read the same bytes on the
         paths the loop completed.
+
+        Returns the ``_row_id`` of every row it appended, so the turn can tell
+        which of its rows are already on disk. A row already there that this
+        write replaces in place is not one of them: the turn did not write it,
+        and the rerun cut takes back exactly what the turn wrote.
 
         ``received_at`` is the wall clock at which the turn's inbound message
         arrived, and it is the opening write that passes one: the turn's other
@@ -4430,8 +4603,12 @@ class TurnPathMixin:
         # also comes through, before any question, and files nothing. A turn the
         # session list and the ACP replay take back whole files none: a notice
         # after its marker would outlive the take-back as an orphan.
-        if not _taken_back_whole(messages, skip):
+        if final and not _taken_back_whole(messages, skip):
             _file_unanswered(messages)
+        written_ids: list[str] = []
+        already_filed, batch = _filing_batch(session, messages, skip)
+        filed_contents = getattr(session, "_filed_contents", None)
+        inbound_filed = getattr(session, "_inbound_filed", None)
         first_user_pending = received_at is not None
         # The turn's first user entry is the inbound message; hooks may have
         # rewritten what the model saw (a memo prepended, a reminder appended),
@@ -4439,9 +4616,31 @@ class TurnPathMixin:
         # Same rule as the runtime-context strip below: history keeps the words
         # the user sent. Block-shaped inbounds pass through as built.
         inbound_rewrite_pending = inbound_original is not None
-        for m in messages[skip:]:
+        for m in batch:
+            # The identifier a later turn_meta names this row by. Kept on the
+            # live dict too: the turn's stamps land on these objects, and the
+            # file already holds a copy.
+            if not m.get("_row_id"):
+                m["_row_id"] = uuid4().hex[:16]
+            row_id = str(m["_row_id"])
+            stored = already_filed.get(row_id)
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
+            restored = inbound_filed.get(row_id) if stored is not None and inbound_filed else None
+            if restored is not None:
+                # This row was filed in the user's words before a hook's view
+                # was stripped. Preparing it again must strip the same view,
+                # not file the memo or the reminder over what the user sent.
+                content = entry["content"] = restored
+                entry.pop(ATTACHMENT_NOTES_KEY, None)
+            if isinstance(content, list) and any(is_inline_image(part) for part in content):
+                # A multimodal row. Inline images must never reach the JSONL: a
+                # single one adds megabytes that are then replayed on every
+                # resume and re-fed to the model, and unlike a code bug that is
+                # not revertible once written. The placeholder is also what
+                # lets the row be filed where it happened instead of waiting
+                # for a window note that a kept picture never gets.
+                content = entry["content"] = _strip_inline_images(content)
             if first_user_pending and role == "user":
                 entry.setdefault("timestamp", received_at)
                 if trace_id:
@@ -4540,14 +4739,6 @@ class TurnPathMixin:
                 # count of the stored log, can only ever guess.
                 if (took := entry.pop(private_key, None)) is not None:
                     entry[stored_key] = took
-            if role == "tool" and isinstance(content, list):
-                # A multimodal tool result. Images must never reach the JSONL:
-                # a single one adds megabytes that are then replayed on every
-                # resume and re-fed to the model, and unlike a code bug that is
-                # not revertible once written. The char cap below cannot catch
-                # it either — it guards `str` content only.
-                content = _strip_inline_images(content)
-                entry["content"] = content
             if role == "tool":
                 # The loop already bounded what the model read; this is the
                 # fallback for a body that never passed through it.
@@ -4560,7 +4751,8 @@ class TurnPathMixin:
                         entry["content"] = parts[1]
                     else:
                         continue
-                if inbound_rewrite_pending:
+                files_the_inbound = inbound_rewrite_pending
+                if files_the_inbound:
                     inbound_rewrite_pending = False
                     if isinstance(entry.get("content"), str) and entry["content"] != inbound_original:
                         # The user's own words, without what assembly put
@@ -4584,15 +4776,54 @@ class TurnPathMixin:
                     if not filtered:
                         continue
                     entry["content"] = filtered
+                if files_the_inbound and inbound_filed is not None:
+                    # The form this write files, not the words the user typed:
+                    # a question carrying a picture is filed as blocks and a
+                    # placeholder, and the closing write prepares the row again
+                    # from the live one. Handed back the string, it would
+                    # rewrite a multimodal question as text and lose the
+                    # placeholder.
+                    inbound_filed[row_id] = entry.get("content")
             if role == "user" and runtime_lines and not carries_runtime_context(entry.get("content"), runtime_lines):
                 # Filed beside the user's words, which ``content`` keeps alone, so
                 # the history projection replays the block this turn sent. Lines
                 # the strip above left in place are not filed, or they would be
                 # sent twice.
                 entry[RUNTIME_CONTEXT_FIELD] = runtime_lines
+            if stored is not None:
+                self._refile_stored_row(session, row_id, entry, stored)
+                continue
             entry.setdefault("timestamp", self._now_fn().isoformat())
             session.record(entry)
+            if filed_contents is not None:
+                filed_contents[row_id] = _content_digest(entry.get("content"))
+            if entry.get("_row_id"):
+                written_ids.append(str(entry["_row_id"]))
         session.updated_at = self._now_fn()
+        return written_ids
+
+    def _refile_stored_row(self, session: Session, row_id: str, entry: dict, stored: dict) -> bool:
+        """Replace a filed row whose turn-side content has changed.
+
+        The image window rewrites a row in place after it reached disk -- a
+        withdrawn picture becomes a note -- so an append boundary past it would
+        keep the first version in the transcript. The stored row is replaced by
+        its new form under the same identifier, and the file is rewritten on the
+        next save. False when the content is unchanged or the stored copy is no
+        longer in this session.
+        """
+        digest = _content_digest(entry.get("content"))
+        filed = getattr(session, "_filed_contents", None)
+        if filed is None or filed.get(row_id) == digest:
+            return False
+        at = next((index for index, row in enumerate(session.messages) if row is stored), None)
+        if at is None:
+            return False
+        entry.setdefault("timestamp", stored.get("timestamp") or self._now_fn().isoformat())
+        session.messages[at] = entry
+        filed[row_id] = digest
+        session._refile_rows = True
+        return True
 
     async def _run_turn(
         self,

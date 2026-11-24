@@ -29,7 +29,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -57,7 +58,7 @@ from raven.rpc.errors import (
 from raven.rpc.methods import turn as turn_module
 from raven.rpc.methods.system import _raven_version
 from raven.session.export import default_export_path, write_transcript
-from raven.session.manager import new_chat_id
+from raven.session.manager import SessionWriterConflictError, new_chat_id
 from raven.session.refs import tool_result_view
 from raven.session.resolve import manager_for
 from raven.session.title import TITLE_STORAGE_MAX, collapse_to_line
@@ -103,6 +104,47 @@ def _safe_invoke_factory(
     except Exception:
         logger.exception("session.*: agent_loop_factory raised")
         return None
+
+
+@contextmanager
+def _cut_rolled_back_on_conflict(session: Any) -> Iterator[None]:
+    """Put the in-memory copy back when the transcript refuses a cut.
+
+    ``clear`` and ``undo_last_turn`` change the copy before the save that makes
+    the cut real. A save that loses the transcript to another writer raises, and
+    the copy would otherwise keep a cut the file never took: every later save of
+    it is refused, and a reader of the live copy reads a session the file does
+    not hold. The conflict is re-raised after the restore, so the caller sees it.
+    """
+    before = (
+        session.messages,
+        session.last_consolidated,
+        dict(session.metadata),
+        session.truncations,
+        session.log_id,
+        session.log_generation,
+        session.log_started_at,
+        session.updated_at,
+        session._persisted_count,
+        session._persisted_truncations,
+    )
+    try:
+        yield
+    except SessionWriterConflictError:
+        (
+            session.messages,
+            session.last_consolidated,
+            metadata,
+            session.truncations,
+            session.log_id,
+            session.log_generation,
+            session.log_started_at,
+            session.updated_at,
+            session._persisted_count,
+            session._persisted_truncations,
+        ) = before
+        session.metadata = metadata
+        raise
 
 
 def _enumerate_tools(agent_loop: "AgentLoop | None") -> dict[str, list[str]]:
@@ -677,6 +719,10 @@ async def session_close(
     mgr = manager_for(agent_loop, config)
     try:
         mgr.flush(session_key)
+    except SessionWriterConflictError:
+        # The tail this close was for is gone with the refused copy, so it is
+        # reported, as a refused clear or undo is, rather than closed as saved.
+        raise
     except Exception:
         logger.warning("session.close: failed to flush {}", session_key)
     return {"ok": True}
@@ -1297,12 +1343,18 @@ async def session_clear(
     config = load_config()
     mgr = manager_for(agent_loop, config)
     session = mgr.get_or_create(session_key)
-    session.clear()
-    if mgr.exists(session_key):
-        try:
-            mgr.save(session)
-        except Exception:
-            logger.warning("session.clear: failed to persist cleared {}", session_key)
+    with _cut_rolled_back_on_conflict(session):
+        session.clear()
+        if mgr.exists(session_key):
+            try:
+                mgr.save(session)
+            except SessionWriterConflictError:
+                # The transcript never took the clear: another process holds this
+                # session. Reported rather than swallowed, because a success a
+                # reload reverses is the one outcome the caller cannot see.
+                raise
+            except Exception:
+                logger.warning("session.clear: failed to persist cleared {}", session_key)
     await reset_for(_task_board(agent_loop), session_key, mgr.session_dir(session_key))
     return {"session_id": session_key, "cleared": True}
 
@@ -1332,12 +1384,19 @@ async def session_undo(
     mgr = manager_for(agent_loop, config)
     session = mgr.get_or_create(session_key)
     before = list(session.messages)
-    removed = session.undo_last_turn(n)
-    if removed and mgr.exists(session_key):
-        try:
-            mgr.save(session)
-        except Exception:
-            logger.warning("session.undo: failed to persist undo for {}", session_key)
+    with _cut_rolled_back_on_conflict(session):
+        removed = session.undo_last_turn(n)
+        if removed and mgr.exists(session_key):
+            try:
+                mgr.save(session)
+            except SessionWriterConflictError:
+                # The in-memory cut must not report an undo the transcript never
+                # took: another process holds the session, and the caller has to
+                # see that rather than a success that a reload reverses. The cut
+                # itself is rolled back by the guard.
+                raise
+            except Exception:
+                logger.warning("session.undo: failed to persist undo for {}", session_key)
     if removed:
         # A step is keyed by its turn's question, stamped when the turn arrived.
         # Named from the messages this undo cut off the tail, not from what the
@@ -1419,6 +1478,10 @@ async def session_compress(
     if compacted and mgr.exists(session_key):
         try:
             mgr.save(session)
+        except SessionWriterConflictError:
+            # The boundary the consolidator moved lives only on the copy the
+            # conflict drops; a summary of it would be undone by the next read.
+            raise
         except Exception:
             logger.warning("session.compress: failed to persist {}", session_key)
 

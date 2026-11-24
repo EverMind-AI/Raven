@@ -745,6 +745,32 @@ async def test_session_close_save_failure_still_returns_ok(tmp_path: Path, monke
     assert result == {"ok": True}
 
 
+async def test_session_close_reports_a_transcript_another_process_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A flush that lost the transcript to another writer is reported, as a refused clear is."""
+    from raven.session.manager import SessionWriterConflictError
+
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_lost01"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "saved")
+    mgr.save(session)
+    other = SessionManager(tmp_path)
+    theirs = other.get_or_create(session_key)
+    theirs.add_message("user", "from the other process")
+    other.save(theirs)
+    session.add_message("assistant", "unsaved")
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    with pytest.raises(SessionWriterConflictError, match="another process is writing this session"):
+        await session_close({"session_id": session_key})
+
+
 async def test_session_close_returns_ok_for_unknown_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """close with an unknown/absent session_key must not raise and returns ok."""
     cfg = load_config()
@@ -1619,6 +1645,88 @@ async def test_session_undo_drops_last_turn(tmp_path):
     result = await session_undo({"session_id": key}, agent_loop_factory=lambda: _LoopWithManager(mgr))
     assert result == {"removed": 2}
     assert [m["content"] for m in mgr.get_or_create(key).messages] == ["q1", "a1"]
+
+
+async def test_session_undo_refuses_a_transcript_another_process_wrote(tmp_path):
+    from raven.rpc.methods.session import session_undo
+    from raven.session.manager import SessionWriterConflictError
+
+    mgr, key = _seed_manager(tmp_path)
+    other = SessionManager(tmp_path)
+    theirs = other.get_or_create(key)
+    theirs.add_message("user", "from the other process")
+    other.save(theirs)
+
+    with pytest.raises(SessionWriterConflictError, match="another process is writing this session"):
+        await session_undo({"session_id": key}, agent_loop_factory=lambda: _LoopWithManager(mgr))
+
+
+async def test_a_refused_undo_leaves_memory_and_disk_agreeing(tmp_path):
+    """A cut the transcript never took cannot stay in the copy.
+
+    The undo edits the in-memory session before the save that would make the cut
+    real. When that save loses the session to another writer the handler raises,
+    and a copy left cut would disagree with the file for as long as it lives:
+    every later save of it is refused, and a reader of the live session sees
+    turns the transcript still holds.
+    """
+    from raven.rpc.methods.session import session_undo
+    from raven.session.manager import SessionWriterConflictError, read_session_file
+
+    mgr, key = _seed_manager(tmp_path)
+    copy = mgr.get_or_create(key)
+    other = SessionManager(tmp_path)
+    theirs = other.get_or_create(key)
+    theirs.add_message("user", "from the other process")
+    other.save(theirs)
+
+    with pytest.raises(SessionWriterConflictError, match="another process is writing this session"):
+        await session_undo({"session_id": key}, agent_loop_factory=lambda: _LoopWithManager(mgr))
+
+    on_disk = read_session_file(mgr.session_path(key), key)
+    assert on_disk is not None
+    contents = [m["content"] for m in on_disk.messages]
+    assert contents == ["q1", "a1", "q2", "a2", "from the other process"]
+    assert [m["content"] for m in copy.messages] == ["q1", "a1", "q2", "a2"], (
+        "the live copy kept a cut the transcript never took"
+    )
+    assert copy.log_generation == 0, "the live copy kept a revision the transcript never took"
+    live = mgr.get_or_create(key)
+    assert live is not copy, "the refused copy stayed cached"
+    assert [m["content"] for m in live.messages] == contents, "the session the manager serves disagrees with the file"
+    assert live.log_generation == on_disk.log_generation
+
+
+async def test_session_clear_refuses_a_transcript_another_process_wrote(tmp_path):
+    """A clear that lost the transcript must not report itself as done.
+
+    Returning ``cleared: True`` with the file untouched is the one outcome the
+    caller cannot detect: the client empties what it shows, the transcript comes
+    back on the next read, and nothing was ever said about it.
+    """
+    from raven.rpc.methods.session import session_clear
+    from raven.session.manager import SessionWriterConflictError, read_session_file
+
+    mgr, key = _seed_manager(tmp_path)
+    copy = mgr.get_or_create(key)
+    other = SessionManager(tmp_path)
+    theirs = other.get_or_create(key)
+    theirs.add_message("user", "from the other process")
+    other.save(theirs)
+
+    with pytest.raises(SessionWriterConflictError, match="another process is writing this session"):
+        await session_clear({"session_id": key}, agent_loop_factory=lambda: _LoopWithManager(mgr))
+
+    on_disk = read_session_file(mgr.session_path(key), key)
+    assert on_disk is not None
+    contents = [m["content"] for m in on_disk.messages]
+    assert contents == ["q1", "a1", "q2", "a2", "from the other process"]
+    assert [m["content"] for m in copy.messages] == ["q1", "a1", "q2", "a2"], (
+        "the live copy kept a clear the transcript never took"
+    )
+    live = mgr.get_or_create(key)
+    assert live is not copy, "the refused copy stayed cached"
+    assert [m["content"] for m in live.messages] == contents, "the session the manager serves disagrees with the file"
 
 
 async def test_session_undo_nothing_to_undo_returns_zero(tmp_path):
@@ -2985,6 +3093,38 @@ async def test_session_compress_persists_what_it_archived(tmp_path: Path, monkey
 
     reread = SessionManager(tmp_path).get_or_create(session_key)
     assert reread.last_consolidated == 3, "the archived boundary must survive a reload"
+
+
+async def test_session_compress_reports_a_transcript_another_process_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A compaction the transcript refused is not reported as done.
+
+    The boundary it moved lives only on the copy the conflict drops, so a
+    success here is one the next read of the session reverses.
+    """
+    from raven.session.manager import SessionWriterConflictError
+
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:compress_lost"
+    _write_session(tmp_path, session_key, [{"role": "user", "content": f"m{i}"} for i in range(5)])
+
+    class _Consolidator:
+        async def maybe_consolidate_by_tokens(self, session, *, force=False):
+            session.last_consolidated = 3
+            other = SessionManager(tmp_path)
+            theirs = other.get_or_create(session_key)
+            theirs.add_message("user", "from the other process")
+            other.save(theirs)
+            return {"before_tokens": 900, "after_tokens": 300, "compacted": 3}
+
+    mgr = SessionManager(tmp_path)
+    loop = SimpleNamespace(memory_consolidator=_Consolidator(), sessions=mgr)
+    with pytest.raises(SessionWriterConflictError, match="another process is writing this session"):
+        await session_module.session_compress({"session_id": session_key}, agent_loop_factory=lambda: loop)
 
 
 async def test_session_list_previews_the_first_thing_the_user_said(

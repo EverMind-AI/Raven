@@ -47,6 +47,7 @@ from raven.agent.window.images import without_pictures
 from raven.utils.images import is_image_part
 
 TURN_LOG_KEY = "_turn_log_seq"
+ROW_ID_KEY = "_row_id"
 """The stamp. Underscored so no provider payload carries it (every transport
 sends an allowlist of keys); the copies :meth:`TurnLog.messages` hands out do
 not carry it."""
@@ -123,6 +124,25 @@ class TurnLog:
             preview = self._projection(entry)
             if preview is not None:
                 entry["content"] = preview
+
+    def filed_messages(self) -> list[dict[str, Any]]:
+        """:meth:`messages`, with each tool body in the form the bound projection files it.
+
+        For a write made while the turn runs. The record keeps the full body for
+        the hooks and observers that read it until the turn ends, so the
+        projection is applied to the copies handed out here and the record is
+        left as it was; :meth:`project_tool_results` is the rewrite at the end.
+        """
+        self._sync(self._live)
+        rows = []
+        for entry in self._entries:
+            row = _unstamped(entry)
+            if self._projection is not None and entry.get("role") == "tool":
+                preview = self._projection(entry)
+                if preview is not None:
+                    row["content"] = preview
+            rows.append(row)
+        return [*self._head, *rows]
 
     def follow(self, messages: list[dict[str, Any]]) -> None:
         """Adopt ``messages`` as the list the loop works on from here.
@@ -217,6 +237,10 @@ class TurnLog:
                 continue
             seq = f"{self._token}:{len(self._entries)}"
             m[TURN_LOG_KEY] = seq
+            # The identifier a later turn_meta names this row by: the session
+            # file keeps it, and the turn's end can restate a stamp on a row it
+            # can no longer reach as a list position.
+            m.setdefault(ROW_ID_KEY, uuid.uuid4().hex[:16])
             self._index[seq] = len(self._entries)
             self._entries.append(m)
         self._mark = len(messages)
@@ -231,4 +255,4 @@ def _unstamped(message: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in message.items() if k != TURN_LOG_KEY}
 
 
-__all__ = ["OPENING_KEY", "STAND_IN_KEY", "TURN_LOG_KEY", "TurnLog"]
+__all__ = ["OPENING_KEY", "ROW_ID_KEY", "STAND_IN_KEY", "TURN_LOG_KEY", "TurnLog"]

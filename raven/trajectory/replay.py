@@ -921,7 +921,13 @@ def _parse_ts(value: Any) -> datetime | None:
 
 
 def _session_records(session_path: Path) -> list[dict[str, Any]]:
-    """The message records of a ``session.jsonl`` file (metadata rows skipped)."""
+    """The message records of a ``session.jsonl`` file (record kinds skipped).
+
+    A transcript carries records beside its messages: ``metadata`` for the
+    session record, ``turn_meta`` for stamps restated on rows already written.
+    Neither has a role, so a reader that hands one on as a message fails where
+    it builds a history.
+    """
     records: list[dict[str, Any]] = []
     for line in session_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -931,7 +937,7 @@ def _session_records(session_path: Path) -> list[dict[str, Any]]:
             data = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(data, dict) and data.get("_type") != "metadata":
+        if isinstance(data, dict) and not data.get("_type"):
             records.append(data)
     return records
 

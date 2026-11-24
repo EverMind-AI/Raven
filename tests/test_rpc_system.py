@@ -294,6 +294,26 @@ async def test_dispatcher_internal_error_maps_to_32603():
     assert "traceback_tail" in resp["error"]["data"]
 
 
+async def test_dispatcher_writer_conflict_maps_to_session_locked():
+    """The store refusing a second writer reaches the client as ``session_locked``, with its sentence."""
+    from raven.session.manager import SessionWriterConflictError
+
+    d = Dispatcher()
+
+    async def taken(params: dict) -> dict:
+        raise SessionWriterConflictError(
+            "session 'tui:x' changed on disk since this copy loaded it: another process is writing this session."
+        )
+
+    d.register("test.taken", taken)
+    resp = await d.dispatch({"jsonrpc": "2.0", "id": 7, "method": "test.taken", "params": {}})
+
+    assert resp["error"]["code"] == -32002
+    assert resp["error"]["message"] == "session_locked"
+    assert "another process is writing this session" in resp["error"]["data"]["detail"]
+    assert "traceback_tail" not in resp["error"]["data"]
+
+
 async def test_dispatcher_parse_response_id_echoed():
     d = _build_dispatcher()
     frame = {

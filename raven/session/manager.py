@@ -1,13 +1,15 @@
 """Session management for conversation history."""
 
 import copy
+import hashlib
 import inspect
 import json
 import os
 import uuid
 import weakref
 from collections import OrderedDict
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,6 +56,17 @@ TURN_MARKERS = (OUTPUT_LIMIT_TURN_AT, BUDGET_STOP_TURN_AT)
 #: patch leaves as null rather than removing -- is not carried: the fork follows
 #: the default, as its parent does.
 FORK_CARRIES: tuple[str, ...] = ("model", "provider", "reasoning_effort")
+
+
+class SessionWriterConflictError(RuntimeError):
+    """A session file changed under a copy that still holds it.
+
+    The store serves one writer per transcript. A second one -- two terminals
+    continuing the same session, or two processes pointed at one home -- is a
+    misuse: its rows would have to be merged or silently dropped, and neither
+    is what the people using it meant. The save refuses instead, and the copy
+    has to be reloaded before it can write again.
+    """
 
 
 def _refuse_imported(key: str) -> None:
@@ -207,17 +220,98 @@ def _declares(method: Any, name: str) -> bool:
     return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
-def _stamp(path: Path) -> tuple[int, int] | None:
-    """A transcript's (size, mtime_ns), or None when it is not there.
+_STAMP_TAIL_BYTES = 4096
+"""How much of a transcript's end the stamp digests: one read, not a scan of the file.
+
+A rewrite of the same length changes the tail, which is what makes the anchor
+catch a second writer the size and clock cannot. A row rewritten in the middle
+alone leaves it alone, so the pair is a cheap tell, not a checksum of the file.
+"""
+
+
+def _tail_stamp(handle: Any, size: int) -> str:
+    """A short digest of the last ``_STAMP_TAIL_BYTES`` of a transcript.
+
+    The window is measured in bytes, so a handle opened for text is read through
+    its raw buffer: counting characters would land the two digests on different
+    windows for anything the file does not spell in ASCII.
+    """
+    raw = getattr(handle, "buffer", handle)
+    raw.seek(max(0, size - _STAMP_TAIL_BYTES))
+    return hashlib.blake2b(raw.read(_STAMP_TAIL_BYTES), digest_size=16).hexdigest()
+
+
+def _stamp(path: Path) -> tuple[int, int, str] | None:
+    """A transcript's (size, mtime_ns, tail digest), or None when it is not there.
 
     What a saved copy compares itself against to know whether anybody else has
-    written to the file since it last read or wrote it.
+    written to the file since it last read or wrote it. The size and the clock
+    are not enough on their own: ``st_mtime_ns`` counts in the filesystem's own
+    ticks, which can be as coarse as a millisecond, so a rewrite of the same
+    length lands in the tick the copy already recorded and both halves compare
+    equal. The tail digest is the content anchor that tells those apart.
     """
     try:
-        st = path.stat()
+        with open(path, "rb") as handle:
+            st = os.fstat(handle.fileno())
+            return (st.st_size, st.st_mtime_ns, _tail_stamp(handle, st.st_size))
     except OSError:
         return None
-    return (st.st_size, st.st_mtime_ns)
+
+
+@contextmanager
+def _writing_as(session: "Session | None", path: Path) -> Iterator[tuple[int, int, str] | None]:
+    """Hold the write lock for a write ``session`` makes, and settle its stamp after it.
+
+    The stamp says the file holds nothing this copy has not read or written, and
+    every save trusts it: a stamp that still matches skips the re-read. Moved past
+    bytes the copy never took in, it hides them from every later save -- another
+    writer's rows, so the conflict is never raised, or another client's metadata
+    record, so the fold never runs and the next save writes over it.
+
+    So the stamp moves here and nowhere else after a write, and on evidence rather
+    than on a caller's word. This yields the file's stamp as the lock found it; on
+    a clean exit the copy's stamp moves past the write only when the copy's own
+    stamp still names that file. A writer that adds a record and reads nothing
+    needs no more than this: a file someone else changed leaves its stamp behind,
+    and the next save settles the difference. A writer that did read what changed
+    and took it in says so with :func:`_took_in` before it writes, which is what
+    ``SessionManager.save`` does after its conflict check and its fold.
+
+    ``read_session_file`` sets the first stamp, taken before the read, so a write
+    landing during the read leaves the copy behind the file rather than ahead.
+    ``SessionManager.append_metadata_patch`` writes for a key, not as a copy, and
+    moves no copy's stamp. A writer of message rows goes through ``save``, which
+    keeps the accounts :class:`Session` lists.
+    """
+    with write_transaction(path):
+        before = _stamp(path)
+        yield before
+        if session is not None and session._file_stamp == before:
+            session._file_stamp = _stamp(path)
+
+
+def _took_in(
+    session: "Session",
+    before: tuple[int, int, str] | None,
+    written: tuple[dict[str, Any] | None, int] | None,
+) -> None:
+    """Record, inside :func:`_writing_as`, that ``session`` now holds the file as ``before`` names it.
+
+    For a writer that read what changed since its stamp and took it in -- ``save``,
+    whose conflict check raised on moved rows and whose fold took in the metadata
+    record. ``written`` is that read: the file's last metadata record and message
+    count, or None when there was nothing to read (the stamp had not moved, or the
+    file is not there). It is checked again here, so a call that skipped the read,
+    or one made past rows another writer added, raises instead of moving the stamp
+    past what this copy never read.
+    """
+    if before is not None and before != session._file_stamp:
+        if written is None or _message_rows_moved(session, *written):
+            raise RuntimeError(
+                f"session {session.key!r}: its stamp cannot move past a file this copy has not read and taken in"
+            )
+    session._file_stamp = before
 
 
 @dataclass
@@ -264,16 +358,60 @@ class Session:
     # Structure: {"original_message": str, "question": str, "domain": str}
     # Cleared immediately after the user's answer is processed.
     pending_clarification: dict | None = field(default=None)
+    # -- What this copy knows about its file --
+    # Several accounts, because each answers a different question and folding two
+    # together makes one of them wrong. ``read_session_file`` sets them on load and
+    # ``SessionManager.save`` -- the only writer of message rows -- brings every one
+    # up to date in one place after its write; a cut or an in-place replacement
+    # marks them stale so that save rewrites. A writer of another record kind (a
+    # metadata patch, a turn_meta) touches none of them; a copy's stamp moves only
+    # inside ``_writing_as``, on that copy's own write.
+    #
+    # - ``_persisted_count`` indexes ``messages``, where the next append starts; it
+    #   counts the reader's synthetic repairs, which sit in the list.
+    # - ``_persisted_file_count`` counts the file's message rows, which never hold
+    #   those repairs; a save compares it with the file's own count.
+    # - ``_persisted_revision`` is the (log_id, generation) the file carried: a
+    #   second writer's undo followed by an append of the same length keeps the
+    #   count and moves this.
+    # - ``_persisted_truncations`` and ``_refile_rows`` say the file still holds
+    #   rows this copy cut or replaced; either makes the next save a rewrite.
+    # - ``_persisted_metadata`` is what a fold measures this copy's changes against.
+    # - ``_file_stamp`` is the cheap test of whether the file changed at all, made
+    #   before any of the above is read back from disk.
+    #
+    # The turn keeps two of its own (``live["persisted"]`` and ``live["filed_ids"]``
+    # in ``turn_path``): where its incremental writes stopped, and which rows the
+    # current attempt appended -- the set a rerun takes off the file.
+    #
     # Messages already on disk; save() appends only past this index.
     _persisted_count: int = field(default=0, repr=False)
+    # Message rows the file held as this copy last read or wrote it. The
+    # reader's synthetic repair is not one of them, so this is what the file's
+    # own message count must still match before a save may proceed.
+    _persisted_file_count: int = field(default=0, repr=False)
     # ``truncations`` when this copy last read or wrote the file. A cut since then
     # leaves the file holding the messages that were cut, which only a rewrite
     # drops, however far the list has grown back.
     _persisted_truncations: int = field(default=0, repr=False)
+    # A row was rewritten after it reached disk (the image window turned a
+    # picture into a note). An append would leave the stale row in the
+    # transcript, so the next save rewrites the file; the save clears this.
+    _refile_rows: bool = field(default=False, repr=False)
+    # What each filed row's content was when it was written, by identifier, so
+    # the writer can tell a rewrite from the transforms it makes itself. Pruned
+    # to the rows the copy still holds.
+    _filed_contents: dict[str, str] = field(default_factory=dict, repr=False)
+    # What a filed inbound row holds now, by identifier: the words the user
+    # typed when the row is text, the blocks and placeholders it was filed as
+    # when the question carried a picture. The hooks' rewrite is a view of the
+    # request, not of the record: a row already filed that is prepared again
+    # must be restored to the form the file holds, not to the string behind it.
+    _inbound_filed: dict[str, Any] = field(default_factory=dict, repr=False)
     # What the transcript looked like the last time this copy read or wrote it,
-    # as (size, mtime_ns). save() compares it to decide whether anybody else
-    # has written since, and only then re-reads the record to merge under.
-    _file_stamp: tuple[int, int] | None = field(default=None, repr=False)
+    # as (size, mtime_ns, tail digest). save() compares it to notice a second
+    # writer before appending or rewriting.
+    _file_stamp: tuple[int, int, str] | None = field(default=None, repr=False)
     # The metadata as this copy last read it from the file or wrote it there.
     # What ``metadata`` says that this does not is what this copy changed, and
     # only that may outrank a record written since -- the snapshot itself is
@@ -429,6 +567,9 @@ class Session:
         cut_index = user_starts[-n] if n <= len(user_starts) else user_starts[0]
         removed = len(self.messages) - cut_index
         self.messages = self.messages[:cut_index]
+        # The append boundary cannot stay past rows this copy no longer holds:
+        # a later message would land behind it and look persisted already.
+        self._persisted_count = min(self._persisted_count, cut_index)
         cursor = self.metadata.get("annotated_through")
         if isinstance(cursor, int) and cursor > cut_index:
             self.metadata["annotated_through"] = cut_index
@@ -488,56 +629,28 @@ def _stored_revision(record: dict[str, Any]) -> tuple[str, int, str | None] | No
     return revision.log_id, revision.generation, started if isinstance(started, str) and started else None
 
 
-def _started(value: str | None) -> datetime:
-    """A ``log_started_at`` as an aware UTC time; the earliest time when missing or unreadable.
-
-    Written in UTC; a naive value is read as local time.
-    """
-    if isinstance(value, str) and value:
-        try:
-            return datetime.fromisoformat(value).astimezone(timezone.utc)
-        except (ValueError, OverflowError, OSError):
-            pass
-    return datetime.min.replace(tzinfo=timezone.utc)
-
-
-def _merge_revision(session: Session, disk: tuple[str, int, str | None] | None) -> None:
-    """Settle ``session``'s revision against the one another writer left on disk.
-
-    ``disk`` is that revision, or None when nobody wrote one since this copy
-    last read or wrote the file. The log id follows the most recent clear -- an
-    id minted with the session or on load never outranks one already on disk --
-    and on a shared id the generation is the larger of the two. Disagreement is
-    resolved, never raised: a save that fails loses the turn it was saving.
-    """
-    if disk is None:
-        return
-    disk_id, disk_generation, disk_started = disk
-    if disk_id != session.log_id:
-        if _started(session.log_started_at) > _started(disk_started):
-            return
-        session.log_id, session.log_started_at = disk_id, disk_started
-        session.log_generation = disk_generation
-    else:
-        session.log_generation = max(disk_generation, session.log_generation)
-
-
 def _move_past(session: Session, *used: tuple[str, int] | None) -> None:
     """Move the generation past every ``used`` scope of this log id.
 
     For a save whose file will no longer hold what those scopes named: each was
-    already handed out -- by this copy or by another writer -- for messages at
-    ordinals that now hold something else, and a scope must never name two
-    different messages.
+    already handed out by this copy for messages at ordinals that now hold
+    something else, and a scope must never name two different messages.
     """
     for revision in used:
         if revision is not None and revision[0] == session.log_id and session.log_generation <= revision[1]:
             session.log_generation = revision[1] + 1
 
 
-def _normalized(messages: list[dict[str, Any]]) -> list[Any]:
-    """Messages as a reader of the file would get them back."""
-    return [json.loads(json.dumps(m, ensure_ascii=False)) for m in messages]
+def _filed_rows(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The rows a save writes: every message but the repair the reader derived.
+
+    The synthetic results of :func:`repair_dangling_tool_calls` are not part of
+    what happened, and a rewrite (an undo, a clear, a fork) would otherwise
+    turn one into a tool result no tool produced. They stay in memory, where
+    the next model call needs the history to be provider-valid, and the next
+    read derives them from the file again.
+    """
+    return [message for message in messages if not message.get(SYNTHETIC_INTERRUPTED_KEY)]
 
 
 def _legacy_log_id(key: str, created_at: Any, message_count: int) -> str:
@@ -553,6 +666,76 @@ def _legacy_log_id(key: str, created_at: Any, message_count: int) -> str:
     return uuid.uuid5(uuid.NAMESPACE_URL, f"raven-session-log:{key}:{created_at}:{message_count}").hex
 
 
+_INTERRUPTED_RESULT = "[interrupted] this call never returned"
+
+SYNTHETIC_INTERRUPTED_KEY = "_synthetic_interrupted"
+"""Marks the result :func:`repair_dangling_tool_calls` invents on read.
+
+The file never holds such a row: it is a reader's repair, re-derived on every
+read, and a rewrite would turn it into a tool result no tool produced. The
+graceful-cancel path builds its own ``[interrupted]`` rows without this mark,
+because those are the turn's real record of what happened."""
+
+_TURN_META_KEYS = frozenset(
+    {"replied_via_tool", "observers", "reasoning_ms", "duration_ms", "context_used", "context_parts"}
+)
+"""The keys a ``turn_meta`` record may restate on a row already written.
+
+The record exists for stamps that land after the row reached disk. Anything
+else in it is malformed or from a newer writer, and applying it would let a
+patch rewrite message content the format never lets it touch."""
+
+
+def repair_dangling_tool_calls(messages: list[dict], *, mark_synthetic: bool = False) -> list[dict]:
+    """Give every tool call that never got a result an ``[interrupted]`` one.
+
+    An incrementally written transcript can end mid-call: the assistant message
+    is on disk and the process is gone before the tool answered. A strict
+    provider rejects a history whose ``tool_calls`` have no matching tool
+    message, so the repair happens on the way in rather than on the way out --
+    the file keeps saying what actually happened. Each result is filed directly
+    after the call that opened it, and after any results already filed for it,
+    so a later restart reloads the same provider-valid order.
+
+    ``mark_synthetic`` tags the inserted rows with
+    :data:`SYNTHETIC_INTERRUPTED_KEY`. The reader passes it, so a later save
+    knows not to write the repair it derived; the cancel path does not, because
+    the rows it builds are what that turn actually leaves behind.
+    """
+    answered = {str(message.get("tool_call_id") or "") for message in messages if message.get("role") == "tool"}
+    repairs: list[tuple[int, list[dict]]] = []
+    for index, message in enumerate(messages):
+        if message.get("role") != "assistant":
+            continue
+        pending = []
+        for call in message.get("tool_calls") or []:
+            call_id = str(call.get("id") or "") if isinstance(call, dict) else str(getattr(call, "id", "") or "")
+            if not call_id or call_id in answered:
+                continue
+            function = call.get("function") if isinstance(call, dict) else getattr(call, "function", None)
+            name = function.get("name") if isinstance(function, dict) else getattr(function, "name", None)
+            synthetic = {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "name": str(name or "tool"),
+                "content": _INTERRUPTED_RESULT,
+            }
+            if mark_synthetic:
+                synthetic[SYNTHETIC_INTERRUPTED_KEY] = True
+            pending.append(synthetic)
+        if pending:
+            repairs.append((index, pending))
+    if not repairs:
+        return list(messages)
+    out = list(messages)
+    for index, pending in reversed(repairs):
+        at = index + 1
+        while at < len(out) and out[at].get("role") == "tool":
+            at += 1
+        out[at:at] = pending
+    return out
+
+
 def read_session_file(path: Path, key: str) -> Session | None:
     """The session stored in the transcript at ``path``, read as ``key``.
 
@@ -560,12 +743,18 @@ def read_session_file(path: Path, key: str) -> Session | None:
     kept outside the session store -- an Imported Session's -- is read by
     the same rules: metadata records are appended per save and the last one
     wins.
+
+    The filing key on a stored row is a detail of the format, not of the
+    conversation: the rows handed to a model or a front end never carry it. A
+    file that ends on a call with no result is repaired here, so every reader
+    gets a provider-valid history; the derived result is never written back.
     """
     if not path.exists():
         return None
 
     try:
         messages = []
+        patches: list[dict] = []
         metadata = {}
         created_at = None
         updated_at = None
@@ -579,10 +768,11 @@ def read_session_file(path: Path, key: str) -> Session | None:
         with open(path, encoding="utf-8-sig") as f:
             # Of the file this read, taken before reading it: a write that lands
             # while the file is read (or replaces it) leaves the stamp behind the
-            # file, so the next save re-reads and merges rather than writing over
+            # file, so the next save notices it changed rather than writing over
             # a revision this copy never saw.
             st = os.fstat(f.fileno())
-            file_stamp = (st.st_size, st.st_mtime_ns)
+            file_stamp = (st.st_size, st.st_mtime_ns, _tail_stamp(f, st.st_size))
+            f.seek(0)
             for line in f:
                 line = line.strip()
                 if not line:
@@ -593,6 +783,13 @@ def read_session_file(path: Path, key: str) -> Session | None:
                 except json.JSONDecodeError:
                     # Partial trailing line from a crashed append.
                     logger.debug("Skipping undecodable line in session {}", key)
+                    continue
+
+                # A turn's late stamps on rows already written: applied by the
+                # row's own identifier rather than its position, which the
+                # window can move under the turn that stamped it.
+                if data.get("_type") == "turn_meta":
+                    patches.extend(data.get("patches") or [])
                     continue
 
                 # Metadata records are appended per save; last one wins.
@@ -607,6 +804,17 @@ def read_session_file(path: Path, key: str) -> Session | None:
                 else:
                     messages.append(data)
 
+        if patches:
+            positions = {str(row.get("_row_id")): index for index, row in enumerate(messages) if row.get("_row_id")}
+            for patch in patches:
+                index = positions.get(str(patch.get("row_id")))
+                keys = patch.get("keys")
+                if index is not None and isinstance(keys, dict):
+                    messages[index].update({key: value for key, value in keys.items() if key in _TURN_META_KEYS})
+        for row in messages:
+            row.pop("_row_id", None)
+        file_count = len(messages)
+        messages = repair_dangling_tool_calls(messages, mark_synthetic=True)
         session = Session(
             key=key,
             messages=messages,
@@ -626,6 +834,7 @@ def read_session_file(path: Path, key: str) -> Session | None:
         else:
             session.log_id = _legacy_log_id(key, created_raw, len(messages))
         session._persisted_count = len(messages)
+        session._persisted_file_count = file_count
         session._file_stamp = file_stamp
         session._persisted_metadata = dict(metadata)
         return session
@@ -634,12 +843,48 @@ def read_session_file(path: Path, key: str) -> Session | None:
         return None
 
 
+def _message_rows_moved(session: Session, last: dict[str, Any] | None, count: int) -> bool:
+    """Whether the file's message rows are no longer the ones this copy last wrote.
+
+    A metadata-only record appended since leaves the count and the revision
+    alone; anything else is a second writer.
+    """
+    disk = None if last is None else _stored_revision(last)
+    disk_scope = None if disk is None else disk[:2]
+    return count != session._persisted_file_count or (last is not None and disk_scope != session._persisted_revision)
+
+
+def append_turn_meta(session_path: Path, patches: list[dict], *, session: Session | None = None) -> None:
+    """Restate keys on rows already written, by row id, under the file lock.
+
+    The turn's rows are appended as it produces them; the stamps filed at its
+    end -- the reply's provenance, the hook observers -- arrive later. One record
+    per turn carries them, and the reader applies it in file order. ``session``
+    is the copy that wrote them. Its stamp moves past this record only when
+    nothing else was written since (``_writing_as``): the record folds nothing
+    in, so another client's metadata record has to stay ahead of the stamp for
+    the save that does.
+    """
+    if not patches:
+        return
+    payload = json.dumps({"_type": "turn_meta", "patches": patches}, ensure_ascii=False)
+    with _writing_as(session, session_path) as before:
+        if session is not None and before != session._file_stamp:
+            # A message write since is a second writer, and filing into its rows
+            # would be this copy's first write past them. A metadata-only record
+            # is not, and the append goes ahead.
+            last, count, *_rest = SessionManager._scan_file(session_path)
+            if _message_rows_moved(session, last, count):
+                return
+        locked_append(session_path, [payload])
+
+
 def _cut_since_persisted(session: Session) -> bool:
     return session.truncations != session._persisted_truncations
 
 
 def _is_clean(session: Session) -> bool:
-    if len(session.messages) != session._persisted_count or _cut_since_persisted(session):
+    if len(session.messages) != session._persisted_count or _cut_since_persisted(session) or session._refile_rows:
         return False
     current = _fingerprint(session)
     # None is "could not tell", never "unchanged": two failures must not read as a match.
@@ -917,7 +1162,9 @@ class SessionManager:
 
         One metadata record is appended per save, so the last reflects
         current state. Message lines are counted without keeping them in
-        memory.
+        memory. A line that is another record kind (``turn_meta`` today) is
+        not a message and is not counted: the count is what the picker shows
+        and what a save compares against the file's own message count.
 
         The timestamp tracked is the newest readable conversational message:
         ``user`` or ``assistant``. Runtime-origin and delegated entries are
@@ -972,24 +1219,30 @@ class SessionManager:
                         continue
                     if isinstance(data, dict) and data.get("_type") == "metadata":
                         meta = data
-                    else:
-                        count += 1
-                        if isinstance(data, dict):
-                            step = take_back.read(data)
-                            if step is TakeBackStep.OPENS:
-                                before_runtime_turn = (latest_preview, last_ts)
-                            elif step is TakeBackStep.TAKES_BACK:
-                                latest_preview, last_ts = before_runtime_turn
-                            role = data.get("role")
-                            if role == "user" and not first_user:
-                                first_user = _message_text(data.get("content"))
-                            if role in {"user", "assistant"} and data.get("silent") is not True:
-                                text = _message_text(data.get("content"))
-                                if text:
-                                    latest_preview = text
-                                ts = data.get("timestamp")
-                                if isinstance(ts, str) and ts > last_ts:
-                                    last_ts = ts
+                        continue
+                    if isinstance(data, dict) and data.get("_type"):
+                        # A record kind rather than a message: turn_meta, and
+                        # whatever the format adds next. Counting one here made
+                        # the listing's count disagree with the transcript, and
+                        # made a save compare a count that could never match.
+                        continue
+                    count += 1
+                    if isinstance(data, dict):
+                        step = take_back.read(data)
+                        if step is TakeBackStep.OPENS:
+                            before_runtime_turn = (latest_preview, last_ts)
+                        elif step is TakeBackStep.TAKES_BACK:
+                            latest_preview, last_ts = before_runtime_turn
+                        role = data.get("role")
+                        if role == "user" and not first_user:
+                            first_user = _message_text(data.get("content"))
+                        if role in {"user", "assistant"} and data.get("silent") is not True:
+                            text = _message_text(data.get("content"))
+                            if text:
+                                latest_preview = text
+                            ts = data.get("timestamp")
+                            if isinstance(ts, str) and ts > last_ts:
+                                last_ts = ts
         except OSError:
             return None, 0, "", "", ""
         return meta, count, last_ts, first_user, latest_preview
@@ -1119,10 +1372,12 @@ class SessionManager:
             # These keys are on disk now, so they are no longer this copy's
             # unsaved opinion: left out of the baseline the patch reads as a
             # local change on every later save and is asserted again over
-            # whatever anybody wrote in between. ``_file_stamp`` deliberately
-            # stays stale -- the file also carries the record this merged into,
-            # and a stale stamp is what makes the next save re-read it.
+            # whatever anybody wrote in between.
             cached._persisted_metadata.update(patch)
+            # The cached copy's stamp is left where it was: this write is made for
+            # the key, not by the copy, and no lock spans the scan its record
+            # merges and the append. The file also carries the record this merged
+            # into, and a stale stamp is what makes the next save re-read it.
             # Clean stays clean; a copy with changes of its own keeps them unsaved.
             if unchanged:
                 cached._clean_fingerprint = _fingerprint(cached)
@@ -1132,12 +1387,17 @@ class SessionManager:
         """Save a session to disk.
 
         Appends a fresh metadata record plus the not-yet-persisted messages
-        under a cross-process lock, so concurrent writers never lose each
-        other's turns and a turn's messages stay contiguous. A message list
-        cut since this copy last read or wrote the file (``clear``,
-        ``undo_last_turn``) rewrites it atomically instead, however far the
-        list has grown back: the cut messages are still in the file, and an
-        append would leave them there.
+        under a cross-process lock. A message list cut since this copy last
+        read or wrote the file (``clear``, ``undo_last_turn``) rewrites it
+        atomically instead, however far the list has grown back: the cut
+        messages are still in the file, and an append would leave them there.
+
+        The store serves one writer per transcript. A file that has gained or
+        lost message rows since this copy read it raises
+        :class:`SessionWriterConflictError` instead of merging the other writer's
+        rows in or writing over them. A metadata-only record appended since
+        (``append_metadata_patch``) is not a second writer: it is folded under
+        this copy's changed keys and the save goes on.
 
         An untitled session is auto-named here from its first user message
         (first line, collapsed whitespace, capped at 40 chars); a title set
@@ -1166,47 +1426,28 @@ class SessionManager:
         }
         session.metadata = {**reserved, **session.metadata}
 
-        # The read and the write are one transaction: the record this merges
-        # under can otherwise be written between them and lost anyway.
-        with write_transaction(path):
-            written = self._record_written_since(session, path)
+        # The read and the write are one transaction: the metadata record this
+        # folds under can otherwise be written between them and lost anyway.
+        with _writing_as(session, path) as before:
+            written = self._record_written_since(session, path, before)
+            if written is not None:
+                self._refuse_second_writer(session, written)
             last = None if written is None else written[0]
             session.metadata = self._metadata_to_write(session, last)
-            rewrite = len(session.messages) < session._persisted_count or _cut_since_persisted(session)
+            _took_in(session, before, written)
+            rewrite = (
+                len(session.messages) < session._persisted_count
+                or _cut_since_persisted(session)
+                or session._refile_rows
+            )
             disk = None if last is None else _stored_revision(last)
             disk_scope = None if disk is None else disk[:2]
-            before = (session.log_id, session.log_generation)
-            _merge_revision(session, disk)
-            merged: list[dict[str, Any]] | None = None
+            messages: list[dict[str, Any]] = []
             if rewrite:
                 # The file is about to hold exactly this copy's list, so neither
                 # the scope it last saw nor the one on disk may name it.
                 _move_past(session, session._persisted_revision, disk_scope)
-            elif written is not None and (
-                written[1] != session._persisted_count or disk_scope != session._persisted_revision
-            ):
-                # Somebody else changed the messages since this copy last saw
-                # the file. The append lands after theirs, so the live list is
-                # re-read to match the file. Refs are minted only into history
-                # already persisted, so the scope survives as long as every
-                # persisted ordinal still names the same message, and is retired
-                # otherwise. Where the persisted part agrees, this copy's own
-                # entries are kept by identity, which is what lets a turn find
-                # its own messages again after the merge.
-                on_disk = read_session_file(path, session.key)
-                count = session._persisted_count
-                kept = on_disk is not None and len(on_disk.messages) >= count
-                kept = kept and _normalized(session.messages[:count]) == _normalized(on_disk.messages[:count])
-                if on_disk is not None:
-                    head = session.messages[:count] if kept else on_disk.messages[:count]
-                    merged = head + on_disk.messages[count:] + session.messages[count:]
-                if not kept and (session.log_id, session.log_generation) == before:
-                    _move_past(session, before, disk_scope)
-                # Indices into this copy's unsaved tail move when the other
-                # writer's messages land ahead of it.
-                moved = on_disk is not None and len(on_disk.messages) > count and len(session.messages) > count
-                if merged is None or not kept or moved:
-                    session.truncations += 1
+                messages = _filed_rows(session.messages)
             metadata_line = json.dumps(
                 {
                     "_type": "metadata",
@@ -1226,16 +1467,20 @@ class SessionManager:
 
             if rewrite:
                 lines = [metadata_line]
-                lines += [json.dumps(m, ensure_ascii=False) for m in session.messages]
+                lines += [json.dumps(m, ensure_ascii=False) for m in messages]
                 atomic_replace(path, "".join(line + "\n" for line in lines))
+                # The file now holds these rows, so this copy's list holds them
+                # too; otherwise the next append would be written past a prefix
+                # it never read. The repair is applied once, after a call still
+                # open on the file can meet its result in this copy's tail.
+                session.messages = repair_dangling_tool_calls(messages, mark_synthetic=True)
+                session._persisted_file_count = len(messages)
             else:
-                new_messages = session.messages[session._persisted_count :]
+                new_messages = _filed_rows(session.messages[session._persisted_count :])
                 lines = [metadata_line]
                 lines += [json.dumps(m, ensure_ascii=False) for m in new_messages]
                 locked_append(path, lines)
-            if merged is not None:
-                session.messages = merged
-            session._file_stamp = _stamp(path)
+                session._persisted_file_count += len(new_messages)
             session._persisted_metadata = dict(session.metadata)
             session._persisted_revision = (session.log_id, session.log_generation)
 
@@ -1244,20 +1489,90 @@ class SessionManager:
         # can land in the same mtime tick (observed on NTFS), and serving the
         # previous listing is the unsafe direction.
         self._scan_cache.pop(path, None)
+        session._refile_rows = False
         session._persisted_count = len(session.messages)
         session._persisted_truncations = session.truncations
         session._clean_fingerprint = _fingerprint(session)
         self._remember(session)
 
-    def _record_written_since(self, session: "Session", path: Path) -> tuple[dict[str, Any] | None, int] | None:
+    def _refuse_second_writer(self, session: Session, written: tuple[dict[str, Any] | None, int]) -> None:
+        """Refuse a save when the file's message rows are not the ones this copy last wrote.
+
+        A metadata-only record appended since (an archive flag, the episodic
+        cursor) leaves the rows and the revision alone and is folded in by
+        ``_metadata_to_write``. Anything else means a second writer is running
+        the same session, and merging its rows or writing over them would
+        silently lose one side's turn.
+        """
+        last, count = written
+        if not _message_rows_moved(session, last, count):
+            return
+        # Dropped before the raise, because the message below tells the caller to
+        # reload and nothing else would: the copy stays cached otherwise, and
+        # every later save of it is refused for the rest of the process's life.
+        # The next ``get_or_create`` reads the transcript the other writer left.
+        self._forget(session)
+        raise SessionWriterConflictError(
+            f"session {session.key!r} changed on disk since this copy loaded it: "
+            "another process is writing this session. This copy is stale: the next read "
+            "of the session returns the transcript the other writer left."
+        )
+
+    def _forget(self, session: Session) -> None:
+        """Drop ``session`` from the cache and the held map, and not a copy that replaced it.
+
+        A refused copy can be refused again -- a turn keeps it until its closing
+        save -- after the next load has cached a fresh copy under the same key.
+        Dropping by key evicted that one, and the load after it made a second
+        copy beside the first, each refusing the other's saves.
+        """
+        if self._cache.get(session.key) is session:
+            self._cache.pop(session.key, None)
+        if self._held.get(session.key) is session:
+            self._held.pop(session.key, None)
+
+    def drop_filed_rows(self, session: Session, row_ids: Collection[str]) -> bool:
+        """Take the rows filed under ``row_ids`` off the transcript.
+
+        The failed attempt filed its rows as it ran, so a rerun that only reset
+        the in-memory log left its research in the transcript and appended the
+        rerun's answer behind the wreckage. The cut is by identifier, not by
+        position: the window can drop a row from the turn record, and a cut by
+        position would take a neighbour with it. The file is rewritten, which is
+        what makes the cut land however far the in-memory list has grown back.
+
+        True when the file no longer holds any of the rows; False when the cut
+        could not be written, so the caller does not go on to append an answer
+        over it.
+        """
+        original = session.messages
+        original_truncations = session.truncations
+        original_count = session._persisted_count
+        kept = [row for row in original if str(row.get("_row_id") or "") not in row_ids]
+        if len(kept) == len(original):
+            return True
+        session.messages = kept
+        session.truncations += 1
+        try:
+            self.save(session)
+        except Exception:
+            session.messages = original
+            session.truncations = original_truncations
+            session._persisted_count = original_count
+            logger.exception("could not drop the filed rows from {}; the caller must not append over them", session.key)
+            return False
+        return True
+
+    def _record_written_since(
+        self, session: "Session", path: Path, stamp: tuple[int, int, str] | None
+    ) -> tuple[dict[str, Any] | None, int] | None:
         """The file's last metadata record and message count, if anybody wrote to it since this copy last read or wrote it.
 
-        None while the file is byte for byte what this copy last read or wrote,
-        which is every save in the ordinary case of one writer -- so a
-        conversation pays for the scan only when somebody else has actually
-        written to it.
+        ``stamp`` is the file's stamp as the write lock found it. None while the
+        file is byte for byte what this copy last read or wrote, which is every
+        save in the ordinary case of one writer -- so a conversation pays for the
+        scan only when somebody else has actually written to it.
         """
-        stamp = _stamp(path)
         if stamp is None or stamp == session._file_stamp:
             return None
         last, count, *_rest = self._scan_file(path)
@@ -1397,7 +1712,14 @@ class SessionManager:
         channel = source_key.partition(":")[0]
         child = Session(
             key=f"{channel}:{new_chat_id()}",
-            messages=copy.deepcopy(source.messages),
+            # The parent's file may end mid-call. The child is served from this
+            # process's cache as well as from its file, and a strict provider
+            # rejects the unrepaired call, so the copy it is cached as is
+            # repaired here; the save below leaves the synthetic results out of
+            # the file, which derives them again on read.
+            messages=repair_dangling_tool_calls(
+                [copy.deepcopy(m) for m in _filed_rows(source.messages)], mark_synthetic=True
+            ),
             last_consolidated=source.last_consolidated,
         )
         if title is not None:
@@ -1433,7 +1755,9 @@ class SessionManager:
         has not seen yet, such as one whose own save failed. Returns False only
         when a save was attempted and failed (the failure is swallowed); True
         otherwise, including the no-op cases (key not in memory / nothing
-        unpersisted).
+        unpersisted). A :class:`SessionWriterConflictError` is raised rather than
+        swallowed: the copy has been dropped with what it had not saved, which a
+        False would report as a write that may still land.
         """
         cached = self._live(key)
         if cached is None:
@@ -1441,6 +1765,8 @@ class SessionManager:
         if len(cached.messages) > cached._persisted_count or _cut_since_persisted(cached):
             try:
                 self.save(cached)
+            except SessionWriterConflictError:
+                raise
             except Exception:
                 logger.warning("flush: failed to persist session {}", key)
                 return False

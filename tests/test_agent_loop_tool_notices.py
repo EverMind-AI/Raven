@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from pathlib import Path
 
 import pytest
@@ -863,16 +864,55 @@ def test_a_reopened_log_keeps_its_standing_notice(tmp_path: Path, monkeypatch: p
     assert "currently unavailable" in answer and "switched off in settings" in answer, answer
 
 
-def test_a_log_adopted_from_another_writer_keeps_its_unsaved_notice(
+def test_a_log_id_that_moved_with_its_history_keeps_its_unsaved_notice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A log id change is not always an empty log.
 
-    Another writer clears the conversation while this copy holds an unsaved
-    turn whose block carries a standing note. Saving adopts the other writer's
-    log id and keeps that turn, so the new log holds the note, and the next
-    turn must keep speaking for it rather than clear it.
+    The notes a turn speaks for are read back from the history it replays, not
+    inferred from the log id: a copy whose id moved while the turn that carries
+    a standing note stayed in its log must keep speaking for that note rather
+    than clear it. The store refuses to merge another writer's clear into an
+    unsaved copy, so the moved id is set here directly; what this pins is the
+    ledger's reading, whichever way the id moved.
     """
+    cfg = tmp_path / "config.json"
+    _write_switches(cfg, [])
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    loop = _loop(tmp_path)
+    mine = loop.sessions.get_or_create("cli:c1")
+    mine.add_message("user", "first")
+    mine.add_message("assistant", "ok")
+    loop.sessions.save(mine)
+
+    log = _NoticeLog(session=mine)
+    log.turn(loop)
+    _write_switches(cfg, ["grep"])
+    assert "currently unavailable" in log.turn(loop)[("tool", "grep")]
+    mine.log_id = uuid.uuid4().hex
+    assert ("tool", "grep") in told_notices(mine.messages), "the turn that holds the note stayed in the log"
+
+    current = log.turn(loop)
+
+    assert log.cleared() == [], log.sent
+    assert "currently unavailable" in current[("tool", "grep")]
+    assert "currently unavailable" in _execute(loop, "grep", {})
+
+
+def test_a_turn_refused_by_another_writers_clear_starts_the_reloaded_log_afresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a refused save, the next turn speaks to the log the other writer left.
+
+    Another writer clears the conversation while this copy holds an unsaved
+    turn with a standing note. The save is refused and the copy dropped, so the
+    note never reached the file; the reloaded log is the cleared one, a new and
+    empty log. Like any clear it captures the tool array afresh, so the tool
+    that went away is simply absent from it: nothing is noted, and nothing is
+    cleared that this log never said.
+    """
+    from raven.session.manager import SessionWriterConflictError
+
     cfg = tmp_path / "config.json"
     _write_switches(cfg, [])
     monkeypatch.setattr("raven.home._current_config_path", cfg)
@@ -891,16 +931,19 @@ def test_a_log_adopted_from_another_writer_keeps_its_unsaved_notice(
     log.turn(loop)
     _write_switches(cfg, ["grep"])
     assert "currently unavailable" in log.turn(loop)[("tool", "grep")]
-    old_log = mine.revision.log_id
-    loop.sessions.save(mine)
-    assert mine.revision.log_id != old_log, "the save adopted the other writer's log id"
-    assert ("tool", "grep") in told_notices(mine.messages), "and kept the unsaved turn that holds the note"
+    with pytest.raises(SessionWriterConflictError):
+        loop.sessions.save(mine)
 
-    current = log.turn(loop)
+    reloaded = loop.sessions.get_or_create("cli:c1")
+    assert reloaded is not mine and reloaded.messages == [], "the next read is the log the other writer left"
+    assert ("tool", "grep") not in told_notices(reloaded.messages), "the refused turn's note never reached the file"
+    fresh = _NoticeLog(session=reloaded)
+    current = fresh.turn(loop)
 
-    assert log.cleared() == [], log.sent
-    assert "currently unavailable" in current[("tool", "grep")]
-    assert "currently unavailable" in _execute(loop, "grep", {})
+    assert fresh.cleared() == [], fresh.sent
+    assert ("tool", "grep") not in current, current
+    with loop.tools.session_scope_for(fresh.key):
+        assert "grep" not in {d["function"]["name"] for d in loop.tools.get_definitions()}
 
 
 def test_a_refusal_says_whether_the_tool_list_still_carries_the_name(

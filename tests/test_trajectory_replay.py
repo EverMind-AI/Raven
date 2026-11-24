@@ -742,6 +742,33 @@ async def test_pre_attempt_messages_cut_at_first_turn_content(tmp_path) -> None:
     assert [m["content"] for m in pre] == ["earlier question", "earlier answer"]
 
 
+async def test_pre_attempt_messages_skip_turn_meta_records(tmp_path) -> None:
+    """A turn_meta record restates stamps on rows; it is not a message.
+
+    The reader used to skip only metadata rows, so a transcript from the
+    incremental session writer handed the stamp record to the history builder,
+    which has no role to read.
+    """
+    from raven.trajectory.replay import _pre_attempt_messages
+
+    bundle = _make_bundle(tmp_path, turns=[{"content": "go", "channel": "cli", "chat_id": "d"}])
+    _write_session(
+        bundle,
+        [
+            {"role": "user", "content": "earlier question", "timestamp": "2026-08-19T10:00:00"},
+            {"_type": "turn_meta", "patches": [{"row_id": "r1", "keys": {"replied_via_tool": True}}]},
+            {"role": "assistant", "content": "earlier answer", "timestamp": "2026-08-19T10:00:05"},
+            {"role": "user", "content": "go", "timestamp": "2026-08-20T10:00:00"},
+            {"role": "assistant", "content": "attempt answer", "timestamp": "2026-08-20T10:00:05"},
+        ],
+    )
+
+    pre = _pre_attempt_messages(load_recording(bundle))
+
+    assert [m["content"] for m in pre] == ["earlier question", "earlier answer"]
+    assert all(m.get("role") for m in pre), "a record without a role reached the history"
+
+
 async def test_pre_attempt_messages_timestamp_fallback_and_no_anchor(tmp_path) -> None:
     from raven.trajectory.replay import _pre_attempt_messages
 

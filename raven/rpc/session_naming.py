@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.session.manager import SessionWriterConflictError
 from raven.session.title import generate_title
 from raven.utils.text import display_width
 
@@ -129,12 +130,18 @@ async def _name_session(
     if mgr.exists(session_key):
         try:
             mgr.save(session)
+        except SessionWriterConflictError:
+            # The refused copy leaves the cache with the title on it, so nothing
+            # holds the name any more: announcing it would show the reader a
+            # title no reload finds. The client is told none is coming.
+            await _ended("error")
+            raise
         except Exception:
             logger.warning("session naming: failed to persist the title for {}", session_key)
-    # Emitted even when the save was skipped or failed: the title is live in the
-    # cached session either way, and the front end is holding a placeholder for
-    # it. A lazy session lands the same title on its first save, exactly as a
-    # title set through ``session.title`` does.
+    # Emitted even when the save was skipped or failed for any other reason: the
+    # title is live in the cached session then, and the front end is holding a
+    # placeholder for it. A lazy session lands the same title on its first save,
+    # exactly as a title set through ``session.title`` does.
     if emitter is not None:
         await emitter.emit(
             session_key, {"type": "session.titled", "payload": {"session_id": session_key, "title": stored}}

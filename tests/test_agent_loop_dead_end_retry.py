@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -824,6 +825,119 @@ async def test_a_cancel_during_the_rerun_files_the_rerun_s_own_work(tmp_path):
     assert "call-a" in calls, "the rerun's tool call is not in what the cancel filed"
     results = {str(m.get("tool_call_id")) for m in filed if m.get("role") == "tool"}
     assert set(calls) <= results, "every filed tool call still needs a filed result"
+
+
+@pytest.mark.asyncio
+async def test_an_image_question_survives_the_dead_end_rerun(tmp_path):
+    """The question row belongs to the turn, not to the attempt the rerun discards.
+
+    A question carrying a picture is filed at the opening write as blocks plus
+    the ``[image]`` placeholder. The closing write prepares that row again from
+    the live message, so restoring the words the user typed would rewrite it as
+    text -- and a rewrite of an already-filed row was counted among the rows the
+    attempt wrote. The cut that clears the attempt then took the user's own
+    question with it, and a turn that ended dead left only its marker on disk.
+    """
+    from PIL import Image
+
+    from raven.spine.message import Media
+
+    image = tmp_path / "shot.png"
+    Image.new("RGB", (48, 36), (10, 120, 90)).save(image, format="PNG")
+    request = replace(_req("what is this?"), media=(Media(path=str(image), mime="image/png", kind="image"),))
+    provider = _Scripted(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="call-look", name="list_dir", arguments={"path": "."})],
+                finish_reason="tool_calls",
+            ),
+            *_dead(),
+            *_dead(),
+        ],
+        _answers("Alice Smith won it."),
+    )
+    agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1)])
+
+    await agent._process_message(request, session_key="s1")
+
+    assert provider.attempts_used == 2, "the rerun did not run, so the cut was not under test"
+    filed = _persisted(tmp_path)
+    assert "call-look" not in json.dumps(filed), "the attempt's rows were not cut, so nothing was dropped"
+    question = next((row for row in filed if row.get("role") == "user"), None)
+    assert question is not None, "the rerun took the user's question off the transcript"
+    assert "[image]" in json.dumps(question["content"]), "the question's picture placeholder was lost"
+
+
+@pytest.mark.asyncio
+async def test_the_rerun_takes_the_failed_attempt_s_rows_off_disk(tmp_path):
+    """The rerun starts fresh on disk, not only in memory.
+
+    The failed attempt's call and result were appended as it ran. Resetting the
+    log reset the in-memory record only, so the rerun's answer was appended
+    behind the wreckage and the next turn read the discarded attempt as history.
+    """
+    provider = _Scripted(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="call-wreck", name="list_dir", arguments={"path": "."})],
+                finish_reason="tool_calls",
+            ),
+            *_dead(),
+            *_dead(),
+        ],
+        _answers("Alice Smith won it."),
+    )
+    agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1)])
+
+    await agent._process_message(_req("look around"), session_key="s1")
+
+    filed = _persisted(tmp_path)
+    calls = [call["id"] for m in filed for call in (m.get("tool_calls") or [])]
+    assert "call-wreck" not in calls, "the discarded attempt's call is still on disk"
+    assert not any(m.get("role") == "tool" for m in filed), "the discarded attempt's result is still on disk"
+    assert any(m.get("content") == "Alice Smith won it." for m in filed), "the rerun's answer was not filed"
+
+
+@pytest.mark.asyncio
+async def test_a_cut_that_could_not_be_written_is_not_followed_by_a_rerun(tmp_path, monkeypatch):
+    """No rerun runs over an attempt whose rows are still on disk.
+
+    The rerun's answer would be appended behind the wreckage it exists to clear,
+    and the next turn would read the discarded attempt as history. A failed cut
+    ends the turn on the attempt it has instead.
+    """
+    from raven.session.manager import SessionManager
+
+    cuts: list[set[str]] = []
+
+    def _cannot_cut(self, session, row_ids):
+        cuts.append(set(row_ids))
+        return False
+
+    monkeypatch.setattr(SessionManager, "drop_filed_rows", _cannot_cut)
+    provider = _Scripted(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="call-kept", name="list_dir", arguments={"path": "."})],
+                finish_reason="tool_calls",
+            ),
+            *_dead(),
+            *_dead(),
+        ],
+        _answers("Alice Smith won it."),
+    )
+    agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1)])
+
+    await _run_answerless(agent, _req("look around"))
+
+    assert cuts, "the rerun was never asked for, so the refusal was not under test"
+    filed = _persisted(tmp_path)
+    assert not any(m.get("content") == "Alice Smith won it." for m in filed), (
+        "a rerun ran although the attempt's rows could not be taken off disk"
+    )
 
 
 # --------------------------------------------------------------------------- #
