@@ -2237,6 +2237,7 @@ class TestPromptCompletion:
                 prompt.cancel()
                 await asyncio.gather(prompt, return_exceptions=True)
 
+    @pytest.mark.production_timing
     async def test_a_held_turn_reaps_a_real_background_command_before_its_early_reply(self, spine_rig, monkeypatch):
         """The hold itself only sends the closing turn; that turn is the active
         turn, and it reaps before it synthesizes. Real processes, because a
