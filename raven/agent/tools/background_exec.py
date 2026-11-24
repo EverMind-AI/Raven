@@ -36,6 +36,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from loguru import logger
+
 from raven.agent import turn_clock
 from raven.contracts.tool import ToolOutput
 from raven.home import raven_home
@@ -390,8 +392,20 @@ async def reap_execution(session_key: str, execution_id: str) -> str:
     except TimeoutError:
         for task in running(session_key, execution_id=execution_id):
             reap(task["task_id"], force=True)
-        async with asyncio.timeout(2):
-            await wait()
+        try:
+            async with asyncio.timeout(2):
+                await wait()
+        except TimeoutError:
+            # A process that survives SIGKILL (an uninterruptible sleep, a child
+            # outside the shell on Windows) must not fail the turn that asked for
+            # its final answer: the tail below is still the best account of the
+            # work, and the survivor is named for whoever reads the log.
+            survivors = [str(task.get("task_id")) for task in running(session_key, execution_id=execution_id)]
+            logger.warning(
+                "background commands for execution {} survived SIGKILL: {}",
+                execution_id,
+                ", ".join(survivors) or "none listed",
+            )
 
     tails = []
     for task in tasks[:8]:

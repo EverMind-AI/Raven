@@ -93,6 +93,37 @@ async def test_reap_execution_only_stops_its_own_tasks(home):
         background_exec.reap(unrelated.task_id)
 
 
+async def test_reap_execution_returns_tails_when_a_command_survives_the_force_kill(home, monkeypatch, tmp_path):
+    """A process that cannot be killed must not fail the turn that asked for
+    its final answer: the log tail is still the best account it can give."""
+    log = tmp_path / "survivor.log"
+    log.write_text("last words\n", encoding="utf-8")
+    task = {"task_id": "bg-survivor", "command": "stuck", "log_path": str(log)}
+    missing = {"task_id": "bg-missing", "command": "gone", "log_path": str(tmp_path / "missing.log")}
+    reaped: list[tuple[str, bool]] = []
+
+    class _ImmediateTimeout:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            raise TimeoutError
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(background_exec, "running", lambda *args, **kwargs: [task, missing])
+    monkeypatch.setattr(
+        background_exec, "reap", lambda task_id, *, force=False: reaped.append((task_id, force)) or True
+    )
+    monkeypatch.setattr(background_exec, "asyncio", SimpleNamespace(timeout=_ImmediateTimeout, sleep=asyncio.sleep))
+
+    tails = await background_exec.reap_execution("s", "e")
+
+    assert "last words" in tails
+    assert ("bg-survivor", False) in reaped and ("bg-survivor", True) in reaped
+
+
 def test_the_start_note_hands_over_the_handle_and_the_log(home):
     task = background_exec.start("sleep 30")
     note = background_exec.start_note(task)
