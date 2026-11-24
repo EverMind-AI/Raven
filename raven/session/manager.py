@@ -8,7 +8,8 @@ import os
 import uuid
 import weakref
 from collections import OrderedDict
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -258,8 +259,9 @@ def _stamp(path: Path) -> tuple[int, int, str] | None:
         return None
 
 
-def _advance_stamp(session: "Session", path: Path, *, held: bool) -> None:
-    """Move ``session``'s stamp past a write it just made. The only place that does.
+@contextmanager
+def _writing_as(session: "Session | None", path: Path) -> Iterator[tuple[int, int, str] | None]:
+    """Hold the write lock for a write ``session`` makes, and settle its stamp after it.
 
     The stamp says the file holds nothing this copy has not read or written, and
     every save trusts it: a stamp that still matches skips the re-read. Moved past
@@ -267,28 +269,49 @@ def _advance_stamp(session: "Session", path: Path, *, held: bool) -> None:
     writer's rows, so the conflict is never raised, or another client's metadata
     record, so the fold never runs and the next save writes over it.
 
-    One rule for every writer: the stamp moves under the write lock, right after a
-    write this copy made, and only when the copy ``held`` everything the file held
-    just before that write. Otherwise it stays where it was, and the next save
-    re-reads the file and settles the difference.
-
-    - ``SessionManager.save`` always holds it: a moved row has raised by then, and
-      a metadata record has been folded into what it wrote, under the same lock.
-    - ``append_turn_meta`` holds it only when the stamp still matched before its
-      append. It folds nothing, so a metadata record written since is left for the
-      next save to fold.
-    - ``SessionManager.append_metadata_patch`` never holds it: no lock spans the
-      scan its record merges and the append, so it cannot show what the file held
-      in between, and the copy it updates is not the copy that wrote.
+    So the stamp moves here and nowhere else after a write, and on evidence rather
+    than on a caller's word. This yields the file's stamp as the lock found it; on
+    a clean exit the copy's stamp moves past the write only when the copy's own
+    stamp still names that file. A writer that adds a record and reads nothing
+    needs no more than this: a file someone else changed leaves its stamp behind,
+    and the next save settles the difference. A writer that did read what changed
+    and took it in says so with :func:`_took_in` before it writes, which is what
+    ``SessionManager.save`` does after its conflict check and its fold.
 
     ``read_session_file`` sets the first stamp, taken before the read, so a write
-    landing during the read leaves the copy behind the file rather than ahead. A
-    new writer of another record kind calls this with what it can show; a writer
-    of message rows goes through ``save``, which keeps the accounts that
-    :class:`Session` lists.
+    landing during the read leaves the copy behind the file rather than ahead.
+    ``SessionManager.append_metadata_patch`` writes for a key, not as a copy, and
+    moves no copy's stamp. A writer of message rows goes through ``save``, which
+    keeps the accounts :class:`Session` lists.
     """
-    if held:
-        session._file_stamp = _stamp(path)
+    with write_transaction(path):
+        before = _stamp(path)
+        yield before
+        if session is not None and session._file_stamp == before:
+            session._file_stamp = _stamp(path)
+
+
+def _took_in(
+    session: "Session",
+    before: tuple[int, int, str] | None,
+    written: tuple[dict[str, Any] | None, int] | None,
+) -> None:
+    """Record, inside :func:`_writing_as`, that ``session`` now holds the file as ``before`` names it.
+
+    For a writer that read what changed since its stamp and took it in -- ``save``,
+    whose conflict check raised on moved rows and whose fold took in the metadata
+    record. ``written`` is that read: the file's last metadata record and message
+    count, or None when there was nothing to read (the stamp had not moved, or the
+    file is not there). It is checked again here, so a call that skipped the read,
+    or one made past rows another writer added, raises instead of moving the stamp
+    past what this copy never read.
+    """
+    if before is not None and before != session._file_stamp:
+        if written is None or _message_rows_moved(session, *written):
+            raise RuntimeError(
+                f"session {session.key!r}: its stamp cannot move past a file this copy has not read and taken in"
+            )
+    session._file_stamp = before
 
 
 @dataclass
@@ -341,8 +364,8 @@ class Session:
     # ``SessionManager.save`` -- the only writer of message rows -- brings every one
     # up to date in one place after its write; a cut or an in-place replacement
     # marks them stale so that save rewrites. A writer of another record kind (a
-    # metadata patch, a turn_meta) touches none of them and moves only the stamp,
-    # through ``_advance_stamp``.
+    # metadata patch, a turn_meta) touches none of them; a copy's stamp moves only
+    # inside ``_writing_as``, on that copy's own write.
     #
     # - ``_persisted_count`` indexes ``messages``, where the next append starts; it
     #   counts the reader's synthetic repairs, which sit in the list.
@@ -838,16 +861,15 @@ def append_turn_meta(session_path: Path, patches: list[dict], *, session: Sessio
     end -- the reply's provenance, the hook observers -- arrive later. One record
     per turn carries them, and the reader applies it in file order. ``session``
     is the copy that wrote them. Its stamp moves past this record only when
-    nothing else was written since (``_advance_stamp``): the record folds nothing
+    nothing else was written since (``_writing_as``): the record folds nothing
     in, so another client's metadata record has to stay ahead of the stamp for
     the save that does.
     """
     if not patches:
         return
     payload = json.dumps({"_type": "turn_meta", "patches": patches}, ensure_ascii=False)
-    with write_transaction(session_path):
-        held = session is not None and session._file_stamp == _stamp(session_path)
-        if session is not None and not held:
+    with _writing_as(session, session_path) as before:
+        if session is not None and before != session._file_stamp:
             # A message write since is a second writer, and filing into its rows
             # would be this copy's first write past them. A metadata-only record
             # is not, and the append goes ahead.
@@ -855,8 +877,6 @@ def append_turn_meta(session_path: Path, patches: list[dict], *, session: Sessio
             if _message_rows_moved(session, last, count):
                 return
         locked_append(session_path, [payload])
-        if session is not None:
-            _advance_stamp(session, session_path, held=held)
 
 
 def _cut_since_persisted(session: Session) -> bool:
@@ -1354,9 +1374,10 @@ class SessionManager:
             # local change on every later save and is asserted again over
             # whatever anybody wrote in between.
             cached._persisted_metadata.update(patch)
-            # Not held: the file also carries the record this merged into, and a
-            # stale stamp is what makes the next save re-read it.
-            _advance_stamp(cached, path, held=False)
+            # The cached copy's stamp is left where it was: this write is made for
+            # the key, not by the copy, and no lock spans the scan its record
+            # merges and the append. The file also carries the record this merged
+            # into, and a stale stamp is what makes the next save re-read it.
             # Clean stays clean; a copy with changes of its own keeps them unsaved.
             if unchanged:
                 cached._clean_fingerprint = _fingerprint(cached)
@@ -1407,12 +1428,13 @@ class SessionManager:
 
         # The read and the write are one transaction: the metadata record this
         # folds under can otherwise be written between them and lost anyway.
-        with write_transaction(path):
-            written = self._record_written_since(session, path)
+        with _writing_as(session, path) as before:
+            written = self._record_written_since(session, path, before)
             if written is not None:
                 self._refuse_second_writer(session, written)
             last = None if written is None else written[0]
             session.metadata = self._metadata_to_write(session, last)
+            _took_in(session, before, written)
             rewrite = (
                 len(session.messages) < session._persisted_count
                 or _cut_since_persisted(session)
@@ -1459,7 +1481,6 @@ class SessionManager:
                 lines += [json.dumps(m, ensure_ascii=False) for m in new_messages]
                 locked_append(path, lines)
                 session._persisted_file_count += len(new_messages)
-            _advance_stamp(session, path, held=True)
             session._persisted_metadata = dict(session.metadata)
             session._persisted_revision = (session.log_id, session.log_generation)
 
@@ -1542,15 +1563,16 @@ class SessionManager:
             return False
         return True
 
-    def _record_written_since(self, session: "Session", path: Path) -> tuple[dict[str, Any] | None, int] | None:
+    def _record_written_since(
+        self, session: "Session", path: Path, stamp: tuple[int, int, str] | None
+    ) -> tuple[dict[str, Any] | None, int] | None:
         """The file's last metadata record and message count, if anybody wrote to it since this copy last read or wrote it.
 
-        None while the file is byte for byte what this copy last read or wrote,
-        which is every save in the ordinary case of one writer -- so a
-        conversation pays for the scan only when somebody else has actually
-        written to it.
+        ``stamp`` is the file's stamp as the write lock found it. None while the
+        file is byte for byte what this copy last read or wrote, which is every
+        save in the ordinary case of one writer -- so a conversation pays for the
+        scan only when somebody else has actually written to it.
         """
-        stamp = _stamp(path)
         if stamp is None or stamp == session._file_stamp:
             return None
         last, count, *_rest = self._scan_file(path)

@@ -785,6 +785,130 @@ def test_a_cut_that_could_not_be_written_leaves_the_copy_as_it_was(tmp_path: Pat
     assert (session.truncations, session._persisted_count) == (truncations, persisted)
 
 
+def test_a_cut_takes_the_row_it_names_from_the_middle_of_the_transcript(tmp_path: Path):
+    """The cut is by identifier: the named row goes and its neighbours stay.
+
+    Every other cut test names rows at the tail, where taking the last rows and
+    taking the named ones agree. A row between two kept ones is where they part.
+    """
+    key = "tui:20260610_100000_cutmiddle"
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create(key)
+    for row_id, role, content in [("r1", "user", "q"), ("r2", "assistant", "dropped"), ("r3", "assistant", "kept")]:
+        session.record({"role": role, "content": content, "_row_id": row_id})
+    manager.save(session)
+
+    assert manager.drop_filed_rows(session, {"r2"}) is True
+
+    assert [m["content"] for m in session.messages] == ["q", "kept"]
+    assert [m["content"] for m in read_session_file(manager.session_path(key), key).messages] == ["q", "kept"]
+
+
+def test_a_new_record_writer_cannot_hide_another_clients_metadata_patch(tmp_path: Path):
+    """A writer of a record kind that does not exist yet gets the stamp rule for free.
+
+    It writes inside ``_writing_as`` and states nothing about what the file held:
+    the comparison with the copy's own stamp decides. After another client's
+    patch the stamp stays behind it, and the next save folds the patch in.
+    """
+    from raven.session.manager import _writing_as
+    from raven.utils.atomic_io import locked_append
+
+    key = "tui:20260610_100000_newrecord"
+    manager, session, path = _a_saved_turn(tmp_path, key)
+    stamp = session._file_stamp
+    assert SessionManager(tmp_path).append_metadata_patch(key, {"archived": True})
+
+    with _writing_as(session, path):
+        locked_append(path, [json.dumps({"_type": "future_record", "note": "x"})])
+
+    assert session._file_stamp == stamp, "the stamp moved past another client's record"
+    session.add_message("user", "next")
+    manager.save(session)
+    assert read_session_file(path, key).metadata.get("archived") is True
+
+
+def test_a_stamp_cannot_be_taken_past_a_file_the_copy_did_not_read(tmp_path: Path):
+    """Saying the copy took the file in is checked, not trusted.
+
+    ``_took_in`` is the one statement a writer makes about what the file held. Made
+    without the read behind it, or past rows another writer added, it raises and
+    the stamp stays where it was.
+    """
+    from raven.session.manager import SessionManager as Manager
+    from raven.session.manager import _took_in, _writing_as
+
+    key = "tui:20260610_100000_tookin"
+    _manager, session, path = _a_saved_turn(tmp_path, key)
+    other = SessionManager(tmp_path)
+    theirs = other.get_or_create(key)
+    theirs.add_message("user", "from the second terminal")
+    other.save(theirs)
+    stamp = session._file_stamp
+
+    with pytest.raises(RuntimeError, match="has not read and taken in"):
+        with _writing_as(session, path) as before:
+            _took_in(session, before, None)
+    last, count, *_rest = Manager._scan_file(path)
+    with pytest.raises(RuntimeError, match="has not read and taken in"):
+        with _writing_as(session, path) as before:
+            _took_in(session, before, (last, count))
+
+    assert session._file_stamp == stamp
+
+
+def test_a_save_that_folded_another_clients_record_does_not_read_the_file_again(tmp_path: Path, monkeypatch):
+    """Folding a metadata record is taking the file in, so the stamp moves past it.
+
+    ``save`` says so through ``_took_in``. Without it the stamp stays behind that
+    record for good, and every later save scans the whole transcript again.
+    """
+    key = "tui:20260610_100000_foldonce"
+    manager, session, _path = _a_saved_turn(tmp_path, key)
+    assert SessionManager(tmp_path).append_metadata_patch(key, {"archived": True})
+    session.add_message("user", "one")
+    manager.save(session)
+
+    scans: list[Path] = []
+    scan = SessionManager._scan_file
+    monkeypatch.setattr(SessionManager, "_scan_file", staticmethod(lambda path: scans.append(path) or scan(path)))
+    session.add_message("user", "two")
+    manager.save(session)
+
+    assert scans == [], "a save re-read a file this copy had already taken in"
+
+
+def test_only_the_writing_helpers_move_a_file_stamp():
+    """Every assignment to ``_file_stamp`` in the package sits in the three places that own it.
+
+    The stamp is what a save trusts to skip the re-read, and a write path that set
+    it from its own reasoning hid another client's metadata patch once. Loading
+    sets the first stamp; ``_writing_as`` moves it on evidence; ``_took_in`` takes
+    in a file the caller checked. A fourth place is a new owner and has to be
+    argued for here.
+    """
+    import ast
+
+    owners = set()
+    for path in sorted(Path(manager_mod.__file__).parents[1].rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        if "_file_stamp" not in source:
+            continue
+        tree = ast.parse(source)
+        for func in ast.walk(tree):
+            if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for node in ast.walk(func):
+                targets = node.targets if isinstance(node, ast.Assign) else [getattr(node, "target", None)]
+                if not isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+                    continue
+                for target in targets:
+                    if isinstance(target, ast.Attribute) and target.attr == "_file_stamp":
+                        owners.add(f"{path.name}:{func.name}")
+
+    assert owners == {"manager.py:read_session_file", "manager.py:_writing_as", "manager.py:_took_in"}, owners
+
+
 def test_a_refused_copy_saving_again_leaves_the_reloaded_copy_cached(tmp_path: Path):
     """Dropping the refused copy must not drop the copy that replaced it.
 
