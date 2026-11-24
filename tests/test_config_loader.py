@@ -1929,7 +1929,7 @@ def test_a_file_past_the_second_pin_floor_has_its_third_floor_pins_carried_in_th
     """The file pass carries the same rows the in-memory pass does, and stamps the
     generation it passed.
 
-    The stamp is the literal generation this load must reach (20), not the floor
+    The stamp is the literal generation this load must reach (21), not the floor
     being exercised: a CURRENT left behind while a new floor is added would
     stamp 19 here, and every later load would re-run the floor. The input side
     of the same lesson is
@@ -1947,7 +1947,7 @@ def test_a_file_past_the_second_pin_floor_has_its_third_floor_pins_carried_in_th
     codex = THIRD_PARTY_SUBAGENT_PRESETS["codex"]["command"]
     assert [a.command for a in cfg.subagents.agents] == [codex]
     assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [_codex_row(codex)]
-    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": 20}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": 21}
 
 
 def test_a_stamped_curator_config_still_loads_after_a_rollback(tmp_path: Path) -> None:
@@ -2034,7 +2034,7 @@ def test_the_file_pass_rewrites_a_curator_config_and_stamps_the_new_floor(tmp_pa
     assert written["context"]["history"]["strategy"] == "compacting"
     assert written["context"]["dropSegments"] == ["compacting"]
     assert "curatorModel" not in written["context"]
-    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": 20}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": 21}
     assert [n for n in drain_migration_notices() if "retired" in n], "the rewrite is announced once"
 
 
@@ -2732,3 +2732,120 @@ def test_push_discovery_set_again_after_its_floor_still_loads(tmp_path: Path) ->
 
     assert cfg.skill_forge.blocklist == ["noisy"]
     assert [n for n in drain_migration_notices() if "skillForge" in n] == []
+
+
+# ---------------------------------------------------------------------------
+# A tail-only compaction config keeps the retain default it was written against
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("tail", [0.25, 0.20, 0.10, 0.09, 0.39])
+def test_a_tail_only_compaction_config_keeps_the_old_retain_default(tmp_path: Path, tail: float) -> None:
+    """Every tail that loaded against the old implicit 0.40 still loads.
+
+    ``ContextCompactionConfig`` requires the tail share to sit below the retain
+    ratio. Before this release retain defaulted to 0.40 and now defaults to
+    0.10, so a file that customized only the tail -- any value in
+    ``[0.10, 0.40)`` was valid before -- would fail startup validation. The
+    shape carries no retain choice, so the value it used to get is written
+    down: the target, and the tail that must stay below it, keep meaning what
+    the file meant.
+    """
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"tailKeepRatio": tail}}}})
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    compacting = cfg.context.history.compacting
+    assert (compacting.retain_ratio, compacting.tail_keep_ratio) == (0.40, tail)
+    written = json.loads(p.read_text(encoding="utf-8"))
+    assert written["context"]["history"]["compacting"] == {"tailKeepRatio": tail, "retainRatio": 0.40}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    assert len([n for n in drain_migration_notices() if "retain" in n]) == 1
+
+    load_raven_config(p)
+    assert drain_migration_notices() == []
+
+
+def test_a_tail_only_compaction_config_in_snake_case_is_migrated_in_place(tmp_path: Path) -> None:
+    """The writer resolves either spelling, so the injected key matches the
+    one the file already uses rather than introducing a second convention."""
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"tail_keep_ratio": 0.25}}}})
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.context.history.compacting.retain_ratio == 0.40
+    written = json.loads(p.read_text(encoding="utf-8"))
+    assert written["context"]["history"]["compacting"] == {"tail_keep_ratio": 0.25, "retain_ratio": 0.40}
+
+
+def test_a_tail_only_compaction_config_loads_on_the_extension_pass_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read-only home must not turn the compat shim into a startup failure.
+
+    ``load_raven_config`` reads the file again for the extension blocks after
+    the base loader's disk rewrite. With that rewrite switched off, the
+    in-memory pass is the only thing that can make the file load.
+    """
+    from raven.config import loader
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"tailKeepRatio": 0.25}}}})
+    monkeypatch.setattr(loader, "_persist_migrations", lambda *args, **kwargs: None)
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.context.history.compacting.retain_ratio == 0.40
+    written = json.loads(p.read_text(encoding="utf-8"))
+    assert written["context"]["history"]["compacting"] == {"tailKeepRatio": 0.25}, "the disk pass was off"
+    assert len([n for n in drain_migration_notices() if "retain" in n]) == 1
+
+
+def test_a_tail_only_shape_added_after_the_floor_still_loads(tmp_path: Path) -> None:
+    """A stamp cannot protect a file a person can edit.
+
+    The shape is produced by hand editing in the first place, so it can appear
+    after the floor ran. The shim holds on every load; nothing is rewritten,
+    because the file is the user's and only this process's view needs to
+    validate.
+    """
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"tailKeepRatio": 0.25}}}})
+    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
+    before = p.read_bytes()
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.context.history.compacting.retain_ratio == 0.40
+    assert p.read_bytes() == before
+    assert drain_migration_notices() == []
+
+
+def test_an_explicit_retain_ratio_is_not_replaced(tmp_path: Path) -> None:
+    """Only a file with no retain choice is migrated. A pair that names both
+    values keeps them, including a pair that is valid under the new defaults."""
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"retainRatio": 0.20, "tailKeepRatio": 0.05}}}})
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.context.history.compacting.retain_ratio == 0.20
+    written = json.loads(p.read_text(encoding="utf-8"))
+    assert written["context"]["history"]["compacting"] == {"retainRatio": 0.20, "tailKeepRatio": 0.05}
+    assert drain_migration_notices() == []
