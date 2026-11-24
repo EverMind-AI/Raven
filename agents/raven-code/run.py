@@ -485,7 +485,15 @@ def render_config(
     exec_slice = tools_slice.setdefault("exec", {})
     host_tools = config.get("tools") or {}
     host_exec = host_tools.get("exec") or {}
-    exec_slice["timeout"] = host_exec.get("timeout", 60)
+    # A timeout that is not a positive whole number is no setting, the way the
+    # live reader (raven/config/live.py exec_timeout) reads it. Forwarded raw, a
+    # zero would bound every command at zero seconds.
+    host_timeout = host_exec.get("timeout")
+    exec_slice["timeout"] = (
+        host_timeout
+        if isinstance(host_timeout, int) and not isinstance(host_timeout, bool) and host_timeout > 0
+        else 60
+    )
     exec_slice["pathAppend"] = host_exec.get("pathAppend", "")
     # The sandbox the rendered config runs in: write_rendered gives a product the
     # host's OpenShell sandbox after this slice is built, so the slice asks the

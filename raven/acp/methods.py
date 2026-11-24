@@ -937,8 +937,9 @@ class AcpMethods:
         client clocks liveness by. The wait has a deadline even when the turn
         named none: ``MAX_BACKGROUND_HOLD_S`` would otherwise let a command that
         never exits hold the prompt forever. At that deadline the rest are
-        killed and the closing turn runs anyway, so a prompt is never left open
-        forever.
+        killed and the closing turn runs anyway. That bounds the wait, not the
+        closing turn: it is a turn like any other and ends the way one does,
+        by its own limits or the client's cancel.
         """
         from raven.agent.tools import background_exec
 
@@ -947,27 +948,38 @@ class AcpMethods:
         cap = time.time() + self._background_hold_limit_s
         if self._background_hold_limit_s > 0 and (deadline is None or deadline > cap):
             deadline = cap
-        stopped = False
-        # The record is retired as soon as its process exits, so a task named by
-        # the hold may be gone by the first poll. Keep the names, or the closing
-        # turn tells the model something finished and names nothing.
-        known = [task for task in hold.get("tasks") or () if isinstance(task, dict) and task.get("task_id")]
+        stopped: set[str] = set()
+        # The record is retired as soon as its process exits, so a task can be
+        # gone by the first poll or between two of them. Every task the hold
+        # named or a poll saw is kept by id, or the closing turn names only the
+        # ones that happened to outlive the others.
+        named: dict[str, dict[str, Any]] = {}
+
+        def note(tasks: Any) -> None:
+            for task in tasks or ():
+                if isinstance(task, dict) and task.get("task_id"):
+                    named[str(task["task_id"])] = task
+
+        note(hold.get("tasks"))
         seen = background_exec.running(session_key=session.session_key)
-        done = seen or known
         while seen:
+            note(seen)
             if deadline is not None and time.time() >= deadline:
+                stopped = {str(task.get("task_id")) for task in seen}
                 self._reap_background(session)
-                stopped = True
                 break
             await asyncio.sleep(BACKGROUND_POLL_S)
             seen = background_exec.running(session_key=session.session_key)
-            if seen:
-                done = seen
-        lines = [f"- {t.get('task_id')}: {t.get('command')} (log: {t.get('log_path')})" for t in done]
+        lines = [
+            f"- {task_id}: {t.get('command')} (log: {t.get('log_path')})"
+            + (" -- stopped at the wait limit" if task_id in stopped else "")
+            for task_id, t in named.items()
+        ]
         if stopped:
             lead = (
-                "[system] The wait limit was reached, so the background commands this session "
-                "started were stopped. Read their logs and continue the task; report what they changed."
+                "[system] The wait limit was reached, so the background commands still running "
+                "were stopped (marked below); any others had finished. Read their logs and continue "
+                "the task; report what they changed."
             )
             if os.name == "nt":
                 lead += " A child process of a stopped command may still be running on Windows."

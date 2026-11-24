@@ -1520,6 +1520,27 @@ def test_rerendered_exec_settings_follow_the_host_and_preserve_its_sandbox(groun
     assert section["tools"]["exec"]["maxTimeout"] == 600
 
 
+@pytest.mark.parametrize("configured", [0, -5])
+def test_a_non_positive_host_timeout_reaches_the_shell_as_no_setting(grounded, tmp_path, configured):
+    """The live reader takes a timeout that is not a positive whole number as no
+    answer. Forwarded raw, a zero bounded every command at zero seconds, and the
+    shell reported a command it never gave time to run as still running."""
+    first = grounded.render_config(RUN_PY.parent / "config.json", tmp_path / "first")
+    config = json.loads(first.read_text())
+    config["tools"]["exec"]["timeout"] = configured
+    source = tmp_path / "custom.json"
+    source.write_text(json.dumps(config))
+    rendered = json.loads(grounded.render_config(source, tmp_path / "second").read_text())
+    section = rendered["plugins"]["config"]["code-flow"]
+    from code_flow.tools import plugin
+
+    from raven.plugins.context import PluginContext, ServiceLocator
+
+    assert section["tools"]["exec"]["timeout"] == 60, "the same as a host config that names no timeout"
+    tool = plugin.make_exec(PluginContext(config=section, services=ServiceLocator(tmp_path / "second", "u", "a")))
+    assert tool is not None and tool._timeout == 60
+
+
 @pytest.mark.parametrize(("platform", "expected"), [("linux", "openshell"), ("win32", "none")])
 def test_the_shell_slice_names_the_sandbox_the_rendered_config_runs_in(
     grounded, tmp_path, monkeypatch, platform, expected

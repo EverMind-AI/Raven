@@ -97,6 +97,21 @@ NO_TIME_NOTE = (
     "so there is no time to run it here. Run it in a later turn, or with "
     "run_in_background: true if it should outlive this one]"
 )
+#: The same refusal once the clock has run out, where "less than a second"
+#: would suggest a moment is still left.
+DEADLINE_PASSED_NOTE = (
+    "[the command was not started: this turn's deadline has passed, so there is no time to "
+    "run it here. Run it in a later turn, or with run_in_background: true if it should "
+    "outlive this one]"
+)
+#: A limit of zero seconds from the tool's own setting rather than the turn's
+#: clock. It is refused for the same reason: spawned, the command would time out
+#: at once and be reported as still running in the background.
+NO_LIMIT_NOTE = (
+    "[the command was not started: its time limit is not a positive number of seconds, so it "
+    "could not run. Pass a positive `timeout`; if the same answer comes back, the configured "
+    "exec ceiling is zero and has to be raised]"
+)
 
 _SPILL_COUNTER = itertools.count(1)
 
@@ -583,10 +598,15 @@ class CodeExecTool(ExecTool):
             )
             timeout = self._MAX_TIMEOUT
         if not machine and not run_in_background:
+            from raven.agent import turn_clock
+
             base = min(self.timeout if timeout is None else timeout, self._MAX_TIMEOUT)
+            if base <= 0:
+                return ToolResult(model_text=NO_LIMIT_NOTE, ok=False)
             requested = self._bounded_timeout(timeout)
-            if base > 0 and requested <= 0:
-                return ToolResult(model_text=NO_TIME_NOTE, ok=False)
+            if requested <= 0:
+                left = turn_clock.remaining() or 0.0
+                return ToolResult(model_text=NO_TIME_NOTE if left > 0 else DEADLINE_PASSED_NOTE, ok=False)
             if requested < base:
                 note += (
                     f"[note: timeout {requested}s, cut to what is left of this turn's deadline; "
@@ -615,9 +635,11 @@ class CodeExecTool(ExecTool):
 
 __all__ = [
     "ADOPTED_NOTE",
+    "DEADLINE_PASSED_NOTE",
     "DEFAULT_MAX_TIMEOUT",
     "DEFAULT_TIMEOUT",
     "MAX_OUTPUT",
+    "NO_LIMIT_NOTE",
     "NO_TIME_NOTE",
     "SPILL_SUBDIR",
     "TIMED_OUT_NOTE",

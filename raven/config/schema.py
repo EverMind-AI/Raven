@@ -930,7 +930,8 @@ class AcpConfig(Base):
     commands when the turn set no wall clock of its own. ACP sessions carry no
     clock by default, so this is what keeps a command that never exits from
     holding the prompt forever. At the limit the remaining commands are stopped
-    and the closing turn runs, so the client always gets an answer."""
+    and the closing turn runs. The limit covers the wait for the commands only:
+    the closing turn is an ordinary turn and ends the way any turn does."""
 
     @model_validator(mode="after")
     def _resolve_the_named_default(self) -> "AcpConfig":

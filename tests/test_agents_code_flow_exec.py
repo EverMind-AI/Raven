@@ -37,7 +37,10 @@ sys.path.insert(0, str(PLUGIN_DIR))
 from code_flow.tools import plugin as factories  # noqa: E402
 from code_flow.tools.exec import (  # noqa: E402
     ADOPTED_NOTE,
+    DEADLINE_PASSED_NOTE,
     MAX_OUTPUT,
+    NO_LIMIT_NOTE,
+    NO_TIME_NOTE,
     SPILL_SUBDIR,
     TIMED_OUT_NOTE,
     CodeExecResult,
@@ -932,6 +935,7 @@ def test_a_sub_second_deadline_refuses_the_command_instead_of_adopting_it(tmp_pa
     assert getattr(out, "ok", None) is False, "a command the turn could not start is not a success"
     assert "was not started" in text
     assert "less than a second" in text, "the answer names the real reason"
+    assert text == NO_TIME_NOTE, "some time is left, so it is not the passed-deadline answer"
     assert "still running" not in text
     assert "background as bg-" not in text
     assert "never-ran" not in text, "the command produced no output because it never ran"
@@ -984,21 +988,77 @@ def test_a_timed_out_command_is_adopted_instead_of_killed(tmp_path, monkeypatch)
     background_exec.reap(task_id)
 
 
-@pytest.mark.slow
-def test_no_time_left_kills_instead_of_adopting(tmp_path, monkeypatch):
-    """There is nothing to hand over when the turn's own clock has run out."""
+def _count_spawns(monkeypatch) -> list[str]:
+    spawned: list[str] = []
+    real = CodeExecutor.exec
+
+    async def spy(self, command, *args, **kwargs):
+        spawned.append(command)
+        return await real(self, command, *args, **kwargs)
+
+    monkeypatch.setattr(CodeExecutor, "exec", spy)
+    return spawned
+
+
+def test_an_expired_turn_refuses_the_command_without_starting_it(tmp_path, monkeypatch):
+    """Once the turn's clock has run out the command is not started at all. It
+    used to be spawned and killed, so the shell ran whatever it reached first;
+    the answer also says the deadline has passed, not that a moment is left."""
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
     from raven.agent import turn_clock
     from raven.agent.tools import background_exec
 
+    spawned = _count_spawns(monkeypatch)
+    marker = tmp_path / "ran"
     tool = _tool(tmp_path)
     turn_clock.set_deadline(time.monotonic() - 1)
     try:
-        _run(tool.execute(command="sleep 30", timeout=1))
+        out = _run(tool.execute(command=f"touch {shlex.quote(str(marker))}; sleep 30", timeout=1))
     finally:
         turn_clock.set_deadline(None)
 
+    text = getattr(out, "model_text", None) or str(out)
+    assert spawned == [], "the executor was never asked to start the command"
+    assert getattr(out, "ok", None) is False
+    assert text == DEADLINE_PASSED_NOTE, text[:300]
+    assert "less than a second" not in text, "no time is left, not a little"
+    time.sleep(0.3)
+    assert not marker.exists(), "the command never ran, so it wrote nothing"
     assert not [t for t in background_exec.running() if "sleep 30" in t["command"]]
+
+
+def test_a_zero_second_setting_refuses_the_command_instead_of_adopting_it(tmp_path, monkeypatch):
+    """A zero limit from the tool's own setting cannot run the command either.
+    Spawned under it, the command timed out at once and was adopted, so the
+    result said it was still running in the background."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    from raven.agent import turn_clock
+    from raven.agent.tools import background_exec
+
+    spawned = _count_spawns(monkeypatch)
+    marker = tmp_path / "ran"
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    tool = CodeExecTool(
+        timeout=0,
+        working_dir=str(home),
+        executor=CodeExecutor(max_timeout=600, spill_dir=home / SPILL_SUBDIR),
+        extra_allowed_dirs=(home,),
+        max_timeout=600,
+    )
+    turn_clock.set_deadline(None)
+    try:
+        out = _run(tool.execute(command=f"touch {shlex.quote(str(marker))}"))
+    finally:
+        for task in background_exec.running():
+            background_exec.reap(str(task["task_id"]))
+
+    text = out if isinstance(out, str) else out.model_text
+    assert text == NO_LIMIT_NOTE, text[:300]
+    assert getattr(out, "ok", None) is False
+    assert spawned == [], "the executor was never asked to start the command"
+    assert not marker.exists()
+    assert not background_exec.running()
 
 
 @pytest.mark.slow

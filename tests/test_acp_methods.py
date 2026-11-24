@@ -2952,3 +2952,64 @@ async def test_a_command_that_ended_before_the_first_poll_is_still_named(rig, mo
     content = rig.stack.params_for("turn.send")["content"]
     assert "have finished" in content
     assert "bg-3" in content and "make all" in content, "the finished command is still named"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "polls",
+    [
+        pytest.param([["bg-2"], []], id="one-ended-before-the-first-poll"),
+        pytest.param([["bg-1", "bg-2"], ["bg-2"], []], id="one-ended-between-polls"),
+    ],
+)
+async def test_the_closing_turn_names_a_command_that_ended_while_another_ran(rig, monkeypatch, polls):
+    """Records are retired one by one as their processes exit. A command that
+    ends while another is still running must not drop out of the closing turn
+    just because a later poll no longer lists it."""
+    from types import SimpleNamespace
+
+    from raven.agent.tools import background_exec
+
+    tasks = {
+        "bg-1": {"task_id": "bg-1", "command": "make docs", "log_path": "/tmp/bg-1.log"},
+        "bg-2": {"task_id": "bg-2", "command": "make test", "log_path": "/tmp/bg-2.log"},
+    }
+    snapshots = iter([[tasks[task_id] for task_id in ids] for ids in polls])
+    monkeypatch.setattr(background_exec, "running", lambda session_key=None: next(snapshots, []))
+    monkeypatch.setattr("raven.acp.methods.BACKGROUND_POLL_S", 0)
+    session = SimpleNamespace(session_id="s1", session_key="cli:c")
+
+    await rig.methods._resume_after_background(
+        session, {"background": True, "untilMs": None, "tasks": list(tasks.values())}
+    )
+
+    content = rig.stack.params_for("turn.send")["content"]
+    assert "have finished" in content
+    assert "bg-1" in content and "make docs" in content, "the command that ended first is named"
+    assert "bg-2" in content and "make test" in content, "the command that ended last is named"
+    assert content.count("- bg-1:") == 1 and content.count("- bg-2:") == 1, "each command is named once"
+
+
+@pytest.mark.asyncio
+async def test_a_wait_limit_marks_only_the_commands_it_stopped(rig, monkeypatch):
+    """At the wait limit the closing turn names every command, and says which
+    ones were stopped: the one that finished on its own was not."""
+    from types import SimpleNamespace
+
+    from raven.agent.tools import background_exec
+
+    done = {"task_id": "bg-1", "command": "make docs", "log_path": "/tmp/bg-1.log"}
+    running = {"task_id": "bg-2", "command": "make test", "log_path": "/tmp/bg-2.log"}
+    reaped: list[str] = []
+    monkeypatch.setattr(background_exec, "running", lambda session_key=None: [running])
+    monkeypatch.setattr(background_exec, "reap", lambda task_id: reaped.append(task_id) or True)
+    monkeypatch.setattr("raven.acp.methods.BACKGROUND_POLL_S", 0)
+    session = SimpleNamespace(session_id="s1", session_key="cli:c")
+
+    past = (time.time() - 1) * 1000
+    await rig.methods._resume_after_background(session, {"background": True, "untilMs": past, "tasks": [done, running]})
+
+    assert reaped == ["bg-2"]
+    lines = {line.split(":", 1)[0]: line for line in rig.stack.params_for("turn.send")["content"].splitlines()}
+    assert "stopped at the wait limit" in lines["- bg-2"]
+    assert "stopped" not in lines["- bg-1"], "the command that finished on its own was not stopped"
