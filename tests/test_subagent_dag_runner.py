@@ -1307,6 +1307,47 @@ async def test_run_dag_cancel_skips_unfinished_and_reaps_in_flight_task(tmp_path
     assert leaked_run_groups == []
 
 
+async def test_a_cancelled_run_wakes_the_host_waiter_with_its_tally(tmp_path: Path, monkeypatch) -> None:
+    """A stop takes the cancelled branch, which returns before the announcer is
+    reached. The host waiter has no other wake-up: without the resolve there,
+    ``execute_to_completion`` -- what ``raven playbook run`` blocks on -- would
+    wait forever on a run that is already over.
+    """
+    running = asyncio.Event()
+
+    class _BlockingExec:
+        kind = "cli"
+
+        async def run(self, task: str, **kwargs: Any) -> str:
+            running.set()
+            await asyncio.sleep(3600)
+            return "never"
+
+    async with draining_dag_runs():
+        tool = SubAgentDagTool(
+            workspace=tmp_path,
+            agents=[ThirdPartyCliSubagentConfig(name="slow", command="cat")],
+        )
+        monkeypatch.setattr(tool, "_resolve_node", lambda node: _BlockingExec())
+        waiter = asyncio.create_task(
+            tool.execute_to_completion(
+                task_summary="run the graph under test",
+                nodes=[{"id": "a", "subagent": "slow", "node_summary": "hold the slot", "prompt_template": "hold"}],
+            )
+        )
+        try:
+            await asyncio.wait_for(running.wait(), timeout=10)
+            run_id = tool.active_run_ids()[0]
+            assert tool.request_cancel(run_id) is True
+            out = await asyncio.wait_for(waiter, timeout=10)
+        finally:
+            waiter.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await waiter
+
+    assert "1 cancelled" in str(out), str(out)
+
+
 async def test_an_injected_semaphore_bounds_concurrent_runs_together() -> None:
     """The cap has to mean total dispatches in flight, not per run.
 

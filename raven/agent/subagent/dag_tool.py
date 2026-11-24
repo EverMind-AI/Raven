@@ -689,10 +689,6 @@ class SubAgentDagTool(Tool):
     # registry skips asyncio.wait_for for blocking_interaction tools, so that
     # human wait is not timer-killed. See the note on ``spawn``.
     blocking_interaction = True
-    # A permission, not a claim: what this tool returns is mostly its own
-    # rendering of the run, and only the branches that quote a node's own output
-    # (its terminal results) return a result claiming it.
-    agent_output = True
 
     def __init__(
         self,

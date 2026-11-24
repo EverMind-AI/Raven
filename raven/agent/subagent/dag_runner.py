@@ -220,10 +220,8 @@ async def _watch_stall(
                 # And the notice is a third state: the node is still running. An
                 # announcer reading "no decision pending" alone would head the
                 # injected turn with "has failed", which is the opposite of what
-                # the report says; a bound foreground call drops it, on purpose,
-                # because the model inside that call cannot act on anything
-                # until the call returns (the progress event above still reaches
-                # the panel).
+                # the report says. The progress event above still reaches the
+                # panel.
                 informational=True,
             )
         except asyncio.CancelledError:

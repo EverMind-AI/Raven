@@ -3,7 +3,13 @@
 Date: 2026-11-21. Status: proposed.
 
 Supersedes `docs/specs/2026-09-02-dag-foreground-report-handoff-design.md`: the
-foreground lane that document specifies is removed whole, not reworked.
+foreground lane that document specifies is removed whole, not reworked. It also
+supersedes the passages that describe that lane as current in
+`docs/specs/2026-09-04-dag-replan-design.md` (the `blocking_for` note and
+"Foreground runs"), `docs/specs/2026-08-26-dag-node-verdict-design.md` (the
+foreground adjudication passage), and
+`docs/specs/2026-09-01-dag-adjudication-route-design.md` (the failure-mode
+table's foreground row).
 
 ## Problem
 

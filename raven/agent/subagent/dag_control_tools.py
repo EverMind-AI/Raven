@@ -571,7 +571,7 @@ class ResolveDagNodeTool(_ControlTool):
             # AgentLoop.dag_tools): the registered one answers "not found" for
             # a run the playbook engine's private instance is running, so every
             # replan-specific call below needs whichever instance actually holds
-            # this run's task, desk and outbox.
+            # this run's task and desk.
             owner = owning_tool(self._loop, run_id)
             proposal = await owner.prepare_replan(
                 run_id, node_id, nodes or [], (message or "").strip(), self._session.get(), live
