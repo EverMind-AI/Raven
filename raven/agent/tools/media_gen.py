@@ -1014,7 +1014,12 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             }
         settings_quality = getattr(config, "quality", "")
         sent_quality = body.get("quality") if isinstance(body.get("quality"), str) else None
-        if spec.get("quality") and settings_quality and spec["quality"] != settings_quality and sent_quality is not None:
+        if (
+            spec.get("quality")
+            and settings_quality
+            and spec["quality"] != settings_quality
+            and sent_quality is not None
+        ):
             selection["quality"] = {"requested": spec["quality"], "sent": sent_quality, "source": "settings"}
         if not selection:
             return answer
