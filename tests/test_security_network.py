@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -483,15 +486,47 @@ async def test_a_plain_http_pin_carries_host_but_no_sni(public_dns) -> None:
 # The resolution waits off the loop
 # ---------------------------------------------------------------------------
 
+METADATA_HOST = "metadata.example.test"
+"""A hostname whose address is the cloud metadata endpoint."""
 
-def _slow_public_dns(monkeypatch: pytest.MonkeyPatch, hold: float) -> None:
-    """A resolver that answers one public address, but only after *hold* seconds."""
+
+def _slow_resolver(monkeypatch: pytest.MonkeyPatch, ip: str, hold: float) -> None:
+    """A resolver that answers one address, but only after *hold* seconds."""
 
     def slow_getaddrinfo(host, *_args, **_kwargs):
         time.sleep(hold)
-        return [(0, 0, 0, "", ("93.184.216.34", 0))]
+        return [(0, 0, 0, "", (ip, 0))]
 
     monkeypatch.setattr("socket.getaddrinfo", slow_getaddrinfo)
+
+
+async def _the_loop_keeps_running(call: Callable[[], Awaitable[Any]]) -> tuple[Any, int]:
+    """Await ``call`` while a heartbeat counts the loop's turns.
+
+    The judge resolves, and the resolution is synchronous: on a slow resolver
+    it holds for seconds. One process serves every session's turn, so a judge
+    that runs on the loop freezes all of them. The heartbeat is the detector
+    -- a loop held by the resolution cannot advance it.
+
+    Returns what ``call`` answered and how many times the loop advanced while
+    it was in flight.
+    """
+    ticks = 0
+    beat = asyncio.Event()
+
+    async def heartbeat() -> None:
+        nonlocal ticks
+        while not beat.is_set():
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    ping = asyncio.create_task(heartbeat())
+    try:
+        answer = await call()
+    finally:
+        beat.set()
+        await ping
+    return answer, ticks
 
 
 async def test_a_slow_resolution_does_not_hold_the_event_loop(monkeypatch) -> None:
@@ -503,35 +538,98 @@ async def test_a_slow_resolution_does_not_hold_the_event_loop(monkeypatch) -> No
     the judge now runs in a worker. The heartbeat here is the detector -- a
     loop held by the resolution cannot advance it.
     """
-    _slow_public_dns(monkeypatch, 0.2)
+    _slow_resolver(monkeypatch, "93.184.216.34", 0.2)
 
     from raven.security.network import guarded_fetch
 
-    ticks = 0
-    beat = asyncio.Event()
-
-    async def heartbeat() -> None:
-        nonlocal ticks
-        while not beat.is_set():
-            await asyncio.sleep(0.01)
-            ticks += 1
-
-    ping = asyncio.create_task(heartbeat())
     rec = _Recorder([(200, "")])
-    await guarded_fetch(rec, "https://cdn.example.test/a.png", what="test")
-    beat.set()
-    await ping
+
+    _, ticks = await _the_loop_keeps_running(lambda: guarded_fetch(rec, "https://cdn.example.test/a.png", what="test"))
 
     assert rec.requested == ["https://93.184.216.34/a.png"], "the fetch itself still has to happen"
     assert ticks >= 5, f"the loop advanced only {ticks} times while the resolver held"
 
 
 async def test_a_refused_target_is_still_never_contacted_off_the_loop(monkeypatch) -> None:
-    """Moving the judge must not move the refusal: the address is not contacted."""
-    _slow_public_dns(monkeypatch, 0.05)
+    """Moving the judge must not move the refusal: the address is not contacted.
+
+    The target is a hostname, not a literal: a literal is refused by
+    ``ipaddress`` without a resolution at all, so it says nothing about where
+    the judge ran. This one resolves -- slowly -- to the metadata address, so
+    the refusal is one the resolver produced.
+    """
+    _slow_resolver(monkeypatch, "169.254.169.254", 0.2)
 
     from raven.security.network import guarded_fetch
 
     rec = _Recorder([(200, "")])
-    assert await guarded_fetch(rec, "http://169.254.169.254/latest/meta-data/", what="test") is None
-    assert rec.requested == []
+
+    answer, ticks = await _the_loop_keeps_running(
+        lambda: guarded_fetch(rec, f"http://{METADATA_HOST}/latest/meta-data/", what="test")
+    )
+
+    assert answer is None, "the refusal is the answer: nothing is fetched"
+    assert rec.requested == [], "the metadata address was never contacted"
+    assert ticks >= 5, f"the loop advanced only {ticks} times while the resolver held"
+
+
+async def test_the_web_fetch_tool_judges_off_the_event_loop(monkeypatch) -> None:
+    """``web_fetch`` is one of the four ways into the judge.
+
+    Its resolution is the one a reader waits on: the tool answers with the
+    refusal, so a judge back on the loop would hold the whole process for the
+    length of the resolution and the refusal would arrive late.
+    """
+    _slow_resolver(monkeypatch, "169.254.169.254", 0.2)
+
+    from raven.agent.tools.web import WebFetchTool
+
+    tool = WebFetchTool()
+
+    answer, ticks = await _the_loop_keeps_running(lambda: tool.execute(f"http://{METADATA_HOST}/latest/meta-data/"))
+
+    assert "URL validation failed" in answer, f"the tool answered {answer!r} instead of refusing"
+    assert ticks >= 5, f"the loop advanced only {ticks} times while the resolver held"
+
+
+async def test_the_knowledge_reader_judges_off_the_event_loop(monkeypatch) -> None:
+    """The knowledge reader is the third way into the judge.
+
+    It raises the refusal instead of answering with it, so the call has to
+    carry the refusal out of the raised error for the test to see it.
+    """
+    _slow_resolver(monkeypatch, "169.254.169.254", 0.2)
+
+    from raven.knowledge._sources import SourceFetchError, fetch_page
+
+    async def call() -> str:
+        try:
+            await fetch_page(f"http://{METADATA_HOST}/latest/meta-data/")
+        except SourceFetchError as exc:
+            return str(exc)
+        return ""
+
+    answer, ticks = await _the_loop_keeps_running(call)
+
+    assert "private/internal" in answer, f"the reader refused with {answer!r}"
+    assert ticks >= 5, f"the loop advanced only {ticks} times while the resolver held"
+
+
+async def test_the_deck_fetch_tool_judges_off_the_event_loop(monkeypatch, tmp_path: Path) -> None:
+    """The deck's fetch tool is the fourth way into the judge.
+
+    Its callers gather one of these per URL, so a judge back on the loop would
+    serialize the gather and hold the process with it.
+    """
+    _slow_resolver(monkeypatch, "169.254.169.254", 0.2)
+
+    from raven_ppt.tools.fetch import PptFetchTool
+
+    tool = PptFetchTool(workspace=tmp_path)
+
+    answer, ticks = await _the_loop_keeps_running(
+        lambda: tool._fetch_one("deck", f"http://{METADATA_HOST}/latest/meta-data/", None, None, ingest_after=False)
+    )
+
+    assert "cannot be fetched" in answer, f"the deck tool answered {answer!r} instead of refusing"
+    assert ticks >= 5, f"the loop advanced only {ticks} times while the resolver held"
