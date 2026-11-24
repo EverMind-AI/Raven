@@ -36,11 +36,13 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from types import ModuleType
 from typing import Any
+from urllib.parse import urljoin
 
 import httpx
 from loguru import logger
 
 from raven.contracts.tool import Tool
+from raven.security.network import DEFAULT_MAX_REDIRECTS
 from raven.utils import cairo
 from raven_ppt.contracts import Project
 from raven_ppt.services.ingest import sources
@@ -49,6 +51,8 @@ from raven_ppt.tools import _return
 
 MAX_BYTES = 32 * 1024 * 1024
 TIMEOUT_S = 60.0
+MAX_REDIRECTS = DEFAULT_MAX_REDIRECTS
+_REDIRECT_CODES = (301, 302, 303, 307, 308)
 
 
 def _user_agent() -> str:
@@ -380,27 +384,54 @@ class PptFetchTool(Tool):
         Checked twice: the declared length first, so an oversized file costs
         nothing, and then the bytes as they arrive, because a server may not
         declare one.
+
+        The redirect chain is followed here rather than by the client, because a
+        client that follows redirects itself checks the address it was given and
+        none of the ones it is sent to: a public URL answering `302 Location:
+        http://169.254.169.254/` had the metadata body returned and ingested. Each
+        hop is judged before it is requested, and a relative Location is resolved
+        against the URL it came from so the hop it names is an absolute URL the
+        judge can read. The chain is bounded because it has to end.
         """
+        from raven.security.network import judge_resolved_url, validate_url_target
+
         async with httpx.AsyncClient(
             proxy=self.proxy,
-            follow_redirects=True,
+            follow_redirects=False,
             timeout=TIMEOUT_S,
             trust_env=False,
             headers={"User-Agent": USER_AGENT},
         ) as client:
-            async with client.stream("GET", url) as response:
-                response.raise_for_status()
-                declared = response.headers.get("content-length")
-                if declared and declared.isdigit() and int(declared) > MAX_BYTES:
-                    raise ValueError(f"that source is {int(declared) // 1_048_576}MB; the limit is 32MB")
-                chunks: list[bytes] = []
-                total = 0
-                async for chunk in response.aiter_bytes():
-                    total += len(chunk)
-                    if total > MAX_BYTES:
-                        raise ValueError("that source is larger than the 32MB limit")
-                    chunks.append(chunk)
-        return b"".join(chunks)
+            current = url
+            for hop in range(MAX_REDIRECTS + 1):
+                if hop == 0:
+                    allowed, refusal = validate_url_target(current)
+                else:
+                    allowed, refusal, _addresses = judge_resolved_url(current)
+                if not allowed:
+                    raise ValueError(f"that URL cannot be fetched: {refusal}")
+                async with client.stream("GET", current) as response:
+                    if response.status_code in _REDIRECT_CODES:
+                        location = response.headers.get("location") or ""
+                        if not location:
+                            raise ValueError(
+                                f"that URL cannot be fetched: the redirect from {current} carried no location"
+                            )
+                        current = urljoin(current, location)
+                        continue
+                    response.raise_for_status()
+                    declared = response.headers.get("content-length")
+                    if declared and declared.isdigit() and int(declared) > MAX_BYTES:
+                        raise ValueError(f"that source is {int(declared) // 1_048_576}MB; the limit is 32MB")
+                    chunks: list[bytes] = []
+                    total = 0
+                    async for chunk in response.aiter_bytes():
+                        total += len(chunk)
+                        if total > MAX_BYTES:
+                            raise ValueError("that source is larger than the 32MB limit")
+                        chunks.append(chunk)
+                    return b"".join(chunks)
+            raise ValueError(f"that URL redirected more than {MAX_REDIRECTS} times")
 
 
 def _sniff(payload: bytes) -> tuple[bytes, str, str]:

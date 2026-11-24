@@ -758,3 +758,161 @@ async def test_a_batch_without_a_collision_keeps_the_names_the_urls_gave(fetch, 
     )
 
     assert {Path(item["path"]).name for item in body["results"]} == {"a.png", "b.png"}
+
+
+# ---------------------------------------------------------------------------
+# Redirects: the first hop being public says nothing about the next one.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def fetch_routed(monkeypatch, tmp_path: Path):
+    """A tool whose fake network routes by URL and records every request it sends.
+
+    The address judge is the production one and only DNS is faked, so a hop is
+    allowed or refused by the code that ships rather than by a stub. The record is
+    what separates "refused before the request" from "refused after it went out":
+    only the first is a fix, because the second has already handed the address what
+    it asked for.
+    """
+
+    def make(handler):
+        sent: list[httpx.Request] = []
+
+        def recording(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            return handler(request)
+
+        transport = httpx.MockTransport(recording)
+        real = httpx.AsyncClient
+
+        def factory(*args, **kwargs):
+            kwargs.pop("proxy", None)
+            return real(*args, transport=transport, **kwargs)
+
+        monkeypatch.setattr(httpx, "AsyncClient", factory)
+        monkeypatch.setattr("socket.getaddrinfo", lambda *_a, **_k: [(0, 0, 0, "", ("93.184.216.34", 0))])
+        return PptFetchTool(tmp_path), sent
+
+    return make
+
+
+@pytest.mark.asyncio
+async def test_a_redirect_toward_the_metadata_endpoint_is_refused_before_it_is_requested(fetch_routed) -> None:
+    """A public first hop says nothing about the second. The metadata endpoint hands
+    credentials to whoever connects from inside the host, so a request that reaches
+    it has already leaked them -- refusing after the fact is not a refusal."""
+    metadata = "http://169.254.169.254/latest/meta-data/"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == "https://public.example/x":
+            return httpx.Response(302, headers={"location": metadata})
+        return httpx.Response(200, content=b"SECRET")
+
+    tool, sent = fetch_routed(handler)
+    body = await _run(tool, url="https://public.example/x")
+
+    assert body["ok"] is False, body
+    assert "cannot be fetched" in body["error"] and "private address" in body["error"], body["error"]
+    assert [str(request.url) for request in sent] == ["https://public.example/x"], (
+        "the second hop must never be contacted; a refusal it already answered is still a leak"
+    )
+
+
+@pytest.mark.parametrize(
+    "redirect_to",
+    ["http://10.1.2.3/secret", "http://127.0.0.1/secret", "http://[::1]/secret"],
+    ids=["private-v4", "loopback-v4", "loopback-v6"],
+)
+@pytest.mark.asyncio
+async def test_a_redirect_into_a_private_network_is_refused_before_it_is_requested(fetch_routed, redirect_to) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "public.example":
+            return httpx.Response(302, headers={"location": redirect_to})
+        return httpx.Response(200, content=b"SECRET")
+
+    tool, sent = fetch_routed(handler)
+    body = await _run(tool, url="https://public.example/x")
+
+    assert body["ok"] is False, body
+    assert len(sent) == 1, [str(request.url) for request in sent]
+
+
+@pytest.mark.asyncio
+async def test_a_relative_location_is_resolved_against_the_hop_it_came_from(fetch_routed) -> None:
+    """A relative Location is legal HTTP. Joining it against the URL it came from
+    keeps every hop absolute, which is what makes the next hop checkable -- and
+    keeps the legitimate redirect working."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/dir/source":
+            return httpx.Response(302, headers={"location": "../moved/figure.png"})
+        return httpx.Response(200, content=_png())
+
+    tool, sent = fetch_routed(handler)
+    body = await _run(tool, url="https://public.example/dir/source")
+
+    assert body["ok"] is True, body
+    assert [str(request.url) for request in sent] == [
+        "https://public.example/dir/source",
+        "https://public.example/moved/figure.png",
+    ], "the relative target was joined against the URL it came from"
+
+
+@pytest.mark.asyncio
+async def test_a_chain_of_public_redirects_is_followed(fetch_routed) -> None:
+    moves = {
+        "https://public.example/a": "https://public.example/b",
+        "https://public.example/b": "https://public.example/c",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if (target := moves.get(str(request.url))) is not None:
+            return httpx.Response(302, headers={"location": target})
+        return httpx.Response(200, content=_png())
+
+    tool, sent = fetch_routed(handler)
+    body = await _run(tool, url="https://public.example/a")
+
+    assert body["ok"] is True, body
+    assert [str(request.url) for request in sent] == [
+        "https://public.example/a",
+        "https://public.example/b",
+        "https://public.example/c",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_redirect_chain_longer_than_the_cap_is_refused_instead_of_followed_forever(fetch_routed) -> None:
+    """The chain has to end. Beyond the cap the handler answers, so an unbounded
+    follower succeeds and this fails on that success instead of hanging."""
+    from raven_ppt.tools.fetch import MAX_REDIRECTS
+
+    served = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal served
+        served += 1
+        if served > MAX_REDIRECTS + 1:
+            return httpx.Response(200, content=_png())
+        return httpx.Response(302, headers={"location": "/next"})
+
+    tool, sent = fetch_routed(handler)
+    body = await _run(tool, url="https://public.example/start")
+
+    assert body["ok"] is False, body
+    assert "redirected more than" in body["error"], body["error"]
+    assert len(sent) == MAX_REDIRECTS + 1, "one initial request plus the cap, and not one more"
+
+
+@pytest.mark.asyncio
+async def test_a_redirect_to_a_non_http_scheme_is_refused(fetch_routed) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": "file:///etc/passwd"})
+
+    tool, sent = fetch_routed(handler)
+    body = await _run(tool, url="https://public.example/x")
+
+    assert body["ok"] is False, body
+    assert "not http/https" in body["error"], body["error"]
+    assert len(sent) == 1
