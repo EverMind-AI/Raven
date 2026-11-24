@@ -376,7 +376,10 @@ class ContextCompactionConfig(_Base):
     pushes the protected tail past the target on the smaller windows and no
     compaction can reach it: 0.05 fails at 262K, 0.09 at 512K and 1M.
 
-    An explicit value is honored at load; the default applies only when the
+    An explicit value is honored at load when it sits below the retain ratio.
+    One at or above the retain it would get is lowered to the shipped default
+    rather than failing startup, since nothing can be compacted into a target
+    that does not clear the protected tail. The default applies only when the
     file does not name the key.
     """
 
@@ -405,6 +408,11 @@ class ContextCompactionConfig(_Base):
     def _check_ratios(self) -> "ContextCompactionConfig":
         """Relations between the ratios, checked at load rather than at the
         first turn that trips over them.
+
+        A config file whose tail is not below its retain is lowered by the
+        loader before this runs; what lands here is direct construction and a
+        pair the repair cannot fix (a retain at or below the shipped tail
+        share), and those are refused rather than rewritten.
 
         Not checked here: whether the static reply-headroom floor leaves room
         for ``triggerRatioMax`` to bind at all. It does not on any window at or
