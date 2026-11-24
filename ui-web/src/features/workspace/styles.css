@@ -201,11 +201,11 @@
 .workspace-md-menu summary::-webkit-details-marker { display: none; }
 .workspace-md-menu[data-tight] summary span { display: none; }
 /* The menu's width is its own, not the button's, and it is laid against the
-   header rather than the button: the slot around that button sits 110-155px
-   from the bar's end, so a 216px menu left-aligned from it ran past the edge
-   (75px at 375, 11px at 450) and was clipped. Anchored to the header's inline
-   end it stays inside; max-width gives up width in a header narrower than the
-   menu rather than being cut. */
+   header rather than the button: while the bar is narrow the slot around that
+   button sits 110px from the bar's end, so a 216px menu left-aligned from it
+   ran past the edge -- 75px at 375 and 11px at 450 -- and the column clipped
+   it. Anchored to the header's inline end it stays inside; max-width gives up
+   width in a header narrower than the menu rather than being cut. */
 .workspace-md-pop {
   position: absolute; z-index: 2;
   inset-block-start: calc(100% + 6px); inset-inline-end: 0;
