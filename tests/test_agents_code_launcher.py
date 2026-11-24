@@ -606,7 +606,7 @@ def test_the_render_loads_through_trunks_own_loader(grounded):
         "tools": {
             "enabled": True,
             "restrictToWorkspace": False,
-            "exec": {"maxTimeout": 1200, "timeout": 600, "pathAppend": "", "sandboxBackend": "none"},
+            "exec": {"maxTimeout": 600, "timeout": 120, "pathAppend": "", "sandboxBackend": "none"},
         },
         "projectFiles": ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"],
     }
@@ -759,7 +759,7 @@ def test_the_cli_render_enables_the_flow_beside_the_conversation_state(cli_run, 
         "tools": {
             "enabled": True,
             "restrictToWorkspace": False,
-            "exec": {"maxTimeout": 1200, "timeout": 600, "pathAppend": "", "sandboxBackend": "none"},
+            "exec": {"maxTimeout": 600, "timeout": 120, "pathAppend": "", "sandboxBackend": "none"},
         },
         "projectFiles": ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"],
     }
@@ -1517,7 +1517,28 @@ def test_rerendered_exec_settings_follow_the_host_and_preserve_its_sandbox(groun
     assert plugin.make_exec(ctx) is None, "a sandboxed shell must not be replaced with a host executor"
     assert section["tools"]["exec"]["timeout"] == 23
     assert section["tools"]["exec"]["pathAppend"] == "/test/tools"
-    assert section["tools"]["exec"]["maxTimeout"] == 1200
+    assert section["tools"]["exec"]["maxTimeout"] == 600
+
+
+@pytest.mark.parametrize("configured", [0, -5])
+def test_a_non_positive_host_timeout_reaches_the_shell_as_no_setting(grounded, tmp_path, configured):
+    """The live reader takes a timeout that is not a positive whole number as no
+    answer. Forwarded raw, a zero bounded every command at zero seconds, and the
+    shell reported a command it never gave time to run as still running."""
+    first = grounded.render_config(RUN_PY.parent / "config.json", tmp_path / "first")
+    config = json.loads(first.read_text())
+    config["tools"]["exec"]["timeout"] = configured
+    source = tmp_path / "custom.json"
+    source.write_text(json.dumps(config))
+    rendered = json.loads(grounded.render_config(source, tmp_path / "second").read_text())
+    section = rendered["plugins"]["config"]["code-flow"]
+    from code_flow.tools import plugin
+
+    from raven.plugins.context import PluginContext, ServiceLocator
+
+    assert section["tools"]["exec"]["timeout"] == 60, "the same as a host config that names no timeout"
+    tool = plugin.make_exec(PluginContext(config=section, services=ServiceLocator(tmp_path / "second", "u", "a")))
+    assert tool is not None and tool._timeout == 60
 
 
 @pytest.mark.parametrize(("platform", "expected"), [("linux", "openshell"), ("win32", "none")])

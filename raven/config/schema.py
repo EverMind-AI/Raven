@@ -902,6 +902,12 @@ def _builtin_modes() -> dict[str, "AcpModeConfig"]:
     return {tier: AcpModeConfig(name=tier.capitalize(), description=_TIER_TEXTS[tier]) for tier in TIER_LADDER}
 
 
+#: The default for ``acp.maxBackgroundHoldSeconds``. The ACP layer falls back to
+#: it when no config is injected, so the config default and that fallback stay one
+#: value instead of two that can drift.
+DEFAULT_MAX_BACKGROUND_HOLD_SECONDS = 1800
+
+
 class AcpConfig(Base):
     """The ACP surface's session modes.
 
@@ -918,6 +924,14 @@ class AcpConfig(Base):
     its first entry (``build_mode_catalogue``) rather than being failed at startup
     by a value it never chose. Naming something is checked -- see the validator
     below for why those two are different cases."""
+
+    max_background_hold_seconds: int = Field(default=DEFAULT_MAX_BACKGROUND_HOLD_SECONDS, ge=60)
+    """How long a ``session/prompt`` may stay held for this session's background
+    commands when the turn set no wall clock of its own. ACP sessions carry no
+    clock by default, so this is what keeps a command that never exits from
+    holding the prompt forever. At the limit the remaining commands are stopped
+    and the closing turn runs. The limit covers the wait for the commands only:
+    the closing turn is an ordinary turn and ends the way any turn does."""
 
     @model_validator(mode="after")
     def _resolve_the_named_default(self) -> "AcpConfig":

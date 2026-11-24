@@ -11,6 +11,8 @@ and that the terminal seam sees an answerless exit.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from raven.agent.hook import AgentHook, HookDecision
@@ -747,3 +749,54 @@ def _fake_model_declares_every_level(monkeypatch):
             "max",
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_the_loop_sets_the_turn_clock_from_its_budget(tmp_path):
+    """Tools read the same deadline the loop checks between iterations.
+
+    A command allowed to run past the turn's clock spends the overrun after
+    the turn was meant to stop; the tool needs the value, not a copy in prose.
+    """
+    from raven.agent import turn_clock
+    from raven.agent.loop import TURN_BUDGETS_KEY
+
+    seen: list[float | None] = []
+    sessions: list[tuple[str, str]] = []
+
+    class Watch(AgentHook):
+        async def before_user_inbound(self, ctx):
+            ctx.metadata[TURN_BUDGETS_KEY] = {"wall_clock_seconds": 60.0}
+            return HookDecision()
+
+        async def before_iteration(self, ctx):
+            seen.append(turn_clock.remaining())
+            sessions.append((ctx.session_key, turn_clock.session_key()))
+            return HookDecision()
+
+    loop = _loop(tmp_path, _ScriptedProvider([_text("answered")]), [Watch()])
+    await loop._process_message(_req())
+
+    assert seen and seen[0] is not None and 0 < seen[0] <= 60
+    assert sessions, "the hook ran inside the turn"
+    assert sessions[0][1] == sessions[0][0], "the adopted work is filed under the turn's session"
+
+
+@pytest.mark.asyncio
+async def test_a_turn_without_a_clock_clears_what_an_earlier_turn_set(tmp_path):
+    """Every turn sets the value, including to None: a stale clock would
+    silently shorten the next turn's commands in the same task."""
+    from raven.agent import turn_clock
+
+    seen: list[float | None] = []
+
+    class Watch(AgentHook):
+        async def before_iteration(self, ctx):
+            seen.append(turn_clock.remaining())
+            return HookDecision()
+
+    turn_clock.set_deadline(time.monotonic() + 5)
+    loop = _loop(tmp_path, _ScriptedProvider([_text("answered")]), [Watch()])
+    await loop._process_message(_req())
+
+    assert seen == [None]

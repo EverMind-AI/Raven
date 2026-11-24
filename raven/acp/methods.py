@@ -28,6 +28,7 @@ import base64
 import binascii
 import contextlib
 import mimetypes
+import os
 import time
 from collections.abc import Callable
 from itertools import count
@@ -43,6 +44,7 @@ from raven.acp.modes import SessionModes, build_session_modes
 from raven.acp.replay import replay
 from raven.acp.updates import AcpSession, TurnAlreadyRunningError, UpdateTranslator
 from raven.config import load_config
+from raven.config.schema import DEFAULT_MAX_BACKGROUND_HOLD_SECONDS
 from raven.providers.usage import reported_cost
 from raven.security import redact
 from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT
@@ -121,6 +123,18 @@ ACP_META_OBSERVER = "acp_meta"
 #: without the key, so a client that reads ``end_turn`` as "finished" (a DAG
 #: judging its node) is not told so while the agent is still on the job.
 HOLD_TURN_META = "raven.holdTurn"
+
+#: How often a held prompt asks whether its background work is gone.
+BACKGROUND_POLL_S = 2.0
+#: The longest a prompt may stay held for background work when the turn named
+#: no deadline of its own. ACP sessions carry no wall clock by default, so
+#: without this a command that never exits would hold the prompt -- and the
+#: heartbeat meant to keep the wait observable -- for the life of the process.
+#: Half an hour is long enough for the builds and downloads that adopt work,
+#: and short enough that a wedged command cannot own a prompt forever. The
+#: schema default is the one source; this is the fallback a caller that injects
+#: no config gets.
+MAX_BACKGROUND_HOLD_S = float(DEFAULT_MAX_BACKGROUND_HOLD_SECONDS)
 #: How often a held prompt says it is alive, as a ``tool_call_update`` on the
 #: one call that stands for the wait. Well inside the ten minutes raven's own
 #: client gives a running node before it reports a stall.
@@ -158,11 +172,13 @@ class AcpMethods:
         questions: Any = None,
         channel: str = "acp",
         modes: "SessionModes | None" = None,
+        background_hold_limit_s: float = MAX_BACKGROUND_HOLD_S,
     ) -> None:
         self._dispatcher = dispatcher
         # Resolved from config on first use when not injected, so a test can
         # hand in a catalogue and a live process reads the file it serves.
         self._modes = modes
+        self._background_hold_limit_s = background_hold_limit_s
         self._translator = translator
         self._emit = emit
         self._agent_loop = agent_loop
@@ -887,12 +903,114 @@ class AcpMethods:
             },
         )
         beat = asyncio.get_running_loop().create_task(self._heartbeat(session, call_id))
+        # A hold for background work has to end by itself: nothing else will
+        # run a turn on this session when the command finishes. The watcher
+        # starts that closing turn, which is what answers this prompt.
+        watcher = (
+            asyncio.get_running_loop().create_task(self._resume_after_background(session, hold))
+            if hold.get("background")
+            else None
+        )
         try:
-            return await future
+            stop = await future
+            if watcher is not None and stop == "cancelled":
+                self._reap_background(session)
+            return stop
         finally:
             beat.cancel()
+            if watcher is not None:
+                watcher.cancel()
             self._translator.end_turn(session.session_id)
             self._update(session, {"sessionUpdate": "tool_call_update", "toolCallId": call_id, "status": "completed"})
+
+    def _reap_background(self, session: AcpSession) -> None:
+        from raven.agent.tools import background_exec
+
+        for task in background_exec.running(session_key=session.session_key):
+            background_exec.reap(str(task.get("task_id") or ""))
+
+    async def _resume_after_background(self, session: AcpSession, hold: dict[str, Any]) -> None:
+        """Run the closing turn once this session's background commands are gone.
+
+        Polled rather than event-driven because the registry is process-wide and
+        holds no subscribers; two seconds is the same order as the heartbeat the
+        client clocks liveness by. The wait has a deadline even when the turn
+        named none: ``MAX_BACKGROUND_HOLD_S`` would otherwise let a command that
+        never exits hold the prompt forever. At that deadline the rest are
+        killed and the closing turn runs anyway. That bounds the wait, not the
+        closing turn: it is a turn like any other and ends the way one does,
+        by its own limits or the client's cancel.
+        """
+        from raven.agent.tools import background_exec
+
+        until = hold.get("untilMs")
+        deadline = (float(until) / 1000.0) if isinstance(until, (int, float)) and until > 0 else None
+        cap = time.time() + self._background_hold_limit_s
+        if self._background_hold_limit_s > 0 and (deadline is None or deadline > cap):
+            deadline = cap
+        stopped: set[str] = set()
+        # The record is retired as soon as its process exits, so a task can be
+        # gone by the first poll or between two of them. Every task the hold
+        # named or a poll saw is kept by id, or the closing turn names only the
+        # ones that happened to outlive the others.
+        named: dict[str, dict[str, Any]] = {}
+
+        def note(tasks: Any) -> None:
+            for task in tasks or ():
+                if isinstance(task, dict) and task.get("task_id"):
+                    named[str(task["task_id"])] = task
+
+        note(hold.get("tasks"))
+        seen = background_exec.running(session_key=session.session_key)
+        while seen:
+            note(seen)
+            if deadline is not None and time.time() >= deadline:
+                stopped = {str(task.get("task_id")) for task in seen}
+                self._reap_background(session)
+                break
+            await asyncio.sleep(BACKGROUND_POLL_S)
+            seen = background_exec.running(session_key=session.session_key)
+        lines = [
+            f"- {task_id}: {t.get('command')} (log: {t.get('log_path')})"
+            + (" -- stopped at the wait limit" if task_id in stopped else "")
+            for task_id, t in named.items()
+        ]
+        if stopped:
+            lead = (
+                "[system] The wait limit was reached, so the background commands still running "
+                "were stopped (marked below); any others had finished. Read their logs and continue "
+                "the task; report what they changed."
+            )
+            if os.name == "nt":
+                lead += " A child process of a stopped command may still be running on Windows."
+        else:
+            lead = (
+                "[system] The background commands this session started have finished. "
+                "Read their logs and continue the task; report what they changed."
+            )
+        content = lead + "\n" + "\n".join(lines)
+        try:
+            await self._call(
+                "turn.send",
+                {
+                    "session_key": session.session_key,
+                    "channel": self._channel,
+                    "chat_id": _chat_id_of(session.session_key),
+                    "content": content,
+                    "media": [],
+                },
+            )
+        except Exception:
+            logger.exception("acp: could not run the closing turn after background work on {}", session.session_key)
+            # The held prompt is waiting on a turn that never started, and only
+            # a turn ending would answer it. Settle it first so the client gets
+            # its stopReason even if telling it why fails too.
+            self._translator.settle_turn(session.session_id, "end_turn")
+            self._say(
+                session,
+                "The closing turn after this session's background work could not be "
+                "started. The commands' logs hold their output; continue from there.",
+            )
 
     async def _heartbeat(self, session: AcpSession, call_id: str) -> None:
         started = time.monotonic()

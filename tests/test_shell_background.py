@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -334,3 +336,56 @@ def test_the_schema_advertises_the_lane(home, tmp_path):
     assert prop["type"] == "boolean"
     assert "ops_submit" in prop["description"], "the boundary is taught where the parameter is read"
     assert "timeout" in prop["description"], "that the lane reads no timeout is said where the model can see it"
+
+
+def test_adopted_work_is_listed_under_its_session(monkeypatch, tmp_path):
+    """A command that outlived its call is still that session's work.
+
+    Nothing about adopting it starts a process: the adopter keeps writing the
+    log, and this registry only has to see it, cap it and reap it like the rest.
+    """
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        log = tmp_path / "adopted.log"
+        log.write_text("started\n", encoding="utf-8")
+        task = background_exec.adopt("sleep 30", proc.pid, log_path=str(log), session_key="cli:a")
+
+        mine = background_exec.running(session_key="cli:a")
+        assert [t["task_id"] for t in mine] == [task.task_id]
+        assert background_exec.running(session_key="cli:b") == []
+        assert "started" in background_exec.tail(task.task_id)
+        assert background_exec.reap(task.task_id) is True
+        proc.wait(timeout=5)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+
+def test_tail_reads_only_the_end_of_a_large_log(home):
+    """A log's tail is read from the end, not by loading the whole file first."""
+    log = home / "background" / "large.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("HEAD-MARKER\n" + "padding line\n" * 20_000 + "TAIL-MARKER\n", encoding="utf-8")
+    task = background_exec.adopt("chatty", 4_000_002, log_path=str(log))
+
+    text = background_exec.tail(task.task_id, max_bytes=128)
+
+    assert "TAIL-MARKER" in text
+    assert "HEAD-MARKER" not in text
+    assert len(text.encode()) <= 128
+
+
+def test_two_adoptions_in_one_millisecond_get_distinct_ids(home, monkeypatch):
+    """The ids are how the record and the log are found; a collision overwrites
+    the first command's record while both keep running."""
+    # Replace the module's own reference, not an attribute of the shared ``time``
+    # module, which would freeze every caller's clock while the test runs.
+    monkeypatch.setattr(background_exec, "time", SimpleNamespace(time=lambda: 1_700_000_000.0))
+    first = background_exec.adopt("first", 4_000_003)
+    second = background_exec.adopt("second", 4_000_004)
+
+    assert first.task_id != second.task_id
+    assert background_exec.status(first.task_id)["command"] == "first"
+    assert background_exec.status(second.task_id)["command"] == "second"
+    assert first.log_path != second.log_path

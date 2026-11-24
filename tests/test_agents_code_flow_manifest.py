@@ -9,6 +9,7 @@ as the prompt response's ``_meta["raven.harnessManifest"]``.
 
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -193,6 +194,56 @@ async def test_the_send_leaves_other_observers_stashes_alone(outside_any_repo):
     assert metadata["observers"]["acp_meta"][MANIFEST_META_KEY]["workspaceKind"] == "plain"
 
 
+@pytest.mark.asyncio
+async def test_the_send_holds_the_turn_for_an_adopted_command(tmp_path, monkeypatch):
+    """A command the turn adopted keeps the client's prompt open until it is gone."""
+    from raven.agent import turn_clock
+    from raven.agent.tools import background_exec
+
+    repo = tmp_path / "repo"
+    make_repo(repo)
+    hook = CodeFlowHook(ledger=SessionLedger())
+    turn_clock.set_session("acp:s1")
+    turn_clock.set_deadline(time.monotonic() + 30)
+    monkeypatch.setattr(
+        background_exec,
+        "running",
+        lambda session_key=None: [{"task_id": "bg-1", "session_key": session_key}] if session_key else [],
+    )
+    metadata: dict = {}
+    try:
+        with workdir.bind(repo):
+            await hook.before_user_inbound(AgentHookContext(session_key="acp:s1", inbound_content="build"))
+            await hook.after_send(AgentHookContext(session_key="acp:s1", outbound_content="done", metadata=metadata))
+        hold = metadata["observers"]["acp_meta"]["raven.holdTurn"]
+        assert hold["background"] is True
+        assert hold["untilMs"] is not None
+        assert abs(hold["untilMs"] - (time.time() + turn_clock.remaining()) * 1000) < 2000
+    finally:
+        turn_clock.set_deadline(None)
+        turn_clock.set_session("")
+
+
+@pytest.mark.asyncio
+async def test_the_send_leaves_an_explicit_background_command_out_of_the_hold(tmp_path, monkeypatch):
+    """The detached lane keeps its own contract: it runs on after the turn answers."""
+    from raven.agent.tools import background_exec
+
+    repo = tmp_path / "repo"
+    make_repo(repo)
+    hook = CodeFlowHook(ledger=SessionLedger())
+    monkeypatch.setattr(
+        background_exec,
+        "running",
+        lambda session_key=None: [] if session_key else [{"task_id": "bg-2", "session_key": None}],
+    )
+    metadata: dict = {}
+    with workdir.bind(repo):
+        await hook.before_user_inbound(AgentHookContext(session_key="acp:s1", inbound_content="build"))
+        await hook.after_send(AgentHookContext(session_key="acp:s1", outbound_content="done", metadata=metadata))
+    assert "raven.holdTurn" not in metadata["observers"]["acp_meta"]
+
+
 class _AnswerProvider(LLMProvider):
     """One plain answer, no tools."""
 
@@ -342,3 +393,77 @@ async def test_the_idle_session_does_not_claim_its_peers_commit(tmp_path):
     report_a = meta_a["observers"]["acp_meta"][MANIFEST_META_KEY]
     assert report_a["status"] == "shared_workspace"
     assert report_a["readyForIntegration"] is False
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_an_adopted_command_is_filed_under_the_turn_and_holds_its_send(tmp_path, monkeypatch):
+    """The whole chain, on the trunk loop: a tool adopted inside a turn records
+    that turn's session, and the code flow's send reads it back to arm the hold.
+
+    This is the seam that fails silently if the loop does not publish its
+    session: ``_adopt`` stores ``session_key=None``, both session-filtered
+    waits see nothing, and the ACP prompt closes as if the work were done.
+    """
+    from code_flow.flow import ACP_META_OBSERVER, HOLD_TURN_KEY
+    from code_flow.tools.exec import CodeExecTool, CodeExecutor
+
+    from raven.agent import turn_clock
+    from raven.agent.hook import AgentHook, HookDecision
+    from raven.agent.tools import background_exec
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "agent-home"))
+    repo = tmp_path / "repo"
+    make_repo(repo)
+    home = tmp_path / "home"
+    home.mkdir()
+    tool = CodeExecTool(
+        timeout=5,
+        working_dir=str(repo),
+        executor=CodeExecutor(max_timeout=600, spill_dir=home / "spill"),
+        extra_allowed_dirs=(home, repo),
+        max_timeout=600,
+    )
+
+    class Adopt(AgentHook):
+        async def before_iteration(self, ctx):
+            if ctx.iteration == 1:
+                result = await tool.execute(command="echo adopted-start; sleep 30", timeout=1)
+                assert "still running" in str(result)
+            return HookDecision()
+
+    agent = AgentLoop(
+        provider=_AnswerProvider(),
+        workspace=home,
+        model="stub",
+        policy=TurnPolicy(max_iterations=4),
+        tools=ToolWiring(restrict_to_workspace=True),
+        engine=EngineWiring(runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="never"))),
+        host=HostWiring(hooks=[CodeFlowHook(ledger=SessionLedger()), Adopt()]),
+    )
+    try:
+        with workdir.bind(repo):
+            out = await agent._process_message(
+                TurnRequest(
+                    origin=Origin.USER,
+                    source=Source(channel="acp", chat_id="s1", sender_id="user", chat_type=ChatType.DM),
+                    text="run the build",
+                ),
+                session_key="acp:s1",
+            )
+        assert out is not None
+
+        mine = background_exec.running(session_key="acp:s1")
+        assert len(mine) == 1, "the adopted command carries the turn's session"
+        assert mine[0]["command"] == "echo adopted-start; sleep 30"
+        record = agent.sessions.get_or_create("acp:s1")
+        stamped = [m for m in record.messages if m.get("role") == "assistant" and "observers" in m]
+        hold = stamped[-1]["observers"][ACP_META_OBSERVER][HOLD_TURN_KEY]
+        assert hold["background"] is True
+        assert hold["untilMs"] is None, "this turn ran without a wall clock"
+        assert [task["task_id"] for task in hold["tasks"]] == [mine[0]["task_id"]]
+    finally:
+        for task in background_exec.running():
+            background_exec.reap(str(task.get("task_id") or ""))
+        turn_clock.set_deadline(None)
+        turn_clock.set_session("")
