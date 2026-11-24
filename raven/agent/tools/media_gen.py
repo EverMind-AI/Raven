@@ -341,7 +341,7 @@ class _OpenRouterMediaTool(Tool):
                 message[key] = choice[key]
         return message
 
-    def _format_http_error(self, e: httpx.HTTPStatusError) -> str:
+    def _format_http_error(self, e: httpx.HTTPStatusError, model: str | None = None, quality: str | None = None) -> str:
         # The status, not the body: ``failure_class`` keys the loop's tool-failure
         # streak on this envelope's ``error`` alone, and a vendor body carries a
         # request id, so interpolating it splits one dead endpoint into a class per
@@ -350,6 +350,12 @@ class _OpenRouterMediaTool(Tool):
         # transient-marker scan. The same rule governs every envelope below.
         body = e.response.text[:400]
         answer: dict[str, Any] = {"error": f"HTTP {e.response.status_code}", "detail": body}
+        # What the request asked for travels on the failure too: a batch that
+        # only ever failed has nothing else left to name the attempt with.
+        if model:
+            answer["model"] = model
+        if quality:
+            answer["quality"] = quality
         if e.response.status_code == 403:
             answer["hint"] = (
                 "Request denied (HTTP 403). You can route media calls through a "
@@ -863,18 +869,25 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             return await self._generate_one(wanted[0], _safe_stem(wanted[0].get("filename")), model, output_dir)
         stems = _distinct_stems(wanted)
         gate = asyncio.Semaphore(_BATCH_CONCURRENCY)
+        # The batch reads the section once and the same snapshot serves every
+        # picture, so a batch's attempts all name the Settings the first request
+        # was built for rather than mixing in whatever the section holds
+        # mid-flight.
+        batch_config = self._config
 
         async def one(spec: dict[str, Any], stem: str) -> str:
             async with gate:
-                return await self._generate_one(spec, stem, model, output_dir)
+                return await self._generate_one(spec, stem, model, output_dir, batch_config)
 
         # Gathered with the exceptions, not through them: a directory refused for one
         # picture, or a reference it cannot read, is that picture's answer -- the seven
         # the caller waited for alongside it still come back.
         answers = await asyncio.gather(*(one(spec, stem) for spec, stem in zip(wanted, stems)), return_exceptions=True)
-        return self._batch_answer(wanted, answers)
+        return self._batch_answer(wanted, answers, model)
 
-    def _batch_answer(self, wanted: list[dict[str, Any]], answers: list[str | BaseException]) -> str:
+    def _batch_answer(
+        self, wanted: list[dict[str, Any]], answers: list[str | BaseException], model: str | None = None
+    ) -> str:
         """Fold the per-picture answers into one, keeping every path under `paths`.
 
         A picture that failed takes its reason with it instead of the batch: the
@@ -914,9 +927,13 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                 item["selection"] = reply["selection"]
             results.append(item)
         failed = [item for item in results if item.get("error")]
+        # The batch is named by the model a picture's answer carries when one
+        # does -- and when none does (every picture failed), by the model the
+        # batch's own call named, which is what its requests were built with.
+        batch_model = next((item["model"] for item in results if item.get("model")), None) or self._model(model)
         answer_body: dict[str, Any] = {
             "success": bool(paths),
-            "model": next((item["model"] for item in results if item.get("model")), self._model(None)),
+            "model": batch_model,
             "paths": paths,
             "results": results,
         }
@@ -929,15 +946,23 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         logger.info("image_generate: {} of {} image(s) made in one call", len(paths), len(results))
         return json.dumps(answer_body, ensure_ascii=False)
 
-    async def _generate_one(self, spec: dict[str, Any], stem: str, model: str | None, output_dir: str | None) -> str:
+    async def _generate_one(
+        self,
+        spec: dict[str, Any],
+        stem: str,
+        model: str | None,
+        output_dir: str | None,
+        config: "MediaToolConfig | None" = None,
+    ) -> str:
         """One picture's answer, with what Settings decided said on it.
 
-        The section is read once here and the same snapshot answers both the
-        request and the explanation of it: a live section is read per call, so
-        a second read may name another model or quality than the one the
-        outgoing request was built from.
+        ``config`` is the Settings snapshot the caller already read for this
+        call -- a batch's single snapshot, or this call's own read otherwise --
+        and the same one answers both the request and the explanation of it: a
+        live section is read per call, so a second read may name another model
+        or quality than the one the outgoing request was built from.
         """
-        config = self._config
+        config = self._config if config is None else config
         answer = await self._generate_one_answer(spec, stem, model, output_dir, config)
         return self._explain_selection(answer, spec, model, config)
 
@@ -951,16 +976,16 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         as the call's own value: a trace showed a requested Sunburst answered by
         another model and a requested high quality omitted, with no reason for
         either. Only a call that named the field is told anything, because a call
-        that named nothing had nothing overridden.
+        that named nothing had nothing overridden -- and a field that reads as
+        Settings' but matches the request is the request's, not an override.
         """
         body = json.loads(answer)
-        if not body.get("success"):
-            return answer
         selection: dict[str, Any] = {}
-        if model and getattr(config, "model", ""):
-            selection["model"] = {"requested": model, "sent": body.get("model"), "source": "settings"}
+        settings_model = getattr(config, "model", "")
+        if model and settings_model and not _same_model_as_sent(model, settings_model):
+            selection["model"] = {"requested": model, "sent": body.get("model") or settings_model, "source": "settings"}
         settings_quality = getattr(config, "quality", "")
-        if spec.get("quality") and settings_quality and body.get("quality") == settings_quality:
+        if spec.get("quality") and settings_quality and spec["quality"] != settings_quality:
             selection["quality"] = {"requested": spec["quality"], "sent": settings_quality, "source": "settings"}
         if not selection:
             return answer
@@ -1034,10 +1059,13 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                 return await self._via_images_api(
                     model_id, prompt, images, aspect_ratio if frames else None, quality, output_dir, stem
                 )
-            return self._format_http_error(e)
+            return self._format_http_error(e, model=model_id, quality=quality)
         except Exception as e:
             logger.error("image_generate error: {}", e)
-            return json.dumps({"error": type(e).__name__, "detail": str(e)}, ensure_ascii=False)
+            return json.dumps(
+                {"error": type(e).__name__, "detail": str(e), "model": model_id, "quality": quality or ""},
+                ensure_ascii=False,
+            )
 
         out_images = msg.get("images") or []
         if not out_images:
@@ -1048,6 +1076,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                     if msg.get("finish_reason") == "content_filter"
                     else "no image returned",
                     "model": model_id,
+                    "quality": quality or "",
                     "note": note[:300],
                     "finish_reason": msg.get("finish_reason"),
                     "native_finish_reason": msg.get("native_finish_reason"),
@@ -1067,7 +1096,10 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             paths.append(str(path))
 
         if not paths:
-            return json.dumps({"error": "image payload was not a data URI", "model": model_id}, ensure_ascii=False)
+            return json.dumps(
+                {"error": "image payload was not a data URI", "model": model_id, "quality": quality or ""},
+                ensure_ascii=False,
+            )
 
         logger.info("image_generate: {} image(s) via {} -> {}", len(paths), model_id, paths)
         return json.dumps(
@@ -1198,10 +1230,10 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                 answer.update(retryable=False, note="Generation may still finish and be billed.")
             return json.dumps(answer, ensure_ascii=False)
         except httpx.HTTPStatusError as e:
-            return self._format_http_error(e)
+            return self._format_http_error(e, model=model_id)
         except Exception as e:
             logger.error("image_generate error: {}", e)
-            return json.dumps({"error": type(e).__name__, "detail": str(e)}, ensure_ascii=False)
+            return json.dumps({"error": type(e).__name__, "detail": str(e), "model": model_id}, ensure_ascii=False)
         paths: list[str] = []
         for mime, raw in pictures:
             path = self._output_path(_MIME_EXT.get(mime, "png"), output_dir, stem)
@@ -1255,13 +1287,19 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         openrouter = httpx.URL(self.api_base).host == "openrouter.ai"
         volces = httpx.URL(self.api_base).host.endswith(".volces.com")
         if volces and images:
-            return json.dumps({"error": "image editing is not supported on Ark", "model": model_id}, ensure_ascii=False)
+            return json.dumps(
+                {"error": "image editing is not supported on Ark", "model": model_id, "quality": quality or ""},
+                ensure_ascii=False,
+            )
         try:
             # OpenRouter takes the chat content-part shape verbatim; the OpenAI
             # edits form takes the bytes behind it.
             refs = [self._image_part(ref) for ref in (images or [])[:16]]
         except OSError as e:
-            return json.dumps({"error": "could not read input image", "detail": str(e)}, ensure_ascii=False)
+            return json.dumps(
+                {"error": "could not read input image", "detail": str(e), "model": model_id, "quality": quality or ""},
+                ensure_ascii=False,
+            )
         try:
             async with httpx.AsyncClient(proxy=self._proxy, timeout=300.0) as client:
                 if openrouter:
@@ -1346,21 +1384,36 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                 except _PictureUnfetchableError as e:
                     return e.answer(model_id)
         except httpx.HTTPStatusError as e:
-            return self._format_http_error(e)
+            return self._format_http_error(e, model=model_id, quality=quality)
         except Exception as e:
             logger.error("image_generate error: {}", e)
-            return json.dumps({"error": type(e).__name__, "detail": str(e)}, ensure_ascii=False)
+            return json.dumps(
+                {"error": type(e).__name__, "detail": str(e), "model": model_id, "quality": quality or ""},
+                ensure_ascii=False,
+            )
         paths: list[str] = []
         for mime, data in pictures:
             path = self._output_path(_MIME_EXT.get(mime, "png"), output_dir, stem)
             path.write_bytes(data)
             paths.append(str(path))
         if not paths:
-            return json.dumps({"error": "no image returned", "model": model_id}, ensure_ascii=False)
+            return json.dumps(
+                {"error": "no image returned", "model": model_id, "quality": quality or ""}, ensure_ascii=False
+            )
         logger.info("image_generate: {} image(s) via {} (images api) -> {}", len(paths), model_id, paths)
         return json.dumps(
             {"success": True, "model": model_id, "quality": quality or "", "paths": paths}, ensure_ascii=False
         )
+
+
+def _same_model_as_sent(asked: str, sent: str) -> bool:
+    """The one spelling a Settings model keeps when it went to OpenRouter.
+
+    An ``openrouter/`` wire prefix is stripped before the request is sent, so a
+    section's model that matches the call's apart from that prefix is the call's
+    own model under the gateway's name, not an override worth a line.
+    """
+    return asked == sent or asked.removeprefix("openrouter/") == sent.removeprefix("openrouter/")
 
 
 class SpeechGenerateTool(_OpenRouterMediaTool):
