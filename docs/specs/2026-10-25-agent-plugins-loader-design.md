@@ -332,9 +332,11 @@ validated and reported, and no server is started. The opt-in is per
 package, not global.
 
 **Namespacing.** A package's server names are qualified with the package
-name (`<package>__<server>`) so they cannot collide with the host's own
+name (`<package>__<server>`) so they are namespaced away from the host's own
 `tools.mcpServers` entries, and so a sub-agent row's `mcps` list
-(`raven/agent/subagent/mcp_grant.py:364-448`) can name them precisely. The
+(`raven/agent/subagent/mcp_grant.py:364-448`) can name them precisely. A
+composed name the host already configured is the host's: the package's
+server is skipped and reported rather than replacing it. The
 separator is `__` because the manifest's name rules forbid an underscore in
 a package name, so the first occurrence is unambiguous.
 
