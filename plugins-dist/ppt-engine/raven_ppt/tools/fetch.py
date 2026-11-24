@@ -392,8 +392,15 @@ class PptFetchTool(Tool):
         hop is judged before it is requested, and a relative Location is resolved
         against the URL it came from so the hop it names is an absolute URL the
         judge can read. The chain is bounded because it has to end.
+
+        Each hop connects to the address its judge resolved, because judging one
+        answer and connecting to a second one is the window rebinding uses: a name
+        that answers public to the check and loopback to the client reaches the
+        inside while the verdict says it is public. The judge's addresses are
+        handed to `_pin_request`, so the connection target is one of them while
+        Host and SNI still carry the site's name.
         """
-        from raven.security.network import judge_resolved_url, validate_url_target
+        from raven.security.network import _pin_request, judge_resolved_url, judge_url_target
 
         async with httpx.AsyncClient(
             proxy=self.proxy,
@@ -404,13 +411,11 @@ class PptFetchTool(Tool):
         ) as client:
             current = url
             for hop in range(MAX_REDIRECTS + 1):
-                if hop == 0:
-                    allowed, refusal = validate_url_target(current)
-                else:
-                    allowed, refusal, _addresses = judge_resolved_url(current)
+                allowed, refusal, addresses = judge_url_target(current) if hop == 0 else judge_resolved_url(current)
                 if not allowed:
                     raise ValueError(f"that URL cannot be fetched: {refusal}")
-                async with client.stream("GET", current) as response:
+                target, pinned = _pin_request(current, addresses)
+                async with client.stream("GET", target, **pinned) as response:
                     if response.status_code in _REDIRECT_CODES:
                         location = response.headers.get("location") or ""
                         if not location:

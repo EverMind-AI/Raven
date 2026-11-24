@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import io
 import json
+import socket
+import threading
 import zipfile
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import httpx
 import pytest
 
+from raven.security.network import judge_url_target as _real_judge
 from raven.security.network import validate_url_target as _real_validate
 from raven_ppt.contracts import Project
 from raven_ppt.tools.fetch import MAX_BYTES, PptFetchTool
@@ -99,6 +103,8 @@ def fetch(monkeypatch, tmp_path: Path):
 
         monkeypatch.setattr(httpx, "AsyncClient", factory)
         monkeypatch.setattr("raven.security.network.validate_url_target", lambda url: (True, ""))
+        monkeypatch.setattr("raven.security.network.judge_url_target", lambda url: (True, "", ()))
+        monkeypatch.setattr("raven.security.network.judge_resolved_url", lambda url: (True, "", ()))
         return PptFetchTool(tmp_path)
 
     return make
@@ -339,6 +345,7 @@ async def test_the_download_names_itself_rather_than_sending_the_library_default
 
     monkeypatch.setattr(httpx, "AsyncClient", factory)
     monkeypatch.setattr("raven.security.network.validate_url_target", lambda url: (True, ""))
+    monkeypatch.setattr("raven.security.network.judge_url_target", lambda url: (True, "", ()))
 
     body = await _run(PptFetchTool(tmp_path), url="https://upload.wikimedia.org/wikipedia/commons/a/a4/x.jpg")
 
@@ -570,8 +577,9 @@ async def test_an_address_the_network_guard_refuses_is_not_downloaded(fetch, mon
     hands out credentials to whoever asks from inside the host.
     """
     tool = fetch(_png())
-    # After the factory, which installs the permissive stub the other cases need.
+    # After the factory, which installs the permissive stubs the other cases need.
     monkeypatch.setattr("raven.security.network.validate_url_target", _real_validate)
+    monkeypatch.setattr("raven.security.network.judge_url_target", _real_judge)
     out = await _run(tool, url="http://169.254.169.254/latest/meta-data/iam/security-credentials/")
 
     assert out.get("ok") is False, "the metadata endpoint must not be fetched"
@@ -765,6 +773,18 @@ async def test_a_batch_without_a_collision_keeps_the_names_the_urls_gave(fetch, 
 # ---------------------------------------------------------------------------
 
 
+def _named(request: httpx.Request) -> str:
+    """The URL a recorded request names, rather than the address it connected to.
+
+    A pinned hop reaches the transport with the judged address in the URL and the
+    site's name in ``Host``; reading the two back together is how a test says
+    which page was asked for.
+    """
+    host = request.headers.get("host") or request.url.netloc.decode("ascii")
+    query = f"?{request.url.query.decode('ascii')}" if request.url.query else ""
+    return f"{request.url.scheme}://{host}{request.url.path}{query}"
+
+
 @pytest.fixture()
 def fetch_routed(monkeypatch, tmp_path: Path):
     """A tool whose fake network routes by URL and records every request it sends.
@@ -805,7 +825,7 @@ async def test_a_redirect_toward_the_metadata_endpoint_is_refused_before_it_is_r
     metadata = "http://169.254.169.254/latest/meta-data/"
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if str(request.url) == "https://public.example/x":
+        if _named(request) == "https://public.example/x":
             return httpx.Response(302, headers={"location": metadata})
         return httpx.Response(200, content=b"SECRET")
 
@@ -814,7 +834,7 @@ async def test_a_redirect_toward_the_metadata_endpoint_is_refused_before_it_is_r
 
     assert body["ok"] is False, body
     assert "cannot be fetched" in body["error"] and "private address" in body["error"], body["error"]
-    assert [str(request.url) for request in sent] == ["https://public.example/x"], (
+    assert [_named(request) for request in sent] == ["https://public.example/x"], (
         "the second hop must never be contacted; a refusal it already answered is still a leak"
     )
 
@@ -827,7 +847,7 @@ async def test_a_redirect_toward_the_metadata_endpoint_is_refused_before_it_is_r
 @pytest.mark.asyncio
 async def test_a_redirect_into_a_private_network_is_refused_before_it_is_requested(fetch_routed, redirect_to) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "public.example":
+        if _named(request).startswith("https://public.example/"):
             return httpx.Response(302, headers={"location": redirect_to})
         return httpx.Response(200, content=b"SECRET")
 
@@ -853,7 +873,7 @@ async def test_a_relative_location_is_resolved_against_the_hop_it_came_from(fetc
     body = await _run(tool, url="https://public.example/dir/source")
 
     assert body["ok"] is True, body
-    assert [str(request.url) for request in sent] == [
+    assert [_named(request) for request in sent] == [
         "https://public.example/dir/source",
         "https://public.example/moved/figure.png",
     ], "the relative target was joined against the URL it came from"
@@ -867,7 +887,7 @@ async def test_a_chain_of_public_redirects_is_followed(fetch_routed) -> None:
     }
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if (target := moves.get(str(request.url))) is not None:
+        if (target := moves.get(_named(request))) is not None:
             return httpx.Response(302, headers={"location": target})
         return httpx.Response(200, content=_png())
 
@@ -875,7 +895,7 @@ async def test_a_chain_of_public_redirects_is_followed(fetch_routed) -> None:
     body = await _run(tool, url="https://public.example/a")
 
     assert body["ok"] is True, body
-    assert [str(request.url) for request in sent] == [
+    assert [_named(request) for request in sent] == [
         "https://public.example/a",
         "https://public.example/b",
         "https://public.example/c",
@@ -916,3 +936,132 @@ async def test_a_redirect_to_a_non_http_scheme_is_refused(fetch_routed) -> None:
     assert body["ok"] is False, body
     assert "not http/https" in body["error"], body["error"]
     assert len(sent) == 1
+
+
+# ---------------------------------------------------------------------------
+# Pinning: the hop connects to the address the judge saw.
+#
+# A MockTransport never resolves anything, so it cannot see this defect at all:
+# the window is between the judge's resolution and the one the client does when
+# it connects. These tests use a real client, a resolver that answers public to
+# the judge and loopback to a connection, and record the TCP target.
+# ---------------------------------------------------------------------------
+
+_PUBLIC_ANSWER = "93.184.216.34"
+
+
+@pytest.fixture()
+def rebinding_dns(monkeypatch):
+    """A resolver whose answer depends on who is asking.
+
+    The judge asks with no port and the connection asks with one, so the two
+    answers are told apart without counting calls. That is the rebinding shape
+    itself: the same name, a different address by the time anything connects.
+    """
+    real = socket.getaddrinfo
+
+    def resolver(host, port, *_args, **_kwargs):
+        name = host.decode() if isinstance(host, bytes) else host
+        if name == "rebind.test":
+            answer = _PUBLIC_ANSWER if port is None else "127.0.0.1"
+            return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (answer, port or 0))]
+        return real(host, port, *_args, **_kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolver)
+    return _PUBLIC_ANSWER
+
+
+@pytest.mark.asyncio
+async def test_the_first_hop_connects_to_the_address_the_judge_saw(rebinding_dns, monkeypatch, tmp_path: Path) -> None:
+    """The first hop resolves once, so the second answer is never used.
+
+    Before pinning, the judge saw the public address and httpx resolved the name
+    again when it connected -- and a name that answers loopback the second time
+    put the request inside the host while the check had said it was public.
+    """
+    public = rebinding_dns
+    attempts: list[tuple] = []
+
+    def recording_connect(self, address):
+        attempts.append(address)
+        raise ConnectionRefusedError(111, "connection refused")
+
+    monkeypatch.setattr(socket.socket, "connect", recording_connect)
+
+    body = await _run(PptFetchTool(tmp_path), url="https://rebind.test/start")
+
+    assert body["ok"] is False, body
+    assert attempts == [(public, 443)], f"the connection must go to the judged address, got {attempts}"
+
+
+@pytest.mark.asyncio
+async def test_every_redirect_hop_connects_to_the_address_its_judge_saw(
+    rebinding_dns, monkeypatch, tmp_path: Path
+) -> None:
+    """A second hop resolves for itself, so it has to be pinned for itself too.
+
+    The first hop is public on both lookups; only the redirect target's
+    connection is answered with loopback. A fix that pins the first hop alone
+    still follows that redirect inward.
+    """
+    public = rebinding_dns
+    served: list[str] = []
+
+    class Redirects(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            served.append(self.path)
+            if self.path == "/start":
+                self.send_response(302)
+                self.send_header("location", "http://rebind.test/next")
+                self.end_headers()
+                return
+            body = b"SECRET"
+            self.send_response(200)
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Redirects)
+    local_port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    attempts: list[tuple] = []
+    real_connect = socket.socket.connect
+
+    def recording_connect(self, address):
+        if address[1] != 80:
+            return real_connect(self, address)
+        attempts.append(address)
+        return real_connect(self, ("127.0.0.1", local_port))
+
+    monkeypatch.setattr(socket.socket, "connect", recording_connect)
+    try:
+        body = await _run(PptFetchTool(tmp_path), url="http://rebind.test/start")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert body["ok"] is True, body
+    assert served == ["/start", "/next"], served
+    assert attempts == [(public, 80), (public, 80)], f"both hops must connect to the judged address, got {attempts}"
+    assert all(address[0] != "127.0.0.1" for address in attempts), attempts
+
+
+@pytest.mark.asyncio
+async def test_a_pinned_hop_still_answers_as_the_name_it_was_given(fetch_routed) -> None:
+    """The TCP target is pinned; the request is not renamed. Host and SNI have to
+    keep the site's name, or a virtual host answers for the wrong site and the
+    certificate check runs against an address."""
+    tool, sent = fetch_routed(lambda _request: httpx.Response(200, content=_png()))
+
+    body = await _run(tool, url="https://public.example/figure.png")
+
+    assert body["ok"] is True, body
+    (request,) = sent
+    assert request.url.host == _PUBLIC_ANSWER, "the URL carries the address the judge saw"
+    assert request.headers["host"] == "public.example", "Host keeps the site's name"
+    assert request.extensions["sni_hostname"] == "public.example", "SNI keeps the site's name"
