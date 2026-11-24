@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest'
 
-import { openPreviewWindow, previewName, previewRequestOf, previewURL } from './preview'
+import { openPreviewTab, previewRequestOf, previewURL } from './preview'
 
 describe('the file preview address', () => {
   it('answers a request only for a preview address that names a file', () => {
@@ -20,18 +20,12 @@ describe('the file preview address', () => {
       .toBe(`${location.pathname}?preview=1&path=%2Frepo%2Fa.md`)
   })
 
-  it('reuses one window per file, and says when a blocker refused it', () => {
-    expect(previewName('/repo/a.md')).toBe('raven-file:/repo/a.md')
-    const open = vi.spyOn(window, 'open')
-    open.mockReturnValue(null)
-    expect(openPreviewWindow('/repo/a.md', null)).toBe(false)
-    expect(open).toHaveBeenCalledWith(
-      previewURL('/repo/a.md', null),
-      'raven-file:/repo/a.md',
-      'popup,width=1040,height=800',
-    )
-    open.mockReturnValue({} as Window)
-    expect(openPreviewWindow('/repo/a.md', null)).toBe(true)
+  it('opens the page in a tab, and a host that refuses the call is not an error', () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    openPreviewTab('/repo/a.md', 's1')
+    expect(open).toHaveBeenCalledWith(previewURL('/repo/a.md', 's1'), '_blank', 'noopener')
+    open.mockImplementation(() => { throw new Error('blocked') })
+    expect(() => openPreviewTab('/repo/a.md', null)).not.toThrow()
     open.mockRestore()
   })
 })

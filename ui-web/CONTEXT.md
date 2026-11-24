@@ -325,14 +325,16 @@ re-runs nothing and only redraws the entries the list store holds.
 
 **Preview window**:
 A page of the same bundle that shows one file and nothing else:
-`features/workspace/preview.ts` owns its address (`?preview=1&path=...&session=...`)
-and the window name that makes a second open reuse the first, and
-`src/chrome/previewBoot.tsx` boots it in place of the page's own boot. It is
+`features/workspace/preview.ts` owns its address (`?preview=1&path=...&session=...`),
+and `src/chrome/previewBoot.tsx` boots it in place of the page's own boot. The
+file viewer opens it in a new browser tab, one per click and with no window
+name to reuse, so where that tab lands is the browser's. It is
 not a second UI -- what it draws is the workspace pane's `FileBody` -- so a
 kind that renders in the pane renders in the window, and the page's shell,
 socket and session list never run there.
-_Avoid_: "pop-up" for this in code and copy. The browser may make it a tab, and
-the query, the i18n key and the component all say preview window.
+_Avoid_: "pop-up" for this in code and copy. The browser may make it a tab: the
+query and the component say preview window, while the button's key
+(`gui.ws.file_newtab`) names the tab it opens.
 
 **Region**:
 One of the things `src/App.tsx` renders at the body, in the standing order

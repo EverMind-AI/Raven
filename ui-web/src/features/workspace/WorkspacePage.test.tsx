@@ -504,7 +504,7 @@ describe('workspace island', () => {
      markup the domain's rule selects and the browser shows the spacing. */
   const GROUPED: Array<[string, string[]]> = [
     ['/repo/out/paper.pdf', ['gui.ws.file_newtab', 'gui.ws.reveal_finder']],
-    ['/repo/report.html', ['gui.ws.file_newtab', 'gui.ws.file_window', 'gui.ws.reveal_finder']],
+    ['/repo/report.html', ['gui.ws.file_newtab', 'gui.ws.reveal_finder']],
     ['/repo/out/shot.png', ['gui.ws.reveal_finder']],
   ]
   it.each(GROUPED)('keeps the file actions on %s in one group', async (path, labels) => {
@@ -934,7 +934,7 @@ describe('workspace island', () => {
     expect(document.querySelector('.fbar .workspace-md-menu')).not.toBeNull()
   })
 
-  it('reads a markdown file full screen until Escape leaves it', async () => {
+  it('leaves fullscreen to the pane, with no second reader mode on the document', async () => {
     install(emptyWs({
       file: {
         path: '/repo/docs/README.md', kind: 'md', raw: false,
@@ -942,26 +942,12 @@ describe('workspace island', () => {
       },
     }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
     await mount()
-    await act(async () => { screen.getByLabelText('gui.ws.expand_reader').click() })
-    expect(document.querySelector('.fwrap')?.getAttribute('data-reader')).toBe('1')
-    await act(async () => {
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
-    })
+    expect(screen.queryByLabelText('gui.ws.expand_reader')).toBeNull()
+    expect(screen.queryByLabelText('gui.ws.exit_reader')).toBeNull()
     expect(document.querySelector('.fwrap')?.getAttribute('data-reader')).toBeNull()
   })
 
-  it('offers no full-screen reading for a file that is not markdown', async () => {
-    install(emptyWs({
-      file: {
-        path: '/repo/report.html', kind: 'html', raw: false,
-        text: '<p>x</p>', err: null, size: null, loading: false, seq: 7,
-      },
-    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
-    await mount()
-    expect(screen.queryByLabelText('gui.ws.expand_reader')).toBeNull()
-  })
-
-  it('opens a text file in a window named after it', async () => {
+  it('opens a text file in a new tab', async () => {
     const open = vi.spyOn(window, 'open').mockReturnValue(null)
     install(emptyWs({
       file: {
@@ -970,14 +956,58 @@ describe('workspace island', () => {
       },
     }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
     await mount()
-    await act(async () => { screen.getByLabelText('gui.ws.file_window').click() })
+    await act(async () => { screen.getByLabelText('gui.ws.file_newtab').click() })
     expect(open).toHaveBeenCalledWith(
       `${location.pathname}?preview=1&path=%2Frepo%2Fdocs%2FREADME.md`,
-      'raven-file:/repo/docs/README.md',
-      'popup,width=1040,height=800',
+      '_blank',
+      'noopener',
     )
     /* A blocker is not an error: the pane the reader is already reading stays. */
     expect(document.querySelector('.fview .prose h1')?.textContent).toBe('Title')
+  })
+
+  /* The text kinds are the ones a preview page can draw; every other kind
+     stays in the pane. The kinds are written out rather than read from
+     IN_TAB: that set is the behaviour these rows pin, so a member dropped
+     from it has to fail one of them. */
+  const PREVIEW_KINDS: Array<[string, string]> = [
+    ['md', '/repo/docs/README.md'],
+    ['csv', '/repo/data/rows.csv'],
+    ['json', '/repo/data/conf.json'],
+    ['diff', '/repo/out/change.diff'],
+    ['code', '/repo/src/app.py'],
+  ]
+  const PANE_KINDS: Array<[string, string]> = [
+    ['img', '/repo/out/shot.png'],
+    ['svg', '/repo/assets/logo.svg'],
+    ['pdf', '/repo/out/paper.pdf'],
+    ['html', '/repo/report.html'],
+    ['office', '/repo/out/deck.pptx'],
+    ['bin', '/repo/blob.dat'],
+  ]
+
+  it.each(PREVIEW_KINDS)('opens a %s file on a page of its own', async (kind, path) => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const file = store.makeFile(path)
+    expect(file.kind).toBe(kind)
+    install(emptyWs({ file }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    const button = document.querySelector('.fbar .workspace-window') as HTMLElement | null
+    expect(button).not.toBeNull()
+    await act(async () => { button!.click() })
+    expect(open).toHaveBeenCalledWith(
+      `${location.pathname}?preview=1&path=${encodeURIComponent(path)}`,
+      '_blank',
+      'noopener',
+    )
+  })
+
+  it.each(PANE_KINDS)('keeps a %s file in the pane, with no page of its own', async (kind, path) => {
+    const file = store.makeFile(path)
+    expect(file.kind).toBe(kind)
+    install(emptyWs({ file }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    expect(document.querySelector('.fbar .workspace-window')).toBeNull()
   })
 
   it('collapses the rendered and source pair to one button in a narrow bar', async () => {

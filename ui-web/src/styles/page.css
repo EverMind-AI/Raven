@@ -4029,7 +4029,7 @@ html[data-traj] #trajHost > * { position: relative; z-index: 1 }
 .lcard .t { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text); }
 .lcard .t small { display: block; font-size: 10.5px; color: var(--faint); }
 
-.fbar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; flex: none;
+.fbar { position: relative; display: flex; align-items: center; gap: 8px; padding: 8px 10px; flex: none;
   border-bottom: 1px solid var(--line-soft); background: var(--ink);
   -webkit-user-select: none; user-select: none; }
 /* The path, not just the name: which of three README.md it is matters more than
@@ -6492,8 +6492,20 @@ body:has(#onb:not([hidden])) .mpick { z-index: calc(var(--z-onboarding) + 1); }
   z-index: var(--z-desk-full); }
 .desk-ready .ws:has(.desk-grid[data-solo="true"])::before { display: none; }
 .desk-ready .split:has(.desk-grid[data-solo="true"]) #wsGrip { display: none; }
-.desk-ready .chat #wsGrip::after { display: none; }
-.desk-ready .chat #wsGrip { right: -3px; width: 6px; }
+/* The desk's workspace column has one free corner, its lower left. The seam's
+   full-height target is replaced there by the same small handle the palette
+   wears -- an 18px square with the diagonal grip at its corner -- so the
+   column is sized from a button at its foot rather than from anywhere along
+   its left edge. */
+.desk-ready .chat #wsGrip {
+  top: auto; bottom: var(--dock-gutter); right: -18px;
+  width: 18px; height: 18px; cursor: ew-resize; touch-action: none;
+}
+.desk-ready .chat #wsGrip::after {
+  display: block; top: auto; left: 4px; bottom: 4px; width: 9px; height: 9px;
+  opacity: .55;
+  background: linear-gradient(45deg, transparent 48%, var(--faint) 50%, var(--faint) 57%, transparent 59%, transparent 70%, var(--faint) 72%, var(--faint) 79%, transparent 81%);
+}
 /* The capsule's chip is the desk's way in, so the panel toggle leaves the row. */
 .desk-ready #wsBtn { display: none; }
 
@@ -7043,7 +7055,7 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
    line of facts under it, and the controls that act on what is shown. A
    hairline sets those off from the window's own two. Each line gives way on
    its own, so the facts stay on screen however narrow the pane. */
-.pane-head { flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; gap: 6px; }
+.pane-head { position: relative; flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; gap: 6px; }
 .pane-head-glyph, .pane-head .pane-head-back { width: 28px; height: 28px; margin-left: -6px; flex: none;
   display: grid; place-items: center; color: var(--text-3); }
 .pane-head-glyph svg { width: 15px; height: 15px; stroke-linecap: round; stroke-linejoin: round; }
