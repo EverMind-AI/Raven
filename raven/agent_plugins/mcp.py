@@ -371,9 +371,9 @@ def _server_entry(raw: Any) -> Any:
 def host_mcp_server_names(servers: Mapping[str, Any] | None) -> tuple[str, ...]:
     """The host's own MCP server names: what a package entry may not compose to.
 
-    Every place that decides host-wins-on-collision reads its reservation
-    through here, so the runtime layer, the RPC list and the CLI cannot drift
-    into deciding it from different inputs.
+    The runtime build, the RPC ``agent_plugins.list`` and the ``agent-plugins``
+    CLI take their collision reservation from here, so the three report the
+    same set instead of each deriving it from its own input.
     """
     return tuple(str(name) for name in (servers or {}))
 

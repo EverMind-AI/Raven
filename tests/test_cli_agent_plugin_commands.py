@@ -587,6 +587,7 @@ def test_list_marks_an_opted_in_packages_mcp_servers_as_enabled(env: _Env) -> No
 
 
 def test_list_json_calls_the_opt_in_allowed(env: _Env) -> None:
+    """``mcp.allowed`` is the field; ``mcp.running`` is its deprecated alias."""
     _write_mcp_config(env.package, {"demo": {"type": "stdio", "command": "npx"}})
     env.config.write_text(
         json.dumps(
@@ -603,7 +604,7 @@ def test_list_json_calls_the_opt_in_allowed(env: _Env) -> None:
     assert result.exit_code == 0, result.stdout
     mcp = _json_payload(result)["packages"][0]["mcp"]
     assert mcp["allowed"] is True
-    assert "running" not in mcp
+    assert mcp["running"] is True
 
 
 def test_list_leaves_out_a_server_the_host_already_configures(env: _Env) -> None:
@@ -624,9 +625,13 @@ def test_list_leaves_out_a_server_the_host_already_configures(env: _Env) -> None
     assert table.exit_code == 0, table.stdout
     assert "1 enabled" not in table.stdout
     assert "none" in table.stdout
+    assert "(1 skipped)" in table.stdout
 
     payload = _json_payload(_run(env, "list", "--json"))
-    assert payload["packages"][0]["mcp"]["servers"] == []
+    mcp = payload["packages"][0]["mcp"]
+    assert mcp["servers"] == []
+    assert [item["server"] for item in mcp["problems"]] == ["demo"]
+    assert "already configured on this host" in mcp["problems"][0]["reason"]
 
 
 def test_inspect_reports_the_packages_mcp_servers(env: _Env) -> None:
@@ -654,6 +659,29 @@ def test_inspect_json_carries_the_mcp_section(env: _Env) -> None:
     mcp = _json_payload(result)["packages"][0]["mcp"]
     assert mcp["servers"] == [f"{PACKAGE_NAME}__demo"]
     assert mcp["disabled"] == ""
+
+
+def test_inspect_names_a_server_the_host_already_configures(env: _Env) -> None:
+    composed = f"{PACKAGE_NAME}__demo"
+    _write_mcp_config(env.package, {"demo": {"type": "stdio", "command": "npx"}})
+    env.config.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"workspace": str(env.workspace)}},
+                "agentPlugins": {"packages": [str(env.package)]},
+                "tools": {"mcpServers": {composed: {"command": "host-own"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    text = _run(env, "inspect", str(env.package))
+    assert text.exit_code == 0, text.stdout
+    assert "already configured on this host" in text.stdout
+
+    mcp = _json_payload(_run(env, "inspect", str(env.package), "--json"))["packages"][0]["mcp"]
+    assert mcp["servers"] == []
+    assert [item["server"] for item in mcp["problems"]] == ["demo"]
 
 
 # ---------------------------------------------------------------------------

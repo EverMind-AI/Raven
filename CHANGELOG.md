@@ -160,6 +160,18 @@ All notable changes to Raven are documented here.
   without the required `node_summary` -- and each node in them writes its
   `prompt_template` last, after `routes`, `depends_on` and `when`.
 
+- `raven agent-plugins list` and `inspect` report only the MCP servers the
+  runtime would actually compose: a package server whose composed name the
+  host already configures is left out and reported -- the table marks the
+  package's count as skipped, and `--json` names the server and the reason
+  under `problems` -- instead of counting as one the package yields.
+  `list --json` calls the opt-in `mcp.allowed`, the same fact the RPC
+  returns, and the table says `enabled` instead of `running`;
+  `mcp.running` remains as a deprecated alias of `mcp.allowed` with the
+  same value for one release, then is removed. A package's `mcp` object in
+  `list --json` also carries `disabled`, why its MCP configuration is off,
+  so an empty server list says which kind of empty it is.
+
 ### Fixed
 
 - A model that refuses a forced tool choice is asked again with the tool on
