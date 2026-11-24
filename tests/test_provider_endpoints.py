@@ -9,7 +9,7 @@ others. These assert that precedence and the empty-section fallback.
 from __future__ import annotations
 
 from raven.config.schema import GeminiProviderConfig, ProviderConfig, ProviderEndpoint
-from raven.providers.endpoints import ResolvedEndpoint, provider_endpoints
+from raven.providers.endpoints import ResolvedEndpoint, provider_endpoints, provider_endpoints_for_request
 
 
 def test_flat_fields_synthesize_a_single_default_endpoint() -> None:
@@ -158,3 +158,46 @@ def test_gemini_endpoints_list_takes_priority_over_api_key_list() -> None:
 
     assert [e.label for e in resolved] == ["only"]
     assert [e.api_key for e in resolved] == ["sk-endpoint"]
+
+
+def test_explicit_endpoints_keep_their_keys_when_an_env_reference_is_also_named(monkeypatch) -> None:
+    """``apiKeyEnv`` stands in for the flat key only.
+
+    A section that grew an explicit endpoint keeps that endpoint's key: the
+    environment variable is a leftover from before, and it must not shadow the
+    key the section declares.
+    """
+    monkeypatch.setenv("PROVIDER_KEY", "sk-from-env")
+    section = ProviderConfig(
+        api_key_env="PROVIDER_KEY",
+        endpoints=[ProviderEndpoint(label="only", api_key="sk-explicit")],
+    )
+
+    resolved = provider_endpoints_for_request(section)
+
+    assert [e.api_key for e in resolved] == ["sk-explicit"]
+
+
+def test_an_api_key_list_keeps_its_keys_when_an_env_reference_is_also_named(monkeypatch) -> None:
+    monkeypatch.setenv("PROVIDER_KEY", "sk-from-env")
+    section = GeminiProviderConfig(api_key_env="PROVIDER_KEY", api_key_list=["k1", "k2"])
+
+    resolved = provider_endpoints_for_request(section)
+
+    assert [e.api_key for e in resolved] == ["k1", "k2"]
+
+
+def test_an_env_reference_that_names_an_unset_variable_does_not_fail_a_declared_section() -> None:
+    """The variable is never read for a section that declares its own keys.
+
+    Reading it would raise a missing-credentials error at request time for a
+    section that has nothing to ask the environment for.
+    """
+    section = ProviderConfig(
+        api_key_env="PROVIDER_KEY_THAT_IS_NOT_SET",
+        endpoints=[ProviderEndpoint(label="only", api_key="sk-explicit")],
+    )
+
+    resolved = provider_endpoints_for_request(section)
+
+    assert [e.api_key for e in resolved] == ["sk-explicit"]
