@@ -175,6 +175,18 @@ async def test_a_file_url_for_another_machine_names_no_local_path(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_a_file_url_that_cannot_be_parsed_names_no_local_path(tmp_path: Path):
+    """A host that is not a valid IPv6 literal leaves the URL without a path."""
+    read = ReadFileTool(workspace=tmp_path)
+
+    answer = await read.execute(path="file://[::1/notes.md")
+
+    assert isinstance(answer, str)
+    assert "file://" in answer
+    assert "-- try" not in answer, f"no local path may be named: {answer}"
+
+
+@pytest.mark.asyncio
 async def test_a_path_that_is_merely_missing_still_says_so(tmp_path: Path):
     """The URL wording is an extra branch, not a replacement.
 
