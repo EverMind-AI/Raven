@@ -201,3 +201,15 @@ def test_an_env_reference_that_names_an_unset_variable_does_not_fail_a_declared_
     resolved = provider_endpoints_for_request(section)
 
     assert [e.api_key for e in resolved] == ["sk-explicit"]
+
+
+def test_a_raw_config_mapping_names_the_variable_too(monkeypatch) -> None:
+    """A section read straight from config.json is a mapping, not a schema object.
+
+    Raw mappings spell the field camelCase, and both spellings are read.
+    """
+    monkeypatch.setenv("PROVIDER_KEY", "sk-from-env")
+
+    resolved = provider_endpoints_for_request({"apiKeyEnv": "PROVIDER_KEY"})
+
+    assert [e.api_key for e in resolved] == ["sk-from-env"]
