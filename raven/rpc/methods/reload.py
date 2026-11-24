@@ -28,9 +28,10 @@ if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
 
 _CONFIRM_MESSAGE = (
-    "/reload-mcp reconnects the MCP servers whose config changed. The tool list "
-    "is the first thing in the cached prompt prefix, so a change to it rebuilds "
-    "the whole cache for this conversation. Run '/reload-mcp now' to proceed."
+    "/reload-mcp reconnects the MCP servers whose config changed. A conversation's "
+    "tool list is frozen until its next compaction or a new conversation, so an "
+    "existing session keeps its cached prefix and the reconciled tools join then. "
+    "Run '/reload-mcp now' to proceed."
 )
 
 
@@ -93,7 +94,11 @@ async def reload_mcp(params: dict, *, agent_loop_factory: Any = None) -> dict:
     # "reconciled", not "reconnected". The count is records touched -- a detach
     # counts, and so does an attempt that failed or parked at the browser -- so
     # naming it a reconnect reported a total outage as a successful reload.
-    tools = "the tool list changed" if report.tools_changed else "the tool list is unchanged"
+    tools = (
+        "the registered tool set changed; this conversation joins it at the next compaction or new conversation"
+        if report.tools_changed
+        else "the registered tool set is unchanged"
+    )
     return {
         "ok": True,
         "status": "reloaded",

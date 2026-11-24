@@ -80,7 +80,12 @@ from raven.context_engine.history.compacting.writer import (
     checkpoint_key,
     session_message_key,
 )
-from raven.context_engine.history.markers import HISTORY_CHECKPOINT_KEY, HISTORY_PINNED_KEY, HISTORY_PRIVATE_KEYS
+from raven.context_engine.history.markers import (
+    HISTORY_CHECKPOINT_KEY,
+    HISTORY_COMPACTED_META,
+    HISTORY_PINNED_KEY,
+    HISTORY_PRIVATE_KEYS,
+)
 from raven.context_engine.history_trimmer import HistoryTrimmer, TrimOutcome
 from raven.context_engine.runtime_context import retell_notices
 from raven.contracts.context import AssemblyContext, OverflowOutcome, Segment
@@ -272,7 +277,11 @@ class CompactingHistoryBuilder:
             raise RuntimeError("CompactingHistoryBuilder requires ctx.prefix (phase B)")
         session = list(ctx.session_messages or [])
         if not session:
-            return Segment(text="", history=[], meta={"path": SEGMENT_PATH, "compaction_action": "pass"})
+            return Segment(
+                text="",
+                history=[],
+                meta={"path": SEGMENT_PATH, "compaction_action": "pass", HISTORY_COMPACTED_META: False},
+            )
         revision = ctx.session_revision
         if revision is None:
             return self._unscoped(ctx, ctx.prefix, session)
@@ -937,6 +946,7 @@ class CompactingHistoryBuilder:
             meta={
                 "path": SEGMENT_PATH,
                 "compaction_action": "unscoped",
+                HISTORY_COMPACTED_META: len(outcome.included_ids) < len(session),
                 "history_kept": len(outcome.included_ids),
                 "history_total": len(session),
                 "history_tokens": outcome.estimated_tokens,
@@ -960,6 +970,7 @@ class CompactingHistoryBuilder:
         return {
             "path": SEGMENT_PATH,
             "compaction_action": plan.action,
+            HISTORY_COMPACTED_META: plan.action == "compact",
             "compaction_trigger": str(plan.trigger),
             "compaction_generation": generation,
             "prompt_tokens": plan.prompt_tokens,

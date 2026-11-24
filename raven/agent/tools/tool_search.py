@@ -274,9 +274,13 @@ class ToolSearchController:
           ``tool_call`` would recurse into itself.
         - absent, or withheld from this channel: one answer for both, and the
           same sentence the direct path uses. Withheld is answered as absent
-          deliberately -- "it exists but not for you" is itself the way around
-          the filter that keeping it out of the schema was meant to close.
-          Appending where the catalog is is safe for that branch because
+          deliberately for a name that never made the session's array -- "it
+          exists but not for you" is itself the way around the filter that
+          keeping it out of the schema was meant to close. A withheld name the
+          session holds a schema for (in the array, or handed over by a notice)
+          gets its reason instead: calling it is a live option, not a name
+          mistake.
+          Appending where the catalog is is safe for the absent branch because
           ``search`` filters by channel too. It reads as a statement of where
           the truth lives, not an instruction to search again: a model that
           searched, called what it found, and lost the tool in between would
@@ -291,6 +295,9 @@ class ToolSearchController:
             return _Target(None, f"Error: '{name}' cannot be invoked via tool_call.")
         tool = self._registry.get(name)
         if tool is None or not self._registry.offers(tool):
+            refusal = self._registry.unavailable_refusal(name)
+            if refusal is not None:
+                return _Target(None, refusal)
             tail = " -- tool_search lists what is currently loaded" if self.search_visible() else ""
             return _Target(None, absent_tool_error(name, tail=tail))
         return _Target(tool, None)

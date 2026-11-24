@@ -397,6 +397,14 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # Asked once per assembled tool array, so an off switch flipped now is
         # honoured by the next request rather than the next restart.
         self.tools.set_withheld_source(self._withheld_tool_names)
+        # The same switch, asked for its reason: the runtime-context notice and
+        # the refusal of a call to an advertised-but-withheld tool say which
+        # setting or credential puts the tool back.
+        self.tools.set_withheld_reason_source(self._withheld_tool_reasons)
+        # The constructor's list is the one off switch that cannot move while
+        # the process runs, so it stays a hard removal from the session array
+        # instead of becoming a notice.
+        self.tools.set_hard_withheld_source(self._hard_withheld_names)
 
         # Context engine — the single ContextAssembler.
         # Constructed here (after self.tools) so the factory can capture
@@ -465,7 +473,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 # rebuilt on a hot config apply, so anything captured now would be
                 # either missing or stale by the time a turn asks for it.
                 list_subagents=lambda: self.subagents.list_agents(),
-                get_tool_notices=self._mcp_tool_notices,
+                get_tool_notices=self._tool_notices,
                 # Read at call time: the board is wired further down this constructor.
                 get_session_notices=lambda key: self.task_board.turn_notes(key) if self.task_board else [],
                 now_fn=now_fn,

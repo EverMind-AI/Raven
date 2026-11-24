@@ -165,7 +165,12 @@ def _tool_names(get_tool_definitions: Callable[[], list[Any]] | None) -> list[st
 
 
 def live_dispatch_tools(get_tool_definitions: Callable[[], list[Any]] | None) -> tuple[str, ...]:
-    """Which dispatch paths this turn actually holds.
+    """Which dispatch paths the agent's tool list advertises.
+
+    The list is the session's frozen array inside a turn, so a tool a live
+    switch has turned off is still counted here; the runtime context reports it
+    as unavailable. A charter that narrows one dispatch is likewise not
+    reflected -- the charter's own prompt carries that restriction.
 
     Reads ``_tool_names`` rather than ``collect_tool_names`` because the two
     questions part company on an empty tool table. For the always-skills filter
@@ -189,7 +194,7 @@ def live_dispatch_tools(get_tool_definitions: Callable[[], list[Any]] | None) ->
 
 
 def collect_tool_names(get_tool_definitions: Callable[[], list[Any]] | None) -> list[str] | None:
-    """Names in the agent's live tool list, or ``None`` when there is nothing to gate on.
+    """Names in the agent's tool list (the session's frozen array inside a turn).
 
     Deliberately lossy: no tool awareness, a lookup that raised, and a successful
     empty result all read as ``None``, and callers must take that as "do not

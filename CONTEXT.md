@@ -115,9 +115,42 @@ produces nothing of its own and exists to put a question to this turn's Agent Pa
 merge what they answer (`ask_intake`, `ask_advice`, `ask_review`, `ask_salvage`, `ask_judge`,
 `ask_system_addendum`, `ask_archive`, `ask_select_tools`). Replacing a role therefore means two
 different things: a new way to produce, or a new rule for adjudicating what the products say.
-Frozen per Generation: the tool array is the prompt-cache prefix, so the set a turn runs on
-does not move between two of its model calls -- except for tools the turn's own `plugin` call
-connected, which join it on purpose (`ToolRegistry.admit_to_this_turn`).
+Frozen per Session: the tool array is the prompt-cache prefix, so the set a session
+assembles with does not move between its model calls or between its turns. It is
+captured on the session's first assembly and recaptured only at a refresh point -- a
+new session, a compaction (cashed by the next assembly), a `/clear`, or a release.
+Availability is judged at each refresh point: a tool the operator's switches have off,
+or whose credential or selected base is missing, does not enter the array then. A switch
+flipped after capture changes availability, not the array, and is reported in the
+runtime context; the next refresh re-judges it. The report has both directions: a tool in
+the array that is switched off gets an unavailable line, and a tool the capture excluded
+whose switch is put back is announced as usable with its definition copied from the
+array's own JSON -- the call already runs, because dispatch reads the live switches, but
+the model was never shown a schema it can now send. Which notes stand is read from the
+log, not kept beside it: at every assembly the registry is handed the subjects the
+replayed log's runtime-context blocks still hold, read back the way the engine reads
+them when it decides what to send. A refresh therefore retires a notice only when its
+array carries the subject or its switch is back on: a name the new array drops because
+its switch is still off keeps the unavailable line while the log holds one. The same
+read makes every lifecycle agree with the log -- a compaction keeps the log and its
+notes, a restart or a reopen after a release replays the stored log and speaks for what
+it holds, a log id adopted from another writer together with this copy's unsaved turns
+speaks for those turns, and a `/clear`, an empty log, speaks for nothing, so a tool off
+at its capture gets no notice, as in a new session. A tool that leaves the registry
+altogether while the log holds a note about it (a plugin removed, a runtime binding
+declined at a restart) is in no switch's reason, so a fourth lane reports it as no
+longer loaded, its calls answered as not available; if it is loaded again outside the
+array it is announced with its schema like a switch put back on. A key missing from the
+runtime context therefore means its condition was resolved, never that a refresh, a
+restart, a release or an unload left it unspoken for. Per-turn restrictions (a
+dispatch's charter, the turn freeze) are not availability and are not reported here. The
+per-server MCP notice follows the same rules, keyed by the server, and reports a server
+the log or the array still names as no longer loaded even when no MCP manager exists (MCP
+closed, or none configured after a restart). A call to a withheld tool the
+session holds a schema for is refused with the reason, and the refusal says whether this
+conversation's tool list still carries it: only a name in the frozen array stays in the
+list. A tool the turn's own `plugin` call connects is admitted to `offers` (reachable
+through `tool_call`) and joins the array at the next refresh.
 
 **Harness Curator** (`experimental/curator/`):
 Experimental generation of a worker's Harness from its task, the materials handed to it and
@@ -719,9 +752,12 @@ user declaring the agent owns nothing and is never refilled.
 Two things never carry ownership. The generic row (`Raven-General`) claims none whatever a config
 says, because it carries no capability bias and a line about it would prohibit the agent
 reading it from doing its own work. And the section is withheld entirely on a turn holding
-no dispatch tool — `spawn` and `run_subagent_dag` can both be withheld by
-`tools.disabledTools`, and a prohibition outliving every means of handing the work over
-leaves a request with no compliant action at all. Only the paths the turn does hold are named.
+no dispatch tool — a hard-subset deploy or a charter narrowing can leave the array without
+`spawn` and `run_subagent_dag`, and a prohibition outliving every means of handing the work
+over leaves a request with no compliant action at all. A `tools.disabledTools` switch
+flipped after capture keeps the schema and reports the tool unavailable in the runtime
+context instead; a tool off at the capture point never enters the array, and the next
+refresh re-judges it. Only the paths the turn does hold are named.
 _Avoid_: putting it in `description` — that copy is spliced into the tool descriptions, where
 the model reads it only once it is already choosing an agent.
 
@@ -925,9 +961,13 @@ Which interchangeable backend each web tool calls: `tools.web.search.provider` s
 `tavily`, `exa`, `firecrawl`, `keenable` or `deepseek`. Every endpoint is a literal in the tool,
 so a selection names a vendor and never a URL. `web_search` is registered whatever the config
 holds and *withheld* from the offered set while the selected vendor's key does not resolve
-(Keenable searches without one and is offered keyless, as Jina reads pages keyless), so a key
-pasted mid-run surfaces it without a restart -- read live from the vendor slot and, for Serper,
-from the pre-vendor leaf, in the order `WebToolsConfig.vendor_key` resolves them, and an empty
+(Keenable searches without one and is offered keyless, as Jina reads pages keyless). Whether
+its schema is in the session's frozen array is decided at the capture point: a key that
+resolved then put it there, and a key pasted after that capture makes it callable again
+without a restart -- the runtime context clears the notice -- but only joins the array at the
+next refresh. The key is read live from the vendor slot and, for Serper, from the pre-vendor
+leaf, in the order `WebToolsConfig.vendor_key`
+resolves them, and an empty
 slot is a revocation rather than a miss (except for a borrowing vendor, whose empty slot is the
 ordinary state and whose LLM provider key answers instead); `web_fetch` is always offered,
 falling back to Jina, which reads pages without a key. The two sub-agent launchers inherit the host's selection
@@ -2354,12 +2394,13 @@ whose change implies WORK rather than a different answer (constructing a provide
 an MCP handshake, moving a workspace) keeps its apply path -- a door, the pool's
 fingerprint cache, or the generation swap. Timing is asymmetric by design: a revocation
 binds the next read (a tightened deny pattern gates the very next tool call), while an
-addition to the model's tool array lands on the next turn -- `ToolRegistry.turn_scope`
-freezes both registry membership and the withheld set at turn entry, because the array
-is the prompt-cache prefix and must not move between two model calls of one turn. The one
-exception is an addition the turn's own call produced: `ToolRegistry.admit_to_this_turn`
-lets the tools a `plugin` connect or authorize registered join that turn from its next
-model call, at the cost of one rebuilt prefix.
+addition to the model's tool array is held until a session refresh -- `ToolRegistry` freezes
+the array on the session's first assembly and recaptures it only at a new session, a
+compaction, a `/clear`, or a release, because the array is the prompt-cache prefix.
+`ToolRegistry.turn_scope` still freezes registry membership and the withheld set at turn
+entry, so a mid-turn arrival cannot change what `offers` or `execute` admits. The turn's own
+`plugin` call is the one admission: `ToolRegistry.admit_to_this_turn` lets the tools it
+connected reach `tool_call` from the next model call, without moving the array.
 _Avoid_: reading `config.json` keys ad hoc outside this module; treating a live
 preference as a door (doors reconcile members after a durable write; this lane never
 touches member identity).

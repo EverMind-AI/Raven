@@ -53,7 +53,11 @@ class ActiveSkillsSegmentBuilder:
         ``tools.disabled_tools``.
 
         Unlike ``requires.bins`` / ``requires.env`` (process-static, resolved
-        in the registry) the tool set is live and hot-appliable, so it is
-        checked here, per turn, against the definitions actually being sent.
+        in the registry) the tool set is checked here, per turn, against the
+        definitions actually being sent. Inside a turn those are the session's
+        frozen array: a tool a live switch has turned off stays in it and is
+        reported as unavailable in the runtime context, so its skill stays
+        injected. The filter still drops a skill for a tool the session never
+        registered.
         """
         return filter_by_required_tools(skills, render.collect_tool_names(self._get_tool_definitions))

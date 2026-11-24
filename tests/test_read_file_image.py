@@ -1514,6 +1514,7 @@ def test_the_loop_hands_the_verdict_to_the_context_engine(monkeypatch) -> None:
     engine = _Engine()
     loop.context_engine = engine
     loop.harness = SimpleNamespace(memory=engine)
+    loop.tools = SimpleNamespace(bind_session_revision=lambda *a, **k: None)
     monkeypatch.setattr(AgentLoop, "_context_messages_for_session", lambda self, s: [])
     monkeypatch.setattr(AgentLoop, "_make_token_budget", lambda self, s=None: None)
     loop._last_injected_skill_ids = None
@@ -1556,6 +1557,7 @@ def test_the_verdict_is_asked_of_the_routed_model_not_the_configured_one(monkeyp
     engine = _Engine()
     loop.context_engine = engine
     loop.harness = SimpleNamespace(memory=engine)
+    loop.tools = SimpleNamespace(bind_session_revision=lambda *a, **k: None)
     monkeypatch.setattr(AgentLoop, "_context_messages_for_session", lambda self, s: [])
     monkeypatch.setattr(AgentLoop, "_make_token_budget", lambda self, s=None: None)
     loop._last_injected_skill_ids = None
