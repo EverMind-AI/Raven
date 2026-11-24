@@ -1588,6 +1588,38 @@ async def test_an_answer_names_no_source_when_settings_decided_nothing(monkeypat
     assert out["success"] and "selection" not in out
 
 
+async def test_the_selection_comes_from_the_settings_the_request_used(monkeypatch, tmp_path):
+    """A live section is read per call, so the explanation of a request must
+    come from the snapshot that request was built from: read again after the
+    request went out, it may name another model or quality than the one sent."""
+    from raven.config.schema import ImageToolConfig
+
+    named = ImageToolConfig(model="openai/gpt-image-2", quality="low", api_key="k")
+    unnamed = ImageToolConfig(model="", quality="", api_key="k")
+    state = {"named": True}
+
+    def source():
+        return named if state["named"] else unnamed
+
+    def handler(request):
+        # The section is rewritten while the request is in flight.
+        state["named"] = False
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+
+    tool = ImageGenerateTool(source, workspace=tmp_path)
+    out = json.loads(await tool.execute("a kitten", model="openai/gpt-image-2.5-sunburst", quality="high"))
+
+    assert out["model"] == "openai/gpt-image-2"
+    assert out["selection"] == {
+        "model": {"requested": "openai/gpt-image-2.5-sunburst", "sent": "openai/gpt-image-2", "source": "settings"},
+        "quality": {"requested": "high", "sent": "low", "source": "settings"},
+    }
+
+
 async def test_a_batch_carries_the_selection_of_each_picture(monkeypatch, tmp_path):
     """Each picture of a batch is its own call, so each carries what Settings
     decided for it rather than the batch saying it once for all of them."""

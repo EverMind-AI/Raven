@@ -793,7 +793,12 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             return 660.0
         return None
 
-    def effective_quality(self, requested: str | None, model_id: str | None = None) -> str | None:
+    def effective_quality(
+        self,
+        requested: str | None,
+        model_id: str | None = None,
+        config: "MediaToolConfig | None" = None,
+    ) -> str | None:
         """The quality a call sends: Settings' where it names one, else the request's.
 
         ``medium`` when neither says and the model is gpt-image-2, and ``None`` for a
@@ -804,9 +809,13 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         that caches on what it asked for has to key on what was actually sent: the
         deck's generator keyed on its own default while the host sent Settings' value,
         so a quality changed in Settings was answered from the old cache.
+
+        ``config`` is the Settings snapshot the caller already read for the request
+        it is asking about; a live section is read per call, so a second read may
+        answer with a different one.
         """
-        config = self._config
-        model_id = model_id or self._model(None)
+        config = self._config if config is None else config
+        model_id = model_id or (getattr(config, "model", "") or self.default_model)
         if "quality" in getattr(config, "model_fields_set", set()) and config.quality:
             quality = config.quality
         elif requested is None:
@@ -921,10 +930,20 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         return json.dumps(answer_body, ensure_ascii=False)
 
     async def _generate_one(self, spec: dict[str, Any], stem: str, model: str | None, output_dir: str | None) -> str:
-        """One picture's answer, with what Settings decided said on it."""
-        return self._explain_selection(await self._generate_one_answer(spec, stem, model, output_dir), spec, model)
+        """One picture's answer, with what Settings decided said on it.
 
-    def _explain_selection(self, answer: str, spec: dict[str, Any], model: str | None) -> str:
+        The section is read once here and the same snapshot answers both the
+        request and the explanation of it: a live section is read per call, so
+        a second read may name another model or quality than the one the
+        outgoing request was built from.
+        """
+        config = self._config
+        answer = await self._generate_one_answer(spec, stem, model, output_dir, config)
+        return self._explain_selection(answer, spec, model, config)
+
+    def _explain_selection(
+        self, answer: str, spec: dict[str, Any], model: str | None, config: "MediaToolConfig | None"
+    ) -> str:
         """Say which of the call's model and quality Settings decided, where it did.
 
         The answer carried the outgoing model and quality and nothing about where
@@ -937,7 +956,6 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         body = json.loads(answer)
         if not body.get("success"):
             return answer
-        config = self._config
         selection: dict[str, Any] = {}
         if model and getattr(config, "model", ""):
             selection["model"] = {"requested": model, "sent": body.get("model"), "source": "settings"}
@@ -950,14 +968,18 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         return json.dumps(body, ensure_ascii=False)
 
     async def _generate_one_answer(
-        self, spec: dict[str, Any], stem: str, model: str | None, output_dir: str | None
+        self,
+        spec: dict[str, Any],
+        stem: str,
+        model: str | None,
+        output_dir: str | None,
+        config: "MediaToolConfig | None",
     ) -> str:
         prompt = str(spec.get("prompt") or "")
         images = list(spec.get("images") or []) or None
         aspect_ratio = spec.get("aspect_ratio") or None
         from raven.config.schema import media_provider
 
-        config = self._config
         runs_on = media_provider(config)
         minimax = runs_on in _MINIMAX_PROVIDERS
         model_id = getattr(config, "model", "") or model or (_MINIMAX_IMAGE_MODEL if minimax else self.default_model)
@@ -970,7 +992,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             model_id = wire_model(model_id, client_provider=runs_on)
         if minimax:
             return await self._via_minimax(model_id, prompt, images, aspect_ratio, output_dir, stem)
-        quality = self.effective_quality(spec.get("quality"), model_id)
+        quality = self.effective_quality(spec.get("quality"), model_id, config)
         # The Images API takes the frame only from the families known to honour
         # it; the chat route takes it from any model, as image_config below. A
         # volces base may serve the family behind an inference endpoint id
