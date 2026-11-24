@@ -210,9 +210,7 @@ class TestSplit:
         """The union again, from the other side: a tail share big enough to
         cover the whole history keeps all of it, count floor or not."""
         ledger = MessageLedger(_conversation(10))
-        # ``model_construct`` bypasses the shipped-share pin: this case needs a
-        # tail share large enough to cover the whole history.
-        cfg = ContextCompactionConfig.model_construct(retain_ratio=0.40, tail_keep_messages=2, tail_keep_ratio=0.39)
+        cfg = ContextCompactionConfig(retain_ratio=0.40, tail_keep_messages=2, tail_keep_ratio=0.39)
         ranges = RetentionPlanner(cfg).split(ledger, _plan(window=100_000, cfg=cfg), generation=1)
         assert ranges.tail.start == 0
         assert len(ranges.compact) == 0

@@ -254,9 +254,7 @@ def test_the_target_drops_until_one_compaction_is_worth_running() -> None:
     """On a small window the plain target is too close to the trigger to buy
     much, so it is lowered until the round trip reclaims ``minReclaimTokens``.
     Without it a session at the line would compact every single turn."""
-    # Bypasses the shipped-share pin: the clamp needs a share large enough to
-    # put the plain target within ``minReclaimTokens`` of the trigger.
-    cfg = ContextCompactionConfig.model_construct(retain_ratio=0.79)
+    cfg = ContextCompactionConfig(retain_ratio=0.79)
     plan = _plan(TriggerPolicy(cfg), window=32_768, prompt_tokens=32_000)
     assert plan.reclaim_clamped is True
     assert plan.trigger_tokens - plan.target_tokens == cfg.min_reclaim_tokens
@@ -301,35 +299,47 @@ def test_the_inputs_travel_with_the_verdict(policy: TriggerPolicy) -> None:
 
 class TestConfigValidation:
     def test_a_target_at_or_above_the_trigger_is_refused(self) -> None:
-        """The shipped retain share is 0.10, so a trigger floor at or below it
+        """The default retain share is 0.10, so a trigger floor at or below it
         leaves nothing for a compaction to reclaim."""
         with pytest.raises(ValidationError, match="retainRatio"):
             ContextCompactionConfig(trigger_ratio_min=0.05)
 
-    def test_explicit_shares_are_replaced_by_the_shipped_values(self) -> None:
-        cfg = ContextCompactionConfig(retain_ratio=0.40, tail_keep_ratio=0.25)
-        assert (cfg.retain_ratio, cfg.tail_keep_ratio) == (0.10, 0.04)
+    def test_an_explicit_pair_is_honored(self) -> None:
+        cfg = ContextCompactionConfig(retain_ratio=0.30, tail_keep_ratio=0.20)
+        assert (cfg.retain_ratio, cfg.tail_keep_ratio) == (0.30, 0.20)
 
-    def test_a_tail_only_override_is_ignored(self) -> None:
-        cfg = ContextCompactionConfig(tail_keep_ratio=0.25)
-        assert (cfg.retain_ratio, cfg.tail_keep_ratio) == (0.10, 0.04)
+    def test_a_tail_only_override_keeps_the_default_retain(self) -> None:
+        cfg = ContextCompactionConfig(tail_keep_ratio=0.06)
+        assert (cfg.retain_ratio, cfg.tail_keep_ratio) == (0.10, 0.06)
 
-    def test_a_retain_only_override_is_ignored(self) -> None:
-        cfg = ContextCompactionConfig(retain_ratio=0.20)
-        assert (cfg.retain_ratio, cfg.tail_keep_ratio) == (0.10, 0.04)
+    def test_a_retain_only_override_keeps_the_default_tail(self) -> None:
+        cfg = ContextCompactionConfig(retain_ratio=0.30)
+        assert (cfg.retain_ratio, cfg.tail_keep_ratio) == (0.30, 0.04)
 
-    def test_a_pair_with_no_overrides_is_the_shipped_pair(self) -> None:
+    def test_a_pair_with_no_overrides_is_the_default_pair(self) -> None:
         cfg = ContextCompactionConfig()
         assert (cfg.retain_ratio, cfg.tail_keep_ratio) == (0.10, 0.04)
 
-    def test_a_programmatic_value_is_still_typed_as_a_ratio(self) -> None:
-        """A config file is rewritten before this model validates, so any value
-        there is replaced; a direct construction still has to name a ratio.
-        The relation between two ignored values cannot be checked and is not."""
+    def test_a_value_out_of_the_ratio_domain_is_refused(self) -> None:
         with pytest.raises(ValidationError, match="retain_ratio"):
             ContextCompactionConfig(retain_ratio=-0.1)
         with pytest.raises(ValidationError, match="tail_keep_ratio"):
             ContextCompactionConfig(tail_keep_ratio=1.5)
+
+    def test_a_tail_larger_than_the_target_is_refused(self) -> None:
+        with pytest.raises(ValidationError, match="tailKeepRatio"):
+            ContextCompactionConfig(tail_keep_ratio=0.5)
+
+    def test_a_tail_equal_to_the_target_is_refused(self) -> None:
+        """The boundary is closed: a tail the same size as the target cannot be
+        compacted into it either. The 0.10 default makes this pair easy to
+        write by hand now that both values look natural."""
+        with pytest.raises(ValidationError, match="tailKeepRatio"):
+            ContextCompactionConfig(retain_ratio=0.10, tail_keep_ratio=0.10)
+
+    def test_a_tail_just_below_the_target_is_accepted(self) -> None:
+        cfg = ContextCompactionConfig(retain_ratio=0.10, tail_keep_ratio=0.09)
+        assert (cfg.retain_ratio, cfg.tail_keep_ratio) == (0.10, 0.09)
 
     def test_an_inverted_ratio_band_is_refused(self) -> None:
         with pytest.raises(ValidationError, match="triggerRatioMin"):

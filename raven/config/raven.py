@@ -318,9 +318,8 @@ class ContextCompactionConfig(_Base):
     fewer compactions, each discarding more. The target never falls below
     ``minRetainTokens``.
 
-    Ignored; the shipped value is fixed. The key stays accepted so a config
-    written against an older release still parses, but whatever it names is
-    replaced at load -- see ``_pin_shipped_ratios``.
+    An explicit value is honored at load; the 0.10 default applies only when
+    the file does not name the key.
     """
 
     min_retain_tokens: int = Field(default=32_768, ge=0)
@@ -333,6 +332,11 @@ class ContextCompactionConfig(_Base):
     compaction reports itself exhausted. The floor keeps the target above that
     incompressible mass; the ``minReclaimTokens`` clamp still lowers it on a
     window too small to fund the floor. ``0`` restores a pure share.
+
+    It is only a floor: a ``retainRatio`` whose share computes above it is
+    never lowered, while one that computes below it is raised to this value.
+    At a 32K window an explicit 0.40 computes 13,107 tokens and is raised to
+    32,768.
     """
 
     min_reclaim_tokens: int = Field(default=16_384, ge=0)
@@ -366,15 +370,14 @@ class ContextCompactionConfig(_Base):
     satisfies both. A count alone leaves nothing behind when recent messages
     are huge; a share alone can leave half a message when they are huger.
 
-    The shipped 4% is the largest two-decimal share that still clears the
+    The default 0.04 is the largest two-decimal share that still clears the
     target at every tabulated window once ``minRetainTokens`` floors it. The
     fixed prompt and the checkpoint are roughly constant, so a larger share
     pushes the protected tail past the target on the smaller windows and no
     compaction can reach it: 0.05 fails at 262K, 0.09 at 512K and 1M.
 
-    Ignored; the shipped value is fixed. The key stays accepted so a config
-    written against an older release still parses, but whatever it names is
-    replaced at load -- see ``_pin_shipped_ratios``.
+    An explicit value is honored at load; the default applies only when the
+    file does not name the key.
     """
 
     boundary: Literal["tool_pair", "turn"] = "tool_pair"
@@ -397,21 +400,6 @@ class ContextCompactionConfig(_Base):
     summary: ContextSummaryConfig = Field(default_factory=ContextSummaryConfig)
     """What replaces the messages removal takes out -- the rung above pruning,
     and the only one that calls a model."""
-
-    @model_validator(mode="after")
-    def _pin_shipped_ratios(self) -> "ContextCompactionConfig":
-        """Replace the two configured shares with the shipped values.
-
-        The target and the protected tail only make sense as a pair chosen
-        against the shipped prompt shape, so neither is a deployment setting:
-        a value in the file is accepted for compatibility and then ignored.
-        Defined before ``_check_ratios`` so the relation checks run on the
-        pinned pair -- otherwise a legacy tail-only file would fail the tail
-        bound before its retain default was replaced.
-        """
-        self.retain_ratio = SHIPPED_COMPACTION_RETAIN_RATIO
-        self.tail_keep_ratio = SHIPPED_COMPACTION_TAIL_KEEP_RATIO
-        return self
 
     @model_validator(mode="after")
     def _check_ratios(self) -> "ContextCompactionConfig":

@@ -145,10 +145,9 @@ def _budget(window: int = WINDOW, model: str = "stub") -> TokenBudget:
 def _config(**compacting) -> ContextConfig:
     # These cases pin the geometry they were written against; the shipped
     # default is exercised by the trigger, retention and defaults suites.
-    # ``model_construct`` bypasses the shipped-share pin the config applies.
     compacting.setdefault("retain_ratio", 0.40)
     compacting.setdefault("tail_keep_ratio", 0.25)
-    return ContextConfig(history=ContextHistoryConfig(compacting=ContextCompactionConfig.model_construct(**compacting)))
+    return ContextConfig(history=ContextHistoryConfig(compacting=ContextCompactionConfig(**compacting)))
 
 
 def _fold_only() -> ContextConfig:
