@@ -213,6 +213,18 @@ def test_estimate_counts_reasoning_fields(
     assert tokens.estimate_message_tokens(with_reasoning) > 10_000
 
 
+def test_a_filed_scratch_costs_the_tokens_it_will_be_replayed_as():
+    """The scratch is filed beside the user's words and joined back when the
+    message is replayed, so the estimate has to count it."""
+    from raven.context_engine.scratch import TURN_SCRATCH_FIELD
+
+    base = {"role": "user", "content": "the words"}
+    filed = {**base, TURN_SCRATCH_FIELD: "r" * 5_000}
+
+    assert tokens.estimate_message_tokens(filed) > tokens.estimate_message_tokens(base)
+    assert tokens.estimate_message_tokens(filed) > 1_000
+
+
 def test_estimate_prompt_tokens_fallback_counts_tool_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

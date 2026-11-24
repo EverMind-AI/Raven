@@ -1730,8 +1730,14 @@ message, the session write keeps the user's words in `content` and files the lin
 them as `runtime_context`, and the history projection, `HistoryTrimmer.history_from_ids`,
 joins them back through `replayed_content` the way they were
 sent, so a later turn replays the block byte for byte and the provider's cached prefix
-still matches through it. The scent menu rides in the same paragraph when the message is
-sent but is not filed. Tool notices are sent as changes: a plugin's line goes out when it
+still matches through it. The scent menu rides in the same paragraph as the lines and is
+filed with them, so the replay carries it too. The Turn Scratch rides at the end of the
+user message and is filed the same way, as `turn_scratch`; it is the recall of the turn it
+was asked in, so it cannot be re-derived on a later turn, and the stored `content` keeps
+the user's words alone so the transcript and the novelty window read the question and not
+the recall. Every join is located by what identifies it, never by position, so a notice put
+in front of the message after assembly moves the block off the content's start without
+breaking the replay. Tool notices are sent as changes: a plugin's line goes out when it
 differs from what the replayed blocks already say, a plugin no longer noted gets a cleared
 line, and a compaction that takes the blocks out has them told again; an overflow reclaim,
 which trims the history after the question was built, puts what it took back into the

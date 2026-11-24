@@ -151,13 +151,13 @@ class TestTheEnvelopeRecordsItsLines:
         assert message[RUNTIME_CONTEXT_KEY] == render.build_runtime_context(clock, "cli", "x")
         assert message["content"] == with_runtime_context(message[RUNTIME_CONTEXT_KEY], "hello")
 
-    async def test_the_scent_menu_is_sent_but_not_recorded(self, tmp_path: Path) -> None:
+    async def test_the_scent_menu_is_sent_and_recorded_with_the_block(self, tmp_path: Path) -> None:
         clock = _Clock()
         message = await _envelope(_plain_engine(tmp_path, clock, scent=_Scent()))
 
         assert "Possibly relevant skills" in message["content"]
-        assert message[RUNTIME_CONTEXT_KEY] == render.build_runtime_context(clock, "cli", "x")
-        assert "Possibly relevant skills" not in message[RUNTIME_CONTEXT_KEY]
+        lines = render.build_runtime_context(clock, "cli", "x")
+        assert message[RUNTIME_CONTEXT_KEY] == f"{lines}\nPossibly relevant skills:\n- one: d"
 
     async def test_a_block_list_envelope_records_the_same_lines(self, tmp_path: Path) -> None:
         from PIL import Image

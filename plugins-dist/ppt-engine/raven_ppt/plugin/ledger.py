@@ -57,7 +57,7 @@ SUMMARY_MARKER = "[Context summary — earlier steps were compacted to fit the c
 # Spelled here so the plugin does not import trunk internals; the test suite pins
 # the spellings against the trunk.
 TURN_SCRATCH_KEY = "_turn_scratch"
-TURN_SCRATCH_TAG = "[Turn Scratch — recalled for this turn only, not conversation history]"
+TURN_SCRATCH_TAG = "[Turn Scratch — recalled for the turn it was asked in]"
 RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
 
 #: The ledger quotes the user, never trims them; this is the safety stop for a
