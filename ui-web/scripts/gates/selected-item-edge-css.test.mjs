@@ -56,6 +56,20 @@ describe('the card that marks the selected row', () => {
     expect(card?.get('pointer-events')).toBe('none')
   })
 
+  it('starts where the rows start, not at the padding box edge', () => {
+    const card = decls('.two-pane-sel')
+    /* The list pads its sides so a row's hover ground stops short of the
+       scrollbar gutter, and an absolutely positioned child is sized by that
+       padding box. The card must step in by the same padding, or it covers 5px
+       of gutter on each side and reads wider than the row it marks. */
+    const padding = decls('.two-pane-list')?.get('padding')?.trim().split(/\s+/) ?? []
+    /* CSS shorthand: one value is every side, two or three put the horizontal
+       value second. */
+    const side = padding.length === 1 ? padding[0] : padding[1]
+    expect(card?.get('left')).toBe(side)
+    expect(card?.get('right')).toBe(side)
+  })
+
   it('does not move for a reader who asked for no motion', () => {
     const still = rules(/\.two-pane-sel/).find(([, body]) => body.includes('transition: none'))
     expect(still).toBeTruthy()

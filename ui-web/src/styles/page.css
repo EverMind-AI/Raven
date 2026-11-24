@@ -5112,7 +5112,10 @@ details[open] summary { margin-bottom: 8px; }
    reader is looking at is the row's own text -- and it carries no pointer
    events, so the row under it is still the row to click. */
 .two-pane-sel {
-  position: absolute; left: 0; right: 0; top: 0; z-index: -1;
+  /* The list's padding box is the card's containing block, but the rows sit in
+     its content box: zero offsets would make the card 5px wider on each side
+     than the row it marks. */
+  position: absolute; left: 5px; right: 5px; top: 0; z-index: -1;
   border-radius: 8px; background: var(--raised);
   box-shadow: inset 0 0 0 1px var(--line);
   pointer-events: none;
