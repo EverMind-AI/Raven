@@ -202,14 +202,74 @@ _CASES = (
         False,
         False,
     ),
+    _Case(
+        "empty version",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "version": ""},
+        True,
+        True,
+    ),
+    _Case(
+        "empty description",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "description": ""},
+        True,
+        True,
+    ),
+    _Case(
+        "empty homepage",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "homepage": ""},
+        True,
+        True,
+    ),
+    _Case(
+        "empty repository",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "repository": ""},
+        True,
+        True,
+    ),
+    _Case(
+        "empty license",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "license": ""},
+        True,
+        True,
+    ),
+    _Case(
+        "empty author object",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "author": {}},
+        True,
+        True,
+    ),
+    _Case(
+        "empty author name",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "author": {"name": ""}},
+        True,
+        True,
+    ),
+    _Case(
+        "empty author email",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "author": {"email": ""}},
+        True,
+        True,
+    ),
+    _Case(
+        "empty author url",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "author": {"url": ""}},
+        True,
+        True,
+    ),
+    _Case(
+        "null extensions",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "extensions": None},
+        False,
+        True,
+    ),
 )
 
-_DIVERGENT = frozenset({"unknown top-level field", "extensions is not an object"})
-"""The two cases the specification lets through where the schema refuses.
+_DIVERGENT = frozenset({"unknown top-level field", "extensions is not an object", "null extensions"})
+"""The three cases the specification lets through where the schema refuses.
 
-An unknown top-level field and a non-object ``extensions`` field are
-reported and ignored, so the rest of the manifest still loads. Every other
-case answers the schema the same way.
+An unknown top-level field and a non-object ``extensions`` field -- which
+includes an explicit ``null`` -- are reported and ignored, so the rest of
+the manifest still loads. Every other case answers the schema the same way.
 """
 
 
@@ -270,7 +330,7 @@ def test_the_only_departures_from_the_official_schema_are_the_documented_ones(
     tmp_path: Path,
     official_validator: Draft202012Validator,
 ) -> None:
-    """A corpus-wide statement: the two sides differ on exactly the two
+    """A corpus-wide statement: the two sides differ on exactly the three
     cases the specification lets through, and on nothing else."""
     differences = {
         case.label
