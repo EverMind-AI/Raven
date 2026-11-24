@@ -3205,9 +3205,19 @@ def borrow_media_credentials(tool: MediaToolConfig, providers: Any) -> None:
         tool.extra_headers = headers if api_base else {}
         return
     if runs_on and not tool.api_key:
-        openrouter = providers.get(_OPENROUTER)
-        if openrouter and openrouter.api_key:
-            tool.api_key = openrouter.api_key
+        from raven.config.update_providers import provider_connection
+
+        try:
+            openrouter = providers.get(_OPENROUTER)
+        except Exception:  # noqa: BLE001 - an undeclared section is validated only when read
+            openrouter = None
+        # Read through the same reader the named-provider branch above uses, so a
+        # section whose flat key is an environment variable lends the variable's
+        # value rather than nothing. A variable named but unset reads as no key,
+        # and the tool keeps its own fallback.
+        _, api_key, _ = provider_connection(_OPENROUTER, openrouter)
+        if api_key:
+            tool.api_key = api_key
 
 
 def media_section_class(kind: str) -> type[MediaToolConfig]:

@@ -300,3 +300,38 @@ def test_a_negative_mode_cap_is_refused_too() -> None:
         AcpModeConfig(name="fast", max_tool_iterations=-1)
     assert AcpModeConfig(name="fast", max_tool_iterations=0).max_tool_iterations == 0
     assert AcpModeConfig(name="fast").max_tool_iterations is None
+
+
+def test_a_media_tool_borrows_an_environment_backed_openrouter_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The key the media tools borrow may live in the environment.
+
+    Reading the OpenRouter section's flat key answered "" for a section that
+    names a variable, so a configured OpenRouter key reached the chat tools
+    and not the image or video ones.
+    """
+    from raven.config.schema import Config
+
+    monkeypatch.setenv("RAVEN_OPENROUTER_KEY", "sk-or-env")
+    payload = {
+        "tools": {"media": {"image": {"model": "m"}}},
+        "providers": {"openrouter": {"apiKeyEnv": "RAVEN_OPENROUTER_KEY"}},
+    }
+
+    media = Config.model_validate(payload).effective_media_config()
+
+    assert media.image.api_key == "sk-or-env"
+
+
+def test_a_media_tool_borrows_nothing_when_the_variable_is_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A variable named but unset is no key: the tool keeps its own fallback."""
+    from raven.config.schema import Config
+
+    monkeypatch.delenv("RAVEN_OPENROUTER_KEY", raising=False)
+    payload = {
+        "tools": {"media": {"image": {"model": "m"}}},
+        "providers": {"openrouter": {"apiKeyEnv": "RAVEN_OPENROUTER_KEY"}},
+    }
+
+    media = Config.model_validate(payload).effective_media_config()
+
+    assert media.image.api_key == ""
