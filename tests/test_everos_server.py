@@ -19,6 +19,7 @@ from raven_everos.server import (
     _everos_executable,
     ensure_everos_server,
 )
+from tests._platform import chmod_is_enforced
 
 
 def _make_executable(path):
@@ -1436,7 +1437,7 @@ class TestAnUnwritableRootFailsAsAStartFailure:
     situation the user can act on: fix the permissions and run it again.
     """
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="chmod 0o555 does not block root")
+    @pytest.mark.skipif(not chmod_is_enforced(), reason="chmod 0o555 does not block access here (root or Windows)")
     def test_it_surfaces_as_runtime_error(self, tmp_path, monkeypatch) -> None:
         from raven_everos import server as _server
 

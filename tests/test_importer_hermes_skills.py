@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -13,6 +12,7 @@ from raven.importer.skills import DiscoveredSkill, SkillOrigin, package_hash
 from raven.importer.skills.hermes import HermesSkillSource
 from raven.importer.skills.installer import install_skills
 from raven.importer.state import ImportState
+from tests._platform import chmod_is_enforced
 
 
 def _skill(
@@ -68,7 +68,7 @@ def test_package_hash_matches_hermes_digest(tmp_path: Path) -> None:
     assert package_hash(_golden_skill(tmp_path)) == "61f145ac5c0353877e5e28fe8bf34a01"
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="chmod 000 does not block root")
+@pytest.mark.skipif(not chmod_is_enforced(), reason="chmod 000 does not block a read here (root or Windows)")
 def test_unreadable_file_aborts_the_whole_hash(tmp_path: Path) -> None:
     """Pins abort-on-first-failure, which a per-file `continue` would silently change.
 
@@ -514,7 +514,7 @@ async def test_a_rerun_does_not_collide_with_its_own_earlier_install(tmp_path: P
     assert [p.name for p in (ws / "skills" / "hermes").iterdir()] == ["coach"]
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="chmod 000 does not block root")
+@pytest.mark.skipif(not chmod_is_enforced(), reason="chmod 000 does not block a read here (root or Windows)")
 async def test_partial_copy_is_removed_so_the_next_run_retries(tmp_path: Path) -> None:
     """copytree fails partway with SKILL.md already written, so a leftover
     target would be both a pool entry missing its attachments and, on the next
