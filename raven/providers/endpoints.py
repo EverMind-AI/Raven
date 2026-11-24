@@ -50,6 +50,8 @@ import os
 from dataclasses import dataclass, replace
 from typing import Any
 
+from raven.providers.errors import MissingCredentialsError
+
 
 @dataclass(frozen=True)
 class ResolvedEndpoint:
@@ -143,8 +145,6 @@ def resolve_api_key_env(section: Any, *, provider: str = "") -> str:
     diagnostics ``rpc.bootstrap`` emits; the section itself does not know the
     name it is stored under.
     """
-    from raven.providers.auth import MissingCredentialsError
-
     name = _api_key_env_name(section)
     if not name:
         return ""

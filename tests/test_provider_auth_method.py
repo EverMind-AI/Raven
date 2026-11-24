@@ -666,3 +666,16 @@ def test_key_refusal_normalizes_hyphen_and_case() -> None:
     """Matched the same way every other provider-name comparison is made."""
     assert key_refusal("Vertex-AI") == key_refusal("vertex_ai")
     assert key_refusal("BEDROCK") == key_refusal("bedrock")
+
+
+def test_the_missing_credentials_error_is_one_class_wherever_it_is_imported_from() -> None:
+    """The class lives in a leaf so the two provider modules stop being a cycle.
+
+    It is re-exported from ``providers.auth`` because that is where the callers
+    import it from, so the two names have to be the same class -- an ``except``
+    clause catching one and not the other is a refusal that does not refuse.
+    """
+    from raven.providers.auth import MissingCredentialsError as FromAuth
+    from raven.providers.errors import MissingCredentialsError as FromErrors
+
+    assert FromAuth is FromErrors
