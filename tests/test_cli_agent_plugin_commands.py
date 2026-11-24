@@ -547,11 +547,16 @@ def test_check_reports_a_changed_package_as_stale(env: _Env) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _write_mcp_config(package: Path, servers: dict) -> None:
+def _write_mcp_config(
+    package: Path,
+    servers: dict,
+    *,
+    schema: str = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+) -> None:
     (package / "mcp.json").write_text(
         json.dumps(
             {
-                "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+                "$schema": schema,
                 "mcpServers": servers,
             }
         ),
@@ -566,6 +571,11 @@ def test_list_marks_a_packages_mcp_servers_as_not_enabled(env: _Env) -> None:
 
     assert result.exit_code == 0, result.stdout
     assert "1 not enabled" in result.stdout
+
+    mcp = _json_payload(_run(env, "list", "--json"))["packages"][0]["mcp"]
+    assert mcp["allowed"] is False
+    # ``running`` is the deprecated alias of ``allowed``: one fact, one value.
+    assert mcp["allowed"] == mcp["running"]
 
 
 def test_list_marks_an_opted_in_packages_mcp_servers_as_enabled(env: _Env) -> None:
@@ -605,6 +615,24 @@ def test_list_json_calls_the_opt_in_allowed(env: _Env) -> None:
     mcp = _json_payload(result)["packages"][0]["mcp"]
     assert mcp["allowed"] is True
     assert mcp["running"] is True
+    assert mcp["disabled"] == ""
+
+
+def test_list_json_reports_why_a_packages_mcp_is_disabled(env: _Env) -> None:
+    _write_mcp_config(
+        env.package,
+        {"demo": {"type": "stdio", "command": "npx"}},
+        schema="https://agent-plugins.org/schemas/2.0.0/mcp.schema.json",
+    )
+
+    result = _run(env, "list", "--json")
+
+    assert result.exit_code == 0, result.stdout
+    mcp = _json_payload(result)["packages"][0]["mcp"]
+    assert isinstance(mcp["disabled"], str)
+    assert mcp["disabled"]
+    assert "2.0.0" in mcp["disabled"]
+    assert mcp["servers"] == []
 
 
 def test_list_leaves_out_a_server_the_host_already_configures(env: _Env) -> None:
