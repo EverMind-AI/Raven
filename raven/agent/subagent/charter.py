@@ -413,10 +413,10 @@ class CharterParticipant(AgentParticipant):
     __slots__ = ()
 
     async def intake(self, text: str, step: StepView) -> Any:
-        return _generated_answer("intake", text, _step_payload(step))
+        return _generated_step_answer("intake", step, text)
 
     async def advise(self, step: StepView) -> Any:
-        answer = _generated_answer("advise", _step_payload(step))
+        answer = _generated_step_answer("advise", step)
         if isinstance(answer, str) and answer and _transcript_says(getattr(step, "transcript", ()), answer):
             # The function is stateless: asked at every phase, it answers the
             # same words. They have been delivered once the transcript carries
@@ -427,7 +427,7 @@ class CharterParticipant(AgentParticipant):
         return answer
 
     async def salvage(self, step: StepView) -> Any:
-        return _generated_answer("salvage", _step_payload(step))
+        return _generated_step_answer("salvage", step)
 
     def judge(
         self,
@@ -492,7 +492,14 @@ policy that has to decide *which* entry to drop is more machinery than the
 thing it manages."""
 
 
-def _generated_answer(name: str, *args: Any) -> Any:
+def _generated_function(name: str) -> Any:
+    """The compiled function for one verb, or none.
+
+    Resolved before the step is turned into a payload. A verb this dispatch
+    generated nothing for answers nothing, and a source the gate refuses can
+    never read a payload either -- it is cached as refused and stays refused --
+    so building the payload for either is a turn paid for nothing.
+    """
     charter = current_charter()
     source = dict(charter.functions).get(name) if charter is not None else None
     if not source:
@@ -512,9 +519,21 @@ def _generated_answer(name: str, *args: Any) -> Any:
         _COMPILED[key] = compiled
     if compiled is False:
         return None
+    return compiled
+
+
+def _generated_step_answer(name: str, step: Any, *extra: Any) -> Any:
+    """What one generated function answers for a step, or nothing.
+
+    The step reaches the function as plain data, and the plain data is built
+    only once the verb is known to have a function that can read it.
+    """
+    compiled = _generated_function(name)
+    if compiled is None:
+        return None
     from raven.agent.subagent.charter_code import run_function
 
-    return run_function(compiled, *args)
+    return run_function(compiled, *extra, _step_payload(step))
 
 
 def _code_refusals(
