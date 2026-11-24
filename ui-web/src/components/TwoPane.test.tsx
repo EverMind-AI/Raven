@@ -83,6 +83,34 @@ describe('the card that marks the selected row', () => {
     expect(card()?.style.transform).toBe('translateY(0px)')
   })
 
+  it('takes the card away when the selected row leaves the list', () => {
+    place(42, 40)
+    const rows = (names: string[], current: string | null) => names.map((n) => (
+      <TwoPaneRow key={n} current={n === current} name={n} onOpen={() => {}} />
+    ))
+    const { rerender } = render(<TwoPaneList>{rows(['first', 'second'], 'first')}</TwoPaneList>)
+    expect(card()).not.toBeNull()
+    /* The row the card is on is gone; the row left behind is not selected, so
+       the card must not stay behind on it. */
+    rerender(<TwoPaneList>{rows(['second'], null)}</TwoPaneList>)
+    expect(card()).toBeNull()
+  })
+
+  it('keeps the card when a row under the selected one leaves', () => {
+    place(42, 40)
+    const rows = (names: string[], current: string | null) => names.map((n) => (
+      <TwoPaneRow key={n} current={n === current} name={n} onOpen={() => {}} />
+    ))
+    const { rerender } = render(<TwoPaneList>{rows(['first', 'second', 'third'], 'first')}</TwoPaneList>)
+    expect(card()?.style.transform).toBe('translateY(42px)')
+    /* A row below the selected one leaves. Its unmount reports that it has no
+       box, and only the row the card is on may take the card away: the
+       selected row did not move, so it has nothing new to report. */
+    rerender(<TwoPaneList>{rows(['first', 'second'], 'first')}</TwoPaneList>)
+    expect(card()).not.toBeNull()
+    expect(card()?.style.transform).toBe('translateY(42px)')
+  })
+
   it('is not drawn when nothing is selected', () => {
     place(42, 40)
     render(
