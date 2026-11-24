@@ -1634,6 +1634,7 @@ async def test_a_batch_carries_the_selection_of_each_picture(monkeypatch, tmp_pa
         await tool.execute(prompts=[{"prompt": "a cat"}, {"prompt": "a dog"}], model="openai/gpt-image-2.5-sunburst")
     )
 
+    assert [json.loads(request.content)["model"] for request in seen] == ["openai/gpt-image-2"] * 2
     assert [item["selection"]["model"]["sent"] for item in out["results"]] == ["openai/gpt-image-2"] * 2
     assert "selection" not in out
 
@@ -1713,6 +1714,7 @@ async def test_a_settings_model_equal_to_the_call_s_is_not_reported_as_an_overri
     out = json.loads(await tool.execute("a poster", model="openai/gpt-image-2"))
     assert out["success"] and out["model"] == "openai/gpt-image-2"
     assert "selection" not in out
+    assert [json.loads(request.content)["model"] for request in seen] == ["openai/gpt-image-2"] * 2
 
 
 async def test_a_batch_that_lost_every_picture_is_named_by_its_call_not_by_a_live_read(monkeypatch, tmp_path):
@@ -1806,6 +1808,44 @@ async def test_the_request_is_built_from_the_snapshot_the_answer_names(monkeypat
         "model": {"requested": "openai/gpt-image-2.5-sunburst", "sent": "openai/gpt-image-2", "source": "settings"},
         "quality": {"requested": "high", "sent": "low", "source": "settings"},
     }
+
+
+async def test_a_request_s_quality_is_built_from_the_snapshot_the_batch_read(monkeypatch, tmp_path):
+    """Pin request construction against the section it read the snapshot from:
+    the quality the outgoing body carries is the one the batch captured before
+    it flew, not whatever a live read returns by the time the body is built."""
+    from raven.config.schema import ImageToolConfig
+
+    named = ImageToolConfig(model="openai/gpt-image-2", quality="low", api_key="k")
+    unnamed = ImageToolConfig(model="openai/gpt-image-2", quality="", api_key="k")
+    state = {"named": True}
+
+    def source():
+        return named if state["named"] else unnamed
+
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+
+    real_effective_quality = ImageGenerateTool.effective_quality
+
+    def flip_then_answer(self, requested, model_id=None, config=None):
+        state["named"] = False
+        return real_effective_quality(self, requested, model_id, config)
+
+    monkeypatch.setattr(ImageGenerateTool, "effective_quality", flip_then_answer)
+
+    tool = ImageGenerateTool(source, workspace=tmp_path)
+    out = json.loads(await tool.execute(prompts=[{"prompt": "a cat"}, {"prompt": "a dog"}], quality="high"))
+
+    assert [body["quality"] for body in seen] == ["low", "low"]
+    assert [item["selection"]["quality"]["sent"] for item in out["results"]] == ["low", "low"]
 
 
 @pytest.mark.parametrize(
