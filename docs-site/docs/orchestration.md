@@ -46,9 +46,11 @@ capability catalogue checked in at `raven/playbook/harness_generation.json`.
 A switch the catalogue leaves off is not emitted, and a switch it turns on but
 this build does not serve is a refusal rather than a silent drop when the
 catalogue is read -- except under a top-level module this loader does not
-know, which is skipped, and for a Harness already stored, which is read back
-without consulting the catalogue again. A missing or malformed catalogue is a
-corrupt installation and does not enable every switch: the loader raises a
+know, which is skipped. A Harness already stored is checked against the
+catalogue when it is loaded, so a capability the catalogue has since turned
+off makes that stored file unloadable, and the library drops it. A missing or
+malformed catalogue is a corrupt installation and does not enable every
+switch: the loader raises a
 `RuntimeError` naming the file when it is absent, a `RuntimeError` without
 the path when the JSON is malformed, and `UnicodeDecodeError` when the bytes
 are not UTF-8, and the turn that needed it logs
