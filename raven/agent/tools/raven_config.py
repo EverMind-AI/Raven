@@ -1577,7 +1577,8 @@ class RavenConfigTool(Tool):
             out["state"] = "connected"
         elif row.get("running"):
             # `connected` is absent for channels that never report pairing; only a
-            # QR-login channel can honestly be "not connected yet".
+            # channel that logs in by scanning, or whose spec requires no
+            # credentials, can honestly be "not connected yet".
             out["state"] = "running, not connected yet" if scan else "running"
         elif row.get("enabled"):
             out["state"] = "enabled, not running (the gateway starts it within a few seconds, or it failed)"

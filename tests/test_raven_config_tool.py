@@ -1379,7 +1379,9 @@ async def test_switching_on_a_scan_channel_says_where_the_code_is(config_file):
     another Raven's, too -- to find the QR, which the Channels settings showed."""
     status = {
         "gateway_running": True,
-        "channels": [{"name": "weixin", "enabled": True, "running": True, "qr_login": True, "fields": []}],
+        "channels": [
+            {"name": "weixin", "enabled": True, "running": True, "connected": False, "qr_login": True, "fields": []}
+        ],
     }
     tool = RavenConfigTool()
     tool.set_rpc_caller(Calls({"channels.status": status, "channels.configure": {"outcome": "started"}}))
@@ -1389,6 +1391,24 @@ async def test_switching_on_a_scan_channel_says_where_the_code_is(config_file):
 
     assert "Settings > Channels > weixin" in reply and "scan" in reply
     assert described["state"] == "running, not connected yet" and "QR" in described["login"]
+
+
+@pytest.mark.asyncio
+async def test_a_scan_channel_that_reported_pairing_reads_as_connected(config_file):
+    """A paired WeChat reports `connected: true`; that is the one case the
+    "not connected yet" branch must not swallow."""
+    status = {
+        "gateway_running": True,
+        "channels": [
+            {"name": "weixin", "enabled": True, "running": True, "connected": True, "qr_login": True, "fields": []}
+        ],
+    }
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"channels.status": status}))
+
+    described = json.loads(await _run(tool, action="describe", path="channels.weixin"))
+
+    assert described["state"] == "connected"
 
 
 @pytest.mark.asyncio
