@@ -60,6 +60,8 @@ class NoticeLog:
         self.bind(loop)
         with loop.tools.session_scope_for(self.key):
             notes = loop._tool_notices()
+        keys = [key for note in notes if (key := notice_key(note)) is not None]
+        assert len(keys) == len(set(keys)), f"two lanes spoke for one subject: {notes}"
         current = {key: note for note in notes if (key := notice_key(note)) is not None}
         sent = notice_changes(notes, self.told)
         if sent:

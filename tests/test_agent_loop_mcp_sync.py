@@ -1650,3 +1650,69 @@ async def test_a_folded_server_with_no_tools_is_forgotten_once_it_connects(works
     loop._mcp_manager = _StatusManager(_snap("res", "disconnected"))
     assert ("mcp", "res") not in log.turn(loop), "it has no tools to be absent from the list"
     assert log.sent == [], log.sent
+
+
+@pytest.mark.parametrize("gone", ["closed", "restart_without_mcp"])
+async def test_a_server_gone_with_its_manager_keeps_a_true_notice(workspace, gone: str) -> None:
+    """No manager at all -- MCP closed, or a restart with no server configured.
+
+    The log still holds the server's note, so the server is reported as no
+    longer loaded rather than left for the consumer to clear: "the earlier
+    note no longer applies" would be false while a call to its tool is
+    answered as not available.
+    """
+    first = _loop(workspace)
+    _register_svc_tool(first)
+    first._mcp_manager = _StatusManager(_snap("svc", "connected"))
+    session = first.sessions.get_or_create("cli:c1")
+    log = NoticeLog(session=session)
+    log.turn(first)
+    _take_svc_down(first, "disconnected")
+    assert "remain in this conversation's tool list" in log.turn(first)[("mcp", "svc")]
+
+    if gone == "closed":
+        loop = first
+        loop._mcp_manager = None
+    else:
+        first.sessions.save(session)
+        loop = _loop(workspace)
+        assert loop._mcp_manager is None
+        log = NoticeLog(session=loop.sessions.get_or_create(session.key))
+    current = log.turn(loop)
+
+    line = current[("mcp", "svc")]
+    assert log.cleared() == [], log.sent
+    assert "no longer loaded" in line, line
+    if gone == "closed":
+        assert "remain in this conversation's tool list" in line, "the frozen array still lists its tools"
+    else:
+        assert "absent from this conversation's tool list" in line
+    with loop.tools.session_scope_for("s1"):
+        answer = await loop.tools.execute("mcp_svc_search", {})
+    assert "not available" in answer
+
+
+async def test_a_tool_note_about_an_mcp_tool_is_left_to_the_server_lane(workspace) -> None:
+    """The unloaded lane speaks for tools the array does not list as a server's.
+
+    No lane writes a tool note about an MCP tool; this log is built by hand to
+    hold one. While the array lists that name under its server, the server's
+    own line is the only report about it, so the tool gets no second subject.
+    """
+    from raven.context_engine.runtime_context import tool_notice
+    from tests._notice_log import filed
+
+    loop = _loop(workspace)
+    _register_svc_tool(loop)
+    loop._mcp_manager = _StatusManager(_snap("svc", "connected"))
+    log = NoticeLog()
+    log.turn(loop)
+    log.messages.append(filed([tool_notice("mcp_svc_search", "a note no lane writes.")]))
+    _take_svc_down(loop, "disconnected")
+
+    current = log.turn(loop)
+
+    assert [key for key in current if "svc" in key[1]] == [("mcp", "svc")], current
+    with loop.tools.session_scope_for("s1"):
+        answer = await loop.tools.execute("mcp_svc_search", {})
+    assert "not available" in answer

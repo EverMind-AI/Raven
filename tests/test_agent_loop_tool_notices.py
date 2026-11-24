@@ -939,3 +939,170 @@ def test_a_refusal_says_whether_the_tool_list_still_carries_the_name(
     assert "currently unavailable" in dropped and "switched off in settings" in dropped
     assert "stays in this conversation's tool list" not in dropped, dropped
     assert "absent from this conversation's tool list" in dropped
+
+
+@pytest.mark.parametrize("where", ["in_session", "at_restart"])
+def test_an_unloaded_tool_gets_a_true_line_not_a_cleared_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where: str
+) -> None:
+    """A tool the log holds a note about leaves the registry entirely.
+
+    No switch's reason names it any more, so the array lane and the withdrawn
+    lane fall silent; without a lane of its own its key would vanish and be
+    cleared as "available again" while a call is answered as not available.
+    The line it gets says exactly that it is not loaded, and dispatch agrees.
+    """
+    cfg = tmp_path / "config.json"
+    _write_switches(cfg, [])
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    loop = _loop(tmp_path)
+    session = loop.sessions.get_or_create("cli:c1")
+    log = _NoticeLog(session=session)
+    log.turn(loop)
+    _write_switches(cfg, ["read_file"])
+    assert "currently unavailable" in log.turn(loop)[("tool", "read_file")]
+
+    if where == "in_session":
+        loop.tools.unregister("read_file")
+    else:
+        loop.sessions.save(session)
+        loop = _loop(tmp_path)
+        loop.tools.unregister("read_file")
+        log = _NoticeLog(session=loop.sessions.get_or_create(session.key))
+    current = log.turn(loop)
+
+    line = current[("tool", "read_file")]
+    assert log.cleared() == [], log.sent
+    assert "no longer available" in line and "not loaded any more" in line, line
+    assert "currently unavailable" not in line and "switched off" not in line, "no switch would bring it back"
+    if where == "in_session":
+        assert "read_file" in _session_names(loop)
+        assert "stays in this conversation's tool list" in line, "the frozen array still lists it"
+    else:
+        assert "read_file" not in _session_names(loop)
+        assert "absent from this conversation's tool list" in line
+    answer = _execute(loop, "read_file", {"path": "x"})
+    assert "is not available" in answer and "currently unavailable" not in answer, answer
+
+    _compact(loop, log)
+    current = log.turn(loop)
+    assert "absent from this conversation's tool list" in current[("tool", "read_file")]
+    assert log.cleared() == [], log.sent
+    assert "is not available" in _execute(loop, "read_file", {"path": "x"})
+
+
+def test_a_tool_loaded_again_outside_the_array_is_reported_as_it_stands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unloaded, then loaded again inside one window, with the array still without it.
+
+    It is in neither the array nor the capture's baseline, so only the note
+    the log holds can keep a lane speaking for it. Loaded with its switch off
+    it is reported unavailable with the reason; switched on it is announced
+    with its schema, because a call then runs. At no step is it cleared as
+    "available again" without a definition to call it by.
+    """
+    cfg = tmp_path / "config.json"
+    _write_switches(cfg, [])
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    loop = _loop(tmp_path)
+    note = tmp_path / "note.txt"
+    note.write_text("payload-reloaded", encoding="utf-8")
+    params = {"path": str(note)}
+    log = _NoticeLog()
+    key = ("tool", "read_file")
+    log.turn(loop)
+    _write_switches(cfg, ["read_file"])
+    log.turn(loop)
+    tool = loop.tools.get("read_file")
+    loop.tools.unregister("read_file")
+    assert "no longer available" in log.turn(loop)[key]
+    _compact(loop, log)
+    log.turn(loop)
+    assert "read_file" not in _session_names(loop), "captured while it was not loaded"
+
+    loop.tools.register(tool)
+    current = log.turn(loop)
+    assert "read_file" not in _session_names(loop), "the window's array does not move"
+    assert "currently unavailable" in current[key] and "switched off" in current[key], current[key]
+    assert log.cleared() == [], log.sent
+    assert "currently unavailable" in _execute(loop, "read_file", params)
+
+    _write_switches(cfg, [])
+    current = log.turn(loop)
+    assert "now available" in current[key], current[key]
+    assert json.dumps(loop.tools.definition_of("read_file"), separators=(",", ":")) in current[key]
+    assert log.cleared() == [] and not any("available again" in line for line in log.sent), log.sent
+    assert "payload-reloaded" in _execute(loop, "read_file", params)
+
+
+@pytest.mark.parametrize("switch", ["on", "off"])
+def test_a_reopened_log_with_the_tool_loaded_again_gets_no_unloaded_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, switch: str
+) -> None:
+    """The log says the tool was not loaded; this time it is.
+
+    The unloaded lane speaks only for a name the registry lacks, so it stays
+    silent, and the tool is reported as it now stands: in the array and
+    callable (the cleared line is then true), or switched off with the reason.
+    """
+    cfg = tmp_path / "config.json"
+    _write_switches(cfg, [])
+    monkeypatch.setattr("raven.home._current_config_path", cfg)
+    note = tmp_path / "note.txt"
+    note.write_text("payload-reopened", encoding="utf-8")
+    params = {"path": str(note)}
+    first = _loop(tmp_path)
+    session = first.sessions.get_or_create("cli:c1")
+    log = _NoticeLog(session=session)
+    log.turn(first)
+    _write_switches(cfg, ["read_file"])
+    log.turn(first)
+    first.tools.unregister("read_file")
+    assert "no longer available" in log.turn(first)[("tool", "read_file")]
+    first.sessions.save(session)
+
+    _write_switches(cfg, [] if switch == "on" else ["read_file"])
+    loop = _loop(tmp_path)
+    reopened = _NoticeLog(session=loop.sessions.get_or_create(session.key))
+    current = reopened.turn(loop)
+
+    assert not any("no longer available" in line for line in current.values()), current
+    if switch == "on":
+        assert ("tool", "read_file") not in current
+        assert "read_file" in _session_names(loop)
+        assert any("available again" in line for line in reopened.cleared()), reopened.sent
+        assert "payload-reopened" in _execute(loop, "read_file", params)
+    else:
+        assert "currently unavailable" in current[("tool", "read_file")]
+        assert reopened.cleared() == [], reopened.sent
+        assert "currently unavailable" in _execute(loop, "read_file", params)
+
+
+def test_an_unloaded_tool_has_one_line_even_while_a_reason_still_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``knowledge_search`` keeps its reason while no base is selected, loaded or not.
+
+    Every other reason names only registered tools, so this is the one name
+    the array lane could still speak for after it is unloaded. Its line would
+    say selecting a base brings it back, which is false; the unloaded lane owns
+    the name, and the subject gets exactly one line.
+    """
+    from raven.agent import knowledge_scope
+
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "absent.json")
+    loop = _loop(tmp_path)
+    log = _NoticeLog()
+    with knowledge_scope.bind(("kb-1",), "s1"):
+        log.turn(loop)
+    assert "knowledge_search" in _session_names(loop)
+    assert "no knowledge base is selected" in log.turn(loop)[("tool", "knowledge_search")]
+
+    loop.tools.unregister("knowledge_search")
+    assert "knowledge_search" in loop._withheld_tool_reasons(), "the reason outlives the tool"
+    line = log.turn(loop)[("tool", "knowledge_search")]
+
+    assert "no longer available" in line and "no knowledge base" not in line, line
+    assert log.cleared() == [], log.sent
+    assert "is not available" in _execute(loop, "knowledge_search", {"query": "x"})

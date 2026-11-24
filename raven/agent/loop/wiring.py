@@ -88,6 +88,17 @@ def _unavailable_tool_notice(name: str, reason: str) -> str:
     )
 
 
+_TOOL_UNLOADED_LISTED = (
+    "no longer available -- it is not loaded any more. Its definition stays in this conversation's tool "
+    "list until the next compaction or new conversation, but a call to it is answered as not available; "
+    "a later note here says if it is loaded again."
+)
+_TOOL_UNLOADED_ABSENT = (
+    "no longer available -- it is not loaded any more and is absent from this conversation's tool list, "
+    "so a call to it is answered as not available; a later note here says if it is loaded again."
+)
+
+
 class WiringMixin:
     """Construction-time wiring: providers, bindings, tool registration, playbooks,
     workdir and sinks."""
@@ -268,7 +279,9 @@ class WiringMixin:
         reasons = self._withheld_tool_reasons()
         lines: list[str] = []
         for name in sorted(set(reasons) & names):
-            if self.tools.session_definition_origin(name) is not None:
+            # An unloaded name is :meth:`_tool_unloaded_notices`' to report: a
+            # switch's reason would say turning it back on helps, and it does not.
+            if self.tools.session_definition_origin(name) is not None or self.tools.get(name) is None:
                 continue
             lines.append(_unavailable_tool_notice(name, reasons[name]))
         return lines
@@ -297,6 +310,25 @@ class WiringMixin:
             for name in self.tools.notified_withheld_again(frozenset(reasons))
         ]
 
+    def _tool_unloaded_notices(self) -> list[str]:
+        """One line per tool the log holds a note about that is not loaded any more.
+
+        A plugin removed, or a tool that declined its runtime binding at a
+        restart, leaves the registry entirely, so no switch's reason names it
+        and neither the array lane nor the withdrawn lane can speak for it.
+        The line says what holds -- it is gone, and a call is answered as not
+        available -- without a reason a setting could undo. It holds until a
+        later note replaces it: if the tool is loaded again, the array carries
+        it (the cleared line is then true), a switch reports it unavailable,
+        or :meth:`_tool_became_available_notices` announces it with its schema.
+        """
+        from raven.context_engine.runtime_context import tool_notice
+
+        return [
+            tool_notice(name, _TOOL_UNLOADED_LISTED if listed else _TOOL_UNLOADED_ABSENT)
+            for name, listed in self.tools.notified_unloaded()
+        ]
+
     def _tool_notices(self) -> list[str]:
         """The host's tool-surface facts for this turn's runtime context."""
         return [
@@ -304,6 +336,7 @@ class WiringMixin:
             *self._tool_availability_notices(),
             *self._tool_withdrawn_again_notices(),
             *self._tool_became_available_notices(),
+            *self._tool_unloaded_notices(),
         ]
 
     def _tool_became_available_notices(self) -> list[str]:

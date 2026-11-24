@@ -280,10 +280,11 @@ class McpGlueMixin:
         from raven.context_engine.runtime_context import mcp_notice
 
         # getattr: the engine factory takes this callable during __init__,
-        # before the manager attribute is assigned further down.
+        # before the manager attribute is assigned further down. No manager
+        # (none configured, or closed) reads as no server loaded: a server the
+        # array or the log still names is then reported as removed, not left
+        # for the consumer to clear while it is gone.
         mgr = getattr(self, "_mcp_manager", None)
-        if mgr is None:
-            return []
         # Stated as fact, not as a directive: this block's own header says
         # "metadata only, not instructions", and the model is told to treat it
         # that way -- an imperative here would be either ignored or a fence
@@ -309,7 +310,7 @@ class McpGlueMixin:
         def emit(server: str, text: str) -> None:
             notices.append(mcp_notice(server, text))
 
-        for snap in mgr.status():
+        for snap in mgr.status() if mgr is not None else ():
             name = snap["name"]
             seen.add(name)
             snap_names = set(self.tools.session_definition_names_of_server(name)) if snapshot is not None else set()

@@ -1216,16 +1216,25 @@ class ToolRegistry:
         Only the operator axis moves it. A charter narrowing or the turn freeze
         is a per-turn restriction that never reached this set, so neither can
         announce a tool as newly available.
+
+        A name the log holds a note about is a candidate too, beside the
+        baseline: a tool that was not registered at all at capture is in
+        neither the array nor the baseline, and when it is loaded again
+        (switched on, outside the array) the model needs its schema the same
+        way. Without it the note's key would vanish and be cleared as
+        "available again" with no definition to call it by.
         """
         session = self._definition_session.get()
         if session is None:
             return []
         array = self._session_definitions_for(session).origins
-        baseline = self._session_unavailable_at_capture.get(session)
-        if not baseline:
+        baseline = self._session_unavailable_at_capture.get(session, frozenset())
+        spoken = self._session_notified_tools.get(session, set())
+        candidates = (baseline | spoken) - withheld_now
+        if not candidates:
             return []
         fresh: list[str] = []
-        for name in sorted(baseline - withheld_now):
+        for name in sorted(candidates):
             if name in array or self._visible(name) is None or self._origins.get(name) is not None:
                 continue
             fresh.append(name)
@@ -1277,6 +1286,32 @@ class ToolRegistry:
             name
             for name in sorted(notified & withheld_now)
             if name not in array and self._visible(name) is not None and self._origins.get(name) is None
+        ]
+
+    def notified_unloaded(self) -> list[tuple[str, bool]]:
+        """Names the log holds a note about that are not registered at all now.
+
+        Each with whether the frozen array still lists it. No other lane can
+        speak for such a name: the array lane and the withdrawn lane answer
+        for a registered tool an operator switch holds off, and an unloaded
+        tool is in no switch's reason. Left silent, its key would vanish and
+        the consumer would clear the note as "available again" while a call
+        to it is answered as not available.
+
+        A name the array lists with an MCP origin is left to the per-server
+        notice, which speaks for every tool of a server that went away.
+        """
+        session = self._definition_session.get()
+        if session is None:
+            return []
+        array = self._session_definitions_for(session).origins
+        notified = self._session_notified_tools.get(session)
+        if not notified:
+            return []
+        return [
+            (name, name in array)
+            for name in sorted(notified)
+            if self._visible(name) is None and array.get(name) is None
         ]
 
     def notified_mcp_servers(self) -> frozenset[str]:

@@ -136,10 +136,17 @@ read makes every lifecycle agree with the log -- a compaction keeps the log and 
 notes, a restart or a reopen after a release replays the stored log and speaks for what
 it holds, a log id adopted from another writer together with this copy's unsaved turns
 speaks for those turns, and a `/clear`, an empty log, speaks for nothing, so a tool off
-at its capture gets no notice, as in a new session. A key missing from the runtime
-context therefore means its condition was resolved, never that a refresh, a restart or a
-release forgot it. The per-server MCP notice follows the same rules, keyed by the
-server. A call to a withheld tool the
+at its capture gets no notice, as in a new session. A tool that leaves the registry
+altogether while the log holds a note about it (a plugin removed, a runtime binding
+declined at a restart) is in no switch's reason, so a fourth lane reports it as no
+longer loaded, its calls answered as not available; if it is loaded again outside the
+array it is announced with its schema like a switch put back on. A key missing from the
+runtime context therefore means its condition was resolved, never that a refresh, a
+restart, a release or an unload left it unspoken for. Per-turn restrictions (a
+dispatch's charter, the turn freeze) are not availability and are not reported here. The
+per-server MCP notice follows the same rules, keyed by the server, and reports a server
+the log or the array still names as no longer loaded even when no MCP manager exists (MCP
+closed, or none configured after a restart). A call to a withheld tool the
 session holds a schema for is refused with the reason, and the refusal says whether this
 conversation's tool list still carries it: only a name in the frozen array stays in the
 list. A tool the turn's own `plugin` call connects is admitted to `offers` (reachable
