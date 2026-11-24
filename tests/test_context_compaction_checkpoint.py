@@ -284,9 +284,12 @@ def _budget(model: str = "stub", window: int = WINDOW) -> TokenBudget:
 def _old_config(**overrides) -> ContextConfig:
     # These cases pin the geometry they were written against; the shipped
     # default is exercised by the trigger, retention and defaults suites.
+    # ``model_construct`` bypasses the shipped-share pin the config applies.
     overrides.setdefault(
         "history",
-        ContextHistoryConfig(compacting=ContextCompactionConfig(retain_ratio=0.40, tail_keep_ratio=0.25)),
+        ContextHistoryConfig(
+            compacting=ContextCompactionConfig.model_construct(retain_ratio=0.40, tail_keep_ratio=0.25)
+        ),
     )
     return ContextConfig(**overrides)
 

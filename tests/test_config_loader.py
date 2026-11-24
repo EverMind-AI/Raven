@@ -2735,22 +2735,40 @@ def test_push_discovery_set_again_after_its_floor_still_loads(tmp_path: Path) ->
 
 
 # ---------------------------------------------------------------------------
-# A tail-only compaction config keeps the retain default it was written against
+# The compaction shares are fixed -- a config value is accepted and ignored
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("tail", [0.25, 0.20, 0.10, 0.09, 0.39])
-def test_a_tail_only_compaction_config_keeps_the_old_retain_default(tmp_path: Path, tail: float) -> None:
-    """Every tail that loaded against the old implicit 0.40 still loads.
+def test_explicit_shares_are_replaced_by_the_shipped_values(tmp_path: Path) -> None:
+    """Both keys stay in the schema so an old file parses, but neither value
+    is used: the pair is internal tuning and the shipped values are fixed.
+    The persisted copy is rewritten in the same load, so the file stops
+    describing a share the build does not run."""
+    from raven.config.raven import load_raven_config
 
-    ``ContextCompactionConfig`` requires the tail share to sit below the retain
-    ratio. Before this release retain defaulted to 0.40 and now defaults to
-    0.10, so a file that customized only the tail -- any value in
-    ``[0.10, 0.40)`` was valid before -- would fail startup validation. The
-    shape carries no retain choice, so the value it used to get is written
-    down: the target, and the tail that must stay below it, keep meaning what
-    the file meant.
-    """
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"retainRatio": 0.40, "tailKeepRatio": 0.25}}}})
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (0.10, 0.04)
+    written = json.loads(p.read_text(encoding="utf-8"))
+    assert written["context"]["history"]["compacting"] == {"retainRatio": 0.10, "tailKeepRatio": 0.04}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    notices = [n for n in drain_migration_notices() if "retainRatio" in n]
+    assert len(notices) == 1
+
+    load_raven_config(p)
+    assert drain_migration_notices() == [], "the rewrite is idempotent"
+
+
+@pytest.mark.parametrize("tail", [0.25, 0.20, 0.10, 0.09, 0.39])
+def test_a_tail_only_share_is_ignored(tmp_path: Path, tail: float) -> None:
+    """Every tail that loaded against the old implicit 0.40 still loads, and
+    none of them changes the shipped pair. No retain key is added: the file
+    only loses a value that was already ignored."""
     from raven.config.raven import load_raven_config
 
     p = tmp_path / "config.json"
@@ -2759,41 +2777,107 @@ def test_a_tail_only_compaction_config_keeps_the_old_retain_default(tmp_path: Pa
 
     cfg = load_raven_config(p)
 
-    compacting = cfg.context.history.compacting
-    assert (compacting.retain_ratio, compacting.tail_keep_ratio) == (0.40, tail)
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (0.10, 0.04)
     written = json.loads(p.read_text(encoding="utf-8"))
-    assert written["context"]["history"]["compacting"] == {"tailKeepRatio": tail, "retainRatio": 0.40}
-    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
-    assert len([n for n in drain_migration_notices() if "retain" in n]) == 1
-
-    load_raven_config(p)
-    assert drain_migration_notices() == []
+    assert written["context"]["history"]["compacting"] == {"tailKeepRatio": 0.04}
+    assert len([n for n in drain_migration_notices() if "tailKeepRatio" in n]) == 1
 
 
-def test_a_tail_only_compaction_config_in_snake_case_is_migrated_in_place(tmp_path: Path) -> None:
-    """The writer resolves either spelling, so the injected key matches the
-    one the file already uses rather than introducing a second convention."""
+def test_a_retain_only_share_is_ignored(tmp_path: Path) -> None:
     from raven.config.raven import load_raven_config
 
     p = tmp_path / "config.json"
-    _write(p, {"context": {"history": {"compacting": {"tail_keep_ratio": 0.25}}}})
+    _write(p, {"context": {"history": {"compacting": {"retainRatio": 0.20}}}})
     drain_migration_notices()
 
     cfg = load_raven_config(p)
 
-    assert cfg.context.history.compacting.retain_ratio == 0.40
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (0.10, 0.04)
     written = json.loads(p.read_text(encoding="utf-8"))
-    assert written["context"]["history"]["compacting"] == {"tail_keep_ratio": 0.25, "retain_ratio": 0.40}
+    assert written["context"]["history"]["compacting"] == {"retainRatio": 0.10}
+    assert len([n for n in drain_migration_notices() if "retainRatio" in n]) == 1
 
 
-def test_a_tail_only_compaction_config_loads_on_the_extension_pass_alone(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A read-only home must not turn the compat shim into a startup failure.
+def test_a_config_with_no_shares_loads_the_shipped_values(tmp_path: Path) -> None:
+    from raven.config.raven import load_raven_config
 
-    ``load_raven_config`` reads the file again for the extension blocks after
-    the base loader's disk rewrite. With that rewrite switched off, the
-    in-memory pass is the only thing that can make the file load.
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"tailKeepMessages": 4}}}})
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (0.10, 0.04)
+    written = json.loads(p.read_text(encoding="utf-8"))
+    assert written["context"]["history"]["compacting"] == {"tailKeepMessages": 4}
+    assert drain_migration_notices() == []
+
+
+@pytest.mark.parametrize("compacting", [{"retainRatio": 0.10, "tailKeepRatio": 0.50}, {"retainRatio": -0.1}])
+def test_an_out_of_domain_file_value_is_normalized(tmp_path: Path, compacting: dict) -> None:
+    """The rewrite runs before the model validates, so a value that could
+    never be a ratio is repaired like any other ignored value instead of
+    turning an upgrade into a startup failure. A direct construction still
+    types the key; only the file path is this forgiving."""
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": compacting}}})
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (0.10, 0.04)
+    written = json.loads(p.read_text(encoding="utf-8"))["context"]["history"]["compacting"]
+    assert all(value in (0.10, 0.04) for value in written.values())
+
+
+def test_a_current_stamp_does_not_preserve_a_configured_pair(tmp_path: Path) -> None:
+    """The reviewer's case: a partial config created on the new release. The
+    floor has already run, so the disk copy is the user's and is not rewritten;
+    the loaded pair is the shipped one all the same."""
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"retainRatio": 0.20, "tailKeepRatio": 0.10}}}})
+    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
+    before = p.read_bytes()
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (0.10, 0.04)
+    assert p.read_bytes() == before, "the post-floor rewrite is in memory only"
+    assert drain_migration_notices() == []
+
+
+def test_snake_case_shares_are_rewritten_in_place(tmp_path: Path) -> None:
+    """The rewrite keeps the spelling the file already uses rather than adding
+    a second convention."""
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"retain_ratio": 0.40, "tail_keep_ratio": 0.25}}}})
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (0.10, 0.04)
+    written = json.loads(p.read_text(encoding="utf-8"))
+    assert written["context"]["history"]["compacting"] == {"retain_ratio": 0.10, "tail_keep_ratio": 0.04}
+
+
+def test_the_shipped_pair_holds_when_the_disk_rewrite_is_off(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A read-only home must not turn the rewrite into a startup failure.
+
+    The model pins the pair on every construction, so the extension pass that
+    re-reads the file loads the same values; only the persisted copy differs.
     """
     from raven.config import loader
     from raven.config.raven import load_raven_config
@@ -2805,47 +2889,24 @@ def test_a_tail_only_compaction_config_loads_on_the_extension_pass_alone(
 
     cfg = load_raven_config(p)
 
-    assert cfg.context.history.compacting.retain_ratio == 0.40
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (0.10, 0.04)
     written = json.loads(p.read_text(encoding="utf-8"))
     assert written["context"]["history"]["compacting"] == {"tailKeepRatio": 0.25}, "the disk pass was off"
-    assert len([n for n in drain_migration_notices() if "retain" in n]) == 1
+    assert len([n for n in drain_migration_notices() if "tailKeepRatio" in n]) == 1
 
 
-def test_a_tail_only_shape_added_after_the_floor_still_loads(tmp_path: Path) -> None:
-    """A stamp cannot protect a file a person can edit.
-
-    The shape is produced by hand editing in the first place, so it can appear
-    after the floor ran. The shim holds on every load; nothing is rewritten,
-    because the file is the user's and only this process's view needs to
-    validate.
-    """
+def test_a_config_already_carrying_the_shipped_pair_is_left_alone(tmp_path: Path) -> None:
     from raven.config.raven import load_raven_config
 
     p = tmp_path / "config.json"
-    _write(p, {"context": {"history": {"compacting": {"tailKeepRatio": 0.25}}}})
-    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
+    _write(p, {"context": {"history": {"compacting": {"retainRatio": 0.10, "tailKeepRatio": 0.04}}}})
     before = p.read_bytes()
     drain_migration_notices()
 
     cfg = load_raven_config(p)
 
-    assert cfg.context.history.compacting.retain_ratio == 0.40
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (0.10, 0.04)
     assert p.read_bytes() == before
-    assert drain_migration_notices() == []
-
-
-def test_an_explicit_retain_ratio_is_not_replaced(tmp_path: Path) -> None:
-    """Only a file with no retain choice is migrated. A pair that names both
-    values keeps them, including a pair that is valid under the new defaults."""
-    from raven.config.raven import load_raven_config
-
-    p = tmp_path / "config.json"
-    _write(p, {"context": {"history": {"compacting": {"retainRatio": 0.20, "tailKeepRatio": 0.05}}}})
-    drain_migration_notices()
-
-    cfg = load_raven_config(p)
-
-    assert cfg.context.history.compacting.retain_ratio == 0.20
-    written = json.loads(p.read_text(encoding="utf-8"))
-    assert written["context"]["history"]["compacting"] == {"retainRatio": 0.20, "tailKeepRatio": 0.05}
     assert drain_migration_notices() == []

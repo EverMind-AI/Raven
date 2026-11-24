@@ -276,6 +276,10 @@ class ContextSummaryConfig(_Base):
     """
 
 
+SHIPPED_COMPACTION_RETAIN_RATIO = 0.10
+SHIPPED_COMPACTION_TAIL_KEEP_RATIO = 0.04
+
+
 class ContextCompactionConfig(_Base):
     """Tuning for the compacting history strategy, read only when it is the selected one.
 
@@ -309,10 +313,15 @@ class ContextCompactionConfig(_Base):
     this is its complement over the range that matters.
     """
 
-    retain_ratio: float = Field(default=0.10, gt=0.0, lt=1.0)
+    retain_ratio: float = Field(default=SHIPPED_COMPACTION_RETAIN_RATIO, gt=0.0, lt=1.0)
     """Share of the window a compaction aims to come back down to. Lower means
     fewer compactions, each discarding more. The target never falls below
-    ``minRetainTokens``."""
+    ``minRetainTokens``.
+
+    Ignored; the shipped value is fixed. The key stays accepted so a config
+    written against an older release still parses, but whatever it names is
+    replaced at load -- see ``_pin_shipped_ratios``.
+    """
 
     min_retain_tokens: int = Field(default=32_768, ge=0)
     """Floor on the target, in estimated tokens.
@@ -349,7 +358,7 @@ class ContextCompactionConfig(_Base):
     tail_keep_messages: int = Field(default=8, ge=0)
     """Recent messages never compacted, as a count."""
 
-    tail_keep_ratio: float = Field(default=0.04, ge=0.0, lt=1.0)
+    tail_keep_ratio: float = Field(default=SHIPPED_COMPACTION_TAIL_KEEP_RATIO, ge=0.0, lt=1.0)
     """Recent messages never compacted, as a share of the window.
 
     Held together with the count as a union, not an alternative: each is a
@@ -362,6 +371,10 @@ class ContextCompactionConfig(_Base):
     fixed prompt and the checkpoint are roughly constant, so a larger share
     pushes the protected tail past the target on the smaller windows and no
     compaction can reach it: 0.05 fails at 262K, 0.09 at 512K and 1M.
+
+    Ignored; the shipped value is fixed. The key stays accepted so a config
+    written against an older release still parses, but whatever it names is
+    replaced at load -- see ``_pin_shipped_ratios``.
     """
 
     boundary: Literal["tool_pair", "turn"] = "tool_pair"
@@ -384,6 +397,21 @@ class ContextCompactionConfig(_Base):
     summary: ContextSummaryConfig = Field(default_factory=ContextSummaryConfig)
     """What replaces the messages removal takes out -- the rung above pruning,
     and the only one that calls a model."""
+
+    @model_validator(mode="after")
+    def _pin_shipped_ratios(self) -> "ContextCompactionConfig":
+        """Replace the two configured shares with the shipped values.
+
+        The target and the protected tail only make sense as a pair chosen
+        against the shipped prompt shape, so neither is a deployment setting:
+        a value in the file is accepted for compatibility and then ignored.
+        Defined before ``_check_ratios`` so the relation checks run on the
+        pinned pair -- otherwise a legacy tail-only file would fail the tail
+        bound before its retain default was replaced.
+        """
+        self.retain_ratio = SHIPPED_COMPACTION_RETAIN_RATIO
+        self.tail_keep_ratio = SHIPPED_COMPACTION_TAIL_KEEP_RATIO
+        return self
 
     @model_validator(mode="after")
     def _check_ratios(self) -> "ContextCompactionConfig":

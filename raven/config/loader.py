@@ -58,7 +58,7 @@ _SANDBOX_NETWORK_MIGRATION = 17
 _RETIRED_PUSH_DISCOVERY_MIGRATION = 18
 _SHIM_PIN_REFRESH_2_MIGRATION = 19
 _RETIRED_CURATOR_MIGRATION = 20
-_COMPACTION_RETAIN_RATIO_MIGRATION = 21
+_COMPACTION_RATIO_REWRITE_MIGRATION = 21
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -72,12 +72,6 @@ LEGACY_CONTEXT_WINDOW_TOKENS = 65_536
 # field, so a planted copy would move every upgraded install's reminders onto
 # this zone -- see ``_migrate_planted_cron_timezone``.
 PLANTED_CRON_TIMEZONE = "Asia/Shanghai"
-
-# The retain share a compaction config got when it named only the tail share:
-# the pre-0.10 implicit default. Pinned into such a config so the new 0.10
-# default does not turn a previously valid file into a startup failure -- see
-# ``_migrate_partial_compaction_ratios``.
-OLD_COMPACTION_RETAIN_RATIO = 0.40
 
 # Single source of truth for Raven extension block keys.
 # Both _migrate_config (pop before base Config validates) and
@@ -446,8 +440,8 @@ def _persist_migrations(path: Path, from_version: int = 0, *, refresh_interprete
                 )
             if from_version < _RETIRED_CURATOR_MIGRATION:
                 changed = _migrate_retired_curator(raw) or changed
-            if from_version < _COMPACTION_RETAIN_RATIO_MIGRATION:
-                changed = _migrate_partial_compaction_ratios(raw) or changed
+            if from_version < _COMPACTION_RATIO_REWRITE_MIGRATION:
+                changed = _rewrite_compaction_ratios(raw) or changed
             if refresh_interpreters:
                 changed = _refresh_bundled_shim_interpreters(raw) or changed
         if not changed:
@@ -974,27 +968,24 @@ def _migrate_retired_curator(data: dict[str, Any], *, notify: bool = False) -> b
     return changed
 
 
-def _migrate_partial_compaction_ratios(data: dict[str, Any], *, notify: bool = False) -> bool:
-    """Pin the old retain default on a config that set only the tail share.
+def _rewrite_compaction_ratios(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Rewrite the compaction shares a config names to the shipped values.
 
-    ``ContextCompactionConfig`` requires ``tailKeepRatio < retainRatio``, and
-    before this release the retain default was 0.40. A saved config that
-    customized only the tail was written against that implicit 0.40: values in
-    ``[0.10, 0.40)`` fail against the new implicit 0.10, and every value below
-    it would silently get a different target. The shape carries no retain
-    choice to preserve, so the old effective value is written down: the target,
-    and with it what the tail had to stay below, keeps meaning what it meant
-    when the file was written.
+    ``ContextCompactionConfig`` ignores both keys: the target and the protected
+    tail are internal tuning, and the pair is replaced at load. A file that
+    still says 0.40 or 0.25 would describe behaviour this build does not run,
+    so the disk copy is brought in line with the loaded config. Each key keeps
+    the spelling the file already uses, and a key the file does not name is not
+    added. Idempotent: a file already carrying the shipped values is left alone
+    and no notice is queued.
 
-    The injection matches the spelling of the tail key already in the file, so
-    a snake_case config does not acquire a second convention. Nothing is
-    changed when the file names either retain spelling, or names no tail.
-
-    Gated on ``_COMPACTION_RETAIN_RATIO_MIGRATION`` for the write, and replayed
-    on every load like the retired-key shims: a hand edit can add the shape to
-    a config whose stamp is already current. Silent, and False, when it
+    Gated on ``_COMPACTION_RATIO_REWRITE_MIGRATION`` for the write, and replayed
+    on every load like the retired-key shims: a hand edit can put the old pair
+    back on a config whose stamp is already current. Silent, and False, when it
     changes nothing.
     """
+    from raven.config.raven import SHIPPED_COMPACTION_RETAIN_RATIO, SHIPPED_COMPACTION_TAIL_KEEP_RATIO
+
     context = data.get("context")
     if not isinstance(context, dict):
         return False
@@ -1004,19 +995,23 @@ def _migrate_partial_compaction_ratios(data: dict[str, Any], *, notify: bool = F
     compacting = history.get("compacting")
     if not isinstance(compacting, dict):
         return False
-    if "retainRatio" in compacting or "retain_ratio" in compacting:
+    rewritten: list[str] = []
+    for key, shipped in (
+        ("retainRatio", SHIPPED_COMPACTION_RETAIN_RATIO),
+        ("retain_ratio", SHIPPED_COMPACTION_RETAIN_RATIO),
+        ("tailKeepRatio", SHIPPED_COMPACTION_TAIL_KEEP_RATIO),
+        ("tail_keep_ratio", SHIPPED_COMPACTION_TAIL_KEEP_RATIO),
+    ):
+        if key in compacting and compacting[key] != shipped:
+            compacting[key] = shipped
+            rewritten.append(key)
+    if not rewritten:
         return False
-    tail_key = "tailKeepRatio" if "tailKeepRatio" in compacting else "tail_keep_ratio"
-    if tail_key not in compacting:
-        return False
-    retain_key = "retain_ratio" if tail_key == "tail_keep_ratio" else "retainRatio"
-    compacting[retain_key] = OLD_COMPACTION_RETAIN_RATIO
-
+    names = ", ".join(f"`context.history.compacting.{key}`" for key in rewritten)
     notice = (
-        f"Wrote `context.history.compacting.{retain_key}: {OLD_COMPACTION_RETAIN_RATIO}` into your config: "
-        f"it sets `{tail_key}` but no retain ratio, and the shipped retain default changed from "
-        f"{OLD_COMPACTION_RETAIN_RATIO} to 0.10. The value it used to get keeps the compaction target, and the "
-        "tail share that has to stay below it, exactly as the file meant. Lower it if you want the new default."
+        f"Rewrote {names} in your config to the shipped values "
+        f"({SHIPPED_COMPACTION_RETAIN_RATIO:.2f} retain, {SHIPPED_COMPACTION_TAIL_KEEP_RATIO:.2f} tail): "
+        "these two shares are fixed internal tuning, so any value in the file is ignored at load."
     )
     if notify and notice not in _migration_notices:
         _migration_notices.append(notice)
@@ -1933,14 +1928,14 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
         # would then refuse the whole load. Strip them on every load; the user
         # was told once, when the floor ran.
         _log.info("Migrated: dropped the retired curator history strategy settings again")
-    if from_version < _COMPACTION_RETAIN_RATIO_MIGRATION:
-        _migrate_partial_compaction_ratios(data, notify=True)
-    elif _migrate_partial_compaction_ratios(data):
-        # The shape can come back after the floor ran: it is produced by hand
-        # editing, and a build from before this floor reads the stamp as
-        # current and leaves the tail-only block alone. ``ContextCompactionConfig``
-        # would then refuse the whole load, so the shim holds on every load.
-        _log.info("Migrated: restored the old 0.40 retain ratio on a tail-only compaction config again")
+    if from_version < _COMPACTION_RATIO_REWRITE_MIGRATION:
+        _rewrite_compaction_ratios(data, notify=True)
+    elif _rewrite_compaction_ratios(data):
+        # The pair can come back after the floor ran: a hand edit or a build
+        # from before this floor can put it in the file. The loaded config is
+        # the same either way, but the in-memory rewrite keeps the two views
+        # honest for this process without touching the user's file again.
+        _log.info("Migrated: rewrote the compaction shares to the shipped values again")
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts
