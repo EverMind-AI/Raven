@@ -126,7 +126,6 @@ from raven.agent.session_effort import of as session_effort_of
 from raven.agent.tools.registry import call_failed
 from raven.agent.tools.removals import RemovalWatch
 from raven.agent.window import shrink
-from raven.agent.window.compaction import SUMMARY_REASONING_EFFORT
 from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, filed_image_note, image_sources
 from raven.agent.window.parts import ATTACHMENT_NOTES_KEY, measure_parts
 from raven.agent.window.turn_log import OPENING_KEY, TURN_LOG_KEY, TurnLog
@@ -3932,7 +3931,11 @@ class TurnPathMixin:
         the other groups it may have moved.
         """
         from raven.agent.task_board.dispatches import delegated_handle, turn_dispatches
-        from raven.agent.task_board.runner import run_post_turn, should_run
+        from raven.agent.task_board.runner import (
+            RECALL_SUMMARY_REASONING_EFFORT,
+            run_post_turn,
+            should_run,
+        )
 
         board = self.task_board
         if board is None or outcome is None:
@@ -3976,8 +3979,8 @@ class TurnPathMixin:
                     tools=[],
                     model=call_model,
                     fallback_models=fallback_models,
-                    # A recall summary is mechanical, like a compaction brief, not the turn's own work.
-                    reasoning_effort=SUMMARY_REASONING_EFFORT,
+                    # A recall summary is mechanical, not the turn's own work.
+                    reasoning_effort=RECALL_SUMMARY_REASONING_EFFORT,
                 )
             return "" if response.finish_reason == "error" else response.content or ""
 

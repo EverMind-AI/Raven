@@ -71,6 +71,10 @@ MATTERS_OWNERS_TEMPLATE = "task_board_matters_owners"
 ASKED_TEMPLATE = "task_board_asked"
 CARRY_TEMPLATE = "task_board_carry"
 
+# The recall summary is mechanical; turning reasoning off measured no accuracy
+# loss and about half the latency.
+RECALL_SUMMARY_REASONING_EFFORT = "none"
+
 _PROSE = "Answer with a task_board call (action=update), not with text."
 _NOT_UPDATE = "Only action=update is accepted here; the board is already in the instruction above."
 _REFUSED = (
