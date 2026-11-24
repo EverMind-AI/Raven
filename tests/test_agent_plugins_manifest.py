@@ -19,6 +19,7 @@ from raven.agent_plugins.manifest import (
     AGENT_PLUGINS_SCHEMA_URL,
     MANIFEST_FILENAME,
     SUPPORTED_SCHEMA_URLS,
+    AgentPluginManifest,
     AgentPluginManifestError,
     read_manifest,
 )
@@ -50,6 +51,7 @@ class _Case(NamedTuple):
     document: Any
     official_accepts: bool
     ours_accepts: bool
+    expected: tuple[tuple[str, Any], ...] = ()
 
 
 _CASES = (
@@ -207,54 +209,63 @@ _CASES = (
         {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "version": ""},
         True,
         True,
+        (("version", ""),),
     ),
     _Case(
         "empty description",
         {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "description": ""},
         True,
         True,
+        (("description", ""),),
     ),
     _Case(
         "empty homepage",
         {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "homepage": ""},
         True,
         True,
+        (("homepage", ""),),
     ),
     _Case(
         "empty repository",
         {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "repository": ""},
         True,
         True,
+        (("repository", ""),),
     ),
     _Case(
         "empty license",
         {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "license": ""},
         True,
         True,
+        (("license", ""),),
     ),
     _Case(
         "empty author object",
         {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "author": {}},
         True,
         True,
+        (("author.name", None), ("author.email", None), ("author.url", None)),
     ),
     _Case(
         "empty author name",
         {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "author": {"name": ""}},
         True,
         True,
+        (("author.name", ""),),
     ),
     _Case(
         "empty author email",
         {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "author": {"email": ""}},
         True,
         True,
+        (("author.email", ""),),
     ),
     _Case(
         "empty author url",
         {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "author": {"url": ""}},
         True,
         True,
+        (("author.url", ""),),
     ),
     _Case(
         "null extensions",
@@ -338,6 +349,30 @@ def test_the_only_departures_from_the_official_schema_are_the_documented_ones(
         if official_validator.is_valid(case.document) != _ours_accepts(case.document, tmp_path)
     }
     assert differences == set(_DIVERGENT)
+
+
+_EXPECTED_VALUES = tuple(case for case in _CASES if case.expected)
+
+
+def _value_at(manifest: AgentPluginManifest, path: str) -> Any:
+    value: Any = manifest
+    for part in path.split("."):
+        value = getattr(value, part)
+    return value
+
+
+@pytest.mark.parametrize("case", _EXPECTED_VALUES, ids=[case.label for case in _EXPECTED_VALUES])
+def test_read_manifest_keeps_each_present_value_verbatim(case: _Case, tmp_path: Path) -> None:
+    """A value the document presents survives the read unchanged.
+
+    The parity test above settles only whether a document loads. A loader
+    that turned ``""`` into ``None`` would accept the same documents while
+    losing the difference between a field the author wrote empty and one
+    the author omitted.
+    """
+    manifest, _ = read_manifest(_manifest_file(tmp_path, case.document))
+    for path, expected in case.expected:
+        assert _value_at(manifest, path) == expected, path
 
 
 # ---------------------------------------------------------------------------
