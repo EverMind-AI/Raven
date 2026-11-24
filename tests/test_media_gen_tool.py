@@ -2306,6 +2306,23 @@ async def test_h3_references_past_the_edits_route_limit_are_refused_before_sendi
     assert out["model"] == "MiniMax-H3-Image"
 
 
+async def test_h3_sends_a_call_at_the_route_limit_itself(monkeypatch, tmp_path) -> None:
+    """Sixteen is the last count the edits route takes, so a call naming sixteen is
+    sent rather than refused: the guard is the route's own bound, not one stricter."""
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return _h3_answer()
+
+    tool = _minimax_image_tool(monkeypatch, handler, tmp_path, model="MiniMax-H3-Image")
+    refs = [f"https://example.test/{index}.png" for index in range(16)]
+    out = json.loads(await tool.execute("a portrait", images=refs))
+
+    assert out["success"]
+    assert seen[0]["images"] == [{"image_url": ref} for ref in refs]
+
+
 async def test_a_minimax_batch_keeps_each_picture_s_own_reference(monkeypatch, tmp_path) -> None:
     seen: list[dict] = []
 
