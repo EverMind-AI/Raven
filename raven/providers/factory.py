@@ -130,11 +130,14 @@ def make_provider(config: Config, model: str | None = None):
         )
     elif protocol in ("responses", "anthropic"):
         from raven.providers.anthropic_messages_provider import AnthropicMessagesProvider
-        from raven.providers.endpoints import provider_endpoints
+        from raven.providers.endpoints import provider_endpoints_for_request
         from raven.providers.openai_responses_provider import OpenAIResponsesProvider
 
         provider_class = OpenAIResponsesProvider if protocol == "responses" else AnthropicMessagesProvider
-        eps = provider_endpoints(p) if p else []
+        # The request boundary: a flat `apiKeyEnv` is resolved here, and an
+        # unset one raises with the provider named. `provider_endpoints` itself
+        # stays declaration-only for the credential gate.
+        eps = provider_endpoints_for_request(p, provider=provider_name or "") if p else []
 
         def make_native(ep=None):
             api_base = native_api_base(provider_name, protocol, ep.api_base if ep else (p.api_base if p else None))
@@ -164,7 +167,7 @@ def make_provider(config: Config, model: str | None = None):
             provider = make_native(eps[0] if eps else None)
     else:
         from raven.providers.capabilities import wire_overrides
-        from raven.providers.endpoints import provider_endpoints
+        from raven.providers.endpoints import provider_endpoints_for_request
         from raven.providers.relay_provider import litellm_provider
 
         if provider_name and configured_protocol(p, model) is None and inferred_protocol(model) != "chat":
@@ -178,7 +181,7 @@ def make_provider(config: Config, model: str | None = None):
                 provider_name,
                 inferred_protocol(model),
             )
-        eps = provider_endpoints(p) if p else []
+        eps = provider_endpoints_for_request(p, provider=provider_name or "") if p else []
         if len(eps) > 1:
             from raven.providers.endpoint_rotor import EndpointRotorProvider
 

@@ -32,7 +32,12 @@ from pydantic.fields import PydanticUndefined
 
 from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import ProviderConfig, ProviderEndpoint, ProvidersConfig
-from raven.providers.endpoints import provider_endpoints
+from raven.providers.endpoints import (
+    provider_endpoints,
+    provider_endpoints_for_request,
+    resolve_api_key_env,
+    uses_flat_key,
+)
 from raven.providers.registry import (
     SHAPE_LOCAL,
     ProviderSpec,
@@ -785,9 +790,13 @@ def set_provider_fields(
                 coerced = None
             prev[path_key] = _set_nested(path_key, coerced, working)
 
-        # apiKey and apiKeyEnv are mutually exclusive (ProviderConfig._one_key_source):
-        # the source just written supersedes the other, or the section this
-        # function is about to validate would be one no later load accepts.
+        # apiKey and apiKeyEnv are mutually exclusive (ProviderConfig._one_key_source).
+        # Naming both in one call is a mistake, not a precedence to guess at:
+        # applying the two supersede rules in turn cleared the literal key and
+        # then the environment reference, deleting the credential the section
+        # already held. One source supersedes the other.
+        if fields.get("api_key") and fields.get("api_key_env"):
+            raise ValueError("set apiKey or apiKeyEnv, not both")
         if fields.get("api_key") and working.get("api_key_env"):
             prev.setdefault("api_key_env", working["api_key_env"])
             working["api_key_env"] = None
@@ -797,7 +806,9 @@ def set_provider_fields(
 
         validated = cls.model_validate(working)
 
-        _write_raw_section(data, name, validated.model_dump(by_alias=True))
+        # Unset fields are absent, not nulls: every `provider set` used to
+        # write `apiKeyEnv: null` into sections that never named a variable.
+        _write_raw_section(data, name, validated.model_dump(by_alias=True, exclude_none=True))
         return json.dumps(data, indent=2, ensure_ascii=False), prev
 
     return atomic_update(path, _apply)
@@ -1365,14 +1376,22 @@ def provider_connection(name: str, section: Any) -> tuple[str, str, dict[str, st
     key, else the first endpoint's address, then the spec's default. The headers
     are that same endpoint's, the section's flat ones included where it names
     none -- a url/key/header group is reachable only whole. Any part may come back
-    empty -- an OAuth seat hands out no key, and a vendor nothing here knows an
-    address for has none -- and what an empty part means is the caller's to say.
+    empty -- an OAuth seat hands out no key, a vendor nothing here knows an
+    address for has none, and a named-but-unset ``apiKeyEnv`` reads the same way
+    -- and what an empty part means is the caller's to say. Reading the variable
+    here rather than refusing lets config assembly (the media tools, the web
+    borrow) keep working; the build is what names an unset one.
     """
+    from raven.providers.auth import MissingCredentialsError
+
     name = canonical_provider_name(name)
     spec = _provider_spec(name)
     if spec is not None and spec.is_oauth:
         return "", "", {}
-    endpoints = provider_endpoints(section) if section is not None else []
+    try:
+        endpoints = provider_endpoints_for_request(section) if section is not None else []
+    except MissingCredentialsError:
+        endpoints = []
     endpoint = next((ep for ep in endpoints if ep.api_key), endpoints[0] if endpoints else None)
     api_key = endpoint.api_key if endpoint else ""
     api_base = (
@@ -1552,6 +1571,26 @@ def test_provider(
                 "error": "no OAuth token stored",
             }
         api_key = oauth_access
+
+    # The probe reports on the credential a request would carry, so a flat
+    # `apiKeyEnv` is resolved here. An unset variable gets its own verdict:
+    # the section is configured -- it names the source -- and the fix is to
+    # export the variable, which `not_configured` does not say.
+    if not api_key and uses_flat_key(instance):
+        from raven.providers.auth import MissingCredentialsError
+
+        try:
+            api_key = resolve_api_key_env(instance, provider=name)
+        except MissingCredentialsError as exc:
+            return {
+                "ok": False,
+                "status": "missing_env",
+                "elapsed_ms": 0,
+                "http_status": None,
+                "models_count": None,
+                "model_ids": None,
+                "error": f"{exc.summary} {exc.remedy}".strip(),
+            }
 
     if not api_key and not (spec and spec.is_local):
         return {

@@ -1,6 +1,5 @@
 """Configuration schema using Pydantic."""
 
-import os
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args
 from urllib.parse import urlparse
@@ -418,7 +417,15 @@ class ProviderConfig(Base):
     # whose keys live in a secret manager: config.json then carries a name,
     # not the credential. Mutually exclusive with api_key, so a section
     # states exactly one source (see _one_key_source).
-    api_key_env: str | None = None
+    api_key_env: str | None = Field(
+        default=None,
+        description=(
+            "Name of an environment variable holding the key, resolved in memory when the "
+            "provider is built. Stands in for apiKey only: a section with endpoints or "
+            "apiKeyList takes its keys there. Set via config.json or `provider set "
+            "--api-key-env`; the settings page does not offer it."
+        ),
+    )
     api_base: str | None = None
     # Optional wire default. When omitted, GPT models use Responses and Claude
     # models use Anthropic Messages; model_protocols can override either rule.
@@ -498,18 +505,13 @@ class ProviderConfig(Base):
         is handed ``api_key or "no-key"``, so a missing variable would fail
         at the API as an auth error instead of naming the variable.
         MissingCredentialsError, not ValueError, so the CLI, gateway and TUI
-        render it the way every other credential refusal is rendered.
+        render it the way every other credential refusal is rendered. The
+        read itself lives beside ``provider_endpoints`` so the build and every
+        request-boundary consumer resolve the value one way.
         """
-        from raven.providers.auth import MissingCredentialsError
+        from raven.providers.endpoints import resolve_api_key_env
 
-        name = self.api_key_env or ""
-        value = os.environ.get(name, "")
-        if not value:
-            raise MissingCredentialsError(
-                f"the environment variable {name!r} that apiKeyEnv names is not set",
-                remedy=f"Export {name}, or clear apiKeyEnv and set apiKey instead.",
-            )
-        return value
+        return resolve_api_key_env(self)
 
     @property
     def effective_api_key(self) -> str:
@@ -562,10 +564,13 @@ class GeminiProviderConfig(ProviderConfig):
 
     @property
     def effective_api_key(self) -> str:
-        if self.api_key_env:
-            return self._key_from_env()
+        # The list is this section's key source, the same way ``endpoints``
+        # replaces the flat pair: ``apiKeyEnv`` stands in for the flat key, so
+        # it applies only when no list is declared.
         if self.api_key_list:
             return self.api_key_list[0]
+        if self.api_key_env:
+            return self._key_from_env()
         return self.api_key
 
 

@@ -184,8 +184,10 @@ add a provider with `protocol: anthropic` and that address as its `apiBase`, in
 
 A deployment that keeps its keys in a secret manager need not write them
 into `config.json`. Name the variable instead of the value: set `apiKeyEnv`
-on the provider section, and Raven resolves it in memory when the provider
-is built.
+on the provider section, or run `raven provider set <name> --api-key-env
+<VAR>`, and Raven resolves it in memory when the provider is built. This
+field is for `config.json` and the CLI; **Settings > Model providers** does
+not offer it.
 
 ```json
 {
@@ -197,8 +199,18 @@ is built.
 
 Export the variable where Raven runs -- your shell profile, or the service
 unit -- so every process Raven starts receives it. A section holds either
-`apiKey` or `apiKeyEnv`, not both. If the variable is unset or empty, Raven
-refuses to start and names it, rather than sending an empty key to the API.
+`apiKey` or `apiKeyEnv`, not both; a file carrying both is refused when it
+loads, so remove one. If the variable is unset or empty, Raven still starts:
+the section counts as configured, and the first model call fails with an
+error naming the variable, rather than sending an empty key to the API.
+`raven provider test <name>` reports the same condition as `missing_env`.
+The startup credential gate reads the config's declaration only, so it does
+not fail on a variable that is exported later, for example after the process
+starts.
+
+`apiKeyEnv` stands in for the flat `apiKey` only. A section that lists keys
+(`apiKeyList`) or full endpoint groups (`endpoints`) takes its keys from those
+entries, and the named variable is ignored there.
 
 Spell the variable exactly as you export it. Windows reads environment names
 case-insensitively, so a name spelled in the wrong case resolves there and

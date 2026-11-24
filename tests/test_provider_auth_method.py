@@ -468,13 +468,20 @@ def test_an_unset_environment_variable_fails_where_the_key_is_built(
     assert "apiKeyEnv" in (excinfo.value.remedy or "")
 
 
-def test_an_environment_variable_answers_for_gemini_too(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Gemini's override must not silently ignore the reference the base gained."""
+def test_an_environment_variable_is_the_flat_key_for_gemini_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``apiKeyEnv`` stands in for the flat key only.
+
+    Gemini's list replaces the flat pair the same way ``endpoints`` does, so a
+    declared list keeps serving the key and the variable answers for a section
+    with no list. One precedence, stated in the field description.
+    """
     from raven.config.schema import GeminiProviderConfig
 
     monkeypatch.setenv("RAVEN_TEST_GEMINI_KEY_ENV", "AIzaFROMENV")
+
+    assert GeminiProviderConfig(api_key_env="RAVEN_TEST_GEMINI_KEY_ENV").effective_api_key == "AIzaFROMENV"
     section = GeminiProviderConfig(api_key_env="RAVEN_TEST_GEMINI_KEY_ENV", api_key_list=["AIzaLIST"])
-    assert section.effective_api_key == "AIzaFROMENV"
+    assert section.effective_api_key == "AIzaLIST"
 
 
 def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
