@@ -48,18 +48,20 @@ this build does not serve is a refusal rather than a silent drop when the
 catalogue is read -- except under a top-level module this loader does not
 know, which is skipped. A Harness already stored is checked against the
 catalogue when it is loaded, so a capability the catalogue has since turned
-off makes that stored file unloadable, and the library drops it. A missing or
-malformed catalogue is a corrupt installation and does not enable every
-switch: the loader raises a
-`RuntimeError` naming the file when it is absent, a `RuntimeError` without
+off makes that stored file unloadable, and the library drops it with a
+`Skipping unloadable playbook '...'` warning. A missing or malformed catalogue
+is a corrupt installation and does not enable every switch: the loader raises
+a `RuntimeError` naming the file when it is absent, a `RuntimeError` without
 the path when the JSON is malformed, and `UnicodeDecodeError` when the bytes
 are not UTF-8, and the turn that needed it logs
 `agent playbook: resolution failed; running unconfigured` and runs
-unconfigured, exactly as any other generation failure does. So a worker
-missing a field you expected is the catalogue saying no, and a table that
-never appeared at the turn boundary comes with that warning line naming the
-file; a table missing for any other reason is one of the other generation
-failures, which log a line of their own.
+unconfigured. The other generation failures log their own lines -- a provider
+failure is `agent playbook: task generation failed (...)` and repair
+exhaustion is `agent playbook: task Harness still invalid after one repair`.
+So a worker missing a field you expected may be the catalogue saying no --
+provided the field was declared at all, since a Harness a model omitted one
+from carries none -- and a table that never appeared at the turn boundary is
+one of those failures, each of which logs a line of its own.
 
 | Layer | Lifetime | Meaning |
 | --- | --- | --- |
