@@ -510,6 +510,18 @@ _STORED_MID_TURN_KEY = "mid_turn"
 _MID_TURN_HEADER = "[Mid-turn messages — sent by the user while this turn was already running]"
 
 
+def _arrival_words(content: Any) -> tuple[str, dict[str, Any] | None]:
+    """An arrival's words, and the text block they end on when a strategy wrapped them.
+
+    An arrival is text by construction -- the inject names attached files in
+    its text -- so its text blocks carry all of it.
+    """
+    if not isinstance(content, list):
+        return str(content or ""), None
+    blocks = [part for part in content if isinstance(part, dict) and part.get("type") == "text"]
+    return "".join(str(part.get("text") or "") for part in blocks), (blocks[-1] if blocks else None)
+
+
 def merge_mid_turn(messages: list[dict[str, Any]], *, replay: bool = False) -> list[dict[str, Any]]:
     """One user message per adjacent run of mid-turn arrivals, under the header.
 
@@ -523,6 +535,13 @@ def merge_mid_turn(messages: list[dict[str, Any]], *, replay: bool = False) -> l
     same fold the turn was sent with so the provider's cached prefix matches.
     The plain spelling is never honoured on the live path, where it would
     label an entry this turn did not add.
+
+    The call seam folds after the ``before_llm_call`` strategies, and
+    ``CacheOptimizer`` wraps the newest messages' text into a text-block list to
+    hang a breakpoint on it. The fold reads an arrival's words through that
+    list, and a run whose last arrival was wrapped comes out as one text block
+    carrying that arrival's block keys: the breakpoint stays at the end of the
+    run, and the text is the same bytes the replay of the stored arrivals folds.
     """
     mark = _MID_TURN_USER_KEY
 
@@ -532,13 +551,14 @@ def merge_mid_turn(messages: list[dict[str, Any]], *, replay: bool = False) -> l
     if not any(arrival(m) for m in messages):
         return messages
     out: list[dict[str, Any]] = []
-    run: list[str] = []
+    run: list[tuple[str, dict[str, Any] | None]] = []
 
     def flush() -> None:
         if not run:
             return
-        body = "\n\n".join(run)
-        merged: dict[str, Any] = {"role": "user", "content": f"{_MID_TURN_HEADER}\n\n{body}"}
+        text = f"{_MID_TURN_HEADER}\n\n" + "\n\n".join(words for words, _ in run)
+        tail = run[-1][1]
+        merged: dict[str, Any] = {"role": "user", "content": text if tail is None else [{**tail, "text": text}]}
         if not replay:
             # The live fold's output is a candidate for the next pass and for the
             # re-run seed. A replayed one is payload only, and marking it would
@@ -551,7 +571,8 @@ def merge_mid_turn(messages: list[dict[str, Any]], *, replay: bool = False) -> l
         if arrival(m):
             # The merged message keeps the mark, so a second pass over the same
             # list must not stack a second header onto its own output.
-            run.append(str(m.get("content") or "").removeprefix(f"{_MID_TURN_HEADER}\n\n"))
+            words, tail = _arrival_words(m.get("content"))
+            run.append((words.removeprefix(f"{_MID_TURN_HEADER}\n\n"), tail))
             continue
         flush()
         out.append(m)

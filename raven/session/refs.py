@@ -20,13 +20,19 @@ from __future__ import annotations
 from typing import Any
 
 from raven.contracts.context import SessionRevision
+from raven.security.trust import fence_span
 from raven.utils.refs import SourceRef
 
 SESSION_REF_STORE = "session"
 """The ``store`` name for refs into ``session.messages``."""
 
 TOOL_RESULT_TRUNCATION_MARKER = "\n... (truncated)"
-"""What the loop's ``_save_turn`` appends to a tool result it had to cut.
+"""What the loop appends to a tool result it had to cut.
+
+The cut lands before the model reads the result and again on the way into the
+session log, so both sides carry the same bytes. A fenced result carries the
+marker at the cut end of its body, inside the fence: after a head preview and
+before a tail preview. An unfenced one carries it at the same end.
 
 Machine-recognisable on purpose: ``context.toolResultMaxChars`` defaults high
 enough that nothing written today is cut, but history written under the old
@@ -46,8 +52,46 @@ def belongs_to(ref: SourceRef, revision: SessionRevision) -> bool:
 
 
 def is_truncated(content: Any) -> bool:
-    """Whether a stored tool result was cut on the way to disk."""
-    return isinstance(content, str) and content.endswith(TOOL_RESULT_TRUNCATION_MARKER)
+    """Whether a stored tool result was cut on the way to disk.
+
+    A fenced result carries the marker at the cut end of its body, inside the
+    fence; an unfenced one carries it at the same end. A head preview puts it
+    after the preview, a tail preview before it.
+    """
+    if not isinstance(content, str):
+        return False
+    if content.startswith(TOOL_RESULT_TRUNCATION_MARKER) or content.endswith(TOOL_RESULT_TRUNCATION_MARKER):
+        return True
+    span = fence_span(content)
+    return span is not None and (
+        span[1].startswith(TOOL_RESULT_TRUNCATION_MARKER) or span[1].endswith(TOOL_RESULT_TRUNCATION_MARKER)
+    )
+
+
+def cap_tool_result(content: Any, cap: int) -> Any:
+    """``content`` cut to ``cap`` characters of its body, saying it was cut.
+
+    A tool result is fenced as untrusted data before it reaches the model. The
+    cut lands inside that fence -- the body is shortened and the marker goes at
+    its end -- so the genuine END marker and any trusted note after it stay
+    whole. Non-string content (a multimodal result) is returned unchanged: the
+    cap has always guarded ``str`` content only.
+
+    Called where a result enters the conversation outside the iteration loop,
+    and again when a tool result is written to the session as the fallback for
+    a body no model call bounded. The bounded preview the loop sends is what
+    keeps the model and a later replay on the same bytes; this cap only catches
+    content that never reached that path.
+    """
+    if not isinstance(content, str) or not cap or is_truncated(content):
+        return content
+    span = fence_span(content)
+    if span is None:
+        return content if len(content) <= cap else content[:cap] + TOOL_RESULT_TRUNCATION_MARKER
+    opening, body, closing = span
+    if len(body) <= cap:
+        return content
+    return f"{opening}{body[:cap]}{TOOL_RESULT_TRUNCATION_MARKER}{closing}"
 
 
 TOOL_RESULT_VIEW_MAX_CHARS = 16_000
@@ -66,12 +110,24 @@ def tool_result_view(text: str, limit: int = TOOL_RESULT_VIEW_MAX_CHARS) -> str:
     """``text`` cut to ``limit`` characters, saying how much of the stored result was left out.
 
     A result already cut on the way to disk counts by its body, so one filed
-    under a cap at or below ``limit`` goes out as stored, marker included.
+    under a cap at or below ``limit`` goes out as stored, marker included. A
+    fenced result is counted by the body inside the fence, not by the fence's
+    own bytes; a marker at either cut end is stripped for the count.
     """
-    body = text[: -len(TOOL_RESULT_TRUNCATION_MARKER)] if is_truncated(text) else text
-    if len(body) <= limit:
+    span = fence_span(text)
+    body = span[1] if span is not None else text
+    stored = body
+    if stored.startswith(TOOL_RESULT_TRUNCATION_MARKER):
+        stored = stored[len(TOOL_RESULT_TRUNCATION_MARKER) :]
+    elif stored.endswith(TOOL_RESULT_TRUNCATION_MARKER):
+        stored = stored[: -len(TOOL_RESULT_TRUNCATION_MARKER)]
+    if len(stored) <= limit:
         return text
-    return f"{text[:limit]}\n... ({len(body) - limit:,} more characters of the stored result not shown here)"
+    more = f"... ({len(stored) - limit:,} more characters of the stored result not shown here)"
+    if span is not None:
+        opening, body, closing = span
+        return f"{opening}{body[:limit]}\n{more}{closing}"
+    return f"{text[:limit]}\n{more}"
 
 
 __all__ = [
@@ -79,6 +135,7 @@ __all__ = [
     "TOOL_RESULT_TRUNCATION_MARKER",
     "TOOL_RESULT_VIEW_MAX_CHARS",
     "belongs_to",
+    "cap_tool_result",
     "is_truncated",
     "session_ref",
     "tool_result_view",

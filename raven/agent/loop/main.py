@@ -53,6 +53,7 @@ from raven.agent.loop.turn_path import TurnPathMixin
 from raven.agent.loop.wiring import WiringMixin
 from raven.agent.subagent.charter import charter_scope
 from raven.agent.subagent.delegate import delegate_scope
+from raven.session.tool_output import ToolOutputLimits
 
 if TYPE_CHECKING:
     from raven.agent.hook import CompositeHook
@@ -87,9 +88,12 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
     5. Sends responses back
     """
 
-    # The default of ``context.toolResultMaxChars``; an instance reads its own
-    # config over it. 0 writes every tool result whole.
+    # The defaults of the tool-result budgets; an instance reads its own config
+    # over them. 0 disables that budget.
+    _TOOL_RESULT_MAX_LINES = 2_000
+    _TOOL_RESULT_MAX_BYTES = 50 * 1024
     _TOOL_RESULT_MAX_CHARS = 1_000_000
+    _TOOL_OUTPUT_LIMITS = ToolOutputLimits()
 
     # Reconnects allowed for a streamed call that failed before its first delta
     # (after one, the caller has output that a retry would duplicate).
@@ -428,7 +432,14 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # off means this host mounts no router source, so the project source
         # the tools would otherwise carry goes with it.
         self._skill_router_enabled = bool(getattr(skill_forge_router_config, "enabled", True))
-        self._TOOL_RESULT_MAX_CHARS = max(0, int(context_config.tool_result_max_chars))
+        self._TOOL_RESULT_MAX_LINES = max(0, int(getattr(context_config, "tool_result_max_lines", 2_000)))
+        self._TOOL_RESULT_MAX_BYTES = max(0, int(getattr(context_config, "tool_result_max_bytes", 50 * 1024)))
+        self._TOOL_RESULT_MAX_CHARS = max(0, int(getattr(context_config, "tool_result_max_chars", 1_000_000)))
+        self._TOOL_OUTPUT_LIMITS = ToolOutputLimits(
+            max_lines=self._TOOL_RESULT_MAX_LINES,
+            max_bytes=self._TOOL_RESULT_MAX_BYTES,
+            max_chars=self._TOOL_RESULT_MAX_CHARS,
+        )
 
         # Skill Hub client — built once and shared by the HubSkillSource
         # (catalog discovery) and the read_skill / use_skill tools (body /

@@ -44,6 +44,38 @@ def wrap_untrusted(text: str, *, source: str) -> str:
     )
 
 
+def fence_span(text: str) -> tuple[str, str, str] | None:
+    """Split a fenced string into ``(opening, body, closing)``, or ``None``.
+
+    ``opening`` is the BEGIN line and its newline; ``body`` is what the fence
+    labels as data; ``closing`` begins with the newline before the genuine END
+    line and carries whatever was appended after it (a trusted note). The
+    genuine close is the last line carrying the opening's nonce -- the nonce
+    makes a forged close inside the body unguessable, so the last match is the
+    real one. One definition for every reader that needs the parts, not just
+    the body.
+    """
+    if not isinstance(text, str) or not text.startswith("[BEGIN UNTRUSTED "):
+        return None
+    head, sep, rest = text.partition("\n")
+    if not sep or "#" not in head:
+        return None
+    nonce = head.rsplit("#", 1)[-1].split()[0]
+    if not nonce:
+        return None
+    at = len(rest)
+    for line in reversed(rest.split("\n")):
+        at -= len(line)
+        if line.startswith("[END UNTRUSTED ") and line.rstrip().endswith(f"#{nonce}]"):
+            if at == 0:
+                return None
+            body_end = at - 1
+            opening_end = len(head) + 1
+            return text[:opening_end], rest[:body_end], rest[body_end:]
+        at -= 1
+    return None
+
+
 def unwrap_untrusted(text: object) -> str:
     """Inverse of :func:`wrap_untrusted`; unfenced input comes back unchanged.
 
@@ -67,20 +99,8 @@ def unwrap_untrusted(text: object) -> str:
     output and is dropped.
     """
     body = text if isinstance(text, str) else str(text)
-    if not body.startswith("[BEGIN UNTRUSTED "):
-        return body
-    head, sep, rest = body.partition("\n")
-    if not sep or "#" not in head:
-        return body
-    nonce = head.rsplit("#", 1)[-1].split()[0]
-    if not nonce:
-        return body
-    lines = rest.split("\n")
-    for i in range(len(lines) - 1, -1, -1):
-        line = lines[i]
-        if line.startswith("[END UNTRUSTED ") and line.rstrip().endswith(f"#{nonce}]"):
-            return "\n".join(lines[:i])
-    return body
+    span = fence_span(body)
+    return span[1] if span is not None else body
 
 
 def wrap_untrusted_blocks(blocks: list[dict[str, Any]], *, source: str) -> list[dict[str, Any]]:
