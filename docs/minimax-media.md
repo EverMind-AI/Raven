@@ -100,10 +100,10 @@ these settings the way the launcher does: a deck on a provider of its own is rea
 `PPT_IMAGE_API_KEY` or the host's key for that provider, never with the host's image
 key for another one.
 
-On an H3 image role the deck inherits both H3 limits: a picture asked for with
-`references` is refused per picture, because H3 ignores reference images, and the deck
-takes its deadline from the host image tool, so a batch gets one H3 window per four
-pictures in flight instead of the deck's own six minutes.
+On an H3 image role the deck inherits the host's route and deadline: a picture asked
+for with `references` is edited through the host's edits route, up to the deck's own
+six references, and the deck takes its deadline from the host image tool, so a batch
+gets one H3 window per four pictures in flight instead of the deck's own six minutes.
 
 ## References
 
