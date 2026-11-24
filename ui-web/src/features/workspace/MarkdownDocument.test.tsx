@@ -81,8 +81,27 @@ describe('a markdown document outline, in the reader chrome', () => {
   it('opens a menu with a menu width rather than the button it hangs from', () => {
     const pop = rule('.workspace-md-pop')
     expect(pop).toMatch(/width: 216px/)
-    expect(pop).toMatch(/inset-inline-start: 0/)
+    expect(pop).toMatch(/max-width: 100%/)
     expect(pop).not.toMatch(/calc\(100% - 28px\)/)
+  })
+
+  /* The slot around the button sits close to the bar's end at narrow widths,
+     so the menu is laid against the header instead: both edges of that box
+     are bounds it cannot leave. happy-dom has no layout, so the anchor is
+     pinned as written; the geometry is measured in the browser. */
+  it('lays the menu against the header, not the button slot', () => {
+    const pop = rule('.workspace-md-pop')
+    expect(pop).toMatch(/inset-inline-end: 0/)
+    expect(pop).not.toMatch(/inset-inline-start: 0/)
+    expect(pop).toMatch(/inset-block-start: calc\(100% \+ 6px\)/)
+    expect(rule('.workspace-md-slot')).not.toMatch(/position: relative/)
+  })
+
+  it('positions every header the menu mounts into', () => {
+    expect(css()).toMatch(/\.workspace-preview-head \{[^}]*position: relative/)
+    const page = readFileSync('src/styles/page.css', 'utf8') as string
+    expect(page).toMatch(/\.fbar \{[^}]*position: relative/)
+    expect(page).toMatch(/\.pane-head \{[^}]*position: relative/)
   })
 
   /* Chromium grows an open <details> by 8px whatever its content is positioned

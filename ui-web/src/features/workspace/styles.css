@@ -87,7 +87,7 @@
    nothing about the room it has, and the desktop shell's WebKit predates
    container queries. */
 
-.workspace-md-slot { position: relative; display: inline-flex; flex: none; }
+.workspace-md-slot { display: inline-flex; flex: none; }
 .workspace-md-slot:empty { display: none; }
 
 .workspace-mddoc {
@@ -200,16 +200,16 @@
 }
 .workspace-md-menu summary::-webkit-details-marker { display: none; }
 .workspace-md-menu[data-tight] summary span { display: none; }
-/* The menu's width is its own, not the button's: this element's containing
-   block is the inline-flex slot around that button (about 90px), so a
-   percentage width here answers a question nobody asked and squeezed the
-   outline into a column of one character per line. Left-aligned, a menu wider
-   than the controls to its right still lands inside the header at every pane
-   width. */
+/* The menu's width is its own, not the button's, and it is laid against the
+   header rather than the button: the slot around that button sits 110-155px
+   from the bar's end, so a 216px menu left-aligned from it ran past the edge
+   (75px at 375, 11px at 450) and was clipped. Anchored to the header's inline
+   end it stays inside; max-width gives up width in a header narrower than the
+   menu rather than being cut. */
 .workspace-md-pop {
   position: absolute; z-index: 2;
-  inset-block-start: calc(100% + 6px); inset-inline-start: 0;
-  width: 216px; max-width: calc(100vw - 24px);
+  inset-block-start: calc(100% + 6px); inset-inline-end: 0;
+  width: 216px; max-width: 100%;
   max-height: min(58dvh, 460px); overflow: auto; padding: 10px;
   border: 1px solid var(--line); border-radius: 12px;
   background: var(--paper);
@@ -298,7 +298,7 @@ html[data-preview] #onb { display: none !important; }
 
 .workspace-preview { display: flex; flex-direction: column; height: 100%; background: var(--paper); }
 .workspace-preview-head {
-  display: flex; flex: none; align-items: center; gap: 10px;
+  position: relative; display: flex; flex: none; align-items: center; gap: 10px;
   height: 52px; padding: 0 12px 0 16px;
   border-bottom: .5px solid var(--line);
 }

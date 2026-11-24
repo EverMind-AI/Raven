@@ -4029,7 +4029,7 @@ html[data-traj] #trajHost > * { position: relative; z-index: 1 }
 .lcard .t { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text); }
 .lcard .t small { display: block; font-size: 10.5px; color: var(--faint); }
 
-.fbar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; flex: none;
+.fbar { position: relative; display: flex; align-items: center; gap: 8px; padding: 8px 10px; flex: none;
   border-bottom: 1px solid var(--line-soft); background: var(--ink);
   -webkit-user-select: none; user-select: none; }
 /* The path, not just the name: which of three README.md it is matters more than
@@ -6470,7 +6470,7 @@ body:has(#onb:not([hidden])) .mpick { z-index: calc(var(--z-onboarding) + 1); }
    its left edge. */
 .desk-ready .chat #wsGrip {
   top: auto; bottom: var(--dock-gutter); right: -18px;
-  width: 18px; height: 18px; cursor: nesw-resize; touch-action: none;
+  width: 18px; height: 18px; cursor: ew-resize; touch-action: none;
 }
 .desk-ready .chat #wsGrip::after {
   display: block; top: auto; left: 4px; bottom: 4px; width: 9px; height: 9px;
@@ -7026,7 +7026,7 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
    line of facts under it, and the controls that act on what is shown. A
    hairline sets those off from the window's own two. Each line gives way on
    its own, so the facts stay on screen however narrow the pane. */
-.pane-head { flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; gap: 6px; }
+.pane-head { position: relative; flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; gap: 6px; }
 .pane-head-glyph, .pane-head .pane-head-back { width: 28px; height: 28px; margin-left: -6px; flex: none;
   display: grid; place-items: center; color: var(--text-3); }
 .pane-head-glyph svg { width: 15px; height: 15px; stroke-linecap: round; stroke-linejoin: round; }

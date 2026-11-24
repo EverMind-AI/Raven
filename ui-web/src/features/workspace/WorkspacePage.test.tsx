@@ -966,6 +966,50 @@ describe('workspace island', () => {
     expect(document.querySelector('.fview .prose h1')?.textContent).toBe('Title')
   })
 
+  /* The text kinds are the ones a preview page can draw; every other kind
+     stays in the pane. The kinds are written out rather than read from
+     IN_TAB: that set is the behaviour these rows pin, so a member dropped
+     from it has to fail one of them. */
+  const PREVIEW_KINDS: Array<[string, string]> = [
+    ['md', '/repo/docs/README.md'],
+    ['csv', '/repo/data/rows.csv'],
+    ['json', '/repo/data/conf.json'],
+    ['diff', '/repo/out/change.diff'],
+    ['code', '/repo/src/app.py'],
+  ]
+  const PANE_KINDS: Array<[string, string]> = [
+    ['img', '/repo/out/shot.png'],
+    ['svg', '/repo/assets/logo.svg'],
+    ['pdf', '/repo/out/paper.pdf'],
+    ['html', '/repo/report.html'],
+    ['office', '/repo/out/deck.pptx'],
+    ['bin', '/repo/blob.dat'],
+  ]
+
+  it.each(PREVIEW_KINDS)('opens a %s file on a page of its own', async (kind, path) => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const file = store.makeFile(path)
+    expect(file.kind).toBe(kind)
+    install(emptyWs({ file }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    const button = document.querySelector('.fbar .workspace-window') as HTMLElement | null
+    expect(button).not.toBeNull()
+    await act(async () => { button!.click() })
+    expect(open).toHaveBeenCalledWith(
+      `${location.pathname}?preview=1&path=${encodeURIComponent(path)}`,
+      '_blank',
+      'noopener',
+    )
+  })
+
+  it.each(PANE_KINDS)('keeps a %s file in the pane, with no page of its own', async (kind, path) => {
+    const file = store.makeFile(path)
+    expect(file.kind).toBe(kind)
+    install(emptyWs({ file }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    expect(document.querySelector('.fbar .workspace-window')).toBeNull()
+  })
+
   it('collapses the rendered and source pair to one button in a narrow bar', async () => {
     const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 420 })
