@@ -52,6 +52,7 @@ def grounded(launcher, tmp_path, monkeypatch):
     monkeypatch.delenv("CODE_SERPER_API_KEY", raising=False)
     monkeypatch.delenv("CODE_JINA_API_KEY", raising=False)
     monkeypatch.delenv("CODE_PROJECT_FILES", raising=False)
+    monkeypatch.delenv("CODE_PROFILE", raising=False)
     for retired in (
         "RAVEN_WORKSPACE_ALLOC_BASE",
         "RAVEN_WORKSPACE_ALLOC_REPOS",
@@ -1397,3 +1398,83 @@ def test_rendered_guidance_conditions_product_only_tools_on_the_actual_tool_list
     assert "You have access to the todo tool" not in system
     assert "Only use tools and parameters exposed in the current function schemas" in system
     assert "otherwise use find" in system
+
+
+OFFICE_PROFILE = RUN_PY.parent / "profiles" / "office"
+
+
+def test_a_profile_replaces_the_prompt_files_it_carries(grounded, tmp_path, monkeypatch):
+    """CODE_PROFILE swaps the identity, conduct and guide for the profile's own
+    copies; the tools stay whatever the config offers."""
+    monkeypatch.setenv("CODE_PROFILE", "office")
+    partition = tmp_path / "part"
+    grounded.render_config(RUN_PY.parent / "config.json", partition, unattended=True)
+    assert (partition / "TOOLS.md").read_text() == (OFFICE_PROFILE / "TOOLS.md").read_text()
+    profile = partition / "agent_memory" / "profile"
+    assert (profile / "soul.md").read_text() == (OFFICE_PROFILE / "soul.md").read_text()
+    assert (profile / "agent.md").read_text() == (OFFICE_PROFILE / "agent.md").read_text()
+
+
+def test_a_profile_replaces_seeds_the_product_wrote_earlier(grounded, tmp_path, monkeypatch):
+    """A partition first seeded with the coding prompts takes the profile's on the
+    next launch: the product's untouched seeds are not an operator's edit."""
+    partition = tmp_path / "part"
+    grounded.render_config(RUN_PY.parent / "config.json", partition, unattended=True)
+    monkeypatch.setenv("CODE_PROFILE", "office")
+    grounded.render_config(RUN_PY.parent / "config.json", partition, unattended=True)
+    assert (partition / "TOOLS.md").read_text() == (OFFICE_PROFILE / "TOOLS.md").read_text()
+    assert (partition / "agent_memory" / "profile" / "soul.md").read_text() == (OFFICE_PROFILE / "soul.md").read_text()
+
+
+def test_a_profile_without_a_footer_passes_the_task_as_written(grounded, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODE_PROFILE", "office")
+    assert grounded.build_task("Make the report.", tmp_path, resuming=False) == "Make the report."
+    assert grounded.build_task("Please continue the task", tmp_path, resuming=True) == "Please continue the task"
+
+
+def test_a_profile_footer_is_appended_with_the_workspace(grounded, tmp_path, monkeypatch):
+    profiles = tmp_path / "profiles"
+    for name in ("soul.md", "agent.md", "TOOLS.md"):
+        (profiles / "custom").mkdir(parents=True, exist_ok=True)
+        (profiles / "custom" / name).write_text(name)
+    (profiles / "custom" / "task_footer.md").write_text("Work in {workspace}.\n")
+    monkeypatch.setattr(grounded, "PROFILES_DIR", profiles)
+    monkeypatch.setenv("CODE_PROFILE", "custom")
+    assert grounded.build_task("Do it.", tmp_path, resuming=False) == f"Do it.\n\n---\nWork in {tmp_path}."
+
+
+def test_an_unknown_profile_is_refused(grounded, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODE_PROFILE", "no-such-profile")
+    with pytest.raises(SystemExit, match="CODE_PROFILE"):
+        grounded.render_config(RUN_PY.parent / "config.json", tmp_path / "part", unattended=True)
+
+
+def test_the_office_guide_teaches_no_coding_only_lane():
+    """The office guide keeps the tool facts and drops what an office run cannot
+    use: the machine lane, the host-tool variants, repository examples."""
+    text = (OFFICE_PROFILE / "TOOLS.md").read_text()
+    for name in (
+        "exec",
+        "run_in_background",
+        "read_file",
+        "edit_file",
+        "write_file",
+        "grep",
+        "glob",
+        "todo",
+        "30,000",
+        "2000",
+    ):
+        assert name in text, name
+    for name in (
+        "machine",
+        "ops_connection_add",
+        "ssh",
+        "repository",
+        "test runner",
+        "build/*.o",
+        "a server that must",
+        "serve the host",
+        "Raven-Code instance",
+    ):
+        assert name not in text, name

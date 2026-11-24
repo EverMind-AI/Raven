@@ -107,6 +107,12 @@ class ContextAssembler(ContextEngine):
     def name(self) -> str:
         return "context_assembler"
 
+    def _offers(self, *names: str) -> bool:
+        """Whether any of these tools is live this turn; an unreadable tool
+        table counts as yes, on the terms ``render.identity_text`` reads one."""
+        live = render._tool_names(self.get_tool_definitions)
+        return live is None or bool(set(names) & set(live))
+
     @property
     def owns_compaction(self) -> bool:
         # The Curator lane archives history itself, so AgentLoop hands it
@@ -165,7 +171,9 @@ class ContextAssembler(ContextEngine):
         prefix_parts.sort(key=lambda t: t[0])
         system_prefix = _SEG_SEP.join(text for _, text, _ in prefix_parts)
 
-        if self._scent is not None:
+        # The menu ends "read one with read_skill(id); search with find_skill": a
+        # run without the skill tools would read an offer it cannot take.
+        if self._scent is not None and self._offers("read_skill", "find_skill", "use_skill"):
             scent = await self._scent.build(ctx.current_message, ctx.session_messages)
             if scent:
                 ctx = replace(ctx, scent_text=scent.text)
@@ -260,8 +268,15 @@ class ContextAssembler(ContextEngine):
         single-newline join and the collapse of any blank lines within.
         """
         notices = self.get_tool_notices() if self.get_tool_notices is not None else None
+        # Channel and chat id say where a ``message`` would go; without that tool
+        # there is nowhere else to send one, and the reply reaches the caller.
+        routed = self._offers("message")
         runtime_ctx = render.build_runtime_context(
-            self._now_fn, ctx.channel, ctx.chat_id, surface=ctx.surface, tool_notices=notices
+            self._now_fn,
+            ctx.channel if routed else None,
+            ctx.chat_id if routed else None,
+            surface=ctx.surface,
+            tool_notices=notices,
         )
         if ctx.scent_text:
             scent = re.sub(r"\n{2,}", "\n", ctx.scent_text.strip())
@@ -272,6 +287,12 @@ class ContextAssembler(ContextEngine):
             can_see_images=ctx.can_see_images,
             describe_tool=ctx.describe_tool,
         )
+        # Work build: a block that would carry nothing but the clock is not sent,
+        # so an unattended task (and a continuation turn) reaches the model as
+        # written. The session persist strips the block only when the message
+        # starts with its tag, so leaving it out loses nothing there.
+        if not ((ctx.channel and ctx.chat_id and routed) or ctx.surface or notices or ctx.scent_text):
+            return {"role": "user", "content": user_content}
         if isinstance(user_content, str):
             merged: Any = f"{runtime_ctx}\n\n{user_content}"
         else:

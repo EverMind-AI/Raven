@@ -214,6 +214,37 @@ class ExecTool(Tool):
 
     @property
     def parameters(self) -> dict[str, Any]:
+        from raven.agent.tools.machine_exec import machines_registered
+
+        # The machine lane is described only where it exists, as the description
+        # and the ``machine`` parameter already are: without a registered machine
+        # "THIS computer" and ops_submit name a choice the model does not have.
+        lane = machines_registered()
+        if lane:
+            timeout = (
+                "Timeout in seconds for a command on THIS computer. Increase for long-running "
+                "commands like compilation or installation (default 60, max 600). Not read with "
+                "'machine': a look on a registered machine is capped at 60s whatever this says, and "
+                "anything longer there is a job for the on-call agent's ops_submit."
+            )
+            background = (
+                "Run detached on THIS computer instead of holding the turn: for long "
+                "mechanical local work (a download, an rsync, packaging). Returns a task id "
+                "and a log path at once; 'timeout' is not read on this lane, the task runs "
+                "until it finishes or the session ends. Read the log with a later exec. Not "
+                "combinable with 'machine': work on a registered machine is ops_submit's job."
+            )
+        else:
+            timeout = (
+                "Timeout in seconds. Increase for long-running commands like a large download or "
+                "conversion (default 60, max 600)."
+            )
+            background = (
+                "Run detached instead of holding the turn: for long mechanical work (a download, "
+                "an rsync, packaging). Returns a task id and a log path at once; 'timeout' is not "
+                "read on this lane, the task runs until it finishes or the session ends. Read the "
+                "log with a later exec."
+            )
         schema: dict[str, Any] = {
             "type": "object",
             "properties": {
@@ -227,31 +258,18 @@ class ExecTool(Tool):
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": (
-                        "Timeout in seconds for a command on THIS computer. Increase for long-running "
-                        "commands like compilation or installation (default 60, max 600). Not read with "
-                        "'machine': a look on a registered machine is capped at 60s whatever this says, and "
-                        "anything longer there is a job for the on-call agent's ops_submit."
-                    ),
+                    "description": timeout,
                     "minimum": 1,
                     "maximum": 600,
                 },
                 "run_in_background": {
                     "type": "boolean",
-                    "description": (
-                        "Run detached on THIS computer instead of holding the turn: for long "
-                        "mechanical local work (a download, an rsync, packaging). Returns a task id "
-                        "and a log path at once; 'timeout' is not read on this lane, the task runs "
-                        "until it finishes or the session ends. Read the log with a later exec. Not "
-                        "combinable with 'machine': work on a registered machine is ops_submit's job."
-                    ),
+                    "description": background,
                 },
             },
             "required": ["command"],
         }
-        from raven.agent.tools.machine_exec import machines_registered
-
-        if machines_registered():
+        if lane:
             schema["properties"]["machine"] = {
                 "type": "string",
                 "description": "Where to run it: a connection id from the owner's machine "

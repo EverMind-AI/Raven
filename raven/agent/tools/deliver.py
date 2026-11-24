@@ -110,8 +110,7 @@ class DeliverFilesTool(Tool):
         return (
             "Deliver finished output files to the user -- the only way to hand one over. "
             "Never write a path or a link instead; neither reaches the user. Call this once "
-            "the file is on disk, for final artifacts only, not scratch files. Raven renders "
-            "the resulting delivery in the form supported by the current client or channel."
+            "the file is on disk, for final artifacts only, not scratch files."
         )
 
     @property
@@ -132,7 +131,7 @@ class DeliverFilesTool(Tool):
                             },
                             "title": {
                                 "type": "string",
-                                "description": "Optional human-friendly title shown in the UI.",
+                                "description": "Optional human-friendly title for the file.",
                             },
                             "description": {
                                 "type": "string",

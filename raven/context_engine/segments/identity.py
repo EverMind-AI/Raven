@@ -8,6 +8,8 @@ from typing import Any
 from raven.context_engine.segments import render
 from raven.contracts.context import AssemblyContext, Segment
 
+SOUL_FILE = "agent_memory/profile/soul.md"
+
 
 def _task_block(ctx: AssemblyContext) -> str:
     """What this dispatch's Charter asked of the turn, as the identity shows it.
@@ -44,10 +46,23 @@ class IdentitySegmentBuilder:
         workspace: Path,
         list_subagents: Any | None = None,
         get_tool_definitions: Any | None = None,
+        *,
+        keeps_memory: bool = True,
     ) -> None:
         self._workspace = workspace
         self._list_subagents = list_subagents
         self._get_tool_definitions = get_tool_definitions
+        # False when ``context.dropSegments`` drops ``memory``: see ``render.identity_text``.
+        self._keeps_memory = keeps_memory
+
+    def _soul(self) -> str | None:
+        """soul.md as the opening of the identity, read per turn like the bootstrap files (the bootstrap
+        segment leaves it out)."""
+        path = self._workspace / SOUL_FILE
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            return None
 
     def _specialists(self) -> list[tuple[str, str]]:
         """``(name, owns)`` for every agent that declares what it owns.
@@ -83,5 +98,8 @@ class IdentitySegmentBuilder:
             self._workspace,
             specialists=self._specialists(),
             dispatch_tools=render.live_dispatch_tools(self._get_tool_definitions),
+            live_tools=render._tool_names(self._get_tool_definitions),
+            keeps_memory=self._keeps_memory,
+            identity=self._soul(),
         )
         return Segment(text=text + _task_block(ctx))

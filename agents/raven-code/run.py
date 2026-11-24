@@ -55,7 +55,10 @@ HERE = Path(__file__).resolve().parent
 DEFAULT_CONFIG = HERE / "config.json"
 PLUGINS_DIR = HERE / "plugins"
 FLOW_PLUGIN_ID = "code-flow"
-GUIDE = PLUGINS_DIR / FLOW_PLUGIN_ID / "prompts" / "TOOLS_CODE.md"
+# The work-domain build: identity, conduct and tool guide are the office prompts beside this file. The code-flow
+# plugin's coding prompts stay in the tree for the plugin and its tests; this launcher does not seed them.
+GUIDE = HERE / "TOOLS.md"
+CONDUCT = HERE / "agent.md"
 #: The coding conduct the model reads as ``agent.md`` beside the host identity:
 #: one variant per model family, the fork's split (its per-family prompt files).
 CONDUCT_DEFAULT = PLUGINS_DIR / FLOW_PLUGIN_ID / "prompts" / "CODE_CONDUCT_default.md"
@@ -302,9 +305,7 @@ def seed_conduct(partition: Path, model: str | None) -> None:
     Turning conduct off removes a managed seed instead of leaving it resident.
     """
     settings = conduct_settings()
-    wanted = (
-        render_conduct(model, discipline=settings.get("discipline", True)) if settings.get("enabled", True) else None
-    )
+    wanted = CONDUCT.read_text(encoding="utf-8") if settings.get("enabled", True) else None
     pristine = _LEGACY_CONDUCT_DIGESTS | {hashlib.sha256(text.encode()).hexdigest() for text in pristine_conducts()}
     _seed_prompt(partition / CONDUCT_RELATIVE, wanted, pristine)
 
@@ -652,33 +653,15 @@ def describe_changes(repo: Path) -> str:
 
 
 def build_task(task: str, workspace: Path, *, resuming: bool) -> str:
-    """Prefix the task with the facts about this run the agent cannot discover.
+    """The task as the caller wrote it.
 
-    On a resumed turn the history is already in context, so the preamble
-    states only what changed. Left out, the agent reads a fresh "you are
-    working in" line against files it remembers creating and treats it as a
-    contradiction.
+    The coding build appended an environment footer here ("the directory the
+    caller works in ... you can read and write anywhere on this host"). In the
+    work build the benchmark's own task message says where the files are and
+    how to hand them in, and agent.md says the run is unattended, so nothing is
+    added -- also not to a continuation turn, which reaches the model as sent.
     """
-    where = (
-        f"You are continuing in {workspace}, the same directory as earlier in this conversation, "
-        f"so anything you left there is still present."
-        if resuming
-        else (
-            f"You are working in {workspace}, the directory the caller works in. Files already "
-            f"there are theirs and your edits change them for real."
-        )
-    )
-    # Task first, environment after. The order is not cosmetic: everos
-    # extracts a memory from each turn by summarising the message, and with
-    # the preamble leading it stored the runtime context instead of the work.
-    return (
-        f"{task}\n\n"
-        f"---\n"
-        f"Environment: {where} You can read and write anywhere on this host. Nobody is watching "
-        f"this run - there is no channel to ask a question on, so where the task is ambiguous "
-        f"choose the most defensible option and say which assumption you made. Your reply is the "
-        f"whole report the caller receives."
-    )
+    return task
 
 
 def resolve_workspace(state_dir: Path, override: str | None) -> Path:

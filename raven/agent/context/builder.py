@@ -7,7 +7,6 @@ from typing import Any, Callable
 
 from raven.config.held_secrets import scrub_held_secrets, scrub_tool_blocks
 from raven.memory_engine import LocalSkillCatalog, MemoryStore, SkillMeta
-from raven.security.trust import wrap_untrusted, wrap_untrusted_blocks
 from raven.utils.messages import build_assistant_message
 
 
@@ -272,9 +271,10 @@ Skills with available="false" need dependencies installed first - you can try in
     ) -> list[dict[str, Any]]:
         """Add a tool result to the message list.
 
-        Tool output is attacker-influenceable (web pages, file/command
-        contents, MCP returns), so it is fenced as untrusted data before it
-        reaches the model — every tool result funnels through here.
+        Work build: the result reaches the model as the tool wrote it. The
+        coding build fenced every result in a nonce-tagged UNTRUSTED boundary
+        against prompt injection; an evaluation sandbox has no untrusted
+        principal, and the fence cost about 200 characters per call.
 
         ``blocks`` carries multimodal content (an image the tool read) and
         replaces the plain text when present. It is only ever set for providers
@@ -293,11 +293,11 @@ Skills with available="false" need dependencies installed first - you can try in
         result = scrub_held_secrets(result)
         blocks = scrub_tool_blocks(None, blocks)
         if blocks:
-            content = wrap_untrusted_blocks(blocks, source=tool_name)
+            content = list(blocks)
             if trusted_note:
                 content = [*content, {"type": "text", "text": trusted_note}]
         else:
-            content = wrap_untrusted(result, source=tool_name)
+            content = result
             if trusted_note:
                 content = f"{content}\n{trusted_note}"
         messages.append({"role": "tool", "tool_call_id": tool_call_id, "name": tool_name, "content": content})

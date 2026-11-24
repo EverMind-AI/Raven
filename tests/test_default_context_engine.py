@@ -492,6 +492,7 @@ class TestTurnPassthrough:
         builder: ContextBuilder,
     ) -> None:
         eng = _engine(builder, router=SkillForgeRouter([]), backend=_StubBackend())
+        eng.get_tool_definitions = lambda: [{"type": "function", "function": {"name": "message"}}]
         ac = await eng.assemble(
             "s",
             [],
@@ -501,6 +502,24 @@ class TestTurnPassthrough:
         joined = "\n".join(str(m.get("content")) for m in ac.messages)
         assert "slack" in joined
         assert "C123" in joined
+
+    async def test_channel_is_left_out_without_the_message_tool(
+        self,
+        builder: ContextBuilder,
+    ) -> None:
+        # The channel says where a ``message`` would go; with no such tool the
+        # reply is the only way out, and the lines name a choice that is not there.
+        eng = _engine(builder, router=SkillForgeRouter([]), backend=_StubBackend())
+        ac = await eng.assemble(
+            "s",
+            [],
+            _budget(),
+            turn=_turn("hello", channel="slack", chat_id="C123"),
+        )
+        joined = "\n".join(str(m.get("content")) for m in ac.messages)
+        assert "Channel: slack" not in joined
+        assert "C123" not in joined
+        assert "Current Time:" in joined
 
 
 # ── consecutive-assistant coalescing (2b deliver_text support) ──

@@ -81,7 +81,7 @@ class GrepTool(_FsTool):
             "grep/rg through exec — results are paginated, capped, and .gitignore-aware. "
             "output_mode 'content' returns matching lines with path:line numbers, "
             "'files_with_matches' lists only file paths, 'count' shows match counts per file. "
-            "Use glob to restrict to file types (e.g. '*.py')."
+            "Use glob to restrict to file types (e.g. '*.csv')."
         )
 
     @property
@@ -96,7 +96,7 @@ class GrepTool(_FsTool):
                 },
                 "glob": {
                     "type": "string",
-                    "description": "Only search files matching this glob (e.g. '*.py', '*.{ts,tsx}')",
+                    "description": "Only search files matching this glob (e.g. '*.csv', '*.{md,txt}')",
                 },
                 "output_mode": {
                     "type": "string",

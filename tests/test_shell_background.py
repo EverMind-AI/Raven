@@ -329,8 +329,19 @@ def test_a_task_from_another_session_is_still_seen_and_reaped_through_its_group(
     assert not background_exec._leads_its_own_group(task.pid)
 
 
-def test_the_schema_advertises_the_lane(home, tmp_path):
+def test_the_schema_advertises_the_lane(home, tmp_path, monkeypatch):
+    monkeypatch.setattr("raven.agent.tools.machine_exec.machines_registered", lambda: True)
     prop = ExecTool(working_dir=str(tmp_path)).parameters["properties"]["run_in_background"]
     assert prop["type"] == "boolean"
     assert "ops_submit" in prop["description"], "the boundary is taught where the parameter is read"
     assert "timeout" in prop["description"], "that the lane reads no timeout is said where the model can see it"
+
+
+def test_without_a_machine_the_schema_names_no_machine_lane(home, tmp_path, monkeypatch):
+    monkeypatch.setattr("raven.agent.tools.machine_exec.machines_registered", lambda: False)
+    props = ExecTool(working_dir=str(tmp_path)).parameters["properties"]
+    assert "machine" not in props
+    for name in ("timeout", "run_in_background"):
+        text = props[name]["description"]
+        assert "machine" not in text and "ops_submit" not in text and "THIS computer" not in text, name
+    assert "timeout" in props["run_in_background"]["description"]

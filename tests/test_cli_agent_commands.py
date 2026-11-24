@@ -169,6 +169,7 @@ def _invoke_agent_capturing_session(
             pass
 
         async def run_turn(self, req, emit, drain, *, stream, **_kw) -> TurnOutcome:
+            captured.setdefault("order", []).append("turn")
             captured["session_id"] = req.conversation
             captured["text"] = str(getattr(req, "text", ""))
             if during_turn is not None:
@@ -178,6 +179,9 @@ def _invoke_agent_capturing_session(
 
         async def await_pending_extractions(self, **_kw) -> None:
             pass
+
+        async def _connect_mcp(self) -> None:
+            captured.setdefault("order", []).append("connect_mcp")
 
         async def close_mcp(self) -> None:
             pass
@@ -222,6 +226,19 @@ def test_agent_default_mints_fresh_session(tmp_config: Path, tmp_path: Path, mon
     r2, cap2 = _invoke_agent_capturing_session(monkeypatch, ws, [])
     assert r2.exit_code == 0
     assert cap1["session_id"] != cap2["session_id"], "each bare invocation must mint a NEW session"
+
+
+def test_a_one_shot_connects_its_mcp_servers_before_the_turn(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one turn is the whole run. A turn only prewarms MCP and freezes its
+    tool array, so tools a handshake registers after the turn starts would wait
+    for a later turn that a one-shot never has."""
+    ws = tmp_path / "chanwork"
+    ws.mkdir()
+    r, cap = _invoke_agent_capturing_session(monkeypatch, ws, [])
+    assert r.exit_code == 0, r.stdout
+    assert cap["order"] == ["connect_mcp", "turn"]
 
 
 def test_a_one_shot_shutdown_tells_the_user_what_the_drain_left(
@@ -564,6 +581,9 @@ def test_agent_auth_error_exit_nonzero_with_guidance(
         async def await_pending_extractions(self, **_kw) -> None:
             pass
 
+        async def _connect_mcp(self) -> None:
+            pass
+
         async def close_mcp(self) -> None:
             pass
 
@@ -807,6 +827,9 @@ def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *,
             return TurnOutcome(usage=Usage(1200, 340, 1540), explicit_reply=True)
 
         async def await_pending_extractions(self, **_kw) -> None:
+            pass
+
+        async def _connect_mcp(self) -> None:
             pass
 
         async def close_mcp(self) -> None:

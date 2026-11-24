@@ -478,6 +478,12 @@ def register(app: typer.Typer) -> None:
                 # A one-shot spawn rarely finishes before the hard-exit below,
                 # but wire submit for parity with the TUI.
                 agent_loop.subagents.set_submit(scheduler.submit)
+                # The one turn is the whole run. A turn only prewarms MCP and
+                # freezes its tool array, so a server's tools join "a later turn"
+                # -- which a one-shot never has, and its configured servers would
+                # never be reachable. Here alone the turn waits for the handshake
+                # (each server still bounded by the manager's handshake timeout).
+                await agent_loop._connect_mcp()
                 with _thinking_ctx():
                     handle = scheduler.submit(
                         TurnRequest(

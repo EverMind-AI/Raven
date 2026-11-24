@@ -296,12 +296,15 @@ class CodeExecTool(ExecTool):
         schema = super().parameters
         timeout = schema["properties"]["timeout"]
         timeout.pop("maximum", None)
+        # The machine lane is named only when the base schema offers it.
+        lane = "machine" in schema["properties"]
+        where = " for a command on THIS computer" if lane else ""
+        not_read = "'machine' or 'run_in_background'" if lane else "'run_in_background'"
         timeout["description"] = (
-            "Timeout in seconds for a command on THIS computer. Increase for long-running work "
-            f"such as a build or a test suite (default {self.timeout}, ceiling {self._MAX_TIMEOUT}; a "
-            "larger value is clamped to the ceiling, not rejected). A command that hits its limit is "
-            "killed and the output it produced so far comes back marked partial. Not read with "
-            "'machine' or 'run_in_background'."
+            f"Timeout in seconds{where}. Increase for long-running work such as a long build, conversion "
+            f"or data job (default {self.timeout}, ceiling {self._MAX_TIMEOUT}; a larger value is clamped to "
+            "the ceiling, not rejected). A command that hits its limit is killed and the output it produced "
+            f"so far comes back marked partial. Not read with {not_read}."
         )
         return schema
 

@@ -699,3 +699,80 @@ class TestDelegationNeedsSomewhereToDelegateTo:
         text = (await builder.build(_ctx(tmp_path))).text
         assert "`Scribe` owns decks." in text
         assert "run_subagent_dag" not in text
+
+
+def _defs(*names: str) -> list[dict]:
+    return [{"type": "function", "function": {"name": n, "parameters": {}}} for n in names]
+
+
+class TestIdentityNamesOnlyLiveTools:
+    """A line that sends the model to a tool renders only while that tool is live.
+
+    A run that disabled ``ask_user`` (nobody to ask) used to read two rules telling
+    it to call ``ask_user``, and one telling it when to use ``message``; an
+    unreadable table keeps every line, so a wiring gap says too much.
+    """
+
+    def test_unknown_table_renders_every_line(self, tmp_path: Path) -> None:
+        text = render.identity_text(tmp_path)
+        assert "call the `ask_user` tool" in text
+        assert "Confirm with `ask_user`" in text
+        assert "Only use the 'message' tool" in text
+        assert "Custom skills:" in text
+
+    def test_a_table_without_the_tools_drops_their_lines(self, tmp_path: Path) -> None:
+        text = render.identity_text(tmp_path, live_tools=["exec", "read_file"])
+        assert "ask_user" not in text
+        assert "'message' tool" not in text
+        assert "Custom skills:" not in text
+        assert "Treat all external content" in text, "the untrusted-content rule is not about a tool"
+        assert not text.endswith("\n")
+
+    def test_a_table_with_the_tools_keeps_them(self, tmp_path: Path) -> None:
+        text = render.identity_text(tmp_path, live_tools=["ask_user", "message", "read_skill"])
+        assert text == render.identity_text(tmp_path)
+
+    async def test_the_segment_reads_the_live_table(self, tmp_path: Path) -> None:
+        seg = await IdentitySegmentBuilder(tmp_path, get_tool_definitions=lambda: _defs("exec")).build(_ctx(tmp_path))
+        assert "ask_user" not in seg.text
+
+
+class TestIdentityWithoutMemory:
+    """``context.dropSegments: [memory]`` means no long-term memory, so the
+    identity stops pointing at the profile and episodic files."""
+
+    def test_dropped_memory_names_no_memory_file(self, tmp_path: Path) -> None:
+        text = render.identity_text(tmp_path, keeps_memory=False)
+        assert "user_memory" not in text
+        assert "Custom skills:" in text, "skills are not memory"
+        assert "your own skills, not a place for user artifacts" in text
+
+    def test_no_memory_and_no_skills_drops_agent_home(self, tmp_path: Path) -> None:
+        text = render.identity_text(tmp_path, keeps_memory=False, live_tools=["exec"])
+        assert "Agent home" not in text
+        assert "Working directory:" in text
+
+    def test_kept_memory_is_unchanged(self, tmp_path: Path) -> None:
+        assert render.identity_text(tmp_path, keeps_memory=True) == render.identity_text(tmp_path)
+
+
+class TestScentFollowsTheSkillTools:
+    """The skill menu's footer sends the model to read_skill / find_skill, so the
+    menu rides a turn only while one of the skill tools is live."""
+
+    def _assembler(self, get_defs):
+        from raven.context_engine.assembler import ContextAssembler
+
+        return ContextAssembler([], get_defs)
+
+    def test_no_skill_tool_no_menu(self) -> None:
+        assert not self._assembler(lambda: _defs("exec", "read_file"))._offers("read_skill", "find_skill", "use_skill")
+
+    def test_a_skill_tool_keeps_the_menu(self) -> None:
+        assert self._assembler(lambda: _defs("exec", "find_skill"))._offers("read_skill", "find_skill", "use_skill")
+
+    def test_an_unreadable_table_keeps_the_menu(self) -> None:
+        def broken():
+            raise RuntimeError("mid-rebuild")
+
+        assert self._assembler(broken)._offers("read_skill", "find_skill", "use_skill")

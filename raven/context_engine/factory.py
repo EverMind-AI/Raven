@@ -139,7 +139,12 @@ def build_context_engine(
         rewriter, gate = None, None
 
     builders = [
-        IdentitySegmentBuilder(workspace, list_subagents=list_subagents, get_tool_definitions=get_tool_definitions),
+        IdentitySegmentBuilder(
+            workspace,
+            list_subagents=list_subagents,
+            get_tool_definitions=get_tool_definitions,
+            keeps_memory="memory" not in frozenset(getattr(config, "drop_segments", None) or ()),
+        ),
         BootstrapSegmentBuilder(workspace),
         MemorySegmentBuilder(
             builder.memory,

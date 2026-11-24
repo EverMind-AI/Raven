@@ -563,14 +563,12 @@ class TodoTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Read or maintain Raven-Code's structured checklist for the current session. "
-            "Checklists are isolated by conversation and saved before a write is acknowledged. Use it to "
-            "plan multi-step work and to keep the user informed of progress.\n"
+            "Read or maintain a structured checklist for the current task. Use it to "
+            "plan multi-step work and to track its progress.\n"
             "action 'read' returns the latest saved checklist without changing it. "
             "action 'write' replaces the checklist with 'todos'; pass the ENTIRE list every "
             "time, and an empty list to clear it.\n"
-            "Use it when the task needs 3+ distinct steps, when the user gives several "
-            "tasks at once, or when new instructions arrive mid-task (capture them as items). "
+            "Use it when the task needs 3+ distinct steps or asks for several deliverables. "
             "Skip it for a single straightforward step or a purely informational question -- "
             "tracking that adds no value.\n"
             "Keep exactly one item 'in_progress' while work remains, and update status as you "

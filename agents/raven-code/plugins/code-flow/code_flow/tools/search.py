@@ -108,11 +108,10 @@ class GlobTool(trunk.FindTool):
     @property
     def description(self) -> str:
         return (
-            "Find files by glob pattern (e.g. '*.py', 'src/**/*.ts' or '*.{ts,tsx}'). Prefer this over "
+            "Find files by glob pattern (e.g. '*.xlsx', 'data/**/*.csv' or '*.{docx,pdf}'). Prefer this over "
             "running find/ls through exec. Returns paths relative to the search root, "
             "most-recently-modified first. Noise directories (.git, node_modules, etc.) are "
-            "skipped below the pattern's literal path prefix; one named inside that prefix, as in "
-            "'src/node_modules/*.js', is entered. "
+            "skipped unless the pattern's literal path prefix names one. "
             "Use it to locate a file before reading or editing it instead of "
             "guessing at the path. Brace alternatives share one limit after deduplication and sorting. "
             "A notice naming the limit means the result was cut there: raise limit or narrow the pattern. "
@@ -127,7 +126,7 @@ class GlobTool(trunk.FindTool):
         if "pattern" in props:
             props["pattern"] = {
                 **props["pattern"],
-                "description": "Glob pattern, e.g. '*.py', 'src/**/*.ts' or '*.{ts,tsx}'",
+                "description": "Glob pattern, e.g. '*.xlsx', 'data/**/*.csv' or '*.{docx,pdf}'",
             }
         if "path" in props:
             props["path"] = {**props["path"], "description": "Directory to search in (default: workspace root)"}

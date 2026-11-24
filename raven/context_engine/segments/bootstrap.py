@@ -17,7 +17,8 @@ class BootstrapSegmentBuilder:
 
     def __init__(self, workspace: Path, bootstrap_files: list[str] | None = None) -> None:
         self._workspace = workspace
-        self._bootstrap_files = bootstrap_files
+        # soul.md opens the identity segment instead (``IdentitySegmentBuilder``).
+        self._bootstrap_files = [f for f in (bootstrap_files or render.BOOTSTRAP_FILES) if Path(f).name != "soul.md"]
 
     async def build(self, ctx: AssemblyContext) -> Segment | None:
         text = render.load_bootstrap_files(self._workspace, self._bootstrap_files)

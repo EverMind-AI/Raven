@@ -105,6 +105,8 @@ class ReadFileTool(_Aliased, trunk.ReadFileTool):
             "of the file. Use offset and limit to paginate through large files. "
             f"Lines longer than {self._MAX_LINE_CHARS} chars are truncated with an "
             "explicit marker; use grep to search inside such files. "
+            "Image files (PNG, JPEG, GIF, WebP, and other common formats) return the picture itself, "
+            "downscaled if needed. "
             "Do not assume a path exists: locate it with glob or list_dir instead of guessing, "
             "and if a read fails, find the real path rather than retrying a guess."
         )
@@ -189,14 +191,9 @@ class WriteFileTool(_Aliased, trunk.WriteFileTool):
     def description(self) -> str:
         return (
             "Write content to a file at the given path. Creates parent directories if needed. "
-            "ALWAYS prefer editing existing files in the codebase: before creating a new file, "
-            "check whether an existing file (an entry point, a stub, a TODO) already owns that "
-            "responsibility, and NEVER write new files unless the task requires it. "
             "If the target file already exists, read it with read_file before overwriting. "
             "mode='overwrite' replaces the entire file; mode='append' adds content at the end. "
-            "Appending to an existing file does not count as reading its previous content. "
-            "After replacing a symbol that is used elsewhere, check its other call "
-            "sites, overrides, and sibling branches for the same required change."
+            "Appending to an existing file does not count as reading its previous content."
         )
 
     @property
@@ -312,7 +309,7 @@ class EditFileTool(_Aliased, trunk.EditFileTool):
     def description(self) -> str:
         prerequisite = (
             "You must first read the file with read_file or write its complete content with write_file "
-            "in this session of this Raven-Code instance. Unread or externally changed files are rejected. "
+            "earlier in this session. Unread or externally changed files are rejected. "
             "Appending to unseen existing content does not satisfy this check. "
             if self._require_read
             else "Read the file before editing so the replacement matches its current content. "
@@ -325,9 +322,7 @@ class EditFileTool(_Aliased, trunk.EditFileTool):
             "Without occurrence, supports minor whitespace/line-ending differences. "
             "If old_string matches several places, either set replace_all=true to "
             "change every one, or occurrence=<n> to change only the nth non-overlapping exact match "
-            "(1-based, in file order, with CRLF normalized to LF). These options cannot be combined. "
-            "After changing a symbol that is used elsewhere, check its other call "
-            "sites, overrides, and sibling branches for the same required change."
+            "(1-based, in file order, with CRLF normalized to LF). These options cannot be combined."
         )
 
     @property
@@ -459,7 +454,7 @@ class ListDirTool(trunk.ListDirTool):
     def description(self) -> str:
         return (
             "List the contents of a directory. "
-            "For a first look at a repository, use recursive=true -- a flat listing "
+            "For a first look at a folder, use recursive=true -- a flat listing "
             "hides everything inside subdirectories. "
             "Do not assume a directory exists; list its parent first when unsure. "
             "Common noise directories (.git, node_modules, __pycache__, etc.) are auto-ignored."
