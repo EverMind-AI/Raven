@@ -1,3 +1,5 @@
+> **Branch `feat/raven_work`: Raven Work**, a minimal version of raven-code for unattended office tasks. See [RAVEN_WORK.md](RAVEN_WORK.md). This branch is not meant to be merged into `main`; the rest of this README is Raven v0.2.4's.
+
 <div align="center" id="readme-top">
 
 ![Raven banner](https://github.com/user-attachments/assets/ae944083-9c61-4218-8372-2c3c0d483d4b?raw=true)
