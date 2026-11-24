@@ -2673,6 +2673,42 @@ def test_borrow_copies_the_key_and_the_address(monkeypatch: pytest.MonkeyPatch) 
     assert borrowed["base_url"] == "https://api.example.test/v1"
 
 
+def test_borrow_lends_the_key_an_environment_variable_holds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A section whose flat key is an environment variable lends its value.
+
+    Reading the section's own flat key answered "" for such a section, so a
+    provider that is connected was offered as a lender and then had nothing to
+    lend.
+    """
+    import raven.config
+    from raven.config.schema import Config
+
+    monkeypatch.setenv("RAVEN_LEND_KEY", "sk-from-env")
+    cfg = Config()
+    section = cfg.providers.get("openai")
+    section.api_key = ""
+    section.api_key_env = "RAVEN_LEND_KEY"
+    monkeypatch.setattr(raven.config, "load_config", lambda: cfg)
+
+    assert lend_provider_credentials("openai")["api_key"] == "sk-from-env"
+
+
+def test_borrow_refuses_a_variable_that_is_not_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A variable named but unset is nothing to lend, and the refusal names it."""
+    import raven.config
+    from raven.config.schema import Config
+
+    monkeypatch.delenv("RAVEN_LEND_KEY", raising=False)
+    cfg = Config()
+    section = cfg.providers.get("openai")
+    section.api_key = ""
+    section.api_key_env = "RAVEN_LEND_KEY"
+    monkeypatch.setattr(raven.config, "load_config", lambda: cfg)
+
+    with pytest.raises(ValueError, match="RAVEN_LEND_KEY"):
+        lend_provider_credentials("openai")
+
+
 def test_borrow_answers_with_the_address_raven_knows_for_the_lender(monkeypatch: pytest.MonkeyPatch) -> None:
     """A lender with no address in its section still has one Raven knows.
 

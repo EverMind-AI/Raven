@@ -38,6 +38,7 @@ from raven.providers.endpoints import (
     resolve_api_key_env,
     uses_flat_key,
 )
+from raven.providers.errors import MissingCredentialsError
 from raven.providers.registry import (
     SHAPE_LOCAL,
     ProviderSpec,
@@ -2381,12 +2382,13 @@ def lend_provider_credentials(provider: str) -> dict[str, str]:
 
     Only a group this can hand over whole: see the header check below.
 
-    Read through ``provider_endpoints``, which is the one place that knows the
-    precedence a section can be written in -- ``endpoints`` first, then
-    ``api_key_list``, then the flat pair. Reading ``api_key`` off the section
-    instead answers "" for both of the shapes that precedence exists for, so a
-    provider serving traffic every day would be offered as a lender and then
-    refuse to lend.
+    Read through ``provider_endpoints_for_request``, which is the one place that
+    knows the precedence a section can be written in -- ``endpoints`` first,
+    then ``api_key_list``, then the flat pair -- and resolves a flat
+    ``apiKeyEnv`` into the key the section actually holds. Reading ``api_key``
+    off the section instead answers "" for both of the shapes that precedence
+    exists for, so a provider serving traffic every day would be offered as a
+    lender and then refuse to lend.
 
     This asks a narrower question than ``credential_status``, which owns "is
     this Provider usable": a provider can be perfectly usable and have nothing
@@ -2404,7 +2406,8 @@ def lend_provider_credentials(provider: str) -> dict[str, str]:
     Raises:
         KeyError: no such provider is configured.
         ValueError: it is configured but has nothing that can be handed over
-            whole -- no key to lend, or a group that authenticates with headers.
+            whole -- no key to lend, a key held in an environment variable that
+            is not set, or a group that authenticates with headers.
     """
     from raven.config import load_config
 
@@ -2419,8 +2422,14 @@ def lend_provider_credentials(provider: str) -> dict[str, str]:
         raise KeyError(provider)
 
     # The first endpoint holding a key. A section can offer several, and any one
-    # of them is a key that works against the same address.
-    lent = next((e for e in provider_endpoints(section) if e.api_key), None)
+    # of them is a key that works against the same address. Read through the
+    # request-side reader, so a section whose flat key is an environment
+    # variable lends the variable's value rather than nothing.
+    try:
+        endpoints = provider_endpoints_for_request(section, provider=provider)
+    except MissingCredentialsError as exc:
+        raise ValueError(f"{provider} has no api key to lend: {exc.summary}") from exc
+    lent = next((e for e in endpoints if e.api_key), None)
     if lent is None:
         raise ValueError(f"{provider} has no api key to lend")
     # A url/key/header group is reachable only whole. A borrowing section holds a
