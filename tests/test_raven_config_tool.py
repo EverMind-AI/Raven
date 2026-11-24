@@ -1374,6 +1374,31 @@ async def test_describe_does_not_call_a_running_non_scan_channel_unconnected(con
 
 
 @pytest.mark.asyncio
+async def test_describe_calls_a_running_channel_with_no_required_fields_unconnected(config_file):
+    """A spec that requires no credentials needs no setup, so a running channel
+    that has not paired yet is still "not connected yet"; only a channel with
+    required fields is trusted as plainly running."""
+    status = {
+        "gateway_running": True,
+        "channels": [
+            {
+                "name": "feishu",
+                "enabled": True,
+                "running": True,
+                "qr_login": False,
+                "fields": [{"key": "encrypt_key", "required": False, "set": True}],
+            }
+        ],
+    }
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"channels.status": status}))
+
+    described = json.loads(await _run(tool, action="describe", path="channels.feishu"))
+
+    assert described["state"] == "running, not connected yet"
+
+
+@pytest.mark.asyncio
 async def test_switching_on_a_scan_channel_says_where_the_code_is(config_file):
     """Seen live: after enabling WeChat the model grepped code and read logs --
     another Raven's, too -- to find the QR, which the Channels settings showed."""
