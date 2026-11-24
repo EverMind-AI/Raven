@@ -2025,7 +2025,29 @@ def test_an_attachment_that_cannot_be_prepared_is_named_not_dropped(tmp_path: Pa
     assert "could not be prepared" in out
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="chmod 000 does not block root")
+def _chmod_blocks_a_read() -> bool:
+    """Whether chmod can make a file unreadable here.
+
+    Root ignores the mode, and Windows has no ``geteuid`` and does not block
+    the read either; the test below cannot exercise the note on either.
+    """
+    geteuid = getattr(os, "geteuid", None)
+    return geteuid is not None and geteuid() != 0
+
+
+def test_the_chmod_guard_handles_an_absent_root_and_non_root_geteuid(monkeypatch) -> None:
+    """The skip is evaluated at import, and Windows has no ``geteuid``; root
+    ignores the mode there too, so only a non-root POSIX process can exercise
+    the note."""
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    assert _chmod_blocks_a_read() is False
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    assert _chmod_blocks_a_read() is True
+    monkeypatch.delattr(os, "geteuid")
+    assert _chmod_blocks_a_read() is False
+
+
+@pytest.mark.skipif(not _chmod_blocks_a_read(), reason="chmod does not block a read here (root or Windows)")
 def test_an_attachment_that_cannot_be_read_costs_a_note_not_the_turn(tmp_path: Path) -> None:
     """Resolution only proved the path pointed at a file. Permissions can change
     between then and the read, and the file can be gone -- and this renderer runs
