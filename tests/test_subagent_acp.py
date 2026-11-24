@@ -43,6 +43,8 @@ from raven.acp_client.capabilities import (
     AcpModelChoice,
     CapabilitySnapshot,
     SnapshotStore,
+    _read_session_model_choices,
+    read_session_current_model,
     read_session_effort,
     relearn_session_menus,
     snapshot_fingerprint,
@@ -276,6 +278,77 @@ def test_a_grouped_effort_option_is_read_and_junk_entries_are_skipped() -> None:
     )
     assert (option, current) == ("effort", "low")
     assert choices == (AcpEffortChoice(value="high", name="High"),)
+
+
+def _qoder_menus() -> dict:
+    """The two ``category: "model"`` entries Qoder 1.1.45 sends, effort first."""
+    return {
+        "configOptions": [
+            {
+                "id": "reasoning_effort",
+                "name": "Reasoning Effort",
+                "category": "model",
+                "currentValue": "max",
+                "options": [{"value": "high"}, {"value": "max"}, {"value": "none"}],
+            },
+            {
+                "id": "model",
+                "name": "Model",
+                "category": "model",
+                "currentValue": "deepseek/deepseek-v4-pro-pg",
+                "options": [
+                    {"value": "deepseek/deepseek-v4-pro-pg", "name": "DeepSeek-V4-Pro (DeepSeek)"},
+                ],
+            },
+        ]
+    }
+
+
+def test_the_model_menu_is_the_entry_named_model_not_the_first_one_categorised_so() -> None:
+    """Qoder 1.1.45 sends its reasoning-effort ladder as a second entry with
+    ``category: "model"``. The id is what tells the two apart; reading by
+    position turns the effort levels into the model menu the moment the agent
+    reorders its options, and the stored current model becomes an effort level.
+    """
+    qoder_shaped = _qoder_menus()
+
+    assert [c.value for c in _read_session_model_choices(qoder_shaped)] == ["deepseek/deepseek-v4-pro-pg"]
+    assert read_session_current_model(qoder_shaped) == "deepseek/deepseek-v4-pro-pg"
+
+
+def test_an_effort_option_mislabelled_as_model_is_still_read_as_effort() -> None:
+    """Qoder 1.1.45 files ``reasoning_effort`` under ``category: "model"`` rather
+    than the protocol's ``thought_level``. Its id and name are what remain to
+    recognise it by; leaving it unread drops a ladder the agent does offer.
+    """
+    option, current, choices = read_session_effort(_qoder_menus())
+
+    assert (option, current) == ("reasoning_effort", "max")
+    assert [c.value for c in choices] == ["high", "max", "none"]
+    assert [(c.value, c.name) for c in choices] == [("high", ""), ("max", ""), ("none", "")]
+
+    plain_model = {
+        "configOptions": [
+            {"id": "model", "name": "Model", "category": "model", "currentValue": "m", "options": [{"value": "m"}]}
+        ]
+    }
+    assert read_session_effort(plain_model) == ("", "", ()), "a model entry is not an effort menu"
+
+
+def test_an_effort_only_menu_leaves_the_model_menu_empty() -> None:
+    """An agent can pin its model and still offer an effort ladder. Qoder files
+    that ladder under ``category: "model"``, so a category fallback with no model
+    entry beside it must not turn the ladder into the model menu.
+    """
+    effort_only = {"configOptions": [_qoder_menus()["configOptions"][0]]}
+
+    assert _read_session_model_choices(effort_only) == ()
+    assert read_session_current_model(effort_only) == ""
+
+    option, current, choices = read_session_effort(effort_only)
+
+    assert (option, current) == ("reasoning_effort", "max")
+    assert [c.value for c in choices] == ["high", "max", "none"]
 
 
 def test_a_mode_menu_of_effort_levels_is_offered_as_reasoning_effort() -> None:
