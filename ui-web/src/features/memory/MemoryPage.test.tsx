@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { setTranslator } from '../../i18n/t'
+import * as prose from '../../lib/prose'
 import * as confirmStore from '../../state/confirm'
 import * as settingsDialog from '../../state/settings'
 import { resetSources, setSources } from '../../state/sources'
@@ -240,6 +241,86 @@ describe('memory island', () => {
       row('shipped the island').click()
     })
     expect(document.querySelector('.memstrip')).toBeNull()
+  })
+
+  it('renders the memory body as markdown, not as its source', async () => {
+    install({
+      list: async () => ({
+        items: [item({
+          kind: 'agent_skill',
+          subject: 'the skill',
+          body: '## Overview\n\nThe rule.\n\n- one\n- two\n\n```bash\nnpm test\n```',
+        })],
+        total: 1,
+      }),
+    })
+    await mount()
+    await act(async () => {
+      row('the skill').click()
+    })
+    const sec = document.querySelector('.pmsec') as HTMLElement
+    /* The shell's prose rules draw it: page.css styles `.prose h2`, `.prose li`,
+       `.prose pre`, so the elements are looked for under that class. Without it
+       the markup is still there, and every rule misses it. */
+    const body = sec.querySelector('.prose')
+    expect(body).not.toBeNull()
+    /* A heading is a heading, not the two characters that spell one. */
+    expect(body?.querySelector('h2')?.textContent).toBe('Overview')
+    expect(body?.querySelectorAll('li').length).toBe(2)
+    expect(body?.querySelector('pre')?.textContent).toContain('npm test')
+    /* The source of the body is not on the page as text. */
+    expect(sec.textContent).not.toContain('## Overview')
+  })
+
+  it('renders the body as text, not as markup the body brought with it', async () => {
+    install({
+      list: async () => ({
+        items: [item({
+          kind: 'agent_skill',
+          subject: 'the skill',
+          body: '<img src=x onerror=1>\n\nA line.',
+        })],
+        total: 1,
+      }),
+    })
+    await mount()
+    await act(async () => {
+      row('the skill').click()
+    })
+    const sec = document.querySelector('.pmsec') as HTMLElement
+    /* The body is a memory the engine wrote, not a document the page trusts:
+       its markup is text, the same as prose. */
+    expect(sec.querySelector('img')).toBeNull()
+    expect(sec.textContent).toContain('<img src=x onerror=1>')
+  })
+
+  it('parses a body once, not again on every redraw of the column', async () => {
+    install({
+      list: async () => ({
+        items: [
+          item({ id: 'a', kind: 'agent_skill', subject: 'skill a', body: '## Alpha' }),
+          item({ id: 'b', kind: 'agent_skill', subject: 'skill b', body: '## Beta' }),
+        ],
+        total: 2,
+      }),
+    })
+    await mount()
+    await act(async () => {
+      row('skill a').click()
+    })
+    const parse = vi.spyOn(prose, 'md')
+    /* What a keystroke in the find box does before its debounced reload: the
+       query lands in the store and the store notifies, so the open body redraws.
+       store.search itself would leave its reload timer running past this test. */
+    act(() => {
+      store.set({ q: 'skill' })
+    })
+    expect(parse).not.toHaveBeenCalled()
+    /* Another pick redraws the same column, and the body it shows is the new one. */
+    await act(async () => {
+      row('skill b').click()
+    })
+    expect(document.querySelector('.pmsec .prose h2')?.textContent).toBe('Beta')
   })
 
   it('switches kind through a stat and reloads with it', async () => {
