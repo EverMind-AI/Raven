@@ -601,7 +601,8 @@ class RavenLoopBackend:
         # model wrote, not the one this lane hands the loop: the charter's
         # preamble is already on ``task`` by the time it arrives, so reading
         # ``task`` would answer on the brief twice over. An older caller that
-        # carries no authored task leaves ``task`` in place.
+        # carries no authored task leaves ``task`` in place, and so does one
+        # that carries an empty one -- which is no task at all.
         original_task = authored_task or task
 
         async def participant_answer(verb: str, *args: Any) -> Any:

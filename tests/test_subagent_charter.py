@@ -748,16 +748,27 @@ def advise(step):
 
 ECHO_THE_QUESTION = """
 def intake(text, step):
-    return {"text": step.get("question")}
+    return {"reply": step.get("question")}
+"""
+
+SAY_NOTHING = """
+def intake(text, step):
+    return None
+"""
+
+NOTE_THE_QUESTION = """
+def advise(step):
+    return "question: " + str(step.get("question"))
+"""
+
+SALVAGE_THE_QUESTION = """
+def salvage(step):
+    return "question: " + str(step.get("question"))
 """
 
 
-async def test_a_generated_function_reads_the_task_the_model_wrote(tmp_path) -> None:
-    """The charter's preamble is already on the task the worker's loop is handed,
-    so a function that read that task would read the brief twice -- and answer on
-    the brief rather than on what was asked. The question is the authored task."""
-    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
-    from raven.agent.subagent.delegate import dispatch_charter
+def _stub_provider(reply: str | None = "done") -> Any:
+    """A provider that answers one thing and records what it was handed."""
     from raven.contracts.llm_provider import LLMResponse
 
     class _Provider:
@@ -767,15 +778,50 @@ async def test_a_generated_function_reads_the_task_the_model_wrote(tmp_path) -> 
         def get_default_model(self) -> str:
             return "stub"
 
-        async def chat_with_retry(self, *, messages, tools, model):
+        async def chat_with_retry(self, *, messages, tools=None, model):
             self.seen.append(list(messages))
-            return LLMResponse(content="done", finish_reason="stop")
+            return LLMResponse(content=reply, finish_reason="stop")
 
-    provider = _Provider()
+    return _Provider()
+
+
+async def test_a_generated_function_reads_the_task_the_model_wrote(tmp_path) -> None:
+    """The charter's preamble is already on the task the worker's loop is handed,
+    so a function that read that task would read the brief twice -- and answer on
+    the brief rather than on what was asked. The question is the authored task."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.subagent.delegate import dispatch_charter
+
+    provider = _stub_provider()
     backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
     prefixed = "Summarise in three bullets.\n\nSummarise the Q3 revenue table."
 
     with dispatch_charter({"brief": "Summarise in three bullets.", "functions": {"intake": ECHO_THE_QUESTION}}):
+        answer = await backend.run(
+            prefixed,
+            task_id="t1",
+            workspace=tmp_path,
+            executor=None,
+            history=[],
+            authored_task="Summarise the Q3 revenue table.",
+        )
+
+    # The question the function was handed is the authored task, and the answer
+    # it gave is what the run handed back.
+    assert answer == "Summarise the Q3 revenue table."
+
+
+async def test_an_intake_that_answers_nothing_leaves_the_worker_the_task_it_was_handed(tmp_path) -> None:
+    """The question is what a generated function reads; the worker is still asked
+    for the task it was handed, the brief and all."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.subagent.delegate import dispatch_charter
+
+    provider = _stub_provider()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+    prefixed = "Summarise in three bullets.\n\nSummarise the Q3 revenue table."
+
+    with dispatch_charter({"brief": "Summarise in three bullets.", "functions": {"intake": SAY_NOTHING}}):
         await backend.run(
             prefixed,
             task_id="t1",
@@ -785,9 +831,7 @@ async def test_a_generated_function_reads_the_task_the_model_wrote(tmp_path) -> 
             authored_task="Summarise the Q3 revenue table.",
         )
 
-    # The function answered with the question it was handed, and the worker asked
-    # the model that: the authored task, with the brief read once by the loop.
-    assert provider.seen[-1][-1] == {"role": "user", "content": "Summarise the Q3 revenue table."}
+    assert provider.seen[-1][-1] == {"role": "user", "content": prefixed}
 
 
 async def test_a_worker_that_carries_no_authored_task_is_asked_what_it_was_handed(tmp_path) -> None:
@@ -795,27 +839,136 @@ async def test_a_worker_that_carries_no_authored_task_is_asked_what_it_was_hande
     dropping it would leave a generated function reading nothing at all."""
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
     from raven.agent.subagent.delegate import dispatch_charter
-    from raven.contracts.llm_provider import LLMResponse
 
-    class _Provider:
-        def __init__(self) -> None:
-            self.seen: list[list[dict]] = []
-
-        def get_default_model(self) -> str:
-            return "stub"
-
-        async def chat_with_retry(self, *, messages, tools, model):
-            self.seen.append(list(messages))
-            return LLMResponse(content="done", finish_reason="stop")
-
-    provider = _Provider()
+    provider = _stub_provider()
     backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
     prefixed = "Summarise in three bullets.\n\nSummarise the Q3 revenue table."
 
     with dispatch_charter({"brief": "Summarise in three bullets.", "functions": {"intake": ECHO_THE_QUESTION}}):
-        await backend.run(prefixed, task_id="t1", workspace=tmp_path, executor=None, history=[])
+        answer = await backend.run(prefixed, task_id="t1", workspace=tmp_path, executor=None, history=[])
 
-    assert provider.seen[-1][-1] == {"role": "user", "content": prefixed}
+    assert answer == prefixed
+
+
+async def test_an_empty_authored_task_leaves_the_question_the_task_the_worker_was_handed(tmp_path) -> None:
+    """An authored task of nothing carries nothing, so the question stays the task
+    the worker was handed rather than becoming an empty answer."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.subagent.delegate import dispatch_charter
+
+    provider = _stub_provider()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+    prefixed = "Summarise in three bullets.\n\nSummarise the Q3 revenue table."
+
+    with dispatch_charter({"brief": "Summarise in three bullets.", "functions": {"intake": ECHO_THE_QUESTION}}):
+        answer = await backend.run(
+            prefixed,
+            task_id="t1",
+            workspace=tmp_path,
+            executor=None,
+            history=[],
+            authored_task="",
+        )
+
+    assert answer == prefixed
+
+
+async def test_an_advise_function_reads_the_task_the_model_wrote(tmp_path) -> None:
+    """``advise`` is asked at every phase, not only on the way in, so the
+    question it reads is the authored task there too."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.subagent.delegate import dispatch_charter
+
+    provider = _stub_provider()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+    prefixed = "Summarise in three bullets.\n\nSummarise the Q3 revenue table."
+
+    with dispatch_charter({"brief": "Summarise in three bullets.", "functions": {"advise": NOTE_THE_QUESTION}}):
+        await backend.run(
+            prefixed,
+            task_id="t1",
+            workspace=tmp_path,
+            executor=None,
+            history=[],
+            authored_task="Summarise the Q3 revenue table.",
+        )
+
+    # The note the advice carried reached the model with the authored task in it.
+    assert provider.seen[-1][-1]["content"] == prefixed + "\n\nquestion: Summarise the Q3 revenue table."
+
+
+async def test_a_salvage_function_reads_the_task_the_model_wrote(tmp_path) -> None:
+    """``salvage`` answers a run that ended with nothing, and it answers about
+    the task the dispatching model wrote."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.subagent.delegate import dispatch_charter
+
+    provider = _stub_provider(reply=None)
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+    prefixed = "Summarise in three bullets.\n\nSummarise the Q3 revenue table."
+
+    with dispatch_charter({"brief": "Summarise in three bullets.", "functions": {"salvage": SALVAGE_THE_QUESTION}}):
+        answer = await backend.run(
+            prefixed,
+            task_id="t1",
+            workspace=tmp_path,
+            executor=None,
+            history=[],
+            authored_task="Summarise the Q3 revenue table.",
+        )
+
+    assert answer == "question: Summarise the Q3 revenue table."
+
+
+async def test_two_dispatches_do_not_read_each_others_task(tmp_path) -> None:
+    """Two runs on one backend at the same time, each with its own task: a
+    generated function reads the task of the dispatch it belongs to."""
+    import asyncio
+
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.subagent.delegate import dispatch_charter
+    from raven.contracts.llm_provider import LLMResponse
+
+    class _Provider:
+        """Answers nothing, and holds every run until a second one is in
+        flight, so the two overlap rather than queue."""
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.both = asyncio.Event()
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+        async def chat_with_retry(self, *, messages, tools=None, model):
+            self.calls += 1
+            if self.calls >= 2:
+                self.both.set()
+            await self.both.wait()
+            return LLMResponse(content=None, finish_reason="stop")
+
+    provider = _Provider()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+
+    async def _run(task_id: str, authored: str) -> str:
+        prefixed = f"Summarise in three bullets.\n\n{authored}"
+        with dispatch_charter({"brief": "Summarise in three bullets.", "functions": {"salvage": SALVAGE_THE_QUESTION}}):
+            return await backend.run(
+                prefixed,
+                task_id=task_id,
+                workspace=tmp_path,
+                executor=None,
+                history=[],
+                authored_task=authored,
+            )
+
+    first, second = await asyncio.gather(
+        _run("t1", "Summarise the Q3 revenue table."),
+        _run("t2", "Draft the Q4 memo."),
+    )
+
+    assert first == "question: Summarise the Q3 revenue table."
+    assert second == "question: Draft the Q4 memo."
 
 
 # --------------------------------------------------------------------------- #
