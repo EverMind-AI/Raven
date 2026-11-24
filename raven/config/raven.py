@@ -461,13 +461,15 @@ class ContextConfig(_Base):
     legacy ``toolResultMaxChars`` is reached first decides the preview.
 
     The cut is applied where the model reads the result: on the payload of the
-    call, after the iteration hooks and the ``before_llm_call`` strategies have
-    run, and not when the result enters the conversation. The hooks and
-    observers in between still read the full body, which is what the research
-    gates parse. The session files the preview the call sent, so the next
-    turn's replay matches what was sent. A cap applied only on the way to disk
-    left the model holding the full result and the replay holding the cut one,
-    so the provider's prefix cache broke at the cut. The untrusted fence around
+    call, after the iteration hooks have run and before the ``before_llm_call``
+    strategies run, and not when the result enters the conversation. The
+    strategies therefore see the preview, so a cache breakpoint marks the bytes
+    the call sends. The hooks and observers in between still read the full
+    body, which is what the research gates parse. The session files the
+    preview the call sent, so the next turn's replay matches what was sent.
+    A cap applied only on the way to disk left the model holding the full
+    result and the replay holding the cut one, so the provider's prefix cache
+    broke at the cut. The untrusted fence around
     the result stays whole: the cut lands inside it, before the genuine END
     marker and any trusted note after it.
 
