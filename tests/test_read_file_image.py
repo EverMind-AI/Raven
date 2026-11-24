@@ -2030,9 +2030,9 @@ def test_the_chmod_guard_handles_an_absent_root_and_non_root_geteuid(monkeypatch
     """The skip is evaluated at import, and Windows has no ``geteuid``; root
     ignores the mode there too, so only a non-root POSIX process can exercise
     the note."""
-    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
     assert chmod_is_enforced() is False
-    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(os, "geteuid", lambda: 1000, raising=False)
     assert chmod_is_enforced() is True
     monkeypatch.delattr(os, "geteuid")
     assert chmod_is_enforced() is False
