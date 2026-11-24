@@ -165,6 +165,39 @@ async def test_judge_fails_open_on_timeout():
     assert verdict.accomplished is True
 
 
+class _SlowToAnswer:
+    """Never answers before the judge's timeout."""
+
+    async def chat_with_retry(self, **kwargs):
+        await asyncio.sleep(1)
+
+
+@pytest.mark.parametrize(
+    "provider",
+    [
+        _Provider(error=RuntimeError("provider down")),
+        _Provider(_Response([])),
+        _SlowToAnswer(),
+    ],
+    ids=["raises", "skips-the-tool", "times-out"],
+)
+async def test_an_early_reply_the_judge_cannot_verify_is_not_accomplished(provider):
+    """The host has already sent this answer on, so every way the judge can
+    come back empty must leave the node unaccomplished -- the opposite of the
+    ordinary fail-open pinned above."""
+    verdict = await judge(
+        provider,
+        prompt="p",
+        output="o",
+        evidence="e",
+        evidence_complete=True,
+        reported_early=True,
+        timeout_s=0.01,
+    )
+    assert verdict.accomplished is False
+    assert verdict.what_is_missing == "The early reply could not be verified."
+
+
 async def test_judge_fences_the_node_output():
     provider = _Provider(_accomplished())
     await judge(provider, prompt="p", output="INJECTED", evidence="e", evidence_complete=True)
