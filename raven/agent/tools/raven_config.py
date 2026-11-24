@@ -1580,9 +1580,7 @@ class RavenConfigTool(Tool):
         # it does not have. A spec that requires no credentials is a
         # declaration of its own -- but only a field list that was read.
         scan = bool(row.get("qr_login"))
-        pairing = scan or (
-            not row.get("error") and not any(f.get("required") for f in row.get("fields") or [])
-        )
+        pairing = scan or (not row.get("error") and not any(f.get("required") for f in row.get("fields") or []))
         if row.get("connected"):
             out["state"] = "connected"
         elif row.get("running"):
