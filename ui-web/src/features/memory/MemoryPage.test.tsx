@@ -258,10 +258,15 @@ describe('memory island', () => {
       row('the skill').click()
     })
     const sec = document.querySelector('.pmsec') as HTMLElement
+    /* The shell's prose rules draw it: page.css styles `.prose h2`, `.prose li`,
+       `.prose pre`, so the elements are looked for under that class. Without it
+       the markup is still there, and every rule misses it. */
+    const body = sec.querySelector('.prose')
+    expect(body).not.toBeNull()
     /* A heading is a heading, not the two characters that spell one. */
-    expect(sec.querySelector('h2')?.textContent).toBe('Overview')
-    expect(sec.querySelectorAll('li').length).toBe(2)
-    expect(sec.querySelector('pre')?.textContent).toContain('npm test')
+    expect(body?.querySelector('h2')?.textContent).toBe('Overview')
+    expect(body?.querySelectorAll('li').length).toBe(2)
+    expect(body?.querySelector('pre')?.textContent).toContain('npm test')
     /* The source of the body is not on the page as text. */
     expect(sec.textContent).not.toContain('## Overview')
   })
