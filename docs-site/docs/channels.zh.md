@@ -130,6 +130,23 @@ account id、open id 或 JID。不要把显示名或 room id 当作 sender id。
 打开同一会话。这不是下载链接；模型回答成功也不代表附件上传成功。支持文件的适配器
 仍受平台权限、格式、大小上限和瞬时传输错误影响。
 
+## Matrix：联邦化渠道与可选 SDK { #matrix-a-federated-channel-with-an-opt-in-sdk }
+
+Matrix 是去中心化消息开放协议：账号住在 homeserver 上，房间可跨服务器，端到端加密内建于
+协议。Raven 支持它，因为它是表格中唯一既开源又设计即端到端加密的渠道，天然适合 Slack、
+Discord 不可用的自托管或隐私敏感部署。
+
+适配器基于 matrix-nio，以可选 extra（`channel-matrix`）形式分发。它用 homeserver URL、
+用户 id 和 access token 认证——不需要 bot 审批流程，但账号必须已存在于 homeserver。
+E2EE 默认开启；关闭它是有意的配置变更，因为会把凭据和消息正文以明文暴露给 homeserver。
+
+房间行为遵循与其他渠道相同的 `allowFrom` / `groupPolicy` 规则。私聊房间总会应答；
+群聊房间遵循 `open`、`mention` 或 `allowlist`。适配器在一轮回复进行时发送 typing
+通知，支持附件，上限取 homeserver 宣告值与 `max_media_bytes` 中的较小者。
+
+一个运维注意点：因为 Matrix 是联邦化的，`homeserver` 字段很敏感——它决定哪台服务器接收
+凭据与消息。默认的 `https://matrix.org` 是公共 homeserver；私有部署应指向自己的服务器。
+
 ## 扫码登录与生命周期 { #qr-login-and-lifecycle }
 
 只有声明 interactive login 的适配器才使用 `channels login`，目前是 WhatsApp 和个人微信：
