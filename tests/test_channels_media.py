@@ -1,5 +1,6 @@
 """Tests for raven.channels.media - traversal-safe, collision-safe writes."""
 
+import nturl2path
 import os
 from pathlib import PureWindowsPath
 
@@ -91,6 +92,44 @@ def test_file_uri_to_path_windows_unc_normalizes(monkeypatch):
     assert str(PureWindowsPath(str(p))) == r"\\localhost\C$\data\x.csv"
 
 
+def test_file_uri_to_path_windows_localhost_drive_keeps_drive(monkeypatch):
+    """On Windows, ``file://localhost/C:/...`` names drive C:, not a UNC share."""
+    monkeypatch.setattr(media, "_IS_WINDOWS", True)
+    monkeypatch.setattr(media, "Path", PureWindowsPath)
+    monkeypatch.setattr(media, "url2pathname", nturl2path.url2pathname)
+
+    assert str(media.file_uri_to_path("file://localhost/C:/work/a.md")) == r"C:\work\a.md"
+    assert str(media.file_uri_to_path("file://localhost/c:/work/a.md")) == r"C:\work\a.md"
+
+
+def test_file_uri_to_path_windows_localhost_case_insensitive(monkeypatch):
+    """Host names are case-insensitive, so ``LOCALHOST`` is accepted like ``localhost``."""
+    monkeypatch.setattr(media, "_IS_WINDOWS", True)
+    monkeypatch.setattr(media, "Path", PureWindowsPath)
+    monkeypatch.setattr(media, "url2pathname", nturl2path.url2pathname)
+
+    assert str(media.file_uri_to_path("file://LOCALHOST/share/x")) == r"\\LOCALHOST\share\x"
+    assert str(media.file_uri_to_path("file://LOCALHOST/C:/work/a.md")) == r"C:\work\a.md"
+
+
+def test_file_uri_to_path_windows_localhost_double_slash_no_extra_prefix(monkeypatch):
+    """A path that already converts to a UNC path does not get a stray localhost prefix."""
+    monkeypatch.setattr(media, "_IS_WINDOWS", True)
+    monkeypatch.setattr(media, "Path", PureWindowsPath)
+    monkeypatch.setattr(media, "url2pathname", nturl2path.url2pathname)
+
+    assert str(media.file_uri_to_path("file://localhost//server/share/x")) == r"\\server\share\x"
+
+
+def test_file_uri_to_path_windows_malformed_drive_returns_none(monkeypatch):
+    """A malformed Windows drive spelling that raises in url2pathname returns None."""
+    monkeypatch.setattr(media, "_IS_WINDOWS", True)
+    monkeypatch.setattr(media, "Path", PureWindowsPath)
+    monkeypatch.setattr(media, "url2pathname", nturl2path.url2pathname)
+
+    assert media.file_uri_to_path("file:///C::/work/a.md") is None
+
+
 def test_file_uri_to_path_refuses_remote_host():
     assert media.file_uri_to_path("file://server/share/x.csv") is None
 
@@ -114,8 +153,4 @@ def test_file_uri_to_path_refuses_unparsable_uri():
 
 def test_file_uri_to_path_refuses_empty_path():
     assert media.file_uri_to_path("file://") is None
-    # POSIX localhost with no path names no file; Windows keeps the UNC form.
-    if os.name == "nt":
-        assert media.file_uri_to_path("file://localhost") is not None
-    else:
-        assert media.file_uri_to_path("file://localhost") is None
+    assert media.file_uri_to_path("file://localhost") is None
