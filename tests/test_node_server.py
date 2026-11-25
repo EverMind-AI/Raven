@@ -94,6 +94,17 @@ async def test_a_read_with_no_offset_starts_at_the_first_line(tree):
     }
 
 
+async def test_a_read_with_a_character_offset_is_the_read_the_host_would_have_made(tree):
+    path = str(tree / "big.txt")
+
+    got = await _result(protocol.READ, {"path": path, "char_offset": 5, "roots": [str(tree)]})
+
+    want = await _local(ReadFileTool, tree).execute(path, char_offset=5)
+    digest = hashlib.sha256((tree / "big.txt").read_bytes()).hexdigest()
+    assert got == {"text": want, "sha256": digest}
+    assert want.startswith("1| 1 of the file")
+
+
 async def test_list_find_and_grep_answer_as_their_tools_do(tree):
     roots = [str(tree)]
 

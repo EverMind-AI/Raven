@@ -15,6 +15,7 @@ trunk's, inherited unchanged.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -80,7 +81,10 @@ class ReadFileTool(_Aliased, trunk.ReadFileTool):
             "'12| text' -- the 'N| ' prefix is added by this tool and is NOT part "
             "of the file. Use offset and limit to paginate through large files. "
             f"Lines longer than {self._MAX_LINE_CHARS} chars are truncated with an "
-            "explicit marker; use grep to search inside such files. "
+            "explicit marker that counts the content characters it kept; pass "
+            "char_offset to read the next stretch of such a line, and a paged "
+            "line's note names the offset to use. Use grep to search inside such "
+            "a file. "
             "Do not assume a path exists: locate it with glob or list_dir instead of guessing, "
             "and if a read fails, find the real path rather than retrying a guess."
         )
@@ -119,6 +123,10 @@ class ReadFileTool(_Aliased, trunk.ReadFileTool):
     def _cut_line(self, line: str) -> str:
         """Trunk's hook: the line cut to the fork's budget before it is numbered and the page's budget counts it."""
         return _cut(line, self._MAX_LINE_CHARS)
+
+    def _hook_shows(self, line: str) -> int:
+        """Trunk's question about its hook, answered with this fork's line budget: the cut keeps as many."""
+        return min(len(line), self._MAX_LINE_CHARS)
 
 
 class WriteFileTool(_Aliased, trunk.WriteFileTool):
@@ -214,20 +222,85 @@ def _respell(result: str | ToolResult) -> str | ToolResult:
     return respelled(str(result))
 
 
-def _cut(line: str, budget: int) -> str:
-    """``line`` cut to ``budget`` characters and marked, or as it is when it fits."""
+def _cut(line: str, budget: int, *, lead: int = 0) -> str:
+    """``line`` cut to ``budget`` characters and marked, or as it is when it fits.
+
+    ``lead`` is the line's prefix rather than its content: a numbered line's
+    ``N| `` spends part of the budget, so the mark names the content characters
+    the reader really holds, the cursor that continues them.
+    """
     if len(line) <= budget:
         return line
-    return line[:budget] + f"... (line truncated to {budget} chars)"
+    return line[:budget] + f"... (line truncated to {budget - lead} chars)"
+
+
+_LONG_LINE_NOTE = re.compile(
+    r"^\(Line (\d+) is (\d+) characters long; (?:characters (\d+)-(\d+)|the first (\d+)) are shown[.,]"
+)
+_NUMBERED = re.compile(r"^(\d+)\| ")
+_FOOTER_SHOWN = re.compile(r"^\(Showing lines (\d+)-(\d+) of (\d+)\.")
+_FOOTER_END = re.compile(r"^\(End of file .*?(\d+) lines total\)$")
+
+
+def _rebuild_footer(lines: list[str]) -> list[str]:
+    """The page's footer, rebuilt after a cut left a character cursor to follow.
+
+    The node's footer counts lines, and this pass has just shortened a line it
+    had paged inside: ``End of file`` says the page is all there is, and the
+    next line number steps over the stretch the cut line's note still points
+    into. So the page names only what it showed, as trunk's own cut page does.
+    """
+    for i in range(len(lines) - 1, -1, -1):
+        if not lines[i]:
+            continue
+        shown = _FOOTER_SHOWN.match(lines[i])
+        ended = _FOOTER_END.match(lines[i])
+        if shown is None and ended is None:
+            return lines
+        numbers = [int(m[1]) for line in lines[:i] if (m := _NUMBERED.match(line))]
+        if not numbers:
+            return lines
+        total = shown[3] if shown is not None else ended[1]
+        return [*lines[:i], f"(Showing lines {numbers[0]}-{numbers[-1]} of {total}.)", *lines[i + 1 :]]
+    return lines
 
 
 def _cut_long_lines(result: str | ToolResult, budget: int) -> str | ToolResult:
-    """Cut any line of a result past ``budget`` characters, marking the cut: a page cut nowhere else."""
+    """Cut any line of a result past ``budget`` characters, marking the cut.
+
+    A page cut nowhere else, apart from its own note and footer: a page a node
+    paged inside one line carries a note claiming the stretch the node sent,
+    and this cut can shorten that line, so the note is rewritten to name the
+    stretch that survived, with the cursor moved to where that stretch ends.
+    That cursor outlives the node's footer, which speaks in whole lines only.
+    """
 
     def cut(text: str) -> str:
-        if not any(len(line) > budget for line in text.split("\n")):
+        lines = text.split("\n")
+        if not any(len(line) > budget for line in lines):
             return text
-        return "\n".join(_cut(line, budget) for line in text.split("\n"))
+        over = set()
+        for line in lines:
+            if (number := _NUMBERED.match(line)) and len(line) > budget:
+                over.add(int(number[1]))
+        out = []
+        paged = False
+        for line in lines:
+            m = _LONG_LINE_NOTE.match(line)
+            if m is not None and int(m[1]) in over:
+                shown_from = int(m[3]) if m[3] is not None else 0
+                shown_to = shown_from + budget - len(f"{m[1]}| ")
+                line = (
+                    f"(Line {m[1]} is {m[2]} characters long; "
+                    f"characters {shown_from}-{shown_to - 1} are shown. "
+                    f"Use offset={m[1]} char_offset={shown_to} to read the next stretch of it.)"
+                )
+                paged = True
+            else:
+                numbered = _NUMBERED.match(line)
+                line = _cut(line, budget, lead=len(numbered[0]) if numbered else 0)
+            out.append(line)
+        return "\n".join(_rebuild_footer(out) if paged else out)
 
     if isinstance(result, ToolResult):
         result.model_text = cut(result.model_text)
