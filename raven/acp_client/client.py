@@ -487,6 +487,7 @@ class AcpClient:
         # carries an id and nothing else -- can be attributed in the journal.
         # Read by the read loop before the awaiting task clears the entry.
         self._request_sessions: dict[int, str | None] = {}
+        self._request_answered: dict[int, Callable[[], None]] = {}
         # Which method each outbound request carries, so "is a turn in flight"
         # is answerable while one is: a pending session/prompt IS the running
         # turn, and a session open that times out behind it needs to say
@@ -888,11 +889,16 @@ class AcpClient:
         timeout: float | None = None,
         cancel_session: str | None = None,
         sent: Callable[[int], None] | None = None,
+        answered: Callable[[], None] | None = None,
     ) -> Any:
         """Send a request and await its result.
 
         ``sent`` hears the request's id as it goes out: what a run on a
         machine records, so a process after this one can await the answer.
+        ``answered`` is called from the read loop as a successful answer
+        arrives, before any frame read after it is dispatched: the caller
+        resumes only some loop hops later, by when the read loop may have
+        applied more of the same burst.
 
         Raises :class:`AcpRemoteError` if the agent answers with an error,
         :class:`AcpTimeoutError` on budget expiry, :class:`AcpConnectionError` if
@@ -927,6 +933,8 @@ class AcpClient:
         self._pending[request_id] = future
         self._request_sessions[request_id] = (params or {}).get("sessionId") if isinstance(params, dict) else None
         self._request_methods[request_id] = method
+        if answered is not None:
+            self._request_answered[request_id] = answered
         try:
             if sent is not None:
                 sent(request_id)
@@ -950,6 +958,7 @@ class AcpClient:
             self._pending.pop(request_id, None)
             self._request_sessions.pop(request_id, None)
             self._request_methods.pop(request_id, None)
+            self._request_answered.pop(request_id, None)
 
     @property
     def endpoint(self) -> Endpoint:
@@ -1364,6 +1373,14 @@ class AcpClient:
                 )
             )
             return
+        answered = self._request_answered.pop(raw_id, None)
+        if answered is not None:
+            try:
+                answered()
+            except Exception:  # noqa: BLE001 - a caller's hook must not break the read loop
+                logger.opt(exception=True).warning(
+                    "acp agent {!r}: answered hook for request {} failed", self.name, raw_id
+                )
         future.set_result(frame.get("result"))
 
     def _fail_pending(self, exc: Exception) -> None:

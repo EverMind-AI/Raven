@@ -3721,6 +3721,17 @@ is the fallback ending.
 _Avoid_: "background turn" - nothing about it is backgrounded; it runs and streams like any
 other turn, and only its *origin* differs.
 
+**Background Settle** (`raven/acp_client/acp_agent.py`,
+`raven/acp_client/background_settle.py`): the part of an ACP Subagent run
+between the prompt answer and the end of the background work the turn started,
+for an agent whose stream reports that work (claude-agent-acp, through
+`emitRawSDKMessages`). The run keeps its session and its sinks, streams the wake
+turns, and returns the last message once the session is idle with no background
+task of this run left, Monitor tasks excepted, or at its ceiling or its
+deadline, or when the connection closes - those three with a closing notice.
+_Avoid_: "held wake" - that is `raven.holdTurn`, where a Raven agent keeps its
+own prompt open on the server side; "hold" alone, for the same reason.
+
 **Elicitation Pass-Through** (`raven/acp_client/elicitor.py`):
 How an ACP Subagent's `elicitation/create` reaches the user. Form mode only, and advertised
 as only that: `url` elicitation is for out-of-band credential and payment collection, so

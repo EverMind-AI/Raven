@@ -16,6 +16,18 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      ``ACP_STUB_AGENT_NAME`` replaces ``agentInfo.name`` (``stub-agent``).
                      ``ACP_STUB_AGENT_VERSION`` replaces ``agentInfo.version`` (``9.9.9``); empty drops it.
                      ``ACP_STUB_COST_PER_PROMPT`` reports a cumulative cost growing by it each prompt.
+- ``settle``       - claude-agent-acp's raw SDK messages (``_claude/sdkMessage``) around a
+                     prompt, by ``ACP_STUB_SETTLE``; unset, it behaves as ``ok``. ``bash``: a
+                     background task, ended 0.3 s after the answer, then a wake turn
+                     answering ``final: done``. ``bash_monitor``: also a Monitor task that
+                     never ends. ``idle_end``: the wake comes 0.5 s after the task's end.
+                     ``idle_end_nowake``: no wake. ``forever``: the task never ends and the
+                     state stays ``running``. ``forever_spent``: as ``forever``, with a wake
+                     turn's ``result`` (7 in, 11 out) after the answer. ``dies``: as ``forever``, then the process
+                     exits 0.5 s after the answer. ``no_state``: no raw message at all.
+                     ``burst``: the task's end and a wake turn answering ``final: burst``,
+                     written with the answer and everything before it in one write.
+                     Logs ``stub: session/cancel <sid>`` on a cancel.
 - ``reject_init``  - answers ``initialize`` with a JSON-RPC error.
 - ``no_session``   - handshake fine, ``session/new`` errors (an auth-shaped message).
 - ``no_session_sdk`` - like ``no_session``, but refused the way both ACP SDKs wrap
@@ -253,9 +265,44 @@ def arm_wake() -> None:
     timer.start()
 
 
+# Whether a session open asked for the raw SDK messages; the adapter sends
+# none otherwise, which is what keeps another agent's run out of the settle.
+_RAW_OPTED_IN: list = []
+
+
+def log_meta(method: str, params: dict) -> None:
+    if "_meta" in params:
+        print(f"stub: {method} meta={json.dumps(params['_meta'], sort_keys=True)}", file=sys.stderr, flush=True)
+        claude = params["_meta"].get("claudeCode") if isinstance(params["_meta"], dict) else None
+        if isinstance(claude, dict) and claude.get("emitRawSDKMessages"):
+            _RAW_OPTED_IN.append(method)
+
+
+# The settle scenarios write from timer threads beside the frame loop.
+_SEND_LOCK = threading.Lock()
+_BURST: list[str] | None = None
+
+
 def send(frame: dict) -> None:
-    sys.stdout.write(json.dumps(frame) + "\n")
-    sys.stdout.flush()
+    with _SEND_LOCK:
+        if _BURST is not None:
+            _BURST.append(json.dumps(frame) + "\n")
+            return
+        sys.stdout.write(json.dumps(frame) + "\n")
+        sys.stdout.flush()
+
+
+def _in_one_write(act) -> None:
+    """Run ``act`` with every frame it sends held back, then write them all at once."""
+    global _BURST
+    _BURST = []
+    try:
+        act()
+    finally:
+        with _SEND_LOCK:
+            lines, _BURST = _BURST, None
+            sys.stdout.write("".join(lines))
+            sys.stdout.flush()
 
 
 def ok(request_id, result) -> None:
@@ -435,11 +482,12 @@ def _ended() -> dict:
     return answered
 
 
-def _answers_without_a_turn(request_id) -> bool:
+def _answers_without_a_turn(request_id, session_id: str) -> bool:
     """The prompts that end the turn before any mode's own script runs.
 
     ``ACP_STUB_EMPTY_PROMPTS`` applies whatever the mode, so it settles first;
-    a resident prompt then arms its wake and ends.
+    a resident prompt then arms its wake and ends, and a settle scenario plays
+    its frames and answers.
     """
     if _PROMPTS <= int(os.environ.get("ACP_STUB_EMPTY_PROMPTS", "0")):
         ok(request_id, _ended())
@@ -448,14 +496,133 @@ def _answers_without_a_turn(request_id) -> bool:
         arm_wake()
         ok(request_id, {"stopReason": "end_turn"})
         return True
+    if MODE == "settle" and (scenario := os.environ.get("ACP_STUB_SETTLE")):
+        if scenario == "burst":
+            _in_one_write(lambda: settle_prompt(request_id, session_id, scenario))
+        else:
+            settle_prompt(request_id, session_id, scenario)
+        return True
     return False
+
+
+def _raw(session_id: str, message: dict) -> None:
+    if not _RAW_OPTED_IN:
+        return
+    notify("_claude/sdkMessage", {"sessionId": session_id, "message": message})
+
+
+def _state(session_id: str, state: str) -> None:
+    _raw(session_id, {"type": "system", "subtype": "session_state_changed", "state": state})
+
+
+def _level(session_id: str, *task_ids: str) -> None:
+    tasks = [{"task_id": t, "task_type": "local_bash", "description": _SETTLE_TASKS[t]} for t in task_ids]
+    _raw(session_id, {"type": "system", "subtype": "background_tasks_changed", "tasks": tasks})
+
+
+def _task_started(session_id: str, task_id: str, call_id: str, tool: str) -> None:
+    update(
+        session_id,
+        {
+            "sessionUpdate": "tool_call",
+            "toolCallId": call_id,
+            "title": tool,
+            "kind": "execute",
+            "status": "pending",
+            "_meta": {"claudeCode": {"toolName": tool}},
+        },
+    )
+    _raw(
+        session_id,
+        {
+            "type": "system",
+            "subtype": "task_started",
+            "task_id": task_id,
+            "tool_use_id": call_id,
+            "task_type": "local_bash",
+            "is_backgrounded": True,
+            "description": _SETTLE_TASKS[task_id],
+        },
+    )
+
+
+def _say(session_id: str, text: str) -> None:
+    update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}})
+
+
+def _result(session_id: str, read: int = 3, wrote: int = 5) -> None:
+    usage = {
+        "input_tokens": read,
+        "output_tokens": wrote,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
+    _raw(session_id, {"type": "result", "subtype": "success", "usage": usage})
+
+
+_SETTLE_TASKS = {"t1": "sleep job", "t2": "watch log"}
+
+
+def _later(delay: float, act) -> None:
+    timer = threading.Timer(delay, act)
+    timer.daemon = True
+    timer.start()
+
+
+def settle_prompt(request_id, session_id: str, scenario: str) -> None:
+    """One ``ACP_STUB_SETTLE`` scenario: the frames before the answer, the answer, and the timed rest."""
+    if scenario == "no_state":
+        _say(session_id, "pong")
+        ok(request_id, _ended())
+        return
+    monitor = scenario == "bash_monitor"
+    _state(session_id, "running")
+    _task_started(session_id, "t1", "c1", "Bash")
+    if monitor:
+        _task_started(session_id, "t2", "c2", "Monitor")
+    held = ("t2",) if monitor else ()
+    _level(session_id, "t1", *held)
+    _say(session_id, "started")
+    _result(session_id)
+    ok(request_id, _ended())
+    if scenario == "burst":
+        _state(session_id, "idle")
+        _level(session_id)
+        _state(session_id, "running")
+        _say(session_id, "final: burst")
+        _result(session_id)
+        _state(session_id, "idle")
+        return
+    if scenario in ("forever", "forever_spent", "dies"):
+        _state(session_id, "running")
+        if scenario == "forever_spent":
+            _result(session_id, 7, 11)
+        if scenario == "dies":
+            _later(0.5, lambda: os._exit(0))
+        return
+    _state(session_id, "idle")
+
+    def wake() -> None:
+        _state(session_id, "running")
+        _say(session_id, "final: done")
+        _result(session_id)
+        _state(session_id, "idle")
+
+    def task_ends() -> None:
+        _level(session_id, *held)
+        if scenario in ("bash", "bash_monitor"):
+            wake()
+        elif scenario == "idle_end":
+            _later(0.5, wake)
+
+    _later(0.3, task_ends)
 
 
 def handle_prompt(request_id, params) -> None:
     global _PROMPTS
     _PROMPTS += 1
     session_id = params.get("sessionId") or "stub-session-1"
-    if _answers_without_a_turn(request_id):
+    if _answers_without_a_turn(request_id, session_id):
         return
     if MODE == "dies_mid_turn":
         # Half an answer, then the process is gone: the prompt went out and
@@ -853,6 +1020,9 @@ def handle_prompt(request_id, params) -> None:
 
 def handle_cancel(params) -> None:
     """Settle a held prompt on ``session/cancel``, unless this mode ignores it."""
+    if MODE == "settle":
+        print(f"stub: session/cancel {params.get('sessionId')}", file=sys.stderr, flush=True)
+        return
     if MODE != "cancel_aware":
         return
     session_id = params.get("sessionId")
@@ -1017,6 +1187,7 @@ def main() -> None:
         elif method == "session/new":
             global _SESSION_CWD
             _SESSION_CWD = str(params.get("cwd") or "")
+            log_meta(method, params)
             if MODE == "no_session":
                 err(request_id, -32000, "no api key configured for this agent")
             elif MODE == "no_session_other":
@@ -1122,6 +1293,7 @@ def main() -> None:
                 print(f"stub: session/set_mode {params.get('modeId')}", file=sys.stderr, flush=True)
                 ok(request_id, {})
         elif method == "session/load":
+            log_meta(method, params)
             if MODE == "resume_only":
                 err(request_id, -32601, "session/load is not implemented")
             elif params.get("sessionId") == "pruned-session":
@@ -1129,6 +1301,7 @@ def main() -> None:
             else:
                 ok(request_id, _reopened(str(params.get("sessionId"))))
         elif method == "session/resume":
+            log_meta(method, params)
             sid = str(params.get("sessionId"))
             if sid in _HELD:
                 err(request_id, -32602, f"Invalid params: session is already active: {sid}")
