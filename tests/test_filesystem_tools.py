@@ -203,14 +203,20 @@ async def test_a_file_url_whose_spelling_resolves_is_still_refused_by_scheme(tmp
 
 
 @pytest.mark.asyncio
-async def test_a_file_url_that_raises_in_the_platform_conversion_stays_a_refusal(tmp_path: Path):
+async def test_a_file_url_that_raises_in_the_platform_conversion_stays_a_refusal(tmp_path: Path, monkeypatch):
     """A malformed Windows spelling is refused, not raised.
 
     ``nturl2path.url2pathname`` raises ``OSError`` for a doubled drive colon
     (``file:///C::/notes.md``); the entry guard runs before ``_missing``, so
     the conversion failure would leave the call as an unhandled exception
-    rather than a refusal. A URL that cannot be converted names no path.
+    rather than a refusal. The CI host is POSIX, where the converter accepts
+    the spelling, so the failure is driven by substituting a converter that
+    raises -- the same one Windows ships for this shape.
     """
+    monkeypatch.setattr(
+        "raven.agent.tools.filesystem.url2pathname",
+        lambda _p: (_ for _ in ()).throw(OSError("Bad URL")),
+    )
     read = ReadFileTool(workspace=tmp_path)
 
     answer = await read.execute(path="file:///C::/notes.md")
