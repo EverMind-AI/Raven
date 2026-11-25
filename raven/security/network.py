@@ -32,7 +32,7 @@ from urllib.parse import urljoin, urlparse
 
 from loguru import logger
 
-from raven.security.hosts import not_public
+from raven.security.hosts import embedded_v4, not_public
 
 if TYPE_CHECKING:
     import httpx
@@ -62,11 +62,14 @@ def _not_public(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
 
     The benchmarking range is refused like every other non-public address on
     an untouched install; only an operator who runs a fake-IP resolver sets
-    the switch, and the refusal message names the range so the cause is
-    legible either way.
+    the switch. The switch matches the range in every spelling the
+    private-address judge unwraps -- an IPv4-mapped or NAT64 spelling of an
+    in-range address is the same destination -- so a resolver that answers in
+    one of them does not leave the switch silently ineffective. The refusal
+    message names the address, so the cause is legible either way.
     """
     if not_public(addr):
-        if _fake_ip_allowed() and addr in _FAKE_IP_NETWORK:
+        if _fake_ip_allowed() and any(a in _FAKE_IP_NETWORK for a in (addr, *embedded_v4(addr))):
             return False
         return True
     return False

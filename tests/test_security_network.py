@@ -219,6 +219,7 @@ def test_a_hostname_resolving_to_a_dangerous_address_is_refused(
     addr: str, reason: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The attacker owns the DNS answer, so the spelling is theirs to choose."""
+    monkeypatch.delenv(net.FAKE_IP_ENV_VAR, raising=False)
     _mock_resolve(monkeypatch, addr)
 
     ok, err = net.validate_url_target("https://attacker.example/latest/meta-data/")
@@ -239,9 +240,10 @@ def test_a_hostname_resolving_to_a_public_address_is_allowed(
 
 
 @pytest.mark.parametrize("addr,reason", DANGEROUS, ids=[c[0] for c in DANGEROUS])
-def test_a_redirect_to_a_dangerous_address_is_refused(addr: str, reason: str) -> None:
+def test_a_redirect_to_a_dangerous_address_is_refused(addr: str, reason: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """A validated URL that redirects inward is the same attack one hop later,
     so the redirect check answers the same table."""
+    monkeypatch.delenv(net.FAKE_IP_ENV_VAR, raising=False)
     host = f"[{addr}]" if ":" in addr else addr
 
     ok, err = net.validate_resolved_url(f"http://{host}/")
@@ -725,3 +727,27 @@ def test_a_literal_benchmark_ip_follows_the_switch_too(monkeypatch: pytest.Monke
     assert not net.validate_url_target("http://198.18.2.194/x")[0]
     monkeypatch.setenv(net.FAKE_IP_ENV_VAR, "1")
     assert net.validate_url_target("http://198.18.2.194/x")[0]
+
+
+def test_a_literal_benchmark_redirect_target_follows_the_switch_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The redirect judge's literal-IP branch never reaches the resolver, so it
+    is its own call site and needs its own switch-on case."""
+    monkeypatch.delenv(net.FAKE_IP_ENV_VAR, raising=False)
+    assert not net.validate_resolved_url("https://198.18.2.194/x")[0]
+    monkeypatch.setenv(net.FAKE_IP_ENV_VAR, "1")
+    assert net.validate_resolved_url("https://198.18.2.194/x")[0]
+
+
+@pytest.mark.parametrize("addr", ["::ffff:198.18.2.194", "64:ff9b::198.18.2.194"])
+def test_an_ipv6_spelling_of_the_benchmark_range_follows_the_switch(addr: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The range is IPv4, but the judge unwraps IPv4-mapped and NAT64 spellings
+    to judge the inner address; the switch reads those spellings the same way,
+    or a resolver answering in one leaves it silently ineffective."""
+    monkeypatch.delenv(net.FAKE_IP_ENV_VAR, raising=False)
+    _mock_resolve(monkeypatch, addr)
+    ok, err = net.validate_url_target("https://example.com/img.png")
+    assert not ok, f"allowed {addr} without the switch"
+
+    monkeypatch.setenv(net.FAKE_IP_ENV_VAR, "1")
+    ok, err = net.validate_url_target("https://example.com/img.png")
+    assert ok, f"blocked {addr} with the switch on: {err}"
