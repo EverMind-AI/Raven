@@ -56,8 +56,9 @@ the path when the JSON is malformed, and `UnicodeDecodeError` when the bytes
 are not UTF-8, and the turn that needed it logs
 `agent playbook: resolution failed; running unconfigured` and runs
 unconfigured. The other generation failures log their own lines -- a provider
-failure is `agent playbook: task generation failed (...)` and repair
-exhaustion is `agent playbook: task Harness still invalid after one repair`.
+failure is `agent playbook: task generation failed (...); running unconfigured`
+and repair exhaustion is
+`agent playbook: task Harness still invalid after one repair; running unconfigured`.
 So a worker missing a field you expected may be the catalogue saying no --
 provided the field was declared at all, since a Harness a model omitted one
 from carries none -- and a table that never appeared after generation ran is
