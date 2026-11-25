@@ -4,6 +4,7 @@ A whole-file write is the only change no UI can reconstruct afterwards -- the
 previous content is gone the moment it lands -- so the tool has to hand it over.
 """
 
+import nturl2path
 import os
 from pathlib import Path
 
@@ -144,11 +145,193 @@ async def test_a_file_url_is_answered_with_the_path_it_means(tmp_path: Path):
     target = tmp_path / "notes.md"
     target.write_text("facts", encoding="utf-8")
 
-    answer = await ReadFileTool(workspace=tmp_path).execute(path=f"file://{target}")
+    answer = await ReadFileTool(workspace=tmp_path).execute(path=target.as_uri())
 
     assert isinstance(answer, str)
     assert str(target) in answer
     assert "web_fetch" not in answer
+
+
+@pytest.mark.asyncio
+async def test_a_file_url_is_answered_with_a_path_the_caller_can_open(tmp_path: Path):
+    """The answer names a path, so the path has to be one the tool can open.
+
+    A file URL escapes what a path cannot carry, and the URL's own spelling is
+    not a path on this machine: the drive of a Windows URL sits behind a
+    leading slash, and a name with a space arrives percent-encoded. Handing
+    the URL's spelling back sent the caller after a file that is not there.
+    """
+    target = tmp_path / "notes and facts.md"
+    target.write_text("facts", encoding="utf-8")
+
+    answer = await ReadFileTool(workspace=tmp_path).execute(path=target.as_uri())
+
+    assert isinstance(answer, str)
+    assert str(target) in answer
+    hint = answer.split("-- try ")[-1]
+    assert hint == str(target), f"the answer must name the path, not the URL: {answer}"
+
+    re_read = await ReadFileTool(workspace=tmp_path).execute(path=hint)
+
+    assert isinstance(re_read, str)
+    assert re_read.startswith("1| facts"), f"the named path must open: {re_read}"
+
+
+@pytest.mark.asyncio
+async def test_a_file_url_for_another_machine_names_no_local_path(tmp_path: Path):
+    """A URL with a host names somebody else's file, so there is no path to try."""
+    read = ReadFileTool(workspace=tmp_path)
+
+    answer = await read.execute(path="file://fileserver/share/notes.md")
+
+    assert isinstance(answer, str)
+    assert "file://" in answer
+    assert "-- try" not in answer, f"no local path may be named: {answer}"
+
+
+@pytest.mark.asyncio
+async def test_a_file_url_for_localhost_names_the_local_path(tmp_path: Path):
+    """A ``localhost`` authority names this machine, as the rest of the repo reads it."""
+    target = tmp_path / "notes.md"
+    target.write_text("facts", encoding="utf-8")
+
+    answer = await ReadFileTool(workspace=tmp_path).execute(
+        path=target.as_uri().replace("file://", "file://localhost", 1)
+    )
+
+    assert isinstance(answer, str)
+    assert answer.split("-- try ")[-1] == str(target), f"localhost names this machine: {answer}"
+
+
+@pytest.mark.asyncio
+async def test_a_windows_localhost_file_url_keeps_its_unc_share(tmp_path: Path, monkeypatch):
+    """A localhost authority names this machine, but a share stays a UNC share.
+
+    ``url2pathname`` folds the authority away, so the bare conversion answers
+    ``\\share\\notes.md`` -- the current drive's share, not the one the URL
+    named. The rest of the repo keeps the host: media attachments and the ACP
+    server both read ``file://localhost/share/x`` as ``\\\\localhost\\share\\x``.
+    The platform and the converter are substituted, as Windows' own converter
+    is the same pure string conversion.
+    """
+    monkeypatch.setattr("raven.agent.tools.filesystem._WINDOWS", True)
+    monkeypatch.setattr("raven.agent.tools.filesystem.url2pathname", nturl2path.url2pathname)
+    read = ReadFileTool(workspace=tmp_path)
+
+    answer = await read.execute(path="file://localhost/share/notes.md")
+
+    assert isinstance(answer, str)
+    assert answer.split("-- try ")[-1] == "\\\\localhost\\share\\notes.md", answer
+
+
+@pytest.mark.asyncio
+async def test_a_windows_localhost_file_url_keeps_a_drive_path(tmp_path: Path, monkeypatch):
+    """A localhost authority in front of a drive names this machine, not a share."""
+    monkeypatch.setattr("raven.agent.tools.filesystem._WINDOWS", True)
+    monkeypatch.setattr("raven.agent.tools.filesystem.url2pathname", nturl2path.url2pathname)
+    read = ReadFileTool(workspace=tmp_path)
+
+    answer = await read.execute(path="file://localhost/C:/work/notes.md")
+
+    assert isinstance(answer, str)
+    assert answer.split("-- try ")[-1] == "C:\\work\\notes.md", answer
+
+
+@pytest.mark.parametrize(
+    "encoded, decoded",
+    [("%0A", "\n"), ("%00", "\x00"), ("%E2%80%A8", "\u2028")],
+)
+@pytest.mark.asyncio
+async def test_a_file_url_whose_decoded_path_has_a_control_character_names_no_path(
+    tmp_path: Path, encoded: str, decoded: str
+):
+    """A percent-encoded line break would forge a line in the tool result.
+
+    The resolver refuses such a path on the next call anyway, so naming one
+    would only put the control character into this answer.
+    """
+    read = ReadFileTool(workspace=tmp_path)
+
+    answer = await read.execute(path=f"file:///tmp/notes{encoded}forged.md")
+
+    assert isinstance(answer, str)
+    assert "file:// URL" in answer
+    assert "-- try" not in answer, f"no path may be named: {answer!r}"
+    assert decoded not in answer, f"the decoded character must not reach the answer: {answer!r}"
+
+
+@pytest.mark.asyncio
+async def test_a_file_url_with_a_literal_line_break_does_not_carry_it_into_the_answer(tmp_path: Path):
+    """The URL parser drops a newline, so the path it would report is not the caller's.
+
+    The refusal escapes the raw argument; the answer must not carry the line
+    break, which would let the argument forge a line of the result.
+    """
+    read = ReadFileTool(workspace=tmp_path)
+
+    answer = await read.execute(path="file:///tmp/notes\nforged.md")
+
+    assert isinstance(answer, str)
+    assert "-- try" not in answer, f"no path may be named: {answer!r}"
+    assert "\n" not in answer, f"the line break must not reach the answer: {answer!r}"
+
+
+@pytest.mark.asyncio
+async def test_a_file_url_that_cannot_be_parsed_names_no_local_path(tmp_path: Path):
+    """A host that is not a valid IPv6 literal leaves the URL without a path."""
+    read = ReadFileTool(workspace=tmp_path)
+
+    answer = await read.execute(path="file://[::1/notes.md")
+
+    assert isinstance(answer, str)
+    assert "file://" in answer
+    assert "-- try" not in answer, f"no local path may be named: {answer}"
+
+
+@pytest.mark.asyncio
+async def test_a_file_url_whose_spelling_resolves_is_still_refused_by_scheme(tmp_path: Path):
+    """A URL's own spelling can reach a real file, and the answer must not read it.
+
+    Under Windows the spelling is drive-relative; on POSIX a directory may be
+    named ``file:``, so the URL read as a relative path lands on a real file
+    under the workspace. The refusal has to happen by scheme, before the path
+    resolves, or the tool reads that file and reports an ordinary success.
+    """
+    hazard = tmp_path / "file:" / "tmp" / "notes.md"
+    hazard.parent.mkdir(parents=True)
+    hazard.write_text("HAZARD-CONTENT", encoding="utf-8")
+
+    answer = await ReadFileTool(workspace=tmp_path).execute(path="file:///tmp/notes.md")
+
+    assert isinstance(answer, str)
+    assert "file:// URL" in answer
+    assert "HAZARD-CONTENT" not in answer, f"the URL's spelling must not be read: {answer}"
+    assert str(hazard) not in answer, f"the hazard path must not be named: {answer}"
+
+
+@pytest.mark.asyncio
+async def test_a_file_url_that_raises_in_the_platform_conversion_stays_a_refusal(tmp_path: Path, monkeypatch):
+    """A malformed Windows spelling is refused, not raised.
+
+    ``nturl2path.url2pathname`` raises ``OSError`` for a doubled drive colon
+    (``file:///C::/notes.md``); the entry guard runs before ``_missing``, so
+    the conversion failure would leave the call as an unhandled exception
+    rather than a refusal. The CI host is POSIX, where the converter accepts
+    the spelling, so the failure is driven by substituting a converter that
+    raises -- the same one Windows ships for this shape.
+    """
+    monkeypatch.setattr(
+        "raven.agent.tools.filesystem.url2pathname",
+        lambda _p: (_ for _ in ()).throw(OSError("Bad URL")),
+    )
+    read = ReadFileTool(workspace=tmp_path)
+
+    answer = await read.execute(path="file:///C::/notes.md")
+
+    assert isinstance(answer, str)
+    assert "file:// URL" in answer
+    assert "plain path" in answer
+    assert "-- try" not in answer, f"a path that cannot be converted must not be named: {answer}"
 
 
 @pytest.mark.asyncio
