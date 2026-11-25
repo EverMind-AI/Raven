@@ -1004,7 +1004,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         runs_on = media_provider(config)
         asked_model = wire_model(model, client_provider=runs_on) if runs_on and model else model
         sent_model = wire_model(settings_model, client_provider=runs_on) if runs_on else settings_model
-        if model and settings_model and not _same_model_as_sent(asked_model, sent_model):
+        if model and settings_model and asked_model != sent_model:
             selection["model"] = {
                 "requested": model,
                 "sent": body.get("model") or settings_model,
@@ -1461,16 +1461,6 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         return json.dumps(
             {"success": True, "model": model_id, "quality": quality or "", "paths": paths}, ensure_ascii=False
         )
-
-
-def _same_model_as_sent(asked: str, sent: str) -> bool:
-    """The one spelling a Settings model keeps when it went to OpenRouter.
-
-    An ``openrouter/`` wire prefix is stripped before the request is sent, so a
-    section's model that matches the call's apart from that prefix is the call's
-    own model under the gateway's name, not an override worth a line.
-    """
-    return asked == sent or asked.removeprefix("openrouter/") == sent.removeprefix("openrouter/")
 
 
 class SpeechGenerateTool(_OpenRouterMediaTool):

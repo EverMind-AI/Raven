@@ -1780,6 +1780,37 @@ async def test_a_named_provider_s_model_prefix_is_not_an_override(monkeypatch, t
     assert "selection" not in out
 
 
+async def test_a_prefix_the_request_did_not_strip_is_reported_as_a_settings_override(monkeypatch, tmp_path):
+    """A custom base is sent the section's model as written -- nothing strips an
+    ``openrouter/`` prefix for an endpoint that is not OpenRouter -- so a
+    Settings model carrying it really did replace the call's model, and the
+    answer has to say so."""
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="openrouter/openai/gpt-image-2",
+        workspace=tmp_path,
+        api_base="https://images.example.test/v1",
+    )
+    out = json.loads(await tool.execute("a poster", model="openai/gpt-image-2"))
+
+    assert out["success"]
+    assert seen[-1]["model"] == "openrouter/openai/gpt-image-2"
+    assert out["selection"] == {
+        "model": {
+            "requested": "openai/gpt-image-2",
+            "sent": "openrouter/openai/gpt-image-2",
+            "source": "settings",
+        }
+    }
+
+
 async def test_a_batch_that_lost_every_picture_is_named_by_its_call_not_by_a_live_read(monkeypatch, tmp_path):
     """The one gap left: a batch where every picture failed before an answer
     carried the attempted model had nothing left to name but a live Settings
