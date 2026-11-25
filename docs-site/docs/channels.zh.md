@@ -136,7 +136,8 @@ Matrix 是去中心化消息开放协议：账号住在 homeserver 上，房间�
 协议。Raven 支持它，因为它是表格中唯一既开源又设计即端到端加密的渠道，天然适合 Slack、
 Discord 不可用的自托管或隐私敏感部署。
 
-适配器基于 matrix-nio，以可选 extra（`channel-matrix`）形式分发。它用 homeserver URL、
+适配器基于 matrix-nio，以可选 extra（`channel-matrix`）形式分发；matrix-nio SDK 未发布
+Windows 版本，因此该渠道在 Windows 上不可用。它用 homeserver URL、
 用户 id 和 access token 认证——不需要 bot 审批流程，但账号必须已存在于 homeserver。
 E2EE 默认开启；关闭它是有意的配置变更，因为会把凭据和消息正文以明文暴露给 homeserver。
 

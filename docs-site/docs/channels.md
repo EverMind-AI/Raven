@@ -166,8 +166,9 @@ self-hosted or privacy-conscious deployments where Slack or Discord is not an
 option.
 
 The adapter is built on matrix-nio and ships as an optional extra
-(`channel-matrix`). It authenticates with a homeserver URL, a user id, and an
-access token — no bot approval flow is needed, but the account must already
+(`channel-matrix`); the matrix-nio SDK is not published for Windows, so this
+channel is unavailable there. It authenticates with a homeserver URL, a user
+id, and an access token — no bot approval flow is needed, but the account must already
 exist on the homeserver. E2EE is enabled by default; turning it off is a
 deliberate config change because it exposes credentials and message bodies to
 the homeserver in plaintext.
