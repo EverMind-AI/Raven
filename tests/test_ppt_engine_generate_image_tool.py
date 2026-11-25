@@ -265,10 +265,10 @@ async def test_both_spellings_of_no_quality_name_the_same_file(monkeypatch, tmp_
     requested = _mock(monkeypatch, _images_api(_png()))
     tool = _tool(tmp_path)
 
-    tool.media.effective_quality = lambda _requested, model_id=None: ""
+    tool.media.effective_quality = lambda _requested, model_id=None, config=None: ""
     first = json.loads(await tool.execute(project="talk", prompt="a lantern", filename="lantern"))
 
-    tool.media.effective_quality = lambda _requested, model_id=None: None
+    tool.media.effective_quality = lambda _requested, model_id=None, config=None: None
     second = json.loads(await tool.execute(project="talk", prompt="a lantern", filename="lantern"))
 
     assert "quality" not in json.loads(requested[0].content)

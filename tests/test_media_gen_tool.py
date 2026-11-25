@@ -1530,6 +1530,438 @@ async def test_an_empty_settings_quality_reaches_a_custom_generations_route(
     assert body["quality"] == "high"
 
 
+async def test_the_answer_says_settings_decided_the_model_the_call_named(monkeypatch, tmp_path):
+    """A trace showed the outgoing model and nothing about where it came from,
+    so a Settings model that outranked the call read the same as the call's own
+    value: a requested Sunburst answered by another model, with no reason given."""
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    tool = _image_tool(monkeypatch, handler, model="openai/gpt-image-2", workspace=tmp_path)
+    out = json.loads(await tool.execute("a poster", model="openai/gpt-image-2.5-sunburst"))
+
+    assert out["model"] == "openai/gpt-image-2"
+    assert out["selection"] == {
+        "model": {"requested": "openai/gpt-image-2.5-sunburst", "sent": "openai/gpt-image-2", "source": "settings"}
+    }
+
+
+async def test_the_answer_says_settings_decided_the_quality_the_call_named(monkeypatch, tmp_path):
+    """The other half: a quality named in Settings outranks the call's, and the
+    answer says so instead of showing a requested high quality gone missing."""
+    from raven.config.schema import ImageToolConfig
+
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+
+    tool = ImageGenerateTool(
+        ImageToolConfig(model="openai/gpt-image-2.5", quality="low", api_key="k"), workspace=tmp_path
+    )
+    out = json.loads(await tool.execute("a kitten", quality="high"))
+
+    assert out["quality"] == "low"
+    assert out["selection"] == {"quality": {"requested": "high", "sent": "low", "source": "settings"}}
+
+
+async def test_a_family_without_the_quality_knob_reports_no_quality_override(monkeypatch, tmp_path):
+    """A seedream section's quality reaches no request -- ``effective_quality``
+    drops the knob for every family but gpt-image -- so the empty quality a
+    success envelope carries is "nothing sent", not Settings overriding the
+    call. The failure envelope leaves the key out instead; both spell no
+    quality, and neither is an override worth a line."""
+    from raven.config.schema import ImageToolConfig
+
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+
+    tool = ImageGenerateTool(
+        ImageToolConfig(model="bytedance/seedream-4.0", quality="low", api_key="k"), workspace=tmp_path
+    )
+    out = json.loads(await tool.execute("a kitten", quality="high"))
+
+    assert out["success"]
+    assert "quality" not in seen[-1]
+    assert out["quality"] == ""
+    assert "selection" not in out
+
+
+async def test_an_answer_names_no_source_when_settings_decided_nothing(monkeypatch, tmp_path):
+    """A call that named both fields against a section that names neither has
+    nothing overridden, and its trace stays as it was."""
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    tool = _image_tool(monkeypatch, handler, model="", workspace=tmp_path)
+    out = json.loads(await tool.execute("a poster", model="openai/gpt-image-2", quality="high"))
+
+    assert out["success"] and "selection" not in out
+
+
+async def test_the_selection_comes_from_the_settings_the_request_used(monkeypatch, tmp_path):
+    """A live section is read per call, so the explanation of a request must
+    come from the snapshot that request was built from: read again after the
+    request went out, it may name another model or quality than the one sent."""
+    from raven.config.schema import ImageToolConfig
+
+    named = ImageToolConfig(model="openai/gpt-image-2", quality="low", api_key="k")
+    unnamed = ImageToolConfig(model="", quality="", api_key="k")
+    state = {"named": True}
+
+    def source():
+        return named if state["named"] else unnamed
+
+    def handler(request):
+        # The section is rewritten while the request is in flight.
+        state["named"] = False
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+
+    tool = ImageGenerateTool(source, workspace=tmp_path)
+    out = json.loads(await tool.execute("a kitten", model="openai/gpt-image-2.5-sunburst", quality="high"))
+
+    assert out["model"] == "openai/gpt-image-2"
+    assert out["selection"] == {
+        "model": {"requested": "openai/gpt-image-2.5-sunburst", "sent": "openai/gpt-image-2", "source": "settings"},
+        "quality": {"requested": "high", "sent": "low", "source": "settings"},
+    }
+
+
+async def test_a_batch_carries_the_selection_of_each_picture(monkeypatch, tmp_path):
+    """Each picture of a batch is its own call, so each carries what Settings
+    decided for it rather than the batch saying it once for all of them."""
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    tool = _image_tool(monkeypatch, handler, model="openai/gpt-image-2", workspace=tmp_path)
+    out = json.loads(
+        await tool.execute(prompts=[{"prompt": "a cat"}, {"prompt": "a dog"}], model="openai/gpt-image-2.5-sunburst")
+    )
+
+    assert [json.loads(request.content)["model"] for request in seen] == ["openai/gpt-image-2"] * 2
+    assert [item["selection"]["model"]["sent"] for item in out["results"]] == ["openai/gpt-image-2"] * 2
+    assert "selection" not in out
+
+
+async def test_a_failed_picture_carries_the_selection_it_was_asked_with(monkeypatch, tmp_path):
+    """The block is not a success ornament: a failed trace still has to explain
+    a Settings override, so a refused call answers with the model and quality
+    it attempted and the same selection a success would have carried."""
+    from raven.config.schema import ImageToolConfig
+
+    def handler(request):
+        return httpx.Response(500, json={"error": "upstream"})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+
+    tool = ImageGenerateTool(
+        ImageToolConfig(model="openai/gpt-image-2", quality="low", api_key="k"), workspace=tmp_path
+    )
+    out = json.loads(await tool.execute("a kitten", model="openai/gpt-image-2.5-sunburst", quality="high"))
+
+    assert out["error"].startswith("HTTP 500")
+    assert out["model"] == "openai/gpt-image-2"
+    assert out["selection"] == {
+        "model": {"requested": "openai/gpt-image-2.5-sunburst", "sent": "openai/gpt-image-2", "source": "settings"},
+        "quality": {"requested": "high", "sent": "low", "source": "settings"},
+    }
+
+
+async def test_a_batch_that_lost_every_picture_is_named_by_its_attempts_not_by_a_reread(monkeypatch, tmp_path):
+    """The batch answer's model used to be a live Settings read after the
+    gather, so a section rewritten mid-flight made the batch name a model none
+    of its requests was built with. Each attempt carries the model it was
+    tried with, so the batch is named by them instead."""
+    from raven.config.schema import ImageToolConfig
+
+    first = ImageToolConfig(model="openai/gpt-image-2", api_key="k")
+    second = ImageToolConfig(model="openai/gpt-image-9", api_key="k")
+    state = {"first": True}
+
+    def source():
+        return first if state["first"] else second
+
+    def handler(request):
+        # The section is rewritten while the requests are in flight.
+        state["first"] = False
+        return httpx.Response(500, json={"error": "upstream"})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+
+    tool = ImageGenerateTool(source, workspace=tmp_path)
+    out = json.loads(await tool.execute(prompts=[{"prompt": "a cat"}, {"prompt": "a dog"}]))
+
+    assert out["model"] == "openai/gpt-image-2"
+    assert out["failed"] == 2
+    assert all(item["model"] == "openai/gpt-image-2" for item in out["results"])
+
+
+async def test_a_settings_model_equal_to_the_call_s_is_not_reported_as_an_override(monkeypatch, tmp_path):
+    """Requested and sent the same model: a selection block would read as an
+    override that did not happen, so none is written -- and the same is true
+    when the two differ only by the ``openrouter/`` wire prefix stripped at send."""
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    tool = _image_tool(monkeypatch, handler, model="openai/gpt-image-2", workspace=tmp_path)
+    out = json.loads(await tool.execute("a poster", model="openai/gpt-image-2"))
+    assert out["success"] and "selection" not in out
+
+    tool = _image_tool(monkeypatch, handler, model="openrouter/openai/gpt-image-2", workspace=tmp_path)
+    out = json.loads(await tool.execute("a poster", model="openai/gpt-image-2"))
+    assert out["success"] and out["model"] == "openai/gpt-image-2"
+    assert "selection" not in out
+    assert [json.loads(request.content)["model"] for request in seen] == ["openai/gpt-image-2"] * 2
+
+
+async def test_a_named_provider_s_model_prefix_is_not_an_override(monkeypatch, tmp_path):
+    """A section on a named provider spells its model under that provider's own
+    prefix and the request goes out with the prefix stripped. The call naming
+    the same prefixed spelling is the same model, so no selection is written;
+    comparing the call's stored spelling against the wire id alone would report
+    an override that never happened."""
+    from raven.config.schema import ImageToolConfig
+
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+
+    tool = ImageGenerateTool(
+        ImageToolConfig(
+            provider="openai",
+            api_base="https://api.openai.com/v1",
+            model="openai/gpt-image-2",
+            api_key="k",
+        ),
+        workspace=tmp_path,
+    )
+    out = json.loads(await tool.execute("a kitten", model="openai/gpt-image-2"))
+
+    assert out["success"] and out["model"] == "gpt-image-2"
+    assert seen[-1]["model"] == "gpt-image-2"
+    assert "selection" not in out
+
+
+async def test_a_prefix_the_request_did_not_strip_is_reported_as_a_settings_override(monkeypatch, tmp_path):
+    """A custom base is sent the section's model as written -- nothing strips an
+    ``openrouter/`` prefix for an endpoint that is not OpenRouter -- so a
+    Settings model carrying it really did replace the call's model, and the
+    answer has to say so."""
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="openrouter/openai/gpt-image-2",
+        workspace=tmp_path,
+        api_base="https://images.example.test/v1",
+    )
+    out = json.loads(await tool.execute("a poster", model="openai/gpt-image-2"))
+
+    assert out["success"]
+    assert seen[-1]["model"] == "openrouter/openai/gpt-image-2"
+    assert out["selection"] == {
+        "model": {
+            "requested": "openai/gpt-image-2",
+            "sent": "openrouter/openai/gpt-image-2",
+            "source": "settings",
+        }
+    }
+
+
+async def test_a_batch_that_lost_every_picture_is_named_by_its_call_not_by_a_live_read(monkeypatch, tmp_path):
+    """The one gap left: a batch where every picture failed before an answer
+    carried the attempted model had nothing left to name but a live Settings
+    read, so the batch reported the model the section held after the flight."""
+    from raven.config.schema import ImageToolConfig
+
+    first = ImageToolConfig(model="openai/gpt-image-2", api_key="k")
+    second = ImageToolConfig(model="openai/gpt-image-9", api_key="k")
+    state = {"first": True}
+
+    def source():
+        return first if state["first"] else second
+
+    def handler(request):
+        # The section is rewritten while the requests are in flight, and a
+        # directory failure answers nothing the batch can name the model from.
+        state["first"] = False
+        raise RuntimeError("output_dir is refused")
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+
+    tool = ImageGenerateTool(source, workspace=tmp_path)
+    out = json.loads(
+        await tool.execute(prompts=[{"prompt": "a cat"}, {"prompt": "a dog"}], model="openai/gpt-image-2.5-sunburst")
+    )
+
+    assert out["model"] == "openai/gpt-image-2"
+    assert all(item["model"] == "openai/gpt-image-2" for item in out["results"])
+
+
+async def test_a_batch_where_every_picture_failed_to_write_is_named_by_its_attempts_not_by_a_live_read(
+    monkeypatch, tmp_path
+):
+    """An output-directory refusal is a failure no request answer can carry a
+    model back from, so a batch where every picture hit it had only a live
+    Settings read to name itself by -- the model the requests were built with
+    must come from the batch's own snapshot instead."""
+    from raven.config.schema import ImageToolConfig
+
+    first = ImageToolConfig(model="openai/gpt-image-2", api_key="k")
+    second = ImageToolConfig(model="openai/gpt-image-9", api_key="k")
+    state = {"first": True}
+
+    def source():
+        return first if state["first"] else second
+
+    async def refuse_output_dir(self, spec, stem, model, output_dir, config):
+        state["first"] = False
+        raise PermissionError("output_dir is refused")
+
+    monkeypatch.setattr(ImageGenerateTool, "_generate_one_answer", refuse_output_dir)
+
+    tool = ImageGenerateTool(source, workspace=tmp_path)
+    out = json.loads(await tool.execute(prompts=[{"prompt": "a cat"}, {"prompt": "a dog"}]))
+
+    assert out["model"] == "openai/gpt-image-2"
+
+
+async def test_a_batch_that_lost_every_picture_is_named_by_the_model_its_attempts_used(monkeypatch, tmp_path):
+    """A section naming no model on a provider that has a model of its own sends
+    that one -- a MiniMax section sends ``image-01`` -- so a batch that lost
+    every picture is named by it and not by the default this tool answers with."""
+
+    def handler(request):
+        pytest.fail("no request should be sent")
+
+    async def refuse_output_dir(self, spec, stem, model, output_dir, config):
+        raise PermissionError("output_dir is refused")
+
+    monkeypatch.setattr(ImageGenerateTool, "_generate_one_answer", refuse_output_dir)
+
+    tool = _minimax_image_tool(monkeypatch, handler, tmp_path, model="")
+    out = json.loads(await tool.execute(prompts=[{"prompt": "a cat"}, {"prompt": "a dog"}]))
+
+    assert out["model"] == "image-01"
+
+
+async def test_the_request_is_built_from_the_snapshot_the_answer_names(monkeypatch, tmp_path):
+    """The in-flight test asserts the answer; this pins the request beside it:
+    the model the answer attributes to Settings is the one the outgoing body
+    carried, and the call's model is only on the selection."""
+    from raven.config.schema import ImageToolConfig
+
+    seen = []
+    state = {"first": True}
+    first = ImageToolConfig(model="openai/gpt-image-2", quality="low", api_key="k")
+    second = ImageToolConfig(model="openai/gpt-image-9", quality="", api_key="k")
+
+    def source():
+        return first if state["first"] else second
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        state["first"] = False
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+
+    tool = ImageGenerateTool(source, workspace=tmp_path)
+    out = json.loads(await tool.execute("a kitten", model="openai/gpt-image-2.5-sunburst", quality="high"))
+
+    assert seen[-1]["model"] == "openai/gpt-image-2"
+    assert seen[-1]["quality"] == "low"
+    assert out["selection"] == {
+        "model": {"requested": "openai/gpt-image-2.5-sunburst", "sent": "openai/gpt-image-2", "source": "settings"},
+        "quality": {"requested": "high", "sent": "low", "source": "settings"},
+    }
+
+
+async def test_a_request_s_quality_is_built_from_the_snapshot_the_batch_read(monkeypatch, tmp_path):
+    """Pin request construction against the section it read the snapshot from:
+    the quality the outgoing body carries is the one the batch captured before
+    it flew, not whatever a live read returns by the time the body is built."""
+    from raven.config.schema import ImageToolConfig
+
+    named = ImageToolConfig(model="openai/gpt-image-2", quality="low", api_key="k")
+    unnamed = ImageToolConfig(model="openai/gpt-image-2", quality="", api_key="k")
+    state = {"named": True}
+
+    def source():
+        return named if state["named"] else unnamed
+
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+
+    real_effective_quality = ImageGenerateTool.effective_quality
+
+    def flip_then_answer(self, requested, model_id=None, config=None):
+        state["named"] = False
+        return real_effective_quality(self, requested, model_id, config)
+
+    monkeypatch.setattr(ImageGenerateTool, "effective_quality", flip_then_answer)
+
+    tool = ImageGenerateTool(source, workspace=tmp_path)
+    out = json.loads(await tool.execute(prompts=[{"prompt": "a cat"}, {"prompt": "a dog"}], quality="high"))
+
+    assert [body["quality"] for body in seen] == ["low", "low"]
+    assert [item["selection"]["quality"]["sent"] for item in out["results"]] == ["low", "low"]
+
+
 @pytest.mark.parametrize(
     "model",
     [
@@ -2489,6 +2921,7 @@ async def test_minimax_h3_returns_failures_without_resubmitting(monkeypatch, tmp
     assert len(posts) == (0 if case == "unreadable_reference" else 1)
     if case == "unreadable_reference":
         assert answer["error"] == "could not read input image"
+        assert answer["model"] == "MiniMax-H3-Image"
     elif case == "timeout":
         assert answer["retryable"] is False and answer["error"] == "ReadTimeout"
     elif case == "http_error":
@@ -2497,6 +2930,26 @@ async def test_minimax_h3_returns_failures_without_resubmitting(monkeypatch, tmp
         assert Path(answer["paths"][0]).read_bytes() == _PNG
     else:
         assert answer["detail"] == [error] and answer["retryable"] is False
+
+
+async def test_a_minimax_transport_failure_names_the_wire_model_the_request_used(monkeypatch, tmp_path):
+    """A transport error carried no model, so the failed call's selection fell
+    back to the stored Settings spelling (``minimax/image-01``) instead of the id
+    the request was actually built with (``image-01``)."""
+
+    def handler(request):
+        raise httpx.ConnectError("boom")
+
+    tool = _minimax_image_tool(monkeypatch, handler, tmp_path, model="minimax/image-01")
+    answer = json.loads(await tool.execute("portrait", model="MiniMax-H3-Image"))
+
+    assert answer["error"] == "ConnectError"
+    assert answer["selection"]["model"] == {
+        "requested": "MiniMax-H3-Image",
+        "sent": "image-01",
+        "source": "settings",
+    }
+    assert answer["model"] == "image-01"
 
 
 async def test_h3_deadline_follows_the_model_selected_for_this_call(monkeypatch, tmp_path):
