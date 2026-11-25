@@ -265,8 +265,8 @@ def test_a_worker_whose_catalogue_disables_tools_names_the_skew_it_drops(tmp_pat
     assert charter is not None
     assert charter.tools is None
     assert [line for line in said if "capability.tools" in line] == [
-        "charter: a host sent 2 tool name(s) but this install's catalogue disables "
-        "capability.tools; the dispatch keeps the worker's own toolset"
+        "charter: 2 tool name(s) accepted from the host, but this install's catalogue "
+        "disables capability.tools; the dispatch keeps the worker's own toolset"
     ]
 
 
@@ -288,8 +288,8 @@ def test_a_dispatch_with_an_empty_restriction_names_the_skew_it_drops(tmp_path, 
     assert charter is not None
     assert charter.tools is None
     assert [line for line in said if "capability.tools" in line] == [
-        "charter: a host sent 0 tool name(s) but this install's catalogue disables "
-        "capability.tools; the dispatch keeps the worker's own toolset"
+        "charter: 0 tool name(s) accepted from the host, but this install's catalogue "
+        "disables capability.tools; the dispatch keeps the worker's own toolset"
     ]
 
 
@@ -302,6 +302,34 @@ def test_a_dispatch_that_carries_no_tools_names_no_skew(tmp_path, monkeypatch) -
     assert absent is not None
     assert absent.tools is None
     assert said == []
+
+
+def test_an_undeclared_tools_switch_fails_the_parse_even_without_a_tools_key(tmp_path, monkeypatch) -> None:
+    """The catalogue is consulted for every payload, so a build whose document
+    never declared the switch refuses the dispatch rather than answering it
+    without the field the document is supposed to describe."""
+    document = json.loads(harness_capabilities._PATH.read_text(encoding="utf-8"))
+    del document["harnessGeneration"]["capability"]["parameters"]["items"]["tools"]
+    path = tmp_path / "harness_generation.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    monkeypatch.setattr(harness_capabilities, "_PATH", path)
+
+    with pytest.raises(RuntimeError, match="not declared: capability.parameters.tools"):
+        parse({"brief": "the dispatch brief"})
+
+
+def test_the_skew_count_names_the_accepted_tools_not_the_entries_sent(tmp_path, monkeypatch) -> None:
+    _disabled_document(tmp_path, monkeypatch)
+
+    with _warnings() as said:
+        charter = parse({"brief": "the dispatch brief", "tools": ["read_file", 7, "", "write_file"]})
+
+    assert charter is not None
+    assert charter.tools is None
+    assert [line for line in said if "capability.tools" in line] == [
+        "charter: 2 tool name(s) accepted from the host, but this install's catalogue "
+        "disables capability.tools; the dispatch keeps the worker's own toolset"
+    ]
 
 
 def test_a_non_boolean_switch_is_refused(tmp_path, monkeypatch) -> None:

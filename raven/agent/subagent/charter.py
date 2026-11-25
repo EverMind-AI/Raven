@@ -156,18 +156,22 @@ def parse(payload: Any) -> Charter | None:
     )
     tools: tuple[str, ...] | None = None
     raw_tools = payload.get("tools")
+    # Asked for every payload, including one that carries no tool list: a
+    # catalogue with no declaration for this switch is broken, and a dispatch
+    # that happens to omit the key must not be what hides it.
+    tools_enabled = _parameter_enabled("capability", "tools")
     if isinstance(raw_tools, list):
         # Read the list even when this install's catalogue refuses the field:
         # the host that enables it sends one, and a list dropped without a
         # word leaves the dispatch running with the worker's whole toolset,
         # which is wider than the host asked for and says so nowhere.
         sent = tuple(str(name) for name in raw_tools[:MAX_TOOLS] if isinstance(name, str) and name)
-        if _parameter_enabled("capability", "tools"):
+        if tools_enabled:
             tools = sent
         else:
             logger.warning(
-                "charter: a host sent {} tool name(s) but this install's catalogue disables "
-                "capability.tools; the dispatch keeps the worker's own toolset",
+                "charter: {} tool name(s) accepted from the host, but this install's catalogue "
+                "disables capability.tools; the dispatch keeps the worker's own toolset",
                 len(sent),
             )
     checks: list[CheckRule] = []
