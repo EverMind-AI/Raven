@@ -110,7 +110,9 @@ class TriggerPolicy:
         capped = max(1, window - max(0, reply_headroom))
         trigger_tokens = min(adaptive, capped)
 
-        target_tokens = int(cfg.retain_ratio * window)
+        # Applied before the reclaim clamp: a floor above the trigger must still
+        # yield a target the trigger can fund, which is what the clamp computes.
+        target_tokens = max(int(cfg.retain_ratio * window), cfg.min_retain_tokens)
         reclaim_clamped = trigger_tokens - target_tokens < cfg.min_reclaim_tokens
         if reclaim_clamped:
             target_tokens = max(0, trigger_tokens - cfg.min_reclaim_tokens)

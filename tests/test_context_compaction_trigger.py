@@ -47,19 +47,29 @@ WINDOW_TABLE = [
 ]
 
 # The same eight windows with the default 4096 headroom applied, and the target
-# each compacts to: 40% of the raw window, lowered where that would reclaim less
-# than ``minReclaimTokens`` below the trigger (only 32K, where the floor-capped
-# trigger of 28672 sits 15565 above 13107).
+# each compacts to: the larger of the configured retain share and
+# ``minRetainTokens``, then lowered where the round trip would reclaim less
+# than ``minReclaimTokens`` below the trigger. The floor is what keeps the 10%
+# share honest below 327,680: there the share alone is smaller than the fixed
+# prompt and the checkpoint, so no removal can reach it. 32K is lowered by the
+# reclaim clamp because its trigger cannot fund the floor.
 TARGET_TABLE = [
     (32_768, 28_672, 12_288),
-    (65_536, 58_982, 26_214),
-    (128_000, 115_200, 51_200),
-    (200_000, 176_136, 80_000),
-    (262_144, 227_796, 104_857),
-    (512_000, 430_080, 204_800),
-    (1_000_000, 811_026, 400_000),
-    (2_000_000, 1_600_000, 800_000),
+    (65_536, 58_982, 32_768),
+    (128_000, 115_200, 32_768),
+    (200_000, 176_136, 32_768),
+    (262_144, 227_796, 32_768),
+    (512_000, 430_080, 51_200),
+    (1_000_000, 811_026, 100_000),
+    (2_000_000, 1_600_000, 200_000),
 ]
+
+# The measured 1M session this default was chosen against: the fixed part of
+# the prompt (system plus tools) and the summary checkpoint that stands in for
+# removed messages. With the protected tail they are the incompressible mass a
+# target has to clear before ``Selection.exhausted`` can ever be false.
+MEASURED_FIXED_TOKENS = 14_344
+MEASURED_SUMMARY_TOKENS = 6_213
 
 # Above this the adaptive ratio binds; at or below it the static reply-headroom
 # floor does and the ratio never gets a say: 4096 / (1 - 0.90).
@@ -102,8 +112,9 @@ def test_the_unclamped_trigger_is_that_share_of_the_raw_window(
 def test_the_trigger_and_target_with_the_default_headroom(
     policy: TriggerPolicy, window: int, trigger: int, target: int
 ) -> None:
-    """``min(ratio * W, W - headroom)`` and ``0.40 * W`` clamped to reclaim at
-    least ``minReclaimTokens`` -- the whole formula, at every tabulated window."""
+    """``min(ratio * W, W - headroom)`` and ``max(retainRatio * W,
+    minRetainTokens)`` clamped to reclaim at least ``minReclaimTokens`` --
+    the whole formula, at every tabulated window."""
     plan = _plan(policy, window=window)
     assert (plan.trigger_tokens, plan.target_tokens) == (trigger, target)
     assert plan.trigger_tokens - plan.target_tokens >= ContextCompactionConfig().min_reclaim_tokens
@@ -196,18 +207,55 @@ def test_a_prompt_over_the_line_compacts_and_one_on_it_does_not(policy: TriggerP
     assert _plan(policy, window=200_000, prompt_tokens=trigger + 1).action == "compact"
 
 
-def test_the_target_is_a_share_of_the_raw_window(policy: TriggerPolicy) -> None:
-    plan = _plan(policy, window=200_000, prompt_tokens=190_000)
-    assert plan.target_tokens == int(ContextCompactionConfig().retain_ratio * 200_000)
+def test_the_target_is_a_share_of_the_raw_window_where_it_clears_the_floor(policy: TriggerPolicy) -> None:
+    plan = _plan(policy, window=1_000_000, prompt_tokens=900_000)
+    assert plan.target_tokens == int(ContextCompactionConfig().retain_ratio * 1_000_000)
     assert plan.reclaim_clamped is False
 
 
-def test_the_target_drops_until_one_compaction_is_worth_running(policy: TriggerPolicy) -> None:
+def test_the_target_has_a_floor_the_share_cannot_go_below(policy: TriggerPolicy) -> None:
+    """Below 327,680 the 10% share is smaller than the prompt's fixed part, so
+    the floor governs; from 512K the share does and the floor is inert."""
+    floor = ContextCompactionConfig().min_retain_tokens
+    assert floor == 32_768
+    for window in (65_536, 128_000, 200_000, 262_144):
+        plan = _plan(policy, window=window)
+        assert plan.target_tokens == floor
+        assert plan.reclaim_clamped is False, "the floor still leaves a reclaim worth running"
+    for window in (512_000, 1_000_000, 2_000_000):
+        assert _plan(policy, window=window).target_tokens == int(ContextCompactionConfig().retain_ratio * window)
+
+
+def test_the_floor_yields_to_the_reclaim_clamp_on_a_window_too_small_for_it(policy: TriggerPolicy) -> None:
+    """A floor above the trigger cannot be the target: the clamp lowers it to
+    what the window can fund, so a small window still produces a valid plan."""
+    cfg = ContextCompactionConfig()
+    plan = _plan(policy, window=32_768)
+    assert plan.reclaim_clamped is True
+    assert plan.target_tokens == plan.trigger_tokens - cfg.min_reclaim_tokens
+
+
+@pytest.mark.parametrize(("window", "_trigger", "target"), [row for row in TARGET_TABLE if row[0] > 32_768])
+def test_the_target_clears_the_measured_incompressible_floor(window: int, _trigger: int, target: int) -> None:
+    """The arithmetic from the measured session the default was chosen on.
+
+    With 14,344 fixed tokens, a 6,213-token checkpoint and the default tail
+    share, a target below their sum is unreachable: every compaction reports
+    ``exhausted``, lazy summaries lose their fold branch, and the warning is
+    logged again on each one. 32K is excluded on purpose -- its trigger is too
+    close for ``minReclaimTokens``, so no target can clear the floor there.
+    """
+    cfg = ContextCompactionConfig()
+    protected = MEASURED_FIXED_TOKENS + MEASURED_SUMMARY_TOKENS + int(cfg.tail_keep_ratio * window)
+    assert target > protected, f"target {target} cannot clear the {protected}-token floor"
+
+
+def test_the_target_drops_until_one_compaction_is_worth_running() -> None:
     """On a small window the plain target is too close to the trigger to buy
     much, so it is lowered until the round trip reclaims ``minReclaimTokens``.
     Without it a session at the line would compact every single turn."""
-    cfg = ContextCompactionConfig()
-    plan = _plan(policy, window=32_768, prompt_tokens=32_000)
+    cfg = ContextCompactionConfig(retain_ratio=0.79)
+    plan = _plan(TriggerPolicy(cfg), window=32_768, prompt_tokens=32_000)
     assert plan.reclaim_clamped is True
     assert plan.trigger_tokens - plan.target_tokens == cfg.min_reclaim_tokens
     assert plan.target_tokens < int(cfg.retain_ratio * 32_768)
@@ -251,12 +299,47 @@ def test_the_inputs_travel_with_the_verdict(policy: TriggerPolicy) -> None:
 
 class TestConfigValidation:
     def test_a_target_at_or_above_the_trigger_is_refused(self) -> None:
+        """The default retain share is 0.10, so a trigger floor at or below it
+        leaves nothing for a compaction to reclaim."""
         with pytest.raises(ValidationError, match="retainRatio"):
-            ContextCompactionConfig(retain_ratio=0.85)
+            ContextCompactionConfig(trigger_ratio_min=0.05)
+
+    def test_an_explicit_pair_is_honored(self) -> None:
+        cfg = ContextCompactionConfig(retain_ratio=0.30, tail_keep_ratio=0.20)
+        assert (cfg.retain_ratio, cfg.tail_keep_ratio) == (0.30, 0.20)
+
+    def test_a_tail_only_override_keeps_the_default_retain(self) -> None:
+        cfg = ContextCompactionConfig(tail_keep_ratio=0.06)
+        assert (cfg.retain_ratio, cfg.tail_keep_ratio) == (0.10, 0.06)
+
+    def test_a_retain_only_override_keeps_the_default_tail(self) -> None:
+        cfg = ContextCompactionConfig(retain_ratio=0.30)
+        assert (cfg.retain_ratio, cfg.tail_keep_ratio) == (0.30, 0.04)
+
+    def test_a_pair_with_no_overrides_is_the_default_pair(self) -> None:
+        cfg = ContextCompactionConfig()
+        assert (cfg.retain_ratio, cfg.tail_keep_ratio) == (0.10, 0.04)
+
+    def test_a_value_out_of_the_ratio_domain_is_refused(self) -> None:
+        with pytest.raises(ValidationError, match="retain_ratio"):
+            ContextCompactionConfig(retain_ratio=-0.1)
+        with pytest.raises(ValidationError, match="tail_keep_ratio"):
+            ContextCompactionConfig(tail_keep_ratio=1.5)
 
     def test_a_tail_larger_than_the_target_is_refused(self) -> None:
         with pytest.raises(ValidationError, match="tailKeepRatio"):
             ContextCompactionConfig(tail_keep_ratio=0.5)
+
+    def test_a_tail_equal_to_the_target_is_refused(self) -> None:
+        """The boundary is closed: a tail the same size as the target cannot be
+        compacted into it either. The 0.10 default makes this pair easy to
+        write by hand now that both values look natural."""
+        with pytest.raises(ValidationError, match="tailKeepRatio"):
+            ContextCompactionConfig(retain_ratio=0.10, tail_keep_ratio=0.10)
+
+    def test_a_tail_just_below_the_target_is_accepted(self) -> None:
+        cfg = ContextCompactionConfig(retain_ratio=0.10, tail_keep_ratio=0.09)
+        assert (cfg.retain_ratio, cfg.tail_keep_ratio) == (0.10, 0.09)
 
     def test_an_inverted_ratio_band_is_refused(self) -> None:
         with pytest.raises(ValidationError, match="triggerRatioMin"):

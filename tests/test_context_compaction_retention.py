@@ -210,10 +210,30 @@ class TestSplit:
         """The union again, from the other side: a tail share big enough to
         cover the whole history keeps all of it, count floor or not."""
         ledger = MessageLedger(_conversation(10))
-        cfg = ContextCompactionConfig(tail_keep_messages=2, tail_keep_ratio=0.39)
+        cfg = ContextCompactionConfig(retain_ratio=0.40, tail_keep_messages=2, tail_keep_ratio=0.39)
         ranges = RetentionPlanner(cfg).split(ledger, _plan(window=100_000, cfg=cfg), generation=1)
         assert ranges.tail.start == 0
         assert len(ranges.compact) == 0
+
+    def test_the_shipped_tail_share_binds_on_a_large_window(self) -> None:
+        """The shipped 4%, exercised on a window where the count floor cannot
+        hide it: a 1M window holds back 40,000 tokens of this 80,000-token
+        history, not the eight-message count floor (which would start the tail
+        at 32). Restoring the old 0.25 share would swallow the whole history,
+        leave COMPACT empty and fail the index assertion.
+
+        At the small windows the rest of this suite uses, the count floor
+        binds and the share never gets a say -- which is why the default needs
+        a case of its own.
+        """
+        messages = _conversation(10)
+        ledger = MessageLedger(messages, [2_000] * len(messages))
+        cfg = ContextCompactionConfig()
+        ranges = RetentionPlanner(cfg).split(ledger, _plan(window=1_000_000, cfg=cfg), generation=1)
+        assert cfg.tail_keep_ratio == 0.04
+        assert ranges.tail.start == 20, "the share, not the count floor at 32, starts the tail"
+        assert len(ranges.tail) == 20
+        assert list(ranges.compact) == list(range(0, 20))
 
     def test_a_tiny_window_leaves_the_tail_at_the_count_floor(self) -> None:
         ledger = MessageLedger(_conversation(10))
