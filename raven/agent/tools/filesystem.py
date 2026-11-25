@@ -323,7 +323,12 @@ def _file_url_path(url: str) -> str | None:
         return None
     if parsed.netloc or not parsed.path:
         return None
-    return url2pathname(parsed.path)
+    try:
+        return url2pathname(parsed.path)
+    except OSError:
+        # A malformed Windows spelling (``file:///C::/...``) raises inside
+        # ``url2pathname``; a URL that cannot be converted names no path.
+        return None
 
 
 def _missing(path: str) -> str:
@@ -339,14 +344,10 @@ def _missing(path: str) -> str:
     nothing on disk, so a path that does resolve never reaches it.
     """
     raw = path.strip()
-    if match := _URL_SCHEME_RE.match(raw):
-        if match.group("scheme").lower() == "file":
-            # Reached only through the tools that share this refusal: Read
-            # answers a file URL at its own entry, before resolution, so a
-            # spelling that resolves to a real file never reads as one.
-            local = _file_url_path(raw)
-            hint = f" -- try {local}" if local else ""
-            return f"Error: {path} is a file:// URL; read_file takes a plain path{hint}"
+    if _URL_SCHEME_RE.match(raw):
+        # A file URL is answered at the read's entry, before this branch is
+        # reached, so a URL that lands here is one the tool refuses for any
+        # other reason.
         return (
             f"Error: {path} is a URL, not a path on this machine. read_file only reads the "
             "filesystem; fetch it with web_fetch, which returns the page as text."
@@ -469,13 +470,7 @@ class ReadFileTool(_FsTool):
         # path under Windows), leaving the refusal to the missing-file branch
         # would read it as a file instead of telling the caller to try a path.
         if (m := _URL_SCHEME_RE.match(path.strip())) and m.group("scheme").lower() == "file":
-            try:
-                local = _file_url_path(path.strip())
-            except OSError:
-                # A malformed Windows spelling (``file:///C::/...``) raises
-                # inside ``url2pathname``; a URL that cannot be converted names
-                # no path the caller can try.
-                local = None
+            local = _file_url_path(path.strip())
             hint = f" -- try {local}" if local else ""
             return f"Error: {path} is a file:// URL; read_file takes a plain path{hint}"
         # A file on a registered machine is read there, by its Raven node.
