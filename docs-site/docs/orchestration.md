@@ -61,8 +61,11 @@ exhaustion is `agent playbook: task Harness still invalid after one repair`.
 So a worker missing a field you expected may be the catalogue saying no --
 provided the field was declared at all, since a Harness a model omitted one
 from carries none -- and a table that never appeared after generation ran is
-one of those failures, each of which logs a line of its own; an empty request
-or an empty roster skips generation altogether and logs nothing.
+one of those failures, each of which logs a line of its own; once the
+catalogue has loaded, an empty request or an empty roster skips generation
+altogether and logs nothing. Without a loadable catalogue the tool schema is
+built first, so an empty request still logs the resolution warning, while an
+empty roster returns before generation and stays silent.
 
 | Layer | Lifetime | Meaning |
 | --- | --- | --- |
