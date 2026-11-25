@@ -79,13 +79,16 @@ async def test_a_rewrite_too_large_to_render_is_dropped_whole(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_the_model_text_of_a_write_is_unchanged_by_the_diff(tmp_path: Path):
     target = tmp_path / "note.txt"
-    out = await WriteFileTool(workspace=tmp_path).execute(path=str(target), content="hi\n")
+    # Multibyte plus a newline: a character count and a byte count differ on
+    # every platform, and the newline keeps the CRLF translation in play.
+    content = "🙂\n"
+    out = await WriteFileTool(workspace=tmp_path).execute(path=str(target), content=content)
 
     assert isinstance(out, ToolResult)
-    # The write goes through a text layer, so a CRLF platform holds four bytes
-    # for "hi\n" -- the count the tool reports is the count that landed.
+    # The write goes through a text layer, so a CRLF platform holds one more
+    # byte for the newline -- the count the tool reports is the count that landed.
     written = target.stat().st_size
-    assert written == len("hi\n".replace("\n", os.linesep).encode("utf-8"))
+    assert written == len(content.replace("\n", os.linesep).encode("utf-8"))
     assert out.model_text.startswith(f"Successfully wrote {written} bytes to ")
 
 
