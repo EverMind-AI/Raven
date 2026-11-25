@@ -222,6 +222,8 @@ class CronTool(Tool):
         if not self._channel or not self._chat_id:
             return "Error: no session context (channel/chat_id)"
         delete_after = False
+        # When several schedule fields arrive together the first one here wins;
+        # the others are never read, and neither is a tz only they would have used.
         if every_seconds:
             schedule = CronSchedule(kind="every", every_ms=every_seconds * 1000)
         elif cron_expr:

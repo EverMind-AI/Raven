@@ -83,6 +83,23 @@ async def test_add_every_with_tz_is_tolerated_and_dropped() -> None:
     assert getattr(schedule, "tz", None) is None  # tz dropped — meaningless for every
 
 
+@pytest.mark.parametrize("tz", ["Asia/Shanghai", "Not/AZone"])
+@pytest.mark.parametrize("dropped", [{"at": "2026-06-24T15:00:00+09:00"}, {"cron_expr": "0 9 * * *"}])
+async def test_every_schedule_wins_over_other_fields_and_ignores_their_tz(tz: str, dropped: dict[str, str]) -> None:
+    """every_seconds is dispatched first, so an `at` or `cron_expr` supplied
+    alongside it is stored nowhere. A tz is meaningful only to the schedule
+    that is actually built, so the every job must ignore it -- including an
+    invalid one that would have been rejected had the passed-over field won.
+    """
+    tool, cron = _tool()
+    result = await tool.execute(action="add", message="drink water", every_seconds=60, tz=tz, **dropped)
+    assert result.startswith("Created job"), result
+    schedule = cron.add_job_with_outcome.call_args.kwargs["schedule"]
+    assert schedule.kind == "every"
+    assert schedule.every_ms == 60_000
+    assert schedule.tz is None and schedule.at_ms is None and schedule.expr is None
+
+
 async def test_add_naive_at_with_tz_anchors_to_that_zone() -> None:
     # A1: a naive `at` + tz means "that wall-clock time in tz" — the stored at_ms
     # must match the tz, not the host's local zone.
