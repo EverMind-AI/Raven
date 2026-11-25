@@ -390,6 +390,28 @@ def test_validate_loads_the_document_and_its_checks(tmp_path, monkeypatch) -> No
         harness_capabilities.validate()
 
 
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (("memory", "parameters", "items", "systemPrompt"), "memory.parameters.systemPrompt"),
+        (("action", "parameters", "items", "checksImpl"), "action.parameters.checksImpl"),
+        (("planning", "functions", "participant", "items", "advise"), "planning.functions.participant.advise"),
+    ],
+)
+def test_validate_refuses_missing_switches_at_startup(tmp_path, monkeypatch, path, expected) -> None:
+    document = json.loads(harness_capabilities._PATH.read_text(encoding="utf-8"))
+    section = document["harnessGeneration"]
+    for key in path[:-1]:
+        section = section[key]
+    del section[path[-1]]
+    catalogue = tmp_path / "harness_generation.json"
+    catalogue.write_text(json.dumps(document), encoding="utf-8")
+    monkeypatch.setattr(harness_capabilities, "_PATH", catalogue)
+
+    with pytest.raises(RuntimeError, match=re.escape(f"not declared: {expected}")):
+        harness_capabilities.validate()
+
+
 def test_enabling_an_unwired_catalog_item_fails_loudly(tmp_path, monkeypatch) -> None:
     document = json.loads(harness_capabilities._PATH.read_text(encoding="utf-8"))
     document["harnessGeneration"]["action"]["functions"]["participant"]["items"]["review"]["enabled"] = True

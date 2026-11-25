@@ -108,7 +108,21 @@ def validate() -> None:
     run at all: a broken file surfaces as the ``RuntimeError`` the loader
     names rather than inside whichever query a turn happens to make first.
     """
-    _root()
+    for module, name in (
+        ("memory", "systemPrompt"),
+        ("memory", "stopWhen"),
+        ("capability", "tools"),
+        ("action", "checks"),
+        ("action", "checksImpl"),
+    ):
+        parameter_enabled(module, name)
+    for module, name in (
+        ("memory", "intake"),
+        ("planning", "advise"),
+        ("action", "judge"),
+        ("action", "salvage"),
+    ):
+        function_enabled(module, "participant", name)
 
 
 def parameter_enabled(module: ModuleName, name: str) -> bool:
