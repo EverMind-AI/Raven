@@ -25,13 +25,14 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import os
 import socket
 from typing import TYPE_CHECKING, Protocol
 from urllib.parse import urljoin, urlparse
 
 from loguru import logger
 
-from raven.security.hosts import not_public
+from raven.security.hosts import embedded_v4, not_public
 
 if TYPE_CHECKING:
     import httpx
@@ -39,6 +40,39 @@ if TYPE_CHECKING:
 # Redirect chains have to end. Each hop costs a DNS resolution and a request,
 # and no legitimate media URL needs many.
 DEFAULT_MAX_REDIRECTS = 5
+
+#: Deployment-level widening, the same class of switch as
+#: ``RAVEN_BROWSER_BLOCK_PRIVATE`` but in the other direction: set to
+#: 1/true/yes/on to let the RFC 2544 benchmarking range through the
+#: private-address refusal. A fake-IP DNS resolver (the kind a transparent
+#: proxy runs) answers every name from that range, so without the switch a
+#: proxied machine cannot fetch anything; with it, the operator has said the
+#: range is their proxy's answer, not an internal target. Per-deployment, not
+#: a config key an agent-driven write could flip.
+FAKE_IP_ENV_VAR = "RAVEN_NETWORK_ALLOW_BENCHMARK"
+_FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
+
+
+def _fake_ip_allowed() -> bool:
+    return os.environ.get(FAKE_IP_ENV_VAR, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _not_public(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """``not_public`` with the deployment's one declared exception applied.
+
+    The benchmarking range is refused like every other non-public address on
+    an untouched install; only an operator who runs a fake-IP resolver sets
+    the switch. The switch matches the range in every spelling the
+    private-address judge unwraps -- an IPv4-mapped or NAT64 spelling of an
+    in-range address is the same destination -- so a resolver that answers in
+    one of them does not leave the switch silently ineffective. The refusal
+    message names the address, so the cause is legible either way.
+    """
+    if not_public(addr):
+        if _fake_ip_allowed() and any(a in _FAKE_IP_NETWORK for a in (addr, *embedded_v4(addr))):
+            return False
+        return True
+    return False
 
 
 class _Fetcher(Protocol):
@@ -74,7 +108,7 @@ def judge_url_target(url: str) -> tuple[bool, str, tuple[str, ...]]:
     except ValueError:
         pass
     else:
-        if not_public(ipaddress.ip_address(hostname)):
+        if _not_public(ipaddress.ip_address(hostname)):
             return False, f"Blocked: {hostname} is a private/internal address", ()
         return True, "", ()
 
@@ -89,7 +123,7 @@ def judge_url_target(url: str) -> tuple[bool, str, tuple[str, ...]]:
             addr = ipaddress.ip_address(info[4][0])
         except ValueError:
             continue
-        if not_public(addr):
+        if _not_public(addr):
             return False, f"Blocked: {hostname} resolves to private/internal address {addr}", ()
         addrs.append(str(addr))
 
@@ -132,7 +166,7 @@ def judge_resolved_url(url: str) -> tuple[bool, str, tuple[str, ...]]:
     addrs: list[str] = []
     try:
         addr = ipaddress.ip_address(hostname)
-        if not_public(addr):
+        if _not_public(addr):
             return False, f"Redirect target is a private address: {addr}", ()
     except ValueError:
         try:
@@ -144,7 +178,7 @@ def judge_resolved_url(url: str) -> tuple[bool, str, tuple[str, ...]]:
                 addr = ipaddress.ip_address(info[4][0])
             except ValueError:
                 continue
-            if not_public(addr):
+            if _not_public(addr):
                 return False, f"Redirect target {hostname} resolves to private address {addr}", ()
             addrs.append(str(addr))
 

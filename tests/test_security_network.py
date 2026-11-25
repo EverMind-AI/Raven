@@ -219,6 +219,7 @@ def test_a_hostname_resolving_to_a_dangerous_address_is_refused(
     addr: str, reason: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The attacker owns the DNS answer, so the spelling is theirs to choose."""
+    monkeypatch.delenv(net.FAKE_IP_ENV_VAR, raising=False)
     _mock_resolve(monkeypatch, addr)
 
     ok, err = net.validate_url_target("https://attacker.example/latest/meta-data/")
@@ -239,9 +240,10 @@ def test_a_hostname_resolving_to_a_public_address_is_allowed(
 
 
 @pytest.mark.parametrize("addr,reason", DANGEROUS, ids=[c[0] for c in DANGEROUS])
-def test_a_redirect_to_a_dangerous_address_is_refused(addr: str, reason: str) -> None:
+def test_a_redirect_to_a_dangerous_address_is_refused(addr: str, reason: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """A validated URL that redirects inward is the same attack one hop later,
     so the redirect check answers the same table."""
+    monkeypatch.delenv(net.FAKE_IP_ENV_VAR, raising=False)
     host = f"[{addr}]" if ":" in addr else addr
 
     ok, err = net.validate_resolved_url(f"http://{host}/")
@@ -664,3 +666,114 @@ async def test_a_redirect_hop_judges_off_the_event_loop(monkeypatch) -> None:
     assert answer is None, "the redirected-to hop is refused: nothing is fetched"
     assert rec.requested == ["http://93.184.216.34/start"], "only the first hop went out, pinned to its judged address"
     assert ticks >= 5, f"the loop advanced only {ticks} times while the resolver held"
+
+
+# ---------------------------------------------------------------------------
+# The fake-IP opt-in (RAVEN_NETWORK_ALLOW_BENCHMARK)
+#
+# 198.18.0.0/15 is in the threat table above because the default install
+# refuses it like every non-public range. A transparent proxy's fake-IP
+# resolver answers every name from that range, so on a proxied machine the
+# refusal is the proxy's own answer, not an internal target. The operator
+# says so through the environment -- the same shape RAVEN_BROWSER_BLOCK_PRIVATE
+# takes, in the other direction.
+# ---------------------------------------------------------------------------
+
+
+def test_the_benchmark_range_is_refused_without_the_switch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(net.FAKE_IP_ENV_VAR, raising=False)
+    _mock_resolve(monkeypatch, "198.18.2.194")
+
+    ok, err = net.validate_url_target("https://example.com/img.png")
+
+    assert not ok
+    assert "198.18.2.194" in err
+
+
+@pytest.mark.parametrize("value", ["1", "true", "YES", "on"])
+def test_the_benchmark_range_is_allowed_when_the_operator_says_so(value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(net.FAKE_IP_ENV_VAR, value)
+    _mock_resolve(monkeypatch, "198.18.2.194")
+
+    ok, err = net.validate_url_target("https://example.com/img.png")
+
+    assert ok, f"blocked with {net.FAKE_IP_ENV_VAR}={value}: {err}"
+
+
+def test_the_switch_lets_only_the_benchmark_range_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The opt-in names one range, not "allow private": an RFC1918 answer is
+    still refused with the switch on."""
+    monkeypatch.setenv(net.FAKE_IP_ENV_VAR, "1")
+    _mock_resolve(monkeypatch, "10.1.2.3")
+
+    ok, err = net.validate_url_target("https://example.com/img.png")
+
+    assert not ok
+    assert "10.1.2.3" in err
+
+
+def test_the_benchmark_range_is_allowed_through_a_redirect_when_switched(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(net.FAKE_IP_ENV_VAR, "1")
+    _mock_resolve(monkeypatch, "198.18.2.194")
+
+    ok, err = net.validate_resolved_url("https://cdn.example/moved.png")
+
+    assert ok, err
+
+
+def test_a_literal_benchmark_ip_follows_the_switch_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A URL naming the address itself takes the same path as a resolved one."""
+    monkeypatch.delenv(net.FAKE_IP_ENV_VAR, raising=False)
+    assert not net.validate_url_target("http://198.18.2.194/x")[0]
+    monkeypatch.setenv(net.FAKE_IP_ENV_VAR, "1")
+    assert net.validate_url_target("http://198.18.2.194/x")[0]
+
+
+def test_a_literal_benchmark_redirect_target_follows_the_switch_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The redirect judge's literal-IP branch never reaches the resolver, so it
+    is its own call site and needs its own switch-on case."""
+    monkeypatch.delenv(net.FAKE_IP_ENV_VAR, raising=False)
+    assert not net.validate_resolved_url("https://198.18.2.194/x")[0]
+    monkeypatch.setenv(net.FAKE_IP_ENV_VAR, "1")
+    assert net.validate_resolved_url("https://198.18.2.194/x")[0]
+
+
+@pytest.mark.parametrize("addr", ["::ffff:198.18.2.194", "64:ff9b::198.18.2.194"])
+def test_an_ipv6_spelling_of_the_benchmark_range_follows_the_switch(addr: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The range is IPv4, but the judge unwraps IPv4-mapped and NAT64 spellings
+    to judge the inner address; the switch reads those spellings the same way,
+    or a resolver answering in one leaves it silently ineffective."""
+    monkeypatch.delenv(net.FAKE_IP_ENV_VAR, raising=False)
+    _mock_resolve(monkeypatch, addr)
+    ok, err = net.validate_url_target("https://example.com/img.png")
+    assert not ok, f"allowed {addr} without the switch"
+
+    monkeypatch.setenv(net.FAKE_IP_ENV_VAR, "1")
+    ok, err = net.validate_url_target("https://example.com/img.png")
+    assert ok, f"blocked {addr} with the switch on: {err}"
+
+
+@pytest.mark.parametrize(
+    "addr,reason",
+    [
+        ("::ffff:169.254.169.254", "cloud metadata spelled as IPv4-mapped"),
+        ("64:ff9b::10.1.2.3", "RFC1918 spelled as NAT64"),
+        ("::ffff:10.1.2.3", "RFC1918 spelled as IPv4-mapped"),
+    ],
+    ids=["mapped-metadata", "nat64-rfc1918", "mapped-rfc1918"],
+)
+def test_the_switch_still_refuses_private_addresses_in_ipv6_spellings(
+    addr: str, reason: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The switch unwraps the IPv6 spelling before the range test, so the
+    refused side must be pinned in those spellings too: a change that opened
+    every IPv6 spelling carrying an embedded IPv4 -- rather than only the
+    benchmark range -- would pass a suite whose only switched-on refusal is a
+    bare IPv4. These rows are what the unwrapping exists to keep shut."""
+    monkeypatch.setenv(net.FAKE_IP_ENV_VAR, "1")
+    _mock_resolve(monkeypatch, addr)
+
+    ok, err = net.validate_url_target("https://example.com/img.png")
+
+    assert not ok, f"allowed {addr} with the switch on: {reason}"
+    assert "private/internal" in err
