@@ -1,7 +1,9 @@
 """Tests for raven.channels.media - traversal-safe, collision-safe writes."""
 
+import nturl2path
 import os
-from pathlib import PureWindowsPath
+from pathlib import PurePosixPath, PureWindowsPath
+from urllib.parse import unquote
 
 import raven.channels.media as media
 
@@ -119,3 +121,39 @@ def test_file_uri_to_path_refuses_empty_path():
         assert media.file_uri_to_path("file://localhost") is not None
     else:
         assert media.file_uri_to_path("file://localhost") is None
+
+
+def test_file_uri_to_path_windows_localhost_drive_keeps_drive(monkeypatch):
+    """A drive path under localhost names that local drive, never a UNC share."""
+    monkeypatch.setattr(media, "_IS_WINDOWS", True)
+    monkeypatch.setattr(media, "Path", PureWindowsPath)
+    monkeypatch.setattr(media, "url2pathname", nturl2path.url2pathname)
+
+    assert str(media.file_uri_to_path("file://localhost/C:/work/a.md")) == r"C:\work\a.md"
+    assert str(media.file_uri_to_path("file://localhost/c:/work/a.md")) == r"c:\work\a.md"
+    assert str(media.file_uri_to_path("file://LOCALHOST/C:/work/a.md")) == r"C:\work\a.md"
+
+
+def test_file_uri_to_path_localhost_is_case_insensitive_and_drops_double_slash_prefix(monkeypatch):
+    monkeypatch.setattr(media, "_IS_WINDOWS", True)
+    monkeypatch.setattr(media, "Path", PureWindowsPath)
+    monkeypatch.setattr(media, "url2pathname", nturl2path.url2pathname)
+
+    assert str(media.file_uri_to_path("file://LOCALHOST/share/x")) == r"\\LOCALHOST\share\x"
+    assert str(media.file_uri_to_path("file://localhost//server/share/x")) == r"\\server\share\x"
+
+
+def test_file_uri_to_path_localhost_case_insensitive_posix(monkeypatch):
+    monkeypatch.setattr(media, "_IS_WINDOWS", False)
+    monkeypatch.setattr(media, "Path", PurePosixPath)
+    monkeypatch.setattr(media, "url2pathname", unquote)
+
+    assert str(media.file_uri_to_path("file://LOCALHOST/tmp/local%20file.csv")) == "/tmp/local file.csv"
+
+
+def test_file_uri_to_path_refuses_conversion_oserror(monkeypatch):
+    def _raise(_path: str) -> str:
+        raise OSError("Bad URL")
+
+    monkeypatch.setattr(media, "url2pathname", _raise)
+    assert media.file_uri_to_path("file:///C::/work/a.md") is None

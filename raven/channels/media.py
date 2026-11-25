@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
 from urllib.request import url2pathname
 
 from raven.config.paths import get_media_dir
@@ -49,12 +49,15 @@ def file_uri_to_path(uri: str) -> Path | None:
 
     ``url2pathname`` is the platform-aware inverse of ``Path.as_uri()``: on
     Windows it turns ``file:///C:/...`` into ``C:\...``, where a bare
-    ``Path(urlparse(uri).path)`` yields ``\C:\...``, which never exists. On
-    Windows a ``localhost`` authority names a UNC share and is handed to Path
-    intact (``//localhost/...``), because ``url2pathname`` folds it away; on
-    POSIX ``file://localhost/p`` names the same local file as ``file:///p``,
-    which is also what ``urllib`` reads. Any other host is remote and refused,
-    mirroring ``raven.acp.methods._file_uri_to_path``.
+    ``Path(urlparse(uri).path)`` yields ``\C:\...``, which never exists. A
+    ``localhost`` authority names this machine regardless of case; on Windows,
+    ``url2pathname`` folds it away into a root-relative path, so a single
+    leading separator keeps the UNC host (``//localhost/...``), while a drive
+    path (``file://localhost/C:/...``) keeps its drive. On POSIX
+    ``file://localhost/p`` names the same local file as ``file:///p``, which is
+    also what ``urllib`` reads. Any other host is remote and refused, mirroring
+    ``raven.acp.methods._file_uri_to_path`` and
+    ``raven.agent.tools.filesystem._file_url_path``.
     """
     if not uri.startswith("file://"):
         return None
@@ -63,11 +66,18 @@ def file_uri_to_path(uri: str) -> Path | None:
     except ValueError:
         # urlparse raises on a bracketed host that is not a valid IPv6 literal.
         return None
-    if parsed.netloc and parsed.netloc != "localhost":
+    if parsed.netloc and parsed.netloc.casefold() != "localhost":
         return None
-    if parsed.netloc and _IS_WINDOWS:
-        # url2pathname folds the localhost authority away; Path keeps the UNC host.
-        return Path(f"//{parsed.netloc}{unquote(parsed.path)}")
     if not parsed.path:
+        return Path(f"//{parsed.netloc}") if (_IS_WINDOWS and parsed.netloc) else None
+    try:
+        local = url2pathname(parsed.path)
+    except OSError:
+        # A malformed Windows spelling (``file:///C::/...``) raises inside
+        # ``url2pathname``; a URI that cannot be converted names no path.
         return None
-    return Path(url2pathname(parsed.path))
+    if _IS_WINDOWS and parsed.netloc and local.startswith(("\\", "/")) and not local.startswith(("\\\\", "//")):
+        # url2pathname folds the localhost authority away; a single-separator
+        # root-relative result names a share on localhost, not a drive path.
+        return Path(f"//{parsed.netloc}{local}")
+    return Path(local)
