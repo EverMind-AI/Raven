@@ -751,3 +751,29 @@ def test_an_ipv6_spelling_of_the_benchmark_range_follows_the_switch(addr: str, m
     monkeypatch.setenv(net.FAKE_IP_ENV_VAR, "1")
     ok, err = net.validate_url_target("https://example.com/img.png")
     assert ok, f"blocked {addr} with the switch on: {err}"
+
+
+@pytest.mark.parametrize(
+    "addr,reason",
+    [
+        ("::ffff:169.254.169.254", "cloud metadata spelled as IPv4-mapped"),
+        ("64:ff9b::10.1.2.3", "RFC1918 spelled as NAT64"),
+        ("::ffff:10.1.2.3", "RFC1918 spelled as IPv4-mapped"),
+    ],
+    ids=["mapped-metadata", "nat64-rfc1918", "mapped-rfc1918"],
+)
+def test_the_switch_still_refuses_private_addresses_in_ipv6_spellings(
+    addr: str, reason: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The switch unwraps the IPv6 spelling before the range test, so the
+    refused side must be pinned in those spellings too: a change that opened
+    every IPv6 spelling carrying an embedded IPv4 -- rather than only the
+    benchmark range -- would pass a suite whose only switched-on refusal is a
+    bare IPv4. These rows are what the unwrapping exists to keep shut."""
+    monkeypatch.setenv(net.FAKE_IP_ENV_VAR, "1")
+    _mock_resolve(monkeypatch, addr)
+
+    ok, err = net.validate_url_target("https://example.com/img.png")
+
+    assert not ok, f"allowed {addr} with the switch on: {reason}"
+    assert "private/internal" in err
