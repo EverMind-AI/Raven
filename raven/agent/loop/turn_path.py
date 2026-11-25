@@ -146,6 +146,7 @@ from raven.permissions.turn import set_current_tool_call_id
 from raven.providers import usage_record
 from raven.providers.base import bound_llm_detail, canonical_llm_error, llm_error_summary, parse_llm_error
 from raven.providers.first_byte import first_byte_budget
+from raven.providers.text_tool_calls import recover_text_tool_calls
 from raven.providers.tool_calls import openai_tool_call
 from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT, SessionWriterConflictError
 from raven.session.refs import cap_tool_result, tool_result_view
@@ -1942,6 +1943,13 @@ class TurnPathMixin:
                     break
                 # Read inside the bind: the count belongs to it and ends with it.
                 recorded_at_seam = usage_record.recorded_inbound()
+            if (recovered := recover_text_tool_calls(response, call_tools)) is not None:
+                logger.warning(
+                    "text-tool-calls: read {} <use_mcp_tool> block(s) in the reply as calls to {}",
+                    len(recovered.tool_calls),
+                    ", ".join(call.name for call in recovered.tool_calls),
+                )
+                response = recovered
             if unstreamed and response.finish_reason != "error":
                 # What the stream would have shown, shown once the whole reply is in and through the
                 # same sinks: the thought first, then the words, which pass the gates a streamed

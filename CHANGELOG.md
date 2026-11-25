@@ -293,6 +293,15 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A tool call that a model writes into its reply as an MCP `<use_mcp_tool>`
+  block now runs as a tool call. MiroThinker-1.7-mini behind vLLM wrote its
+  first search that way under a long agent prompt. The server's tool parser
+  passed the block on as text, a report gate read it as a draft, and the turn
+  spent its budget re-sampling it. The loop now reads such a reply as the
+  calls it holds when every block names a tool the step offered and carries a
+  JSON object as its arguments. Any other reply is left as it came. Words of
+  the block that already streamed to a reader stay shown.
+
 - A Raven-Research turn no longer spends its iteration budget revising a report
   file it already wrote. On one run the first draft stood at iteration 15 and
   the next 45 iterations edited it a few characters at a time toward the
