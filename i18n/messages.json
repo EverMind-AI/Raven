@@ -1573,6 +1573,14 @@
       "en": "{n} credentials still needed",
       "zh": "还差 {n} 项凭据"
     },
+    "gui.conn.st_read_failed": {
+      "en": "Couldn't read the channel's fields",
+      "zh": "读不到渠道字段"
+    },
+    "gui.conn.st_read_failed_why": {
+      "en": "Couldn't read the channel's fields: {why}",
+      "zh": "读不到渠道字段：{why}"
+    },
     "gui.conn.gw_live": {
       "en": "Receiving on {n} entries",
       "zh": "{n} 个入口在收消息"
@@ -11770,6 +11778,10 @@
     "gui.conn.line_saved": {
       "en": "Credentials saved",
       "zh": "凭据已填好"
+    },
+    "gui.conn.line_read_failed": {
+      "en": "Couldn't read this channel's fields",
+      "zh": "读不到这个渠道的字段"
     },
     "gui.conn.none_on": {
       "en": "No channel connected yet",

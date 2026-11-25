@@ -5169,6 +5169,13 @@ class ChannelStatusRow(_Strict):
         default=None,
         description="Whether this channel signs in by scanning a code.",
     )
+    error: str | None = Field(
+        default=None,
+        description=(
+            "Why this channel's field read failed, when it did. A row that cannot describe itself is "
+            "marked here and reads as unconfigured, rather than drawn as a channel needing nothing."
+        ),
+    )
 
 
 class ChannelsStatusParams(_Strict):
