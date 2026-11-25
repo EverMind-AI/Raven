@@ -99,6 +99,30 @@ async def test_a_read_goes_to_the_machine_s_node_placed_and_fenced(registry, poo
     ]
 
 
+async def test_a_read_with_a_character_offset_sends_it_to_the_machine_s_node(registry, pool, tmp_path):
+    pool.answer = {"text": "1| 1 of the file"}
+
+    got = await _tools(tmp_path)["read_file"].execute("box:raven-work/t1/a.md", char_offset=5)
+
+    assert got == pool.answer["text"]
+    assert pool.calls == [
+        (
+            "box",
+            "fs/read",
+            {
+                "offset": 1,
+                # A character offset pages inside one line, so the page the
+                # node is asked for is one line: the same page this side's
+                # own read returns for the argument.
+                "limit": 1,
+                "char_offset": 5,
+                "path": f"{HOME}/raven-work/t1/a.md",
+                "roots": [f"{HOME}/raven-work"],
+            },
+        )
+    ]
+
+
 async def test_list_find_and_grep_send_their_own_arguments(registry, pool, tmp_path):
     tools = _tools(tmp_path)
 
@@ -550,4 +574,4 @@ async def test_a_line_longer_than_a_page_reads_the_same_through_the_real_node(re
     assert got == await local.execute(f"{home}/raven-work/t1/bundle.min.js")
     room = ReadFileTool._MAX_CHARS - len("1| ")
     assert got.startswith("1| " + "x" * room + "\n\n(Line 1 is 200000 characters long; the first ")
-    assert got.endswith("\n\n(End of file — 1 lines total)")
+    assert got.endswith("\n\n(Showing lines 1-1 of 1.)")
