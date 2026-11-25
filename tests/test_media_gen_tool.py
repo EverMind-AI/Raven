@@ -1573,6 +1573,35 @@ async def test_the_answer_says_settings_decided_the_quality_the_call_named(monke
     assert out["selection"] == {"quality": {"requested": "high", "sent": "low", "source": "settings"}}
 
 
+async def test_a_family_without_the_quality_knob_reports_no_quality_override(monkeypatch, tmp_path):
+    """A seedream section's quality reaches no request -- ``effective_quality``
+    drops the knob for every family but gpt-image -- so the empty quality a
+    success envelope carries is "nothing sent", not Settings overriding the
+    call. The failure envelope leaves the key out instead; both spell no
+    quality, and neither is an override worth a line."""
+    from raven.config.schema import ImageToolConfig
+
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+
+    tool = ImageGenerateTool(
+        ImageToolConfig(model="bytedance/seedream-4.0", quality="low", api_key="k"), workspace=tmp_path
+    )
+    out = json.loads(await tool.execute("a kitten", quality="high"))
+
+    assert out["success"]
+    assert "quality" not in seen[-1]
+    assert out["quality"] == ""
+    assert "selection" not in out
+
+
 async def test_an_answer_names_no_source_when_settings_decided_nothing(monkeypatch, tmp_path):
     """A call that named both fields against a section that names neither has
     nothing overridden, and its trace stays as it was."""
@@ -1715,6 +1744,40 @@ async def test_a_settings_model_equal_to_the_call_s_is_not_reported_as_an_overri
     assert out["success"] and out["model"] == "openai/gpt-image-2"
     assert "selection" not in out
     assert [json.loads(request.content)["model"] for request in seen] == ["openai/gpt-image-2"] * 2
+
+
+async def test_a_named_provider_s_model_prefix_is_not_an_override(monkeypatch, tmp_path):
+    """A section on a named provider spells its model under that provider's own
+    prefix and the request goes out with the prefix stripped. The call naming
+    the same prefixed spelling is the same model, so no selection is written;
+    comparing the call's stored spelling against the wire id alone would report
+    an override that never happened."""
+    from raven.config.schema import ImageToolConfig
+
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+
+    tool = ImageGenerateTool(
+        ImageToolConfig(
+            provider="openai",
+            api_base="https://api.openai.com/v1",
+            model="openai/gpt-image-2",
+            api_key="k",
+        ),
+        workspace=tmp_path,
+    )
+    out = json.loads(await tool.execute("a kitten", model="openai/gpt-image-2"))
+
+    assert out["success"] and out["model"] == "gpt-image-2"
+    assert seen[-1]["model"] == "gpt-image-2"
+    assert "selection" not in out
 
 
 async def test_a_batch_that_lost_every_picture_is_named_by_its_call_not_by_a_live_read(monkeypatch, tmp_path):

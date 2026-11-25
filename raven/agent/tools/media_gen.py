@@ -1005,15 +1005,18 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         from raven.config.schema import media_provider
 
         runs_on = media_provider(config)
+        asked_model = wire_model(model, client_provider=runs_on) if runs_on and model else model
         sent_model = wire_model(settings_model, client_provider=runs_on) if runs_on else settings_model
-        if model and settings_model and not _same_model_as_sent(model, sent_model):
+        if model and settings_model and not _same_model_as_sent(asked_model, sent_model):
             selection["model"] = {
                 "requested": model,
                 "sent": body.get("model") or settings_model,
                 "source": "settings",
             }
         settings_quality = getattr(config, "quality", "")
-        sent_quality = body.get("quality") if isinstance(body.get("quality"), str) else None
+        # The success envelope writes an empty quality where none was sent, so
+        # an empty string here is "nothing on the wire", not a Settings value.
+        sent_quality = body.get("quality") or None
         if (
             spec.get("quality")
             and settings_quality
