@@ -1,27 +1,35 @@
 """WeCom (Enterprise WeChat) channel — receives events over a wecom_aibot_sdk
-WebSocket long connection and replies via the bot's streaming API."""
+WebSocket long connection, replies via the bot's streaming API and sends files
+through the SDK's chunked upload protocol (media_id reply/send)."""
 
 from __future__ import annotations
 
 import asyncio
+import os
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from loguru import logger
 from wecom_aibot_sdk import WSClient, generate_req_id
+from wecom_aibot_sdk.upload import WECOM_UPLOAD_MAX_BYTES
 
 from raven.channels.base import ChannelBase
+from raven.channels.contract import Capabilities
 from raven.channels.errors import transient_network
-from raven.channels.media import safe_name, save_media_bytes
+from raven.channels.media import file_uri_to_path, safe_name, save_media_bytes
 
 _MSG_TYPE_LABEL = {"image": "[image]", "voice": "[voice]", "file": "[file]", "mixed": "[mixed content]"}
 _DEDUP_CAP = 1000
 _FRAMES_CAP = 1000
+_MAX_MEDIA_BYTES = WECOM_UPLOAD_MAX_BYTES  # the SDK's own upload cap; never drift from it
 
 
 class WecomChannel(ChannelBase):
     """WeCom AI bot over a WebSocket long connection — no public IP / webhook."""
 
+    capabilities = Capabilities(file_attachments=True)
     config: Any
     name = "wecom"
     display_name = "WeCom"
@@ -199,25 +207,84 @@ class WecomChannel(ChannelBase):
         if not self._client:
             logger.warning("WeCom client not initialized")
             return
-        content = content.strip()
-        media = media or []
-        if media:
-            # reply_stream is text-only; surface the dropped attachments to the
-            # user instead of losing them silently.
-            logger.warning("WeCom reply is text-only; {} attachment(s) not sent", len(media))
-            notes = "\n".join(
-                f"[Attachment not sent: {safe_name(m)}]" for m in media if isinstance(m, str) and m.strip()
-            )
-            content = f"{content}\n{notes}".strip()
-        if not content:
-            return
+        content = (content or "").strip()
+        media = [m for m in (media or []) if isinstance(m, str) and m.strip()]
+        if content:
+            await self._send_text(chat_id, content)
+        for media_ref in media:
+            if await self._send_media_ref(chat_id, media_ref):
+                continue
+            logger.error("WeCom media send failed for {}", media_ref)
+            # Tell the user instead of dropping the attachment silently.
+            await self._send_text(chat_id, f"[Attachment send failed: {self._media_display_name(media_ref)}]")
+
+    async def _send_text(self, chat_id: str, text: str) -> None:
         frame = self._frames.get(chat_id)
         if not frame:
             logger.warning("No frame for chat {}, cannot reply", chat_id)
             return
         try:
-            await self._client.reply_stream(frame, generate_req_id("stream"), content, finish=True)
+            await self._client.reply_stream(frame, generate_req_id("stream"), text, finish=True)
         except Exception as e:
             if transient_network(e):
                 raise  # ws drop / timeout: the frame is still cached, retry can succeed
             logger.error("Error sending WeCom message: {}", e)
+
+    async def _send_media_ref(self, chat_id: str, media_ref: str) -> bool:
+        path = self._resolve_media_path(media_ref)
+        if not path:
+            return False
+        # In-band reply when the inbound frame is cached (same routing as the
+        # text reply); otherwise the proactive send needs only the chatid.
+        frame = self._frames.get(chat_id)
+        try:
+            if frame:
+                await self._client.reply_media(frame, path)
+            else:
+                await self._client.send_media_message(chat_id, path)
+            return True
+        except Exception as e:
+            if transient_network(e):
+                raise  # ws drop / timeout: the hub retries the delivery
+            logger.error("Error sending WeCom media ref={} err={}", media_ref, e)
+            return False
+
+    @staticmethod
+    def _media_display_name(media_ref: str) -> str:
+        """The name a failure notice shows: a ``file://`` ref is resolved first,
+        so the user reads ``report.pdf`` rather than its percent-encoded tail."""
+        if media_ref.startswith("file://"):
+            resolved = file_uri_to_path(media_ref)
+            if resolved is not None:
+                return safe_name(str(resolved))
+            try:
+                return safe_name(unquote(urlparse(media_ref).path))
+            except ValueError:
+                return safe_name(media_ref)
+        return safe_name(media_ref)
+
+    @staticmethod
+    def _resolve_media_path(media_ref: str) -> str | None:
+        """Resolve an outbound media ref (local or file:// path) to an existing
+        local path within the upload size cap, for the SDK upload protocol."""
+        if media_ref.startswith("file://"):
+            path = file_uri_to_path(media_ref)
+            if path is None:
+                logger.warning("WeCom media file not found: {}", media_ref)
+                return None
+        else:
+            path = Path(os.path.expanduser(media_ref))
+        if not path.is_file():
+            logger.warning("WeCom media file not found: {}", path)
+            return None
+        try:
+            size = path.stat().st_size
+        except OSError:
+            # Removed between the existence check and the size read: report it
+            # as missing here rather than let it escape as a retryable failure.
+            logger.warning("WeCom media file not found: {}", path)
+            return None
+        if size > _MAX_MEDIA_BYTES:
+            logger.warning("WeCom media too large: {} bytes, cap {} (ref {})", size, _MAX_MEDIA_BYTES, media_ref)
+            return None
+        return str(path)

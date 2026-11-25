@@ -1,5 +1,8 @@
 """Native Raven adaptation preserves grants, resources and observable result semantics."""
 
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 
 from experimental.curator.harness import Artifact, Declaration, Target
@@ -20,6 +23,21 @@ from raven.config.schema import Config
 from raven.contracts.llm_provider import LLMResponse
 from raven.contracts.participant import Accept, AgentParticipant, StepView
 from raven.spine.turn import Origin
+
+
+def _symlink_to(link: Path, target: Path, **kwargs) -> None:
+    """Create a symlink, or skip where the platform refuses one.
+
+    Unelevated Windows without Developer Mode raises WinError 1314 for every
+    symlink, and none of these fixtures can express the resolved-target rule
+    another way.
+    """
+    try:
+        link.symlink_to(target, **kwargs)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink creation requires an unavailable privilege")
+        raise
 
 
 @pytest.fixture
@@ -84,7 +102,7 @@ def test_owned_content_rollback_restores_files_symlinks_and_permissions(tmp_path
     outside = tmp_path / "template.md"
     outside.write_text("shared template")
     target = home / "TOOLS.md"
-    target.symlink_to(outside)
+    _symlink_to(target, outside)
     script = home / "skills" / "old" / "run.sh"
     script.parent.mkdir(parents=True)
     script.write_text("old")
@@ -113,7 +131,7 @@ def test_content_writes_reject_an_escaping_parent(tmp_path, declaration):
     home.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
-    (home / "skills").symlink_to(outside, target_is_directory=True)
+    _symlink_to(home / "skills", outside, target_is_directory=True)
     with pytest.raises(ValueError, match="escapes"):
         with install_content(home, Artifact(values={"planning.skills": {"new/SKILL.md": "text"}}), declaration):
             pytest.fail("the write should not be attempted")
@@ -366,3 +384,128 @@ def test_execution_errors_preserve_child_failure_attribution():
         }
     ]
     assert "harness" not in nested["records"][0]
+
+
+def _skill_home(tmp_path, names):
+    """An agent home whose skills folder holds one package per name."""
+    home = tmp_path / "agent"
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+    for name in names:
+        skill = home / "skills" / name
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(f"---\nname: {name}\ndescription: d\n---\n\nBody.\n")
+    return home, builtin
+
+
+def test_a_blocked_skill_is_not_a_discoverable_root_so_its_artifact_is_refused(tmp_path):
+    """The catalog omits blocklisted names from every listing, and the assembly
+    check resolves a package's skill resources against the discoverable roots.
+    So a blocked skill's directory is not a root and an artifact that names it
+    is refused -- fail-closed, rather than staged where nothing can load it."""
+    from experimental.curator.raven_adapter.bind import _verify_skills
+    from raven.memory_engine import LocalSkillCatalog
+
+    home, builtin = _skill_home(tmp_path, ("hidden", "kept"))
+    catalog = LocalSkillCatalog(
+        home,
+        builtin_skills_dir=builtin,
+        start_watcher=False,
+        blocklist_reader=lambda: frozenset({"hidden"}),
+    )
+    runtime = SimpleNamespace(loop=SimpleNamespace(context=SimpleNamespace(skills=catalog)))
+
+    roots = {Path(row["path"]).parent.resolve() for row in catalog.list_skills(filter_unavailable=False)}
+    assert (home / "skills" / "hidden").resolve() not in roots
+
+    with pytest.raises(ValueError, match="no discoverable SKILL.md package: hidden"):
+        _verify_skills(runtime, Artifact(values={"planning.skills": {"hidden/SKILL.md": "x"}}), home)
+    _verify_skills(runtime, Artifact(values={"planning.skills": {"kept/SKILL.md": "x"}}), home)
+
+
+def test_a_blocked_capability_skill_is_refused_at_install(tmp_path):
+    """Capability resources are staged under the agent home and registered as a
+    local dir before the runtime is built, so the same discoverable-roots check
+    applies. A name the blocklist hides never reaches a root, and installation
+    refuses rather than registering a skill nothing can load.
+
+    The instance is built bare because the constructor compiles generated
+    strategy code; the reachability check lives in ``install``."""
+    from experimental.curator.raven_adapter.capability.runtime import BoundCapability
+    from raven.memory_engine import LocalSkillCatalog
+
+    home, builtin = _skill_home(tmp_path, ())
+    skill_root = home / "capability-skills"
+    for name in ("hidden", "kept"):
+        (skill_root / name).mkdir(parents=True)
+        (skill_root / name / "SKILL.md").write_text(f"---\nname: {name}\n---\n\nBody.\n")
+    catalog = LocalSkillCatalog(
+        home,
+        config=SimpleNamespace(
+            enabled=True,
+            local_dirs=[SimpleNamespace(path=str(skill_root), name="curator-capability", enabled=True)],
+            scan_max_depth=5,
+            blocklist=None,
+        ),
+        builtin_skills_dir=builtin,
+        start_watcher=False,
+        blocklist_reader=lambda: frozenset({"hidden"}),
+    )
+    runtime = SimpleNamespace(
+        loop=SimpleNamespace(
+            context=SimpleNamespace(skills=catalog),
+            tools=SimpleNamespace(get=lambda _name: None, register=lambda _tool: None),
+        )
+    )
+    capability = object.__new__(BoundCapability)
+    capability.resources = SimpleNamespace(tools=[])
+    capability.skill_root = skill_root
+    capability.recorder = SimpleNamespace(add=lambda *_args, **_kwargs: None)
+
+    capability.skill_files = {"kept/SKILL.md": "x"}
+    capability.install(runtime)
+
+    capability.skill_files = {"hidden/SKILL.md": "x"}
+    with pytest.raises(ValueError, match="capability skill is not discoverable: hidden"):
+        capability.install(runtime)
+
+
+def test_inspection_omits_a_blocked_skill_from_the_sources_it_lists(tmp_path, baseline):
+    """Inspection does not refuse here: it lists what the discoverable catalog
+    holds, so a blocked skill is simply absent from ``sources``. Pinned because
+    the difference from the assembly checks matters -- nothing errors, the
+    reported source set just never mentions the skill."""
+    from experimental.curator.raven_adapter.inspection.runtime import describe_runtime
+    from raven.memory_engine import LocalSkillCatalog
+
+    home = Path(baseline.config.workspace_path)
+    home.mkdir(parents=True, exist_ok=True)
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+    for name in ("hidden", "kept"):
+        skill = home / "skills" / name
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(f"---\nname: {name}\ndescription: d\n---\n\nBody.\n")
+    catalog = LocalSkillCatalog(
+        home,
+        builtin_skills_dir=builtin,
+        start_watcher=False,
+        blocklist_reader=lambda: frozenset({"hidden"}),
+    )
+    runtime = SimpleNamespace(
+        plugin_registry=SimpleNamespace(activated_ids=lambda: [], manifest_for=lambda _name: None),
+        backend=None,
+        loop=SimpleNamespace(
+            context=SimpleNamespace(skills=catalog),
+            harness=SimpleNamespace(memory=object(), planning=object(), capability=object(), action=object()),
+            hooks=[],
+            tools=SimpleNamespace(get_definitions=lambda: []),
+            mcp_manager_if_started=None,
+            context_engine=object(),
+        ),
+    )
+
+    data = describe_runtime(runtime, baseline, Artifact(values={}), [], {})
+
+    assert "skill.workspace/kept" in data["sources"]
+    assert "skill.workspace/hidden" not in data["sources"]

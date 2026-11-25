@@ -6,6 +6,36 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- A connection a sandbox blocks while a command runs is now settled like a
+  tool call. A target your `permissions.network` deny rules name is refused;
+  otherwise `ask` mode asks you on a card of its own (the program, the
+  address, the command), `smart` mode lets the reviewer open what the command
+  plainly needs, `full` mode opens it for the session, and with nobody to ask
+  it stays blocked and `raven agent -m` exits with status 3. "Allow once"
+  opens it in that sandbox and "allow for this session" in every sandbox of
+  the conversation, applied to running sandboxes without restarting them; the
+  agent is told to run the command again. An address given as an IP or an
+  internal name is never opened without you, also when another Raven runs the
+  agent as a sub-agent. The same goes for the
+  connections a sandboxed MCP server is refused, and agents of one
+  conversation that hit the same address share one prompt. A deny rule wins
+  over an allow rule for the same target, also one added while a sandbox
+  runs. In a sandbox whose
+  network is closed, OpenShell's own reviewed proposal is approved when it
+  opens exactly the same thing. `CONTRACTS_VERSION` moves to 44.
+
+- The deck engine's `ppt_image_search` follows the host's selected search
+  vendor. `serper`, `serpapi`, `brave`, `firecrawl` and `serply` answer on that
+  vendor's own key, `imageSearch.provider: "host"` being the shipped
+  declaration; any other selection -- Tavily, whose image hits carry no size or
+  source page, or a deck vendor without a key -- searches through Serper
+  instead. When the selection falls back to Serper and no Serper key resolves,
+  the tool is withheld: a key for some other deck vendor is not enough on its
+  own. *Settings → Tools → Search service* says which vendor answers and
+  whether it is a fallback, and a Raven-Design card says when the route to
+  Raven-PPT is closed because no picture tool resolves. The deck's own Serper
+  key remains an override and is never sent to another vendor's endpoint.
+
 - Delivered files carry a download link in the tile, the desk's deliverables
   shelf, and the viewer header; a missing delivery draws no control.
 
@@ -19,6 +49,51 @@ All notable changes to Raven are documented here.
   section's skills tab is "Skills" instead of "Know-how".
 
 ### Changed
+
+- The `curator` history strategy is retired; `compacting` is the only one.
+  A config that still sets `context.history.strategy: "curator"` is rewritten
+  to `"compacting"` on its next load and told once, and a `dropSegments`
+  entry naming `curator` becomes `compacting`. The flat keys only the curator
+  read (`context.curatorModel`, `curatorProvider`, `fastPathThreshold`,
+  `protectFirstN`, `archiveDir`, `curatorTimeoutSeconds`, `relevanceDecay`,
+  `relevanceReferenceBoost`) are removed from the file with the same notice.
+  The settings page's curator model row goes with them; a summarising
+  compaction runs on the turn's model unless
+  `context.history.compacting.summary.model` names one.
+
+- Sandboxed commands run in NVIDIA OpenShell, on its Docker driver, instead of
+  boxlite micro-VMs. `tools.sandbox.backend` takes `"openshell"` or `"none"`;
+  the first load rewrites a config that still says `"auto"` or `"boxlite"` to
+  `"openshell"` and removes the retired `debug` and `diskSizeGb` keys, with a
+  notice for each change.
+  Each executor gets its own sandbox on a local OpenShell gateway, with the
+  workspace and extra volumes mounted and the same CPU and memory limits.
+  Network egress stays open by default: any host name with three or more
+  labels on any port, plus common package, code-hosting and model-provider
+  domains on common ports, since OpenShell cannot yet match every host name;
+  rules under `permissions.network` narrow or widen it. The `raven sandbox`
+  command group and the sandbox debug server are gone, and
+  `openshell sandbox list`, `exec` and `connect` do those jobs. The `sandbox`
+  extra installs the OpenShell SDK instead of boxlite, `raven onboard` checks
+  that the SDK imports and the gateway answers, and the design engine's
+  sandboxed renderer runs on OpenShell too.
+
+- What a sandbox may reach moved from `tools.sandbox.allowNet` into the
+  permission set, `permissions.network` (a default of `open` or `closed`, and
+  allow or deny rules by host, port and program), which every sandbox reads:
+  the main agent's, sub-agents', DAG nodes' and sandboxed MCP servers'. The
+  first load moves an `allowNet` there with a notice, and a change reaches a
+  running sandbox before its next command or MCP tool call.
+
+- Raven's own agents (Raven-Code and the rest) run under the host's ask, allow
+  and network rules as well as its refusals, and in the host's OpenShell
+  sandbox where the platform supports it. They take the host's mode too, except
+  where their hosting pins one: Raven-Code asks in an editor and runs a
+  one-shot turn at full, and Raven-Oncall holds connections a sandbox refuses
+  to the owner's approval mode.
+
+- The design engine's renderer always runs offline; `render.allowNetwork` and
+  `render.networkAllowlist` are retired and ignored with a notice.
 
 - When an agent's report comes back, Raven's reply explains it in full in its
   own words instead of a one-to-two-sentence summary: the user has not read
@@ -84,6 +159,18 @@ All notable changes to Raven are documented here.
   are whole calls the runtime accepts -- two of them used to be node lists
   without the required `node_summary` -- and each node in them writes its
   `prompt_template` last, after `routes`, `depends_on` and `when`.
+
+- `raven agent-plugins list` and `inspect` report only the MCP servers the
+  runtime would actually compose: a package server whose composed name the
+  host already configures is left out and reported -- the table marks the
+  package's count as skipped, and `--json` names the server and the reason
+  under `problems` -- instead of counting as one the package yields.
+  `list --json` calls the opt-in `mcp.allowed`, the same fact the RPC
+  returns, and the table says `enabled` instead of `running`;
+  `mcp.running` remains as a deprecated alias of `mcp.allowed` with the
+  same value for one release, then is removed. A package's `mcp` object in
+  `list --json` also carries `disabled`, why its MCP configuration is off,
+  so an empty server list says which kind of empty it is.
 
 ### Fixed
 

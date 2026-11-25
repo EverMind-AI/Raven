@@ -281,6 +281,16 @@ def _budget(model: str = "stub", window: int = WINDOW) -> TokenBudget:
     )
 
 
+def _old_config(**overrides) -> ContextConfig:
+    # These cases pin the geometry they were written against; the shipped
+    # default is exercised by the trigger, retention and defaults suites.
+    overrides.setdefault(
+        "history",
+        ContextHistoryConfig(compacting=ContextCompactionConfig(retain_ratio=0.40, tail_keep_ratio=0.25)),
+    )
+    return ContextConfig(**overrides)
+
+
 def _summary_config(**kwargs) -> ContextConfig:
     return ContextConfig(
         history=ContextHistoryConfig(compacting=ContextCompactionConfig(summary=ContextSummaryConfig(**kwargs)))
@@ -297,7 +307,7 @@ def _builder(
 ) -> CompactingHistoryBuilder:
     return CompactingHistoryBuilder(
         tmp_path,
-        config or ContextConfig(),
+        config or _old_config(),
         provider,  # type: ignore[arg-type]
         model,
         WINDOW,
@@ -443,9 +453,7 @@ class TestPrefixReuse:
         cache optimizer marking what the loop sends: each summary has to carry
         that mark, deep enough that most of what it replays is cacheable."""
         provider = _RecordingProvider()
-        builder = _builder(
-            tmp_path, provider, config=ContextConfig(cache=ContextCacheConfig(compaction_breakpoint=True))
-        )
+        builder = _builder(tmp_path, provider, config=_old_config(cache=ContextCacheConfig(compaction_breakpoint=True)))
         optimizer = CacheOptimizer(supports_caching=lambda _model: True)
         for exchanges in range(UNDER, 140, 2):
             segment = await builder.build(_ctx(_session(exchanges)))

@@ -6,8 +6,7 @@ summary).
 
 Retrieval is **not** here: it lives in :class:`LocalSkillSource`, which reuses
 this catalog's ``pool`` and ``registry``, and is fused with the remote sources
-by :class:`SkillForgeRouter`, with the LLM gate and query rewriter downstream
-of the fusion.
+by :class:`SkillForgeRouter`.
 """
 
 from __future__ import annotations
@@ -181,8 +180,8 @@ class LocalSkillCatalog:
         # Local-pool BM25 retrieval over file-based skills (workspace +
         # builtin). Always available — no model, no GPU. Blocklisted
         # skills are hidden from the index via a filtered registry view
-        # so they never surface through retrieval; the router pool drop
-        # in SkillsSegmentBuilder stays the backstop for other sources.
+        # so they never surface through retrieval; the scent menu and the
+        # skill tools apply the same list to the other sources.
         self._local_pool = LocalPool(_BlocklistRegistryView(self._registry, self._blocklist_reader))
 
         # Background SKILL.md watcher. Auto-started by default so the
@@ -210,6 +209,18 @@ class LocalSkillCatalog:
 
     def _is_blocked(self, name: str) -> bool:
         return is_blocked(self._current_blocklist(), name)
+
+    @property
+    def blocklist(self) -> frozenset[str]:
+        """The names this catalog currently hides, from the live reader.
+
+        The surfaces that deliberately keep blocked skills
+        (:meth:`gather_all_skills`) mark them through this rather than
+        re-reading the config file: the reader is what retrieval applied, and
+        a page-side copy of the raw list drifts from it on case, surrounding
+        whitespace and the legacy block spellings the loader normalizes.
+        """
+        return self._current_blocklist()
 
     @property
     def registry(self) -> SkillRegistry:
@@ -302,10 +313,21 @@ class LocalSkillCatalog:
     # ------------------------------------------------------------------
 
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
-        """All skills as ``{name, path, source}`` dicts."""
+        """All skills as ``{name, path, source}`` dicts.
+
+        Blocklisted skills are left out, like every other runtime listing
+        in this catalog; :meth:`gather_all_skills` is the deliberate
+        exception that keeps them so the CLI can mark them.
+        """
         metas = self._registry.list_all()
         if filter_unavailable:
             metas = [m for m in metas if self._registry.check_available(m.name, source=m.source)]
+        # One read for the whole listing, like ``_BlocklistRegistryView`` and
+        # ``ext_list``: the reader re-reads the file on every ask, and a list
+        # that mixed two answers would both cost N reads and hide a skill whose
+        # block was written mid-loop.
+        blocklist = self.blocklist
+        metas = [m for m in metas if not is_blocked(blocklist, m.name)]
         return [{"name": m.name, "path": str(m.path), "source": m.source} for m in metas]
 
     def load_skill(self, name: str) -> str | None:
@@ -363,14 +385,11 @@ class LocalSkillCatalog:
         server already free of frontmatter).
 
         ``max_inject`` caps the number of skills inlined (each body is
-        typically 1-5K tokens). When None, falls back to
-        ``config.inject_max``. 0 / None disables the cap.
+        typically 1-5K tokens). 0 / None disables the cap.
 
         Each body is rendered by :func:`render_skill_body`, which resolves
         its bundled-file references against the skill's directory.
         """
-        if max_inject is None:
-            max_inject = getattr(self._config, "inject_max", 0) or 0
         # Backward-compat: accept list[str] of names, resolve via registry.
         if skills and isinstance(skills[0], str):
             resolved: list[SkillMeta] = []
@@ -453,8 +472,7 @@ class LocalSkillCatalog:
             only: When provided, only these skills are included. Accepts
                 either ``list[SkillMeta]`` (canonical) or ``list[str]`` of
                 skill names (backward-compat for older callers). ``None``
-                preserves legacy behavior (full local directory), used as
-                a fallback when no selector picked.
+                renders the full local directory.
 
         Local skills render via their on-disk ``meta.path``; LLM reads the
         full body via ``read_file``. ``available`` reflects ``requires``

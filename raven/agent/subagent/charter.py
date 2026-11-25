@@ -31,6 +31,7 @@ from typing import Any
 
 from loguru import logger
 
+from raven.contracts.llm_provider import ToolCallRequest
 from raven.contracts.participant import AgentParticipant, StepView
 
 MAX_PROMPT_CHARS = 4000
@@ -133,14 +134,21 @@ def parse(payload: Any) -> Charter | None:
     """
     if not isinstance(payload, dict):
         return None
-    legacy_prompt = payload.get("prompt")
-    raw_brief = payload.get("brief") if "brief" in payload else legacy_prompt
-    prompt = str(raw_brief or "")[:MAX_PROMPT_CHARS]
     instruction_addendum = (
         str(payload.get("instructionAddendum") or "")[:MAX_PROMPT_CHARS]
         if _parameter_enabled("memory", "systemPrompt")
         else ""
     )
+    if "brief" in payload:
+        prompt = str(payload.get("brief") or "")[:MAX_PROMPT_CHARS]
+    else:
+        prompt = str(payload.get("prompt") or "")[:MAX_PROMPT_CHARS]
+        # A host that knows the addendum field writes it into the legacy prompt
+        # as well when there is no brief beside it, so a host that knows only
+        # the prompt still receives it. Read as the brief too, that same text
+        # would be injected a second time on top of the addendum.
+        if prompt == instruction_addendum:
+            prompt = ""
     stop_when = (
         str(payload.get("stopWhen") or payload.get("stop_when") or "")[:MAX_PROMPT_CHARS]
         if _parameter_enabled("memory", "stopWhen")
@@ -322,10 +330,47 @@ def _pure_data(value: Any) -> Any:
         return {str(key): _pure_data(item) for key, item in value.items()}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [_pure_data(item) for item in value]
+    if isinstance(value, ToolCallRequest):
+        # The normalized shape, three keys and no more: a generated function
+        # reads id, name and arguments, and the provider-private fields the
+        # dataclass carries beside them are not its business.
+        return {
+            "id": value.id,
+            "name": value.name,
+            "arguments": _pure_data(value.arguments),
+        }
     return str(value)
 
 
+def _transcript_says(transcript: Any, note: str) -> bool:
+    """Whether the transcript already carries this note.
+
+    A note is written either as a row of its own or after a blank line on the
+    row the model was about to read, so the match is made on those boundaries
+    rather than on a bare substring: a tool result quoting the same sentence is
+    not delivered guidance.
+    """
+    for row in transcript or ():
+        if not isinstance(row, Mapping) or row.get("role") == "tool":
+            continue
+        content = row.get("content")
+        if isinstance(content, str):
+            texts: tuple[str, ...] = (content,)
+        elif isinstance(content, list):
+            texts = tuple(
+                block["text"] for block in content if isinstance(block, Mapping) and isinstance(block.get("text"), str)
+            )
+        else:
+            continue
+        for text in texts:
+            if text == note or text.endswith("\n\n" + note) or ("\n\n" + note + "\n\n") in text:
+                return True
+    return False
+
+
 def _step_payload(step: Any) -> dict[str, Any]:
+    """The step as the generated functions see it: plain data throughout, with
+    ``response.tool_calls`` projected to ``id``/``name``/``arguments`` mappings."""
     response = getattr(step, "response", None)
     response_data = None
     if response is not None:
@@ -368,13 +413,21 @@ class CharterParticipant(AgentParticipant):
     __slots__ = ()
 
     async def intake(self, text: str, step: StepView) -> Any:
-        return _generated_answer("intake", text, _step_payload(step))
+        return _generated_step_answer("intake", step, text)
 
     async def advise(self, step: StepView) -> Any:
-        return _generated_answer("advise", _step_payload(step))
+        answer = _generated_step_answer("advise", step)
+        if isinstance(answer, str) and answer and _transcript_says(getattr(step, "transcript", ()), answer):
+            # The function is stateless: asked at every phase, it answers the
+            # same words. They have been delivered once the transcript carries
+            # them, so a second copy is not guidance the model still needs --
+            # and one a rollback popped is absent again, which is why the
+            # transcript, not a counter, is what this reads.
+            return None
+        return answer
 
     async def salvage(self, step: StepView) -> Any:
-        return _generated_answer("salvage", _step_payload(step))
+        return _generated_step_answer("salvage", step)
 
     def judge(
         self,
@@ -439,7 +492,14 @@ policy that has to decide *which* entry to drop is more machinery than the
 thing it manages."""
 
 
-def _generated_answer(name: str, *args: Any) -> Any:
+def _generated_function(name: str) -> Any:
+    """The compiled function for one verb, or none.
+
+    Resolved before the step is turned into a payload. A verb this dispatch
+    generated nothing for answers nothing, and a source the gate refuses can
+    never read a payload either -- it is cached as refused and stays refused --
+    so building the payload for either is a turn paid for nothing.
+    """
     charter = current_charter()
     source = dict(charter.functions).get(name) if charter is not None else None
     if not source:
@@ -459,9 +519,21 @@ def _generated_answer(name: str, *args: Any) -> Any:
         _COMPILED[key] = compiled
     if compiled is False:
         return None
+    return compiled
+
+
+def _generated_step_answer(name: str, step: Any, *extra: Any) -> Any:
+    """What one generated function answers for a step, or nothing.
+
+    The step reaches the function as plain data, and the plain data is built
+    only once the verb is known to have a function that can read it.
+    """
+    compiled = _generated_function(name)
+    if compiled is None:
+        return None
     from raven.agent.subagent.charter_code import run_function
 
-    return run_function(compiled, *args)
+    return run_function(compiled, *extra, _step_payload(step))
 
 
 def _code_refusals(

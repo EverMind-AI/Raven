@@ -16,6 +16,7 @@ from raven.channels.adapters.weixin import crypto
 from raven.channels.adapters.weixin import protocol as p
 from raven.channels.adapters.weixin.channel import SessionEndedError, WeixinChannel
 from raven.gateway.outlet import ChannelOutletAdapter
+from raven.providers.transcription import TranscriptionResult
 from raven.spine import ChatType, Media, MediaOut, Source, Text
 from raven.spine import delivery as delivery_mod
 from raven.spine.delivery import DeliveryHub
@@ -752,6 +753,45 @@ def test_render_media_voice_uses_server_transcription():
     asyncio.run(ch._render_media_item({"text": "transcribed words"}, p.ITEM_VOICE, parts, media))
     assert parts == ["[voice] transcribed words"]
     assert media == []  # no download when server already transcribed
+
+
+def test_render_media_voice_uses_the_groq_transcript(monkeypatch):
+    ch = _channel()
+    ch._download_media = AsyncMock(return_value="/media/a.ogg")
+    monkeypatch.setattr(
+        "raven.channels.adapters.weixin.channel.transcribe_audio",
+        AsyncMock(return_value=TranscriptionResult(text="hello")),
+    )
+    parts, media = [], []
+    asyncio.run(ch._render_media_item({}, p.ITEM_VOICE, parts, media))
+    assert parts == ["[voice] hello"]
+    assert media == ["/media/a.ogg"]
+
+
+def test_render_media_voice_labels_a_transcription_diagnosis(monkeypatch):
+    ch = _channel()
+    ch._download_media = AsyncMock(return_value="/media/a.ogg")
+    monkeypatch.setattr(
+        "raven.channels.adapters.weixin.channel.transcribe_audio",
+        AsyncMock(return_value=TranscriptionResult(diagnosis="no key")),
+    )
+    parts, media = [], []
+    asyncio.run(ch._render_media_item({}, p.ITEM_VOICE, parts, media))
+    assert parts == ["[voice]\n[transcription unavailable: no key]"]
+    assert media == ["/media/a.ogg"]
+
+
+def test_render_media_voice_keeps_the_audio_marker_without_a_transcript(monkeypatch):
+    ch = _channel()
+    ch._download_media = AsyncMock(return_value="/media/a.ogg")
+    monkeypatch.setattr(
+        "raven.channels.adapters.weixin.channel.transcribe_audio",
+        AsyncMock(return_value=TranscriptionResult()),
+    )
+    parts, media = [], []
+    asyncio.run(ch._render_media_item({}, p.ITEM_VOICE, parts, media))
+    assert parts == ["[voice]\n[Audio: source: /media/a.ogg]"]
+    assert media == ["/media/a.ogg"]
 
 
 def test_render_media_image_downloaded():

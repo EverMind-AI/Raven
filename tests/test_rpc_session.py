@@ -745,6 +745,32 @@ async def test_session_close_save_failure_still_returns_ok(tmp_path: Path, monke
     assert result == {"ok": True}
 
 
+async def test_session_close_reports_a_transcript_another_process_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A flush that lost the transcript to another writer is reported, as a refused clear is."""
+    from raven.session.manager import SessionWriterConflictError
+
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_lost01"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "saved")
+    mgr.save(session)
+    other = SessionManager(tmp_path)
+    theirs = other.get_or_create(session_key)
+    theirs.add_message("user", "from the other process")
+    other.save(theirs)
+    session.add_message("assistant", "unsaved")
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    with pytest.raises(SessionWriterConflictError, match="another process is writing this session"):
+        await session_close({"session_id": session_key})
+
+
 async def test_session_close_returns_ok_for_unknown_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """close with an unknown/absent session_key must not raise and returns ok."""
     cfg = load_config()
@@ -1621,6 +1647,88 @@ async def test_session_undo_drops_last_turn(tmp_path):
     assert [m["content"] for m in mgr.get_or_create(key).messages] == ["q1", "a1"]
 
 
+async def test_session_undo_refuses_a_transcript_another_process_wrote(tmp_path):
+    from raven.rpc.methods.session import session_undo
+    from raven.session.manager import SessionWriterConflictError
+
+    mgr, key = _seed_manager(tmp_path)
+    other = SessionManager(tmp_path)
+    theirs = other.get_or_create(key)
+    theirs.add_message("user", "from the other process")
+    other.save(theirs)
+
+    with pytest.raises(SessionWriterConflictError, match="another process is writing this session"):
+        await session_undo({"session_id": key}, agent_loop_factory=lambda: _LoopWithManager(mgr))
+
+
+async def test_a_refused_undo_leaves_memory_and_disk_agreeing(tmp_path):
+    """A cut the transcript never took cannot stay in the copy.
+
+    The undo edits the in-memory session before the save that would make the cut
+    real. When that save loses the session to another writer the handler raises,
+    and a copy left cut would disagree with the file for as long as it lives:
+    every later save of it is refused, and a reader of the live session sees
+    turns the transcript still holds.
+    """
+    from raven.rpc.methods.session import session_undo
+    from raven.session.manager import SessionWriterConflictError, read_session_file
+
+    mgr, key = _seed_manager(tmp_path)
+    copy = mgr.get_or_create(key)
+    other = SessionManager(tmp_path)
+    theirs = other.get_or_create(key)
+    theirs.add_message("user", "from the other process")
+    other.save(theirs)
+
+    with pytest.raises(SessionWriterConflictError, match="another process is writing this session"):
+        await session_undo({"session_id": key}, agent_loop_factory=lambda: _LoopWithManager(mgr))
+
+    on_disk = read_session_file(mgr.session_path(key), key)
+    assert on_disk is not None
+    contents = [m["content"] for m in on_disk.messages]
+    assert contents == ["q1", "a1", "q2", "a2", "from the other process"]
+    assert [m["content"] for m in copy.messages] == ["q1", "a1", "q2", "a2"], (
+        "the live copy kept a cut the transcript never took"
+    )
+    assert copy.log_generation == 0, "the live copy kept a revision the transcript never took"
+    live = mgr.get_or_create(key)
+    assert live is not copy, "the refused copy stayed cached"
+    assert [m["content"] for m in live.messages] == contents, "the session the manager serves disagrees with the file"
+    assert live.log_generation == on_disk.log_generation
+
+
+async def test_session_clear_refuses_a_transcript_another_process_wrote(tmp_path):
+    """A clear that lost the transcript must not report itself as done.
+
+    Returning ``cleared: True`` with the file untouched is the one outcome the
+    caller cannot detect: the client empties what it shows, the transcript comes
+    back on the next read, and nothing was ever said about it.
+    """
+    from raven.rpc.methods.session import session_clear
+    from raven.session.manager import SessionWriterConflictError, read_session_file
+
+    mgr, key = _seed_manager(tmp_path)
+    copy = mgr.get_or_create(key)
+    other = SessionManager(tmp_path)
+    theirs = other.get_or_create(key)
+    theirs.add_message("user", "from the other process")
+    other.save(theirs)
+
+    with pytest.raises(SessionWriterConflictError, match="another process is writing this session"):
+        await session_clear({"session_id": key}, agent_loop_factory=lambda: _LoopWithManager(mgr))
+
+    on_disk = read_session_file(mgr.session_path(key), key)
+    assert on_disk is not None
+    contents = [m["content"] for m in on_disk.messages]
+    assert contents == ["q1", "a1", "q2", "a2", "from the other process"]
+    assert [m["content"] for m in copy.messages] == ["q1", "a1", "q2", "a2"], (
+        "the live copy kept a clear the transcript never took"
+    )
+    live = mgr.get_or_create(key)
+    assert live is not copy, "the refused copy stayed cached"
+    assert [m["content"] for m in live.messages] == contents, "the session the manager serves disagrees with the file"
+
+
 async def test_session_undo_nothing_to_undo_returns_zero(tmp_path):
     from raven.rpc.methods.session import session_undo
 
@@ -2093,6 +2201,128 @@ async def test_session_resume_reports_the_window_the_last_call_measured(
     assert usage["context_used"] == 50_000
     assert usage["context_percent"] == 25
     assert usage["context_estimated"] is False
+
+
+async def test_session_resume_carries_the_breakdown_stored_with_the_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The divided window survives with the reading it belongs to.
+
+    A page that resumes a conversation has no live report to draw the card's
+    parts from. The reply that carries the reading carries the breakdown too,
+    so the pair the live card showed is the pair the reload draws -- and it is
+    read off the same row: an older breakdown describes a prompt the newer
+    reading did not measure.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    cfg.agents.defaults.context_window_tokens = 200_000
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_parts01"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "first")
+    session.add_message(
+        "assistant",
+        "first answer",
+        context_used=1_234,
+        context_parts={"system": 1, "tools": 2, "conversation": 3, "files": 4, "memory": 5, "skills": 6},
+    )
+    session.add_message("user", "and then?")
+    session.add_message(
+        "assistant",
+        "second answer",
+        context_used=50_000,
+        context_parts={"system": 10, "tools": 20, "conversation": 30, "files": 40, "memory": 50, "skills": 60},
+    )
+    mgr.save(session)
+
+    result = await session_resume({"session_id": session_key})
+    usage = result["info"]["usage"]
+
+    assert usage["context_used"] == 50_000
+    assert usage["context_parts"] == {
+        "system": 10,
+        "tools": 20,
+        "conversation": 30,
+        "files": 40,
+        "memory": 50,
+        "skills": 60,
+    }
+
+
+async def test_session_resume_does_not_pair_a_reading_with_an_older_breakdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The breakdown describes the call the reading belongs to.
+
+    A newer reading without one leaves the card's parts absent rather than
+    drawing an older prompt's composition under the newer fill.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    cfg.agents.defaults.context_window_tokens = 200_000
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_parts02"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "first")
+    session.add_message(
+        "assistant",
+        "first answer",
+        context_used=1_234,
+        context_parts={"system": 1, "tools": 2, "conversation": 3, "files": 4, "memory": 5, "skills": 6},
+    )
+    session.add_message("user", "and then?")
+    session.add_message("assistant", "second answer", context_used=50_000)
+    mgr.save(session)
+
+    result = await session_resume({"session_id": session_key})
+    usage = result["info"]["usage"]
+
+    assert usage["context_used"] == 50_000
+    assert "context_parts" not in usage
+
+
+@pytest.mark.parametrize(
+    ("stored", "kept"),
+    [
+        (
+            {"system": -1, "tools": True, "conversation": "10", "files": 1.5, "memory": 3, "skills": 10**12},
+            {"memory": 3},
+        ),
+        ({"system": -1, "tools": True}, None),
+        ("not a mapping", None),
+    ],
+    ids=["only_the_counts_survive", "nothing_valid_left", "not_a_mapping"],
+)
+async def test_session_resume_reads_only_token_counts_from_a_stored_breakdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stored: object, kept: dict[str, int] | None
+) -> None:
+    """A stored breakdown is data a reader draws, so only counts a window can
+    hold are taken -- the same rule the stored reading follows."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    cfg.agents.defaults.context_window_tokens = 200_000
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_parts03"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "hello")
+    session.add_message("assistant", "answer", context_used=50_000, context_parts=stored)
+    mgr.save(session)
+
+    result = await session_resume({"session_id": session_key})
+    usage = result["info"]["usage"]
+
+    assert usage["context_used"] == 50_000
+    if kept is None:
+        assert "context_parts" not in usage
+    else:
+        assert usage["context_parts"] == kept
 
 
 @pytest.mark.parametrize(
@@ -2863,6 +3093,38 @@ async def test_session_compress_persists_what_it_archived(tmp_path: Path, monkey
 
     reread = SessionManager(tmp_path).get_or_create(session_key)
     assert reread.last_consolidated == 3, "the archived boundary must survive a reload"
+
+
+async def test_session_compress_reports_a_transcript_another_process_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A compaction the transcript refused is not reported as done.
+
+    The boundary it moved lives only on the copy the conflict drops, so a
+    success here is one the next read of the session reverses.
+    """
+    from raven.session.manager import SessionWriterConflictError
+
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:compress_lost"
+    _write_session(tmp_path, session_key, [{"role": "user", "content": f"m{i}"} for i in range(5)])
+
+    class _Consolidator:
+        async def maybe_consolidate_by_tokens(self, session, *, force=False):
+            session.last_consolidated = 3
+            other = SessionManager(tmp_path)
+            theirs = other.get_or_create(session_key)
+            theirs.add_message("user", "from the other process")
+            other.save(theirs)
+            return {"before_tokens": 900, "after_tokens": 300, "compacted": 3}
+
+    mgr = SessionManager(tmp_path)
+    loop = SimpleNamespace(memory_consolidator=_Consolidator(), sessions=mgr)
+    with pytest.raises(SessionWriterConflictError, match="another process is writing this session"):
+        await session_module.session_compress({"session_id": session_key}, agent_loop_factory=lambda: loop)
 
 
 async def test_session_list_previews_the_first_thing_the_user_said(

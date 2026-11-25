@@ -4862,6 +4862,81 @@
       }
     },
     {
+      "name": "agent_plugins.list",
+      "summary": "The Agent Plugin packages this host can see, with their skills and MCP servers.",
+      "params": [],
+      "result": {
+        "name": "AgentPluginsListResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "packages": {
+              "items": {
+                "$ref": "#/components/schemas/AgentPluginRow"
+              },
+              "type": "array"
+            },
+            "problems": {
+              "description": "Configured paths that hold no usable package.",
+              "items": {
+                "$ref": "#/components/schemas/AgentPluginProblem"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "packages",
+            "problems"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "agent_plugins.set_mcp",
+      "summary": "Allow or withhold one package's MCP servers (agentPlugins.mcpPackages); applies at the next start.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "enabled",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "AgentPluginsSetMcpResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "changed": {
+              "description": "False when the package was already in the asked state.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "name",
+            "enabled",
+            "changed"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "skillhub.search",
       "summary": "Search the skill hub; installed skills are flagged.",
       "params": [
@@ -5628,13 +5703,48 @@
             "skill_hub_on": {
               "description": "Whether conversational Skill Hub retrieval is on, read the way the runtime reads the config: enabled=false turns it off, and the default is on.",
               "type": "boolean"
+            },
+            "picture_search": {
+              "additionalProperties": false,
+              "description": "The deck engine's picture search as the runtime would resolve it now: the vendor it would use and whether a key resolves, environment and product-folder credentials included.",
+              "properties": {
+                "vendor": {
+                  "description": "The picture vendor the deck engine would use now, or an empty string when none resolves. Answered from effective credentials -- the config file, the vendor's environment variable, and the deck lane's own .env -- so it agrees with what ppt_image_search would do.",
+                  "type": "string"
+                },
+                "ready": {
+                  "type": "boolean"
+                },
+                "fallback": {
+                  "description": "True when the deck could not use the selected search vendor and a keyed fallback vendor answers instead, so the page can say deck generation will fall back to it. A deck pinned to its own vendor is not a fallback.",
+                  "type": "boolean"
+                },
+                "reason": {
+                  "default": "not_ready",
+                  "description": "Why `vendor` is the picture vendor: `ok` when the deck searches on the vendor it is configured to use (the selected search vendor, or the deck's own pin), `fallback_no_key` when the selected vendor has a picture surface but no key the deck can use (an environment-only host key does not reach the deck lane), `no_surface` when the selected vendor has no picture surface for decks, `not_ready` when no vendor resolves. Absent on gateways older than this field, hence the default.",
+                  "enum": [
+                    "ok",
+                    "fallback_no_key",
+                    "no_surface",
+                    "not_ready"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "vendor",
+                "ready",
+                "fallback"
+              ],
+              "type": "object"
             }
           },
           "required": [
             "settings",
             "config_path",
             "raven_version",
-            "skill_hub_on"
+            "skill_hub_on",
+            "picture_search"
           ],
           "type": "object"
         }
@@ -8466,6 +8576,16 @@
             "context_estimated": {
               "type": "boolean",
               "description": "True when context_used is a tiktoken estimate."
+            },
+            "context_parts": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "description": "The window divided: tokens by part, keyed system / tools / conversation / files / memory / skills, as the last measured turn recorded them. Absent when that turn measured none, or the conversation predates the record."
             }
           }
         }
@@ -10709,14 +10829,14 @@
     },
     {
       "name": "skills.manage",
-      "summary": "List, inspect, search, browse or install skills; the result carries the fields of the action taken.",
+      "summary": "List, inspect, search, browse, install, block or unblock skills; the result carries the fields of the action taken.",
       "params": [
         {
           "name": "action",
           "required": true,
           "schema": {
             "type": "string",
-            "description": "One of list, inspect, search, browse, install, open."
+            "description": "One of list, inspect, search, browse, install, open, block, unblock."
           }
         },
         {
@@ -10809,6 +10929,23 @@
                 "null"
               ],
               "description": "`open`."
+            },
+            "blocked": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "`block`/`unblock`: the state that was written."
+            },
+            "blocklist": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "description": "`block`/`unblock`: the list after the write."
             }
           },
           "required": [],
@@ -13138,6 +13275,16 @@
           "context_estimated": {
             "type": "boolean",
             "description": "True when context_used is a tiktoken estimate of a resumed transcript, not a measurement."
+          },
+          "context_parts": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "The window divided: tokens by part, keyed system / tools / conversation / files / memory / skills, as the last measured turn recorded them. Absent when that turn measured none, or the conversation predates the record."
           }
         },
         "required": [
@@ -13254,12 +13401,18 @@
           "kind": {
             "enum": [
               "spawn",
-              "dag"
+              "dag",
+              "unprompted"
             ],
-            "type": "string"
+            "type": "string",
+            "description": "`spawn` or `dag` for a delegated run's result; `unprompted` for an instance's own report, made on its own schedule (an armed wake, a watch round) and answering no call."
           },
           "label": {
             "type": "string"
+          },
+          "agent": {
+            "type": "string",
+            "description": "The agent that sent it. Set on an unprompted report, which answers no call, so no spawn call or task row exists to read the sender off."
           },
           "status": {
             "enum": [
@@ -13267,9 +13420,11 @@
               "error",
               "exception",
               "notice",
-              "cancelled"
+              "cancelled",
+              "report"
             ],
-            "type": "string"
+            "type": "string",
+            "description": "`report` is an unprompted report's only status: it carries what the instance said, not how a run ended."
           },
           "run_id": {
             "description": "Set for kind=dag, so a client can open the run.",
@@ -13424,6 +13579,10 @@
           },
           "hub_id": {
             "type": "string"
+          },
+          "blocked": {
+            "description": "On skillForge.blocklist, so retrieval and injection skip it. The row is still listed here because this is the surface a person turns it back on from.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -13432,7 +13591,8 @@
           "source",
           "always",
           "hub",
-          "hub_id"
+          "hub_id",
+          "blocked"
         ],
         "type": "object"
       },
@@ -14903,6 +15063,28 @@
                 }
               }
             }
+          },
+          "routes": {
+            "type": "array",
+            "description": "The routes this row offers to other agents, with the picture-search readiness the router applies. image_search_ready is null on a route that does not declare image_search.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "to"
+              ],
+              "properties": {
+                "to": {
+                  "type": "string"
+                },
+                "image_search_ready": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
           }
         }
       },
@@ -15565,11 +15747,17 @@
                     "type": "string",
                     "enum": [
                       "spawn",
-                      "dag"
-                    ]
+                      "dag",
+                      "unprompted"
+                    ],
+                    "description": "`spawn` or `dag` for a delegated run's result; `unprompted` for an instance's own report, made on its own schedule (an armed wake, a watch round) and answering no call."
                   },
                   "label": {
                     "type": "string"
+                  },
+                  "agent": {
+                    "type": "string",
+                    "description": "The agent that sent it. Set on an unprompted report, which answers no call, so no spawn call or task row exists to read the sender off."
                   },
                   "status": {
                     "type": "string",
@@ -15578,8 +15766,10 @@
                       "error",
                       "exception",
                       "notice",
-                      "cancelled"
-                    ]
+                      "cancelled",
+                      "report"
+                    ],
+                    "description": "`report` is an unprompted report's only status: it carries what the instance said, not how a run ended."
                   },
                   "node_id": {
                     "description": "Which node of the run this is about. Present only on a `kind: dag` node's own report, which concerns one node rather than the whole run.",
@@ -16153,6 +16343,10 @@
                 "type": "string",
                 "description": "The failure's long account beside the bounded detail, for a reader who expands the row: the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the bounded text already is the whole account."
               },
+              "hint": {
+                "type": "string",
+                "description": "What the reader can do about the failure, in the words this surface can act on. Absent when the failure has no category to advise about."
+              },
               "usage": {
                 "$ref": "#/components/schemas/TurnUsage",
                 "description": "What a failed or stopped turn measured, in message.complete's shape: its last reported call, so a client's context gauge moves on with the turn's stored record. Absent when that call read no window."
@@ -16346,12 +16540,18 @@
                 "type": "string",
                 "enum": [
                   "spawn",
-                  "dag"
-                ]
+                  "dag",
+                  "unprompted"
+                ],
+                "description": "`spawn` or `dag` for a delegated run's result; `unprompted` for an instance's own report, made on its own schedule (an armed wake, a watch round) and answering no call."
               },
               "label": {
-                "description": "The spawn's display label, or the dag's run_id.",
+                "description": "The spawn's display label, the dag's run_id, or `<agent>/<instance>` for an unprompted report.",
                 "type": "string"
+              },
+              "agent": {
+                "type": "string",
+                "description": "The agent that sent it. Set on an unprompted report, which answers no call, so no spawn call or task row exists to read the sender off."
               },
               "status": {
                 "type": "string",
@@ -16360,8 +16560,10 @@
                   "error",
                   "exception",
                   "notice",
-                  "cancelled"
-                ]
+                  "cancelled",
+                  "report"
+                ],
+                "description": "`report` is an unprompted report's only status: it carries what the instance said, not how a run ended."
               },
               "run_id": {
                 "description": "Set for kind=dag, so a client can open the run.",
@@ -19893,6 +20095,137 @@
             "$ref": "#/components/schemas/TasksBoardUpdatedPayload"
           }
         }
+      },
+      "AgentPluginServerRow": {
+        "additionalProperties": false,
+        "description": "One MCP server an Agent Plugin package declares.",
+        "properties": {
+          "name": {
+            "description": "Composed server name, '<package>__<server>'.",
+            "type": "string"
+          },
+          "state": {
+            "description": "The connection manager's state, or 'off' when the running process does not run this server.",
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "state"
+        ],
+        "type": "object"
+      },
+      "AgentPluginMcpRow": {
+        "additionalProperties": false,
+        "properties": {
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/AgentPluginServerRow"
+            },
+            "type": "array"
+          },
+          "allowed": {
+            "description": "Named in agentPlugins.mcpPackages.",
+            "type": "boolean"
+          },
+          "live": {
+            "description": "The running process started this package's servers. Differs from allowed until the next start.",
+            "type": "boolean"
+          },
+          "problems": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "servers",
+          "allowed",
+          "live",
+          "problems"
+        ],
+        "type": "object"
+      },
+      "AgentPluginRow": {
+        "additionalProperties": false,
+        "description": "One Agent Plugins 1.0 package: a directory whose root holds a plugin.json.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "source": {
+            "description": "The package root on the host's disk.",
+            "type": "string"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "skills": {
+            "description": "The usable skills the package holds.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "skills_imported": {
+            "description": "A verified import of this package stands in the workspace.",
+            "type": "boolean"
+          },
+          "problems": {
+            "description": "Skills the package holds that cannot be used, with the reason.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "mcp": {
+            "$ref": "#/components/schemas/AgentPluginMcpRow"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "description",
+          "source",
+          "notes",
+          "skills",
+          "skills_imported",
+          "problems",
+          "mcp"
+        ],
+        "type": "object"
+      },
+      "AgentPluginProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "reason"
+        ],
+        "type": "object"
       }
     },
     "errors": {

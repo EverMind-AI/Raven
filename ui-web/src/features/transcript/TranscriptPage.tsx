@@ -27,6 +27,7 @@ import {
 } from '../workspace/store'
 import * as citations from './citations'
 import { endIndex, startIndex } from './laneWindow'
+import { ProseBlocks } from './ProseBlocks'
 import * as store from './store'
 import * as tail from './tail'
 
@@ -997,8 +998,7 @@ const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepDa
         <Chev />
       </div>
       <div ref={cotRef} className="cot" hidden={!seg.thinkOpen}>{seg.think}</div>
-      <div className="say prose"
-        dangerouslySetInnerHTML={{ __html: seg.say ? store.mdHtml(seg.say) : '' }} />
+      <ProseBlocks className="say prose" blocks={seg.say ? store.mdBlocks(seg.say) : []} />
       <div className="wk">
         <div ref={sumRef}
           className={'wrow tog' + (showSum ? ' sum' : '') + (showSum && live ? ' run' : '') + (showSum && seg.wkOpen ? ' open' : '')}
@@ -1211,9 +1211,9 @@ const AnswerView = memo(function AnswerView({ lane, seg, showFoot = true }: {
   useSeg(lane, seg)
   const branch = store.branchOf(lane)
   const typing = seg.shown != null && seg.shown < seg.text.length
-  const html = seg.shown != null
-    ? store.mdHtml(seg.text.slice(0, seg.shown)) + (typing ? '<span class="caret"></span>' : '')
-    : store.mdHtml(seg.text)
+  const blocks = seg.shown != null
+    ? [...store.mdBlocks(seg.text.slice(0, seg.shown)), ...(typing ? ['<span class="caret"></span>'] : [])]
+    : store.mdBlocks(seg.text)
   const items = (): Array<{ label: string; fn: () => void }> => {
     const list = [{
       label: t('gui.answer.copy'),
@@ -1224,7 +1224,7 @@ const AnswerView = memo(function AnswerView({ lane, seg, showFoot = true }: {
   }
   return (
     <div className="answer in" data-answer={seg.id} ref={ctxRef(items)}>
-      <div className="prose" dangerouslySetInnerHTML={{ __html: html }} />
+      <ProseBlocks className="prose" blocks={blocks} />
       {showFoot ? <AnswerFoot lane={lane} seg={seg} /> : null}
     </div>
   )
@@ -1539,7 +1539,7 @@ const DeliveredView = memo(function DeliveredView({ lane, seg }: { lane: Lane; s
      arrive with its run -- so the row follows the call's own version too. */
   useSyncExternalStore((cb) => store.subscribe(lane, cb), () => (call ? call.v : 0))
   const { cls, key } = deliveredVerdict(seg)
-  const who = seg.isDag ? t('gui.deleg.dag_title') : call ? store.spawnHead(call).agent : row?.agent || ''
+  const who = seg.isDag ? t('gui.deleg.dag_title') : seg.agent || (call ? store.spawnHead(call).agent : row?.agent || '')
   const title = seg.isDag ? row?.task_summary || (call && call.runTitle) || t('gui.deleg.dag_title') : seg.label
   const tally = graphTally(seg)
   const span = runSpan(row, call)

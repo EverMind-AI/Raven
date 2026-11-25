@@ -258,6 +258,12 @@ export interface SessionUsage {
    * True when context_used is a tiktoken estimate of a resumed transcript, not a measurement.
    */
   context_estimated?: boolean;
+  /**
+   * The window divided: tokens by part, keyed system / tools / conversation / files / memory / skills, as the last measured turn recorded them. Absent when that turn measured none, or the conversation predates the record.
+   */
+  context_parts?: {
+    [k: string]: number;
+  } | null;
 }
 /**
  * One stored message in wire form: ``content`` renamed to ``text``.
@@ -420,9 +426,19 @@ export interface TranscriptNotice {
  * via the `definition` "TranscriptDelegated".
  */
 export interface TranscriptDelegated {
-  kind: 'spawn' | 'dag';
+  /**
+   * `spawn` or `dag` for a delegated run's result; `unprompted` for an instance's own report, made on its own schedule (an armed wake, a watch round) and answering no call.
+   */
+  kind: 'spawn' | 'dag' | 'unprompted';
   label: string;
-  status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled';
+  /**
+   * The agent that sent it. Set on an unprompted report, which answers no call, so no spawn call or task row exists to read the sender off.
+   */
+  agent?: string;
+  /**
+   * `report` is an unprompted report's only status: it carries what the instance said, not how a run ended.
+   */
+  status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled' | 'report';
   /**
    * Set for kind=dag, so a client can open the run.
    */
@@ -465,6 +481,10 @@ export interface ExtSkillRow {
    */
   hub: boolean;
   hub_id: string;
+  /**
+   * On skillForge.blocklist, so retrieval and injection skip it. The row is still listed here because this is the surface a person turns it back on from.
+   */
+  blocked: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -1219,6 +1239,13 @@ export interface SubagentRow {
      */
     name?: string;
   }[];
+  /**
+   * The routes this row offers to other agents, with the picture-search readiness the router applies. image_search_ready is null on a route that does not declare image_search.
+   */
+  routes?: {
+    to: string;
+    image_search_ready?: boolean | null;
+  }[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -1651,9 +1678,19 @@ export interface TurnStartedEvent {
   payload: {
     turn_id: string;
     delegated?: {
-      kind: 'spawn' | 'dag';
+      /**
+       * `spawn` or `dag` for a delegated run's result; `unprompted` for an instance's own report, made on its own schedule (an armed wake, a watch round) and answering no call.
+       */
+      kind: 'spawn' | 'dag' | 'unprompted';
       label: string;
-      status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled';
+      /**
+       * The agent that sent it. Set on an unprompted report, which answers no call, so no spawn call or task row exists to read the sender off.
+       */
+      agent?: string;
+      /**
+       * `report` is an unprompted report's only status: it carries what the instance said, not how a run ended.
+       */
+      status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled' | 'report';
       /**
        * Which node of the run this is about. Present only on a `kind: dag` node's own report, which concerns one node rather than the whole run.
        */
@@ -1920,6 +1957,10 @@ export interface ErrorEvent {
      * The failure's long account beside the bounded detail, for a reader who expands the row: the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the bounded text already is the whole account.
      */
     full_detail?: string;
+    /**
+     * What the reader can do about the failure, in the words this surface can act on. Absent when the failure has no category to advise about.
+     */
+    hint?: string;
     usage?: TurnUsage1;
     target?: DirectTarget;
   };
@@ -2006,12 +2047,22 @@ export interface SessionNamingEndedEvent {
 export interface SubagentDeliveredEvent {
   type: 'subagent.delivered';
   payload: {
-    kind: 'spawn' | 'dag';
     /**
-     * The spawn's display label, or the dag's run_id.
+     * `spawn` or `dag` for a delegated run's result; `unprompted` for an instance's own report, made on its own schedule (an armed wake, a watch round) and answering no call.
+     */
+    kind: 'spawn' | 'dag' | 'unprompted';
+    /**
+     * The spawn's display label, the dag's run_id, or `<agent>/<instance>` for an unprompted report.
      */
     label: string;
-    status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled';
+    /**
+     * The agent that sent it. Set on an unprompted report, which answers no call, so no spawn call or task row exists to read the sender off.
+     */
+    agent?: string;
+    /**
+     * `report` is an unprompted report's only status: it carries what the instance said, not how a run ended.
+     */
+    status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled' | 'report';
     /**
      * Set for kind=dag, so a client can open the run.
      */
@@ -3645,6 +3696,76 @@ export interface TaskBoardCard {
   running_since_ms?: number | null;
   events: number;
   sub_agents: number;
+}
+/**
+ * One MCP server an Agent Plugin package declares.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentPluginServerRow".
+ */
+export interface AgentPluginServerRow {
+  /**
+   * Composed server name, '<package>__<server>'.
+   */
+  name: string;
+  /**
+   * The connection manager's state, or 'off' when the running process does not run this server.
+   */
+  state: string;
+  error?: string | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentPluginMcpRow".
+ */
+export interface AgentPluginMcpRow {
+  servers: AgentPluginServerRow[];
+  /**
+   * Named in agentPlugins.mcpPackages.
+   */
+  allowed: boolean;
+  /**
+   * The running process started this package's servers. Differs from allowed until the next start.
+   */
+  live: boolean;
+  problems: string[];
+}
+/**
+ * One Agent Plugins 1.0 package: a directory whose root holds a plugin.json.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentPluginRow".
+ */
+export interface AgentPluginRow {
+  name: string;
+  version: string;
+  description: string;
+  /**
+   * The package root on the host's disk.
+   */
+  source: string;
+  notes: string[];
+  /**
+   * The usable skills the package holds.
+   */
+  skills: string[];
+  /**
+   * A verified import of this package stands in the workspace.
+   */
+  skills_imported: boolean;
+  /**
+   * Skills the package holds that cannot be used, with the reason.
+   */
+  problems: string[];
+  mcp: AgentPluginMcpRow;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentPluginProblem".
+ */
+export interface AgentPluginProblem {
+  path: string;
+  reason: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5637,6 +5758,42 @@ export interface PlugConfigureResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentPluginsListParams".
+ */
+export interface AgentPluginsListParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentPluginsListResult".
+ */
+export interface AgentPluginsListResult {
+  packages: AgentPluginRow[];
+  /**
+   * Configured paths that hold no usable package.
+   */
+  problems: AgentPluginProblem[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentPluginsSetMcpParams".
+ */
+export interface AgentPluginsSetMcpParams {
+  name: string;
+  enabled: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentPluginsSetMcpResult".
+ */
+export interface AgentPluginsSetMcpResult {
+  name: string;
+  enabled: boolean;
+  /**
+   * False when the package was already in the asked state.
+   */
+  changed: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SkillhubSearchParams".
  */
 export interface SkillhubSearchParams {
@@ -5976,6 +6133,24 @@ export interface SettingsGetResult {
    * Whether conversational Skill Hub retrieval is on, read the way the runtime reads the config: enabled=false turns it off, and the default is on.
    */
   skill_hub_on: boolean;
+  /**
+   * The deck engine's picture search as the runtime would resolve it now: the vendor it would use and whether a key resolves, environment and product-folder credentials included.
+   */
+  picture_search: {
+    /**
+     * The picture vendor the deck engine would use now, or an empty string when none resolves. Answered from effective credentials -- the config file, the vendor's environment variable, and the deck lane's own .env -- so it agrees with what ppt_image_search would do.
+     */
+    vendor: string;
+    ready: boolean;
+    /**
+     * True when the deck could not use the selected search vendor and a keyed fallback vendor answers instead, so the page can say deck generation will fall back to it. A deck pinned to its own vendor is not a fallback.
+     */
+    fallback: boolean;
+    /**
+     * Why `vendor` is the picture vendor: `ok` when the deck searches on the vendor it is configured to use (the selected search vendor, or the deck's own pin), `fallback_no_key` when the selected vendor has a picture surface but no key the deck can use (an environment-only host key does not reach the deck lane), `no_surface` when the selected vendor has no picture surface for decks, `not_ready` when no vendor resolves. Absent on gateways older than this field, hence the default.
+     */
+    reason?: 'ok' | 'fallback_no_key' | 'no_surface' | 'not_ready';
+  };
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -7418,6 +7593,12 @@ export interface SessionUsageResult {
    * True when context_used is a tiktoken estimate.
    */
   context_estimated: boolean;
+  /**
+   * The window divided: tokens by part, keyed system / tools / conversation / files / memory / skills, as the last measured turn recorded them. Absent when that turn measured none, or the conversation predates the record.
+   */
+  context_parts?: {
+    [k: string]: number;
+  } | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -8414,7 +8595,7 @@ export interface ShellExecResult {
  */
 export interface SkillsManageParams {
   /**
-   * One of list, inspect, search, browse, install, open.
+   * One of list, inspect, search, browse, install, open, block, unblock.
    */
   action: string;
   query?: string;
@@ -8465,6 +8646,14 @@ export interface SkillsManageResult {
    * `open`.
    */
   opened?: boolean | null;
+  /**
+   * `block`/`unblock`: the state that was written.
+   */
+  blocked?: boolean | null;
+  /**
+   * `block`/`unblock`: the list after the write.
+   */
+  blocklist?: string[] | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

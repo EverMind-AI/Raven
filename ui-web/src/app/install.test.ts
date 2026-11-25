@@ -175,6 +175,62 @@ describe('the session-pointer reload (installActions)', () => {
   })
 })
 
+/* A gateway that comes back is a gateway whose process said nothing about the
+   runs it lost while it was down: the rows the client kept are the ones it
+   last heard, and the store is not reset unless the reconnect happens to
+   re-open the conversation with a different id. So the three reads the tasks
+   surfaces draw from are asked again here. */
+describe('the task lists after a reconnect (installActions)', () => {
+  it('re-reads the rows, the open conversation board and the rail badge', async () => {
+    let reconnect = (): void => { throw new Error('reconnect callback was not installed') }
+    const wiring = await harness({
+      'src/app/connection': { onReconnect: (fn: () => void) => { reconnect = fn } },
+      'src/features/installed/source': { loadExt: async () => {} },
+      'src/features/importSync/store': { refresh: async () => {} },
+      'src/state/session/registry': { reconnect: async () => {}, switchToDraft: () => {} },
+    })
+    const asked: string[] = []
+    const { setSources } = await import('../state/sources')
+    const { setCurrent, _resetForTests } = await import('../lib/session') as Session
+    setCurrent('s1')
+    setSources({
+      composer: {
+        slash: [], meter: () => '', slashName: () => '', slashHelp: () => '', send: () => {}, stop: () => {},
+      },
+      tasks: {
+        list: async () => { asked.push('tasks.list'); return [] },
+        board: async () => {
+          asked.push('tasks.board')
+          return { board: { version: 1, groups: [], unassigned: [] }, lineage: {} }
+        },
+        boards: async () => {
+          asked.push('tasks.boards')
+          return { cards: [], completed_count: 0, needs_you_count: 0 }
+        },
+        one: async () => null,
+        stop: async () => false,
+        node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }),
+        roster: async () => [],
+      },
+    } as unknown as Partial<Sources>)
+    try {
+      wiring.installActions()
+      await act(async () => {
+        reconnect()
+        /* afterReconnect awaits the handshake and the session reload before
+           the tasks reads: a turn of the microtask queue each. */
+        for (let i = 0; i < 20; i += 1) await Promise.resolve()
+      })
+
+      expect(asked).toContain('tasks.list')
+      expect(asked).toContain('tasks.board')
+      expect(asked).toContain('tasks.boards')
+    } finally {
+      _resetForTests()
+    }
+  })
+})
+
 describe('the working-directory menu after reconnect', () => {
   it.each([false, true])('updates an open menu when the next gateway has a dialog: %s', async (hasDialog) => {
     let reconnect = (): void => { throw new Error('reconnect callback was not installed') }

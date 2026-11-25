@@ -45,10 +45,18 @@ class _FakeSkillCatalog:
 
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
         return [
-            {"name": "curator", "path": "/tmp/curator", "source": "builtin"},
+            {"name": "guide", "path": "/tmp/guide", "source": "builtin"},
             {"name": "cron-tracker", "path": "/tmp/cron-tracker", "source": "builtin"},
             {"name": "my-workspace-skill", "path": "/tmp/my-skill", "source": "workspace"},
         ]
+
+    def gather_all_skills(self) -> list[dict[str, str]]:
+        """The inspection view, which keeps a blocked skill on purpose.
+
+        Different from ``list_skills`` in exactly the way that matters here: the
+        banner lists what the agent can reach, and a blocked skill is not that.
+        """
+        return [*self.list_skills(), {"name": "blocked-skill", "path": "/tmp/blocked", "source": "builtin"}]
 
 
 class _FakeAgentContext:
@@ -144,6 +152,10 @@ async def test_default_session_info_contains_real_skills(fake_agent_loop, config
     for source, names in info["skills"].items():
         assert isinstance(names, list)
         assert len(names) >= 1, f"source group {source!r} has empty list"
+    assert "blocked-skill" not in info["skills"].get("builtin", []), (
+        "the banner lists what the agent can reach: gather_all_skills keeps blocked "
+        "skills for inspection and must not feed this field"
+    )
 
 
 async def test_default_session_info_contains_real_usage_baseline(fake_agent_loop, config) -> None:

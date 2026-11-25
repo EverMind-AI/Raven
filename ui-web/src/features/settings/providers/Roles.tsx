@@ -1,5 +1,5 @@
 /* The model roles: which model each job runs on, and the picker that changes
-   it. Eleven rows; each knows where its pair is written and which providers
+   it. Nine rows; each knows where its pair is written and which providers
    may serve it. The media tools' rows on the Tools page draw the same pill. */
 import { useRef } from 'react'
 
@@ -15,7 +15,7 @@ import type { ProviderRow, SettingsSnapshot } from '../types'
 import type { JSX } from 'react'
 
 export type RoleId =
-  | 'chat' | 'curator' | 'title' | 'memllm' | 'gate'
+  | 'chat' | 'title' | 'memllm'
   | 'embedding' | 'rerank' | 'multimodal' | 'image' | 'speech' | 'video'
 
 /* What each slot may be filled with. The one consumer of a model's kind: an
@@ -25,7 +25,7 @@ export type RoleId =
    a model that also reads pictures is text, and the multimodal slot -- which
    wants exactly that -- takes text too. */
 export const ROLE_KIND: Record<RoleId, Kind> = {
-  chat: 'text', curator: 'text', title: 'text', memllm: 'text', gate: 'text', multimodal: 'text',
+  chat: 'text', title: 'text', memllm: 'text', multimodal: 'text',
   embedding: 'embedding', rerank: 'reranker', image: 'image', speech: 'audio', video: 'video',
 }
 
@@ -43,10 +43,8 @@ export interface Role {
 
 export const ROLES: Role[] = [
   { id: 'chat' },
-  { id: 'curator', keys: ['context.curatorModel', 'context.curatorProvider'] },
   { id: 'title', keys: ['sessionTitle.model', 'sessionTitle.provider'] },
   { id: 'memllm', everos: 'llm' },
-  { id: 'gate', keys: ['skillForge.llmGateModel', 'skillForge.llmGateProvider'] },
   { id: 'embedding', everos: 'embedding', optional: true },
   { id: 'rerank', everos: 'rerank', optional: true },
   { id: 'multimodal', everos: 'multimodal', optional: true },
@@ -57,14 +55,14 @@ export const ROLES: Role[] = [
 
 /* Literal keys, for the i18n gate. */
 const NAME: Record<RoleId, string> = {
-  chat: 'gui.settings.roles.chat', curator: 'gui.settings.roles.curator', title: 'gui.settings.roles.title',
-  memllm: 'gui.settings.roles.memllm', gate: 'gui.settings.roles.gate', embedding: 'gui.settings.roles.embedding',
+  chat: 'gui.settings.roles.chat', title: 'gui.settings.roles.title',
+  memllm: 'gui.settings.roles.memllm', embedding: 'gui.settings.roles.embedding',
   rerank: 'gui.settings.roles.rerank', multimodal: 'gui.settings.roles.multimodal', image: 'gui.settings.roles.image',
   speech: 'gui.settings.roles.speech', video: 'gui.settings.roles.video',
 }
 const USE: Record<RoleId, string> = {
-  chat: 'gui.settings.roles.chat_use', curator: 'gui.settings.roles.curator_use', title: 'gui.settings.roles.title_use',
-  memllm: 'gui.settings.roles.memllm_use', gate: 'gui.settings.roles.gate_use', embedding: 'gui.settings.roles.embedding_use',
+  chat: 'gui.settings.roles.chat_use', title: 'gui.settings.roles.title_use',
+  memllm: 'gui.settings.roles.memllm_use', embedding: 'gui.settings.roles.embedding_use',
   rerank: 'gui.settings.roles.rerank_use', multimodal: 'gui.settings.roles.multimodal_use', image: 'gui.settings.roles.image_use',
   speech: 'gui.settings.roles.speech_use', video: 'gui.settings.roles.video_use',
 }
@@ -73,6 +71,7 @@ export const roleName = (r: Role): string => t(NAME[r.id])
 const MEDIA_PROVIDER = 'openrouter'
 const CTX_MIN = 1024
 const ITER_RANGE: [number, number] = [1, 200]
+const ITER_DEFAULT = 40
 
 export const disabledTools = (raw: Record<string, unknown>): string[] => (dig(raw, 'tools.disabledTools') as string[] | undefined) || []
 
@@ -411,13 +410,32 @@ const EFFORTS: Array<[string, string]> = [
 const effortWord = (v: string): string =>
   t(EFFORTS.find(([id]) => id === v)?.[1] ?? 'gui.settings.roles.effort_default')
 
+/* The cap as the loader reads it, not as the number control wants it: an
+   explicit null or 0 is the file saying "no cap", a positive int is the cap,
+   and an absent key keeps the built-in 40. The two spellings are tried in the
+   loader's order, camelCase first, because the value shown has to be the one
+   the turn runs under. */
+interface IterCap { unlimited: boolean; value: number }
+function iterCap(raw: Record<string, unknown>): IterCap {
+  for (const key of ['agents.defaults.maxToolIterations', 'agents.defaults.max_tool_iterations']) {
+    const v = dig(raw, key)
+    if (v === undefined || typeof v === 'boolean') continue
+    if (v === null) return { unlimited: true, value: ITER_DEFAULT }
+    if (typeof v === 'number' && Number.isInteger(v)) {
+      if (v === 0) return { unlimited: true, value: ITER_DEFAULT }
+      return { unlimited: false, value: v > 0 ? v : ITER_DEFAULT }
+    }
+  }
+  return { unlimited: false, value: ITER_DEFAULT }
+}
+
 /* The three values the parameters drawer edits. Read out here rather than
    inside it, because the closed trigger says what they are. */
-function chatParams(raw: Record<string, unknown>): { effort: string; iters: number; pin: number | null } {
+function chatParams(raw: Record<string, unknown>): { effort: string; iters: IterCap; pin: number | null } {
   const pinned = dig(raw, 'agents.defaults.contextWindowTokens')
   return {
     effort: (dig(raw, 'agents.defaults.reasoningEffort') as string) || '',
-    iters: Number(dig(raw, 'agents.defaults.maxToolIterations')) || 40,
+    iters: iterCap(raw),
     pin: typeof pinned === 'number' && pinned > 0 ? pinned : null,
   }
 }
@@ -432,7 +450,9 @@ function ParamsDisc(): JSX.Element {
   const { effort, iters, pin } = chatParams(s.snap.raw)
   const sum: Array<[string, string]> = [
     [t('gui.settings.roles.sum_effort'), effortWord(effort)],
-    [t('gui.settings.roles.sum_iters'), t('gui.settings.roles.sum_iters_n', { n: iters })],
+    [t('gui.settings.roles.sum_iters'), iters.unlimited
+      ? t('gui.settings.roles.iterations_unbounded')
+      : t('gui.settings.roles.sum_iters_n', { n: iters.value })],
     [t('gui.settings.roles.sum_ctx'), pin ? `${pin.toLocaleString()} tok` : t('gui.settings.roles.sum_ctx_auto')],
   ]
   return (
@@ -458,8 +478,8 @@ function ChatParams(): JSX.Element {
   const { effort, iters, pin } = chatParams(raw)
   const win = modelWindow(s.snap)
   const bump = (d: number): void => {
-    const step = iters >= 100 ? 10 : 1
-    const v = iters + d * step
+    const step = iters.value >= 100 ? 10 : 1
+    const v = iters.value + d * step
     if (v < ITER_RANGE[0]) { store.refuse(t('gui.settings.roles.min', { n: ITER_RANGE[0] })); return }
     if (v > ITER_RANGE[1]) { store.refuse(t('gui.settings.roles.max', { n: ITER_RANGE[1] })); return }
     void store.write('agents.defaults.maxToolIterations', v)
@@ -480,8 +500,13 @@ function ChatParams(): JSX.Element {
         />
       </Row>
       <Row label={t('gui.settings.roles.iterations')}>
-        <Stepper value={iters} unit={t('gui.settings.roles.times')} onBump={bump} />
+        {iters.unlimited
+          ? <Rov>{t('gui.settings.roles.iterations_unbounded')}</Rov>
+          : <Stepper value={iters.value} unit={t('gui.settings.roles.times')} onBump={bump} />}
       </Row>
+      {iters.unlimited && (
+        <div className="settings-addhint">{t('gui.settings.roles.iterations_unbounded_note')}</div>
+      )}
       <Row label={t('gui.settings.roles.ctx')}>
         <span className="settings-taglist">
           {pin ? (

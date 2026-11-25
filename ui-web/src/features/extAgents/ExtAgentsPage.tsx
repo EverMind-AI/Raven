@@ -671,6 +671,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
   const [keyTyped, setKeyTyped] = useState(false)
   const shown = shownOf(row, s)
   const stage = stageOf(row)
+  const pictureBlocked = (row.routes || []).some((route) => route.image_search_ready === false)
   const testing = s.testing.includes(row.name) || row.test_running
   const saveKey = (): void => {
     const api_key = keyRef.current ? keyRef.current.value.trim() : ''
@@ -829,6 +830,9 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
         ) : (
           <>
             {note ? <Note {...note} /> : null}
+            {pictureBlocked ? (
+              <div className="extAgents-probe extAgents-probe-bad">{t('gui.agent.route_no_picture')}</div>
+            ) : null}
             <GoodAt
               readOnly={!!row.builtin}
               row={row}

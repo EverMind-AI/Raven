@@ -47,6 +47,27 @@ the `raven-data` volume mounted at `/data`. Preserve the volume during upgrades
 and restarts.
 `docker compose down -v` deletes the volume and all data it contains.
 
+Model request timeouts live under `agents.defaults` in `config.json`:
+
+- `llmCallTimeout` (default 600 seconds) is the wall-clock budget for one
+  model request, including a streaming response that keeps producing chunks
+  and the time the consumer spends handling each chunk between pulls. It is
+  not only model generation time. Increase it if a legitimate generation needs
+  longer; receiving another chunk does not reset this budget. A reply that has
+  already delivered `finish_reason` gets one additional idle window (at most
+  `streamIdleTimeout`, capped at `llmCallTimeout`) to finish its stream, so a
+  completed answer is not reported as cut; a call can therefore take that
+  window longer than the budget.
+- `llmFirstByteTimeout` (default 120 seconds) limits the wait for the first
+  response, and `streamIdleTimeout` (default 180 seconds) limits silence after
+  streaming starts. These may end a request before its total budget expires.
+
+The call deadline applies to the native Chat Completions, Anthropic Messages,
+OpenAI Responses and Codex transports. A timeout closes the request; it does
+not guarantee that a remote model server stops its computation. Retry and
+partial-answer recovery follow the caller's existing policy, so this is a
+per-request limit rather than a limit on the whole multi-agent workflow.
+
 ## <span class="em-section-icon em-section-icon--build" aria-hidden="true"></span>Build a Docker image
 
 Build the image using the Makefile target:

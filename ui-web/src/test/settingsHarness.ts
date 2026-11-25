@@ -14,7 +14,7 @@ import { setTranslator } from '../i18n/t'
 import * as settingsDialog from '../state/settings'
 
 import type { ModelSource, Provider } from '../features/model/types'
-import type { ProviderRow, SettingsSnapshot, SettingsSource } from '../features/settings/types'
+import type { AgentPluginList, ProviderRow, SettingsSnapshot, SettingsSource } from '../features/settings/types'
 
 /* Every label carries the `kind` the wire carries, because the surfaces read
    it: `model.options` runs `registry_data.kind_of` over each row, so a fixture
@@ -74,11 +74,31 @@ export const modelSource: ModelSource = new Proxy({} as ModelSource, {
   },
 })
 
+/* Two packages: one whose skills are imported and whose MCP server runs, one
+   just found, holding a skill and a server it may not start yet. */
+export function pkgList(over: Partial<AgentPluginList> = {}): AgentPluginList {
+  return {
+    packages: [
+      {
+        name: 'docs-kit', version: '1.0.0', description: 'Docs helpers.', source: '/pkgs/docs-kit', notes: [],
+        skills: ['write-docs'], skills_imported: true, problems: [],
+        mcp: { servers: [{ name: 'docs-kit__search', state: 'connected', error: null }], allowed: true, live: true, problems: [] },
+      },
+      {
+        name: 'fresh-pkg', version: '0.3.0', description: '', source: '/pkgs/fresh-pkg', notes: [],
+        skills: ['draft'], skills_imported: false, problems: [],
+        mcp: { servers: [{ name: 'fresh-pkg__local', state: 'off', error: null }], allowed: false, live: false, problems: [] },
+      },
+    ],
+    problems: [],
+    ...over,
+  }
+}
+
 export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
   return {
     raw: {
       agents: { defaults: { model: 'claude-opus-4-5', provider: 'anthropic', reasoningEffort: 'low', maxToolIterations: 40 } },
-      context: { curatorModel: 'anthropic/claude-sonnet-4-5', curatorProvider: 'openrouter' },
       tools: { disabledTools: ['image_generate', 'write_file'], web: { search: { provider: 'serper' } } },
       skillForge: { blocklist: ['sql-style'] },
       sessions: { autoArchiveAfterDays: null },
@@ -86,6 +106,7 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     },
     configPath: '/home/me/.raven/config.json',
     skillHub: { on: false },
+    pictureSearch: { vendor: '', ready: false, fallback: false },
     everos: {
       available: true,
       owned: true,
@@ -119,9 +140,9 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
       { id: 'cancel_dag', name: 'cancel dag', group: 'collab', reach: 'local', one: 'cancels a dag', on: true, builtin: false },
     ],
     skills: [
-      { name: 'git-flow', description: 'Branch and merge the house way', source: 'builtin', always: true, hub: false, hub_id: '' },
-      { name: 'sql-style', description: 'Names and indents for the database', source: 'workspace', always: false, hub: true, hub_id: 'sh-sql-style' },
-      { name: 'notes', description: 'Personal notes', source: 'workspace', always: false, hub: false, hub_id: '' },
+      { name: 'git-flow', description: 'Branch and merge the house way', source: 'builtin', always: true, hub: false, hub_id: '', blocked: false },
+      { name: 'sql-style', description: 'Names and indents for the database', source: 'workspace', always: false, hub: true, hub_id: 'sh-sql-style', blocked: true },
+      { name: 'notes', description: 'Personal notes', source: 'workspace', always: false, hub: false, hub_id: '', blocked: false },
     ],
     mcp: [
       { name: 'github', transport: 'http', state: 'error', connected: false, tool_count: 3, enabled: true, auth: 'apikey', credentialed: true, error: 'boom' },
@@ -187,6 +208,7 @@ export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsS
     openSkillFile: async (name, file) => { calls.push(['openSkillFile', { name, file }]) },
     revealPlace: async (place) => { calls.push(['revealPlace', place]) },
     uninstallSkill: async (name) => rec('uninstallSkill', name),
+    blockSkill: async (name, blocked) => rec('blockSkill', { name, blocked }),
     /* A read the credential panel makes on its own, so it is not recorded: a
        case asserting what a row's buttons wrote would have to skip past it. */
     serverDetail: async () => ({
@@ -200,6 +222,8 @@ export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsS
     revokeServer: async (name) => rec('revokeServer', name),
     configureServer: async (name, form) => rec('configureServer', { name, form }),
     authServer: async (name) => rec('authServer', name),
+    agentPlugins: async () => pkgList(),
+    setPackageMcp: async (name, on) => { calls.push(['setPackageMcp', { name, on }]); return pkgList() },
     version: () => '0.2.1',
     checkUpdate: async (btn) => { calls.push(['checkUpdate', btn.textContent]) },
     newerVersion: () => null,

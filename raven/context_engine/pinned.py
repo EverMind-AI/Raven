@@ -10,11 +10,10 @@ the bodies that must survive; this module answers which message indices that
 is, for a given history.
 
 Shared rather than owned by one history strategy: the config field is
-strategy-independent and every strategy that drops history has to know what it
-may not drop. What each does with the answer differs -- the Curator raises
-their manifest relevance, the compacting strategy holds them out of the range
-it compacts -- but the question is one question, and it is answered with the
-same positional tool pairing ``HistoryTrimmer`` drops by.
+strategy-independent and any strategy that drops history has to know what it
+may not drop. What each does with the answer differs, but the question is one
+question, and it is answered with the same positional tool pairing
+``HistoryTrimmer`` drops by.
 """
 
 from __future__ import annotations

@@ -10,8 +10,8 @@ Two design points worth highlighting:
   without a second round-trip to the source.
 
 - :class:`ForgeSkillSource` is **internal**. Per the design decision
-  recorded in the change plan, sources are hardcoded (Local + Mass +
-  Everos) rather than exposed as a plugin contribution point.
+  recorded in the change plan, sources are hardcoded (Local + Everos + Hub
+  + Project) rather than exposed as a plugin contribution point.
   ``@runtime_checkable`` lets tests assert duck-typed conformance
   without inheritance; the cost is accepting any object whose surface
   matches, which is fine because the registration set is closed.
@@ -49,11 +49,10 @@ class RouterHit:
     which source they came from."""
 
     content: str
-    """Pre-rendered SKILL.md body (frontmatter already stripped) that
-    will land in the prompt's ``# Skills`` block. Empty string means
-    the source has metadata but no body — consumers skip such hits
-    from the body-join, while still letting the name appear in
-    summaries."""
+    """Pre-rendered SKILL.md body (frontmatter already stripped). The scent
+    menu and ``find_skill`` fall back to its first line when the hit carries
+    no description. Empty string means the source has metadata but no
+    body."""
 
     score: float
     """Source-internal relevance. Each source normalizes to its own
@@ -75,8 +74,8 @@ class RouterHit:
 @runtime_checkable
 class ForgeSkillSource(Protocol):
     """One pool of skills the router can ask. Internal Protocol — the
-    set of sources is fixed at compile time (Local + Mass + the
-    configured memory backend);
+    set of sources is fixed at compile time (Local, the configured memory
+    backend, Hub, and Project);
     third parties extend retrieval by contributing a
     :class:`MemoryBackend` whose ``agent``-track ``recall`` hits get
     re-emitted by :class:`BackendSkillSource`.

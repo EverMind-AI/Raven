@@ -55,10 +55,87 @@ DECLINED_FINISH_REASONS = frozenset({"refusal", "content_filter"})
 #: The finish of an answer handed back from a stream that died; ``unknown`` is what a clean close without one reads.
 STREAM_CUT = "stream_cut"
 
+#: How much of an answered media type is echoed back into the failure sentence.
+#: A response header can be long, and the sentence it lands in is bounded, so
+#: the echo is capped: what identifies the answer fits well inside this, and
+#: anything longer is a value the reader cannot use anyway.
+_MAX_ECHOED_MEDIA_TYPE = 60
+
+_ELLIPSIS = "..."
+
 
 def _finish_after(held: str | None, incoming: str) -> str:
     """The finish reason a stream stands on once ``incoming`` has arrived."""
     return held if held in DECLINED_FINISH_REASONS else incoming
+
+
+def _answered_with_a_document(record: CallRecord | None) -> str | None:
+    """The content-type of a stream request answered by a JSON document.
+
+    An event stream arrives ``text/event-stream``; ``application/json`` means
+    the endpoint answered the request as a document -- it does not speak the
+    protocol this provider called it with, or the path is not the one it called
+    -- so the empty stream the cut branch below sees is that answer failing to
+    parse, not a connection that died mid-reply. The media type is read on its
+    own, so a charset parameter does not hide it and a structured suffix
+    (``application/problem+json``) reads the same way.
+    """
+    if record is None:
+        return None
+    for name, value in (record.headers or {}).items():
+        if not name.lower().endswith("content-type"):
+            continue
+        text = str(value)
+        mime = text.split(";", 1)[0].strip().lower()
+        if mime == "application/json" or mime.endswith("+json"):
+            return text
+    return None
+
+
+def _cut_account(answered_document: str | None, elapsed: float, reasoning_chars: int) -> tuple[str, str]:
+    """The category and detail for a stream the upstream closed with nothing delivered.
+
+    A request for a stream that a JSON document answered was never treated as
+    one -- the endpoint does not speak the protocol this provider called it
+    with -- so that account names the mismatch rather than the connection, the
+    fact a person holding the config can act on. Anything else was cut
+    mid-reply and stays a transport failure.
+
+    The recommendation opens the sentence because ``canonical_llm_error`` bounds
+    this one at ``LLM_ERROR_DETAIL_MAX``: anything ahead of it is paid for by it,
+    and a reader whose bound ran out before the recommendation cannot act on the
+    failure at all. The echoed media type is a response header, so it is capped
+    -- an endpoint can answer with a long one, and it must not be able to push
+    the sentence past that bound.
+
+    Nothing "was lost" on the mismatch path: a document answered the request
+    before a single event arrived, so there is no reasoning to count. That
+    clause stays where it means something, on a reply the connection cut.
+    """
+    if answered_document is not None:
+        logger.warning(
+            "the stream request came back as {} rather than an event stream; treating it as a protocol mismatch",
+            answered_document,
+        )
+        media = str(answered_document)
+        if len(media) > _MAX_ECHOED_MEDIA_TYPE:
+            media = media[: _MAX_ECHOED_MEDIA_TYPE - len(_ELLIPSIS)].rstrip() + _ELLIPSIS
+        return (
+            "protocol_mismatch",
+            f"check this provider's protocol and base URL: the endpoint answered the stream "
+            f"request with a JSON document ({media}), not an event stream",
+        )
+    logger.warning(
+        "the stream ended without the upstream's terminal chunk after {:.0f}s "
+        "({} chars of reasoning, no content or tool call); treating it as a transport failure",
+        elapsed,
+        reasoning_chars,
+    )
+    return (
+        "network",
+        f"the model's reply was cut off by the connection after {elapsed:.0f}s, "
+        f"before any content arrived ({reasoning_chars} chars of reasoning were lost)",
+    )
 
 
 def _transport_failed(
@@ -477,20 +554,27 @@ async def stream_llm_call(
             # content, and the empty-reply recovery re-sent the same request
             # five more times because the cut looked like a finished reply. Handed
             # back as a retryable network error instead, so the loop's error
-            # ladder owns it and the log says what happened. Content that did
-            # arrive is delivered as it is, with the finish reason left unknown.
+            # ladder owns it and the log says what happened. The exception is the
+            # stream a document answered, which is deterministic and is not
+            # retried. Content that did arrive is delivered as it is, with the
+            # finish reason left unknown.
             if finish_made_up and not content_buf and not tool_call_slots and not had_error:
                 elapsed = time.monotonic() - attempt_t0
                 reasoning_chars = sum(len(part) for part in reasoning_buf)
-                logger.warning(
-                    "the stream ended without the upstream's terminal chunk after {:.0f}s "
-                    "({} chars of reasoning, no content or tool call); treating it as a transport failure",
-                    elapsed,
-                    reasoning_chars,
-                )
+                # A cut is worth asking again: the connection may come back. A
+                # document answer is not -- the protocol it showed is the one the
+                # provider will send next time too, so a retry spends a ladder of
+                # waits to be refused identically, and tells the reader about the
+                # retry before it ever tells them what to check. Same family as
+                # ``auth`` and ``billing``, which are not retried either. Both
+                # keep ``should_fallback``: another model may speak the endpoint.
+                answered_document = _answered_with_a_document(record)
+                cut_category, cut_detail = _cut_account(answered_document, elapsed, reasoning_chars)
                 stop_thinking()
                 cut_verdict: ErrorClassification | None = ErrorClassification(
-                    "network", retryable=True, should_fallback=True
+                    cut_category,
+                    retryable=answered_document is None,
+                    should_fallback=True,
                 )
                 if rendered() and not retry_after_output:
                     # The thought is already on the watcher's screen, so the
@@ -501,13 +585,11 @@ async def stream_llm_call(
                     logger.warning("the cut stream had already rendered its reasoning; not asking again")
                 # In the canonical error shape, so the readers of that shape (the
                 # loop's failure report, the CLI's diagnosis) keep this account.
+                # The provider's own name goes in with it: the advice says to
+                # check a provider's settings, and a reader running more than one
+                # needs to know which.
                 return LLMResponse(
-                    content=canonical_llm_error(
-                        "network",
-                        None,
-                        f"the model's reply was cut off by the connection after {elapsed:.0f}s, "
-                        f"before any content arrived ({reasoning_chars} chars of reasoning were lost)",
-                    ),
+                    content=canonical_llm_error(cut_category, getattr(provider, "provider_name", None), cut_detail),
                     finish_reason="error",
                     error_classification=cut_verdict,
                     usage=final_usage or {},

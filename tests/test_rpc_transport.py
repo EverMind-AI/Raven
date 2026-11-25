@@ -10,7 +10,9 @@ that makes it safe to serve unauthenticated.
 
 from __future__ import annotations
 
+import gzip
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -147,6 +149,68 @@ async def test_health_and_auth_page_stay_open(gateway_client) -> None:
     _, client = gateway_client
     assert (await client.get("/health")).status == 200
     assert (await client.get("/auth")).status == 200
+
+
+async def test_an_already_signed_in_browser_is_sent_back_to_the_app(gateway_client) -> None:
+    """A signed-in tab refreshing ``/auth`` must not reach a dead end.
+
+    The sign-in page clears its hash the moment the nonce is redeemed, so a
+    refresh arrives with nothing to exchange and the page would otherwise sit
+    on its refusal text forever -- which reads exactly like a frozen page.
+    The session cookie that tab already holds is a credential, so the gateway
+    sends it back to the app at ``/``.
+    """
+    gateway, client = gateway_client
+    resp = await client.post("/auth/exchange", json={"nonce": gateway.mint_nonce()})
+    assert resp.status == 200
+
+    auth = await client.get("/auth")
+    assert auth.status == 200
+    assert auth.url.path == "/", "a signed-in browser must be redirected to the app, not shown the sign-in page"
+
+    # A browser without a session still gets the sign-in page.
+    anonymous = TestClient(TestServer(build_app(WsGateway(), None)))
+    await anonymous.start_server()
+    try:
+        plain = await anonymous.get("/auth")
+        assert plain.status == 200
+        assert plain.url.path == "/auth"
+        assert "Signing in to Raven" in await plain.text()
+    finally:
+        await anonymous.close()
+
+
+async def test_the_sign_in_page_explains_a_missing_hash_instead_of_posting_an_empty_nonce(gateway_client) -> None:
+    """A refresh of ``/auth`` without a nonce must say so, not POST an empty one.
+
+    After the one-time exchange the tab's hash is gone, so a reload lands on
+    ``/auth`` with no credential at all. Posting the empty string would burn a
+    request and come back with the spent-link refusal; the page says directly
+    where the app and a fresh link live instead.
+
+    The sentence alone cannot carry this: it stays in the served page even when
+    the branch that reaches it is gone, so a test that only searches for it goes
+    green while the page posts the empty nonce again. The script's shape is
+    asserted too -- the branch on the hash-derived nonce has to explain the dead
+    end and return before the exchange is posted.
+    """
+    _, client = gateway_client
+    resp = await client.get("/auth")
+    body = await resp.text()
+
+    script = re.search(r"<script>(.*?)</script>", body, re.S)
+    assert script is not None, "the sign-in page no longer carries a script"
+    code = script.group(1)
+
+    guard = re.search(r"if\s*\(\s*!\s*nonce\s*\)\s*\{", code)
+    assert guard is not None, "the page no longer branches on a missing nonce"
+
+    exchange = code.find("fetch('/auth/exchange'")
+    assert exchange != -1, "the page no longer posts the nonce to the exchange"
+
+    before_exchange = code[guard.end() : exchange]
+    assert "No sign-in link here" in before_exchange, "the missing-nonce branch must explain the dead end"
+    assert "return;" in before_exchange, "the missing-nonce branch must return before the exchange is posted"
 
 
 # ---------------------------------------------------------------------------
@@ -860,6 +924,37 @@ async def test_a_rebuilt_page_is_not_served_from_a_stale_browser_cache(tmp_path:
         again = await client.get("/", headers={"If-None-Match": etag})
         assert again.status == 304, "an unchanged page must still cost no bytes"
         assert again.headers["Cache-Control"] == "no-cache", "a 304 must carry the directive too"
+    finally:
+        await client.close()
+
+
+async def test_the_page_goes_out_gzipped_where_the_build_left_a_copy(tmp_path: Path) -> None:
+    """ui-web/build.py writes ``index.html.gz`` beside the page, and aiohttp's
+    FileResponse sends it to a client that accepts gzip: the page is a few
+    megabytes of inlined script and stylesheet, about a quarter of that packed.
+    Nothing in the route names the copy, so this is what holds the route to a
+    FileResponse; a response built from the page's bytes would quietly send
+    the whole page again. A client that does not accept gzip still gets the page.
+    """
+    static = tmp_path / "dist"
+    static.mkdir()
+    html = b"<html>" + b"x" * 4096 + b"</html>"
+    (static / "index.html").write_bytes(html)
+    (static / "index.html.gz").write_bytes(gzip.compress(html, mtime=0))
+
+    client = TestClient(TestServer(build_app(WsGateway(), static)), auto_decompress=False)
+    await client.start_server()
+    try:
+        packed = await client.get("/", headers={"Accept-Encoding": "gzip, deflate, br"})
+        assert packed.status == 200
+        assert packed.headers.get("Content-Encoding") == "gzip"
+        assert "Accept-Encoding" in packed.headers.get("Vary", "")
+        assert packed.headers["Cache-Control"] == "no-cache"
+        assert gzip.decompress(await packed.read()) == html
+
+        plain = await client.get("/", headers={"Accept-Encoding": "identity"})
+        assert "Content-Encoding" not in plain.headers
+        assert await plain.read() == html
     finally:
         await client.close()
 

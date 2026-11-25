@@ -102,6 +102,63 @@ function highlighter(): HighlighterCore | null {
   return made
 }
 
+/* Building the highlighter and a grammar's first read are most of what
+   colouring costs: about 55 ms to build and up to about a hundred to read a
+   grammar the first time, against a few for a short listing once warm. Paid
+   by the first listing, that is one long frame just as a streamed fence
+   closes. So the page pays it after boot, in background tasks: one to build,
+   then one per grammar, each reading a line of code-shaped text -- a few
+   constructs most grammars have, which compiles more of their rules than an
+   empty read would. */
+const PROBE = 'import x from "y"\nconst a = f(\'s\', 1, [b]) // c\n'
+
+type Later = (task: () => void) => void
+
+/* Background priority where the platform schedules tasks by priority, an idle
+   callback where it has only that, and otherwise a timer far enough out to
+   stay clear of the boot. A polyfill would be a second script, which this page
+   does not load. */
+const background: Later = (task) => {
+  const tasks = (globalThis as {
+    scheduler?: { postTask?: (cb: () => void, opts: { priority: string }) => Promise<unknown> }
+  }).scheduler
+  if (typeof tasks?.postTask === 'function') void tasks.postTask(task, { priority: 'background' }).catch(() => {})
+  else if (typeof requestIdleCallback === 'function') requestIdleCallback(task)
+  else setTimeout(task, 250)
+}
+
+let warming = false
+
+/** Build the highlighter and read each of its grammars once, in background
+    tasks, so the first listing coloured does not pay for either. */
+export function warm(later: Later = background): void {
+  if (warming) return
+  warming = true
+  later(() => {
+    const hl = highlighter()
+    if (!hl) return
+    /* An alias answers with its grammar, which needs no read of its own. */
+    const seen = new Set<unknown>()
+    const names = hl.getLoadedLanguages().filter((name) => {
+      const grammar = hl.getLanguage(name)
+      if (seen.has(grammar)) return false
+      seen.add(grammar)
+      return true
+    })
+    const next = (): void => {
+      const name = names.shift()
+      if (name === undefined) return
+      try {
+        hl.codeToTokensBase(PROBE, { lang: name, theme: THEME.name })
+      } catch {
+        /* A grammar the probe trips is still one a listing may read. */
+      }
+      if (names.length) later(next)
+    }
+    if (names.length) later(next)
+  })
+}
+
 const esc = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 

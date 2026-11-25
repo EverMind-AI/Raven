@@ -166,6 +166,30 @@ class TestTheRequest:
         assert kinds == ["allow_once", "allow_always", "reject_once"]
         assert [o["name"] for o in client.request["params"]["options"]][1] == "Allow for this session"
 
+    async def test_a_blocked_sandbox_connection_is_asked_as_a_fetch_with_the_same_three_options(self):
+        client, _, broker = _rig(_allow)
+
+        await _ask(
+            broker,
+            command="/usr/bin/curl -> example.com:443",
+            description="The sandbox blocked these connections. Allow them?",
+            kind="sandbox.network",
+            evidence={"targets": [{"binary": "/usr/bin/curl", "host": "example.com", "port": 443}], "command": "curl"},
+        )
+
+        params = client.request["params"]
+        validate_def("RequestPermissionRequest", params)
+        assert params["toolCall"]["kind"] == "fetch"
+        assert "rawInput" not in params["toolCall"]
+        assert [option["kind"] for option in params["options"]] == ["allow_once", "allow_always", "reject_once"]
+
+    async def test_a_shell_command_is_still_asked_as_an_execute(self):
+        client, _, broker = _rig(_allow)
+
+        await _ask(broker, kind="shell.exec", evidence={"command": "git push origin main"})
+
+        assert client.request["params"]["toolCall"]["kind"] == "execute"
+
     async def test_the_always_option_answers_as_a_session_grant(self):
         def pick_session(frame: dict) -> dict:
             option = next(o for o in frame["params"]["options"] if o["kind"] == "allow_always")
@@ -191,6 +215,19 @@ class TestTheRequest:
         params = client.request["params"]
         assert params["_meta"] == {"raven.turnId": "turn-1"}
         assert "turnId" not in params
+
+    async def test_an_action_only_a_person_may_answer_is_marked_in_meta(self):
+        """A raven host answers its sub-agents' requests itself; the mark is how it
+        knows to refuse an address no mode may open rather than approve it."""
+        client, _, broker = _rig(_allow)
+
+        await _ask(broker, kind="sandbox.network", needs_person=True)
+        await _ask(broker, kind="sandbox.network")
+        marked, plain = (f["params"] for f in client.frames if f.get("method") == "session/request_permission")
+
+        assert marked["_meta"] == {"raven.turnId": "turn-1", "raven.needsPerson": True}
+        assert plain["_meta"] == {"raven.turnId": "turn-1"}
+        validate_def("RequestPermissionRequest", marked)
 
     async def test_no_meta_key_at_all_when_there_is_no_turn_id(self):
         client, _, broker = _rig(_allow)

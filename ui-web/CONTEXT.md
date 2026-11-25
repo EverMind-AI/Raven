@@ -323,6 +323,19 @@ _Avoid_: "trajectory replay" for it -- that is the Runtime's Trajectory Replay
 (`raven trajectory replay`), a re-run of the harness against a recording; this
 re-runs nothing and only redraws the entries the list store holds.
 
+**Preview window**:
+A page of the same bundle that shows one file and nothing else:
+`features/workspace/preview.ts` owns its address (`?preview=1&path=...&session=...`),
+and `src/chrome/previewBoot.tsx` boots it in place of the page's own boot. The
+file viewer opens it in a new browser tab, one per click and with no window
+name to reuse, so where that tab lands is the browser's. It is
+not a second UI -- what it draws is the workspace pane's `FileBody` -- so a
+kind that renders in the pane renders in the window, and the page's shell,
+socket and session list never run there.
+_Avoid_: "pop-up" for this in code and copy. The browser may make it a tab: the
+query and the component say preview window, while the button's key
+(`gui.ws.file_newtab`) names the tab it opens.
+
 **Region**:
 One of the things `src/App.tsx` renders at the body, in the standing order
 `src/state/portals.ts`'s `BOOT_BODY_ORDER` declares: `div.app`, the collapse's
@@ -367,7 +380,7 @@ _Avoid_: "agent hub" for the whole -- that is the agents module, one of its two.
 
 **Settings section**:
 One row of `features/settings/store.ts`'s `SECTIONS`: a pane of the settings
-dialog. Nine of the eleven are that domain's own components. The other two --
+dialog. Ten of the twelve are that domain's own components. The other two --
 schedules and memory -- are another domain's island, rooted in a box
 `src/App.tsx` renders beside `#spanels` and named by that store's `HOSTED`,
 because a React root inside the settings island's own tree would be unmounted
@@ -378,6 +391,24 @@ registers what arriving at it costs on `state/settings.ts`'s `onEnter`, and
 what leaving it costs on `onLeave`.
 _Avoid_: "page" for one -- a page is a row of `state/pages.ts` and has a rail
 button.
+
+**MCP section** (`features/settings/pages/Mcp.tsx`):
+The settings section that lists the MCP servers configured in
+`tools.mcpServers`, each with its switch (`plug.toggle`), its credential and
+the connection manager's state. The servers an **Agent Plugin Package** (Runtime
+`CONTEXT.md`) contributes are not among its rows.
+_Avoid_: "plugins" for it -- the section carried that label until the Plugins
+section below took it.
+
+**Plugins section** (`features/settings/pages/Plugins.tsx`):
+The settings section that lists the **Agent Plugin Packages** this host can see
+(`agent_plugins.list`). Its one write is `agent_plugins.set_mcp`, which adds a
+package to `agentPlugins.mcpPackages` or takes it out; the running generation
+keeps the package servers it was assembled with, so a row whose `allowed` and
+`live` disagree reads "needs restart". Importing and removing a package's
+skills stay with `raven agent-plugins`, which take a path on the host's disk.
+_Avoid_: reading it as PlugHub's plugins or as kernel **Plugins** -- neither is
+listed here.
 
 **Manifest**:
 `features/<domain>/manifest.ts` -- what one domain declares about itself: its
@@ -519,8 +550,9 @@ at boot, which holds the group for that message as Move on does); clicking a ste
 the transcript to that turn's reply (`transcript/source.ts` `revealTurnAt`). Finished groups
 fold away at the bottom, and Tasks no step places sit in an Unassigned fold at the top. A conversation whose
 board holds no group draws the flat list of Tasks it always had, and the desk's tab says it is
-empty only with no Task and no group (`desk/DeskPalette.tsx` `TasksNav`, which reads the board
-itself): a conversation that delegated nothing still has its matters. The terms are the Runtime's
+empty only with no Task and no group (`desk/DeskPalette.tsx` `TasksNav`, which leaves the
+panel to read both and shows the note once they land): a conversation that delegated nothing
+still has its matters. The terms are the Runtime's
 (`CONTEXT.md`: Task Board, Task Group, Progress Step, Board category).
 _Avoid_: "task list" for this -- that is the flat list it falls back to.
 

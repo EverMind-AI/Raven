@@ -35,6 +35,10 @@ def test_the_service_locator_grants_are_the_ledgered_nine() -> None:
         "media_proxy",
         "notify",
         "provider",
+        # The host's tools.sandbox.gateway, so a plugin that runs work in an
+        # OpenShell sandbox of its own (the design renderer) lands on the gateway
+        # the host's sandbox runs on rather than the CLI's active one.
+        "sandbox_gateway",
         "user_id",
         # The host's tools.web section (proxy, search vendor keys), so a plugin
         # with a web-facing tool defaults to the host's routing and credentials

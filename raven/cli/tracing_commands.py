@@ -12,9 +12,12 @@ so it needs the same Node >= 22 that ``raven tui`` already requires.
 
 The background viewer's pid + port are recorded in ``<state_dir>/viewer.pid``
 so a later ``raven tracing`` reuses the live instance instead of stacking
-orphans, and ``raven tracing stop`` can shut it down. The stop path only
-signals a pid whose command line still matches the node viewer — a recycled
-pid is never killed.
+orphans, and ``raven tracing stop`` can shut it down. The record is replaced
+atomically -- otherwise a reader could catch a half-written file, read it as
+"no record", and drop it -- and every read-and-delete of it runs under the same
+lock as that replacement, so a record a concurrent launcher just wrote is never
+the one deleted. The stop path only signals a pid whose command line still
+matches the node viewer — a recycled pid is never killed.
 
 Registered as a top-level leaf command (not a subcommand group) so the TUI
 command catalog lists it as a plain ``/tracing`` slash under "(top-level)".
@@ -32,6 +35,7 @@ import subprocess
 import time
 import urllib.request
 import webbrowser
+from contextlib import suppress
 from pathlib import Path
 
 import typer
@@ -124,24 +128,125 @@ def _pid_file() -> Path:
     return tracing_config.state_dir() / "viewer.pid"
 
 
-def _read_pid_file() -> dict | None:
-    try:
-        data = json.loads(_pid_file().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+_PID_MAX = 2**31 - 1  # pid_t is a signed 32-bit int; real Windows pids stay far below it.
+_PORT_MAX = 65535
+
+
+def _is_port(value: object) -> bool:
+    """True for a port a viewer can listen on, and false for a bool.
+
+    ``isinstance(True, int)`` would let a bool through as port 1, and an int
+    outside 1-65535 names a port nothing can bind.
+    """
+    return isinstance(value, int) and not isinstance(value, bool) and 0 < value <= _PORT_MAX
+
+
+def _is_pid(value: object) -> bool:
+    """True for a pid the OS can answer about.
+
+    A bool would name pid 1, and an int too large for ``os.kill`` raises
+    OverflowError instead of answering "not running".
+    """
+    return isinstance(value, int) and not isinstance(value, bool) and 0 < value <= _PID_MAX
+
+
+def _parse_pid_record(text: str | None) -> dict | None:
+    """The record in ``text``, or None when it is not one."""
+    if text is None:
         return None
-    if isinstance(data, dict) and isinstance(data.get("pid"), int) and isinstance(data.get("port"), int):
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    if isinstance(data, dict) and _is_pid(data.get("pid")) and _is_port(data.get("port")):
         return data
     return None
 
 
-def _write_pid_file(pid: int, port: int) -> None:
+def _read_pid_file() -> dict | None:
+    """Read the record, dropping only a record that was read and is not one.
+
+    A read that fails (a Windows sharing violation, a permission blip) is not
+    evidence that the record is bad: it stays for the next run. Deleting a bad
+    record is serialized with ``_write_pid_file``'s atomic replace, so a record
+    a concurrent launcher wrote between the read and the unlink is not the one
+    the delete removes.
+    """
     path = _pid_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"pid": pid, "port": port}), encoding="utf-8")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return None
+    except ValueError:
+        text = None  # not UTF-8: a corrupt record, removed below
+    entry = _parse_pid_record(text)
+    if entry is not None:
+        return entry
+    from raven.utils.atomic_io import write_transaction
+
+    # The delete is a read-modify-write, so it runs under the writer's lock --
+    # but taking that lock can fail too (a read-only state dir, an ACL that
+    # denies the lock file). That is not evidence the record is bad, and the
+    # recovery command must not turn it into a traceback: leave the record.
+    try:
+        with write_transaction(path):
+            try:
+                current = path.read_text(encoding="utf-8")
+            except OSError:
+                return None
+            except ValueError:
+                current = None
+            entry = _parse_pid_record(current)
+            if entry is not None:
+                # A launcher replaced the corrupt record while this read was
+                # failing over it: the newer record wins.
+                return entry
+            with suppress(OSError):
+                path.unlink()
+    except OSError:
+        return None
+    return None
 
 
-def _clear_pid_file() -> None:
-    _pid_file().unlink(missing_ok=True)
+def _write_pid_file(pid: int, port: int) -> None:
+    """Record the viewer, replacing the file atomically.
+
+    A reader that caught a half-written record would read it as "no record",
+    drop the file, and leave a live viewer with no handle -- so the write goes
+    through ``atomic_replace`` rather than straight to the file. That helper
+    also creates the state directory, which is why this does not do it itself.
+    """
+    from raven.utils.atomic_io import atomic_replace
+
+    atomic_replace(_pid_file(), json.dumps({"pid": pid, "port": port}))
+
+
+def _clear_pid_file(pid: int) -> None:
+    """Remove the record only while it still names ``pid``.
+
+    The caller has just decided about that pid (stopped it, or found it stale).
+    A launcher can replace the record in between; deleting that newer record
+    would take away the handle of a viewer the caller never saw. A lock that
+    cannot be taken leaves the record in place: the next run reads it again.
+    """
+    path = _pid_file()
+    from raven.utils.atomic_io import write_transaction
+
+    try:
+        with write_transaction(path):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, ValueError):
+                return
+            entry = _parse_pid_record(text)
+            if entry is None or entry["pid"] != pid:
+                return
+            with suppress(OSError):
+                path.unlink()
+    except OSError:
+        return
 
 
 def _pid_is_viewer(pid: int) -> bool | None:
@@ -184,20 +289,36 @@ def _checked_viewer(pid: int) -> bool:
 
 
 def _stop_viewer() -> None:
+    had_record = _pid_file().exists()
     entry = _read_pid_file()
     if entry is None:
-        console.print("Tracing viewer is not running.")
+        if _pid_file().exists():
+            # The record survived the read: it could not be read this time, or
+            # its lock could not be taken. It is still there for the next run,
+            # so do not send the user to kill a pid by hand.
+            console.print(
+                "The tracing viewer record could not be read this time; a viewer may still be "
+                "running. Retry [cyan]raven tracing stop[/cyan]."
+            )
+        elif had_record:
+            # There was a file and it could not be used, so `_read_pid_file`
+            # dropped it. A viewer may still be running -- a record written by
+            # an older CLI could be truncated by a crash mid-write -- so do not
+            # claim there is none.
+            console.print("No usable tracing viewer record; a viewer may still be running. Stop it by hand.")
+        else:
+            console.print("Tracing viewer is not running.")
         return
     pid = entry["pid"]
     if not _checked_viewer(pid):
-        _clear_pid_file()
+        _clear_pid_file(pid)
         console.print("Tracing viewer is not running (cleared a stale pid file).")
         return
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
-    _clear_pid_file()
+    _clear_pid_file(pid)
     console.print(f"Stopped tracing viewer (pid {pid}).")
 
 
@@ -229,18 +350,69 @@ def _server_js() -> Path:
 
 def _open_dashboard(port: int) -> None:
     entry = _read_pid_file()
+    # A record still on disk survived the read: `_read_pid_file` drops a record
+    # it read and could not use, and keeps one it could not read (or whose lock
+    # it could not take). Only the former is gone for good.
+    record_kept = entry is None and _pid_file().exists()
+    stuck: dict | None = None
     if entry is not None:
-        if _checked_viewer(entry["pid"]) and _viewer_health(entry["port"]):
-            url = f"http://127.0.0.1:{entry['port']}/"
-            console.print(f"Tracing dashboard already running at [cyan]{url}[/cyan]")
-            webbrowser.open(url)
-            return
-        _clear_pid_file()
+        if _checked_viewer(entry["pid"]):
+            if _viewer_health(entry["port"]):
+                url = f"http://127.0.0.1:{entry['port']}/"
+                console.print(f"Tracing dashboard already running at [cyan]{url}[/cyan]")
+                webbrowser.open(url)
+                return
+            # The record names a live viewer of ours, but it is not answering:
+            # it may be hung, or its assets were replaced under it. Starting a
+            # second viewer would leave this process unreachable, because
+            # `raven tracing stop` only signals pids named in this file.
+            if entry["port"] == port:
+                # The user asked for this exact port, so the viewer that is not
+                # answering is the one they are waiting for. Keep the record
+                # and send them to stop it.
+                console.print(
+                    f"[yellow]Tracing viewer (pid {entry['pid']}) is not answering on "
+                    f"http://127.0.0.1:{entry['port']}/. "
+                    "Run [cyan]raven tracing stop[/cyan] to stop it, then retry.[/yellow]"
+                )
+                raise typer.Exit(1)
+            # Another port: the viewer that is stuck is not the one the user is
+            # waiting for, so the launcher goes on to the port they asked for.
+            # The record still names the old viewer until a viewer started
+            # below takes it over, and `raven tracing stop` can then reach only
+            # the new one.
+            stuck = entry
+        else:
+            _clear_pid_file(entry["pid"])
 
     if _port_live(port):
         if _viewer_health(port):
             url = f"http://127.0.0.1:{port}/"
             console.print(f"Tracing dashboard already running at [cyan]{url}[/cyan]")
+            # This viewer has no record of its own -- there was none, the one we
+            # had was stale and has just been cleared, or the record names a
+            # viewer on another port -- so nothing in the CLI can stop it
+            # later. Say so instead of handing out a dashboard the user cannot
+            # shut down.
+            if record_kept:
+                console.print(
+                    "[yellow]Its pid record could not be read this time, so [cyan]raven tracing stop[/cyan] "
+                    "may not manage it; retry that command before stopping the instance by hand.[/yellow]"
+                )
+            else:
+                console.print(
+                    "[yellow]It has no usable pid record, so [cyan]raven tracing stop[/cyan] will "
+                    "not manage it; stop that instance by hand.[/yellow]"
+                )
+            if stuck is not None:
+                # The record names the stuck viewer on the other port; that is
+                # the one `stop` still manages, so name it rather than let the
+                # earlier decision go unsaid.
+                console.print(
+                    f"[yellow]The recorded viewer (pid {stuck['pid']}, port {stuck['port']}) is not "
+                    "answering and keeps running; [cyan]raven tracing stop[/cyan] manages that one, "
+                    f"not the viewer on {port}.[/yellow]"
+                )
             webbrowser.open(url)
             return
         # Port is held by something that is NOT our viewer (a stale instance or
@@ -273,6 +445,14 @@ def _open_dashboard(port: int) -> None:
         start_new_session=True,
     )
     _write_pid_file(proc.pid, port)
+    if stuck is not None:
+        # The record now names the viewer just started, so the old one is out of
+        # the CLI's reach: name its pid so the user can stop it by hand.
+        console.print(
+            f"[yellow]The recorded viewer (pid {stuck['pid']}, port {stuck['port']}) is not "
+            "answering and keeps running; [cyan]raven tracing stop[/cyan] now manages the "
+            "new viewer only, so stop the old one by hand.[/yellow]"
+        )
 
     for _ in range(24):  # wait up to ~6s for the server to actually serve
         if _viewer_health(port):

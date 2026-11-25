@@ -2,18 +2,18 @@
  * raven bands, the sheet rack, the card with the field and the bar under it, and
  * the popovers that hang off that bar.
  *
- * The bar is four things: the "+" (a file or a deck template, behind one
- * button), the workspace chip (a draft's, gone once a conversation starts),
- * the permission chip and the model chip, then the send button -- plus the
- * environment chip the page is served hidden, the meter and the context ring.
- * The sub-agent tier is a row of the picker the model chip opens, not a chip
- * of its own. The element order, the ids and the classes are what
+ * The bar is three things: the "+" and the "@" (what goes with the message),
+ * one segment holding the permission chip, the model chip and the context ring
+ * (what runs the session), then the send button -- plus the environment chip
+ * the page is served hidden and the meter. The sub-agent tier is a row of the
+ * picker the model chip opens, not a chip of its own. The element order, the ids and the classes are what
  * src/test/__golden__/region-app.txt records. The band has to stay one stable
  * node: the composer hangs a ResizeObserver and a MutationObserver on it
  * (features/composer/mount.tsx), and a node rebuilt per render would lose both.
  *
  * Each of the four small popovers is a child of an anchor wrapper (`.chrome-anch`)
- * around its own chip, and the stylesheet hangs it off that chip's top edge:
+ * around its own chip, and the stylesheet hangs it off that chip's top edge --
+ * or, for the two in the segment, off the segment's, right edges lined up:
  * nothing measures an element, nothing leaves the card, and every row keeps a
  * plain onClick because the tree never leaves the container React delegates
  * from. The model picker is the exception -- it is a body-level layer
@@ -107,19 +107,24 @@ function DockIn(): JSX.Element {
             instead, where it cannot be changed. */}
         <Plus />
         <At />
-        <span className="chrome-anch">
-          <PermChip />
-          <PermPopover />
-        </span>
         <span className="chip" id="envChip" hidden><span className="led" /><span id="envName">Local</span></span>
         <span className="meter" id="meter" />
-        <span className="chrome-anch">
-          <CtxChip />
-          <CtxPopover />
+        {/* What runs the session, as one segment beside send: the permission
+            (its glyph; the name is its hover pill), the model and the context
+            ring. Both popovers hang off the segment rather than their chips. */}
+        <span className="chrome-seg">
+          <span className="chrome-anch">
+            <PermChip />
+            <PermPopover />
+          </span>
+          {/* The sub-agent tier is a row of the picker this chip opens
+              (features/model/ModelPicker.tsx), not a chip of its own. */}
+          <ModelChip />
+          <span className="chrome-anch">
+            <CtxChip />
+            <CtxPopover />
+          </span>
         </span>
-        {/* The sub-agent tier is a row of the picker this chip opens
-            (features/model/ModelPicker.tsx), not a chip of its own. */}
-        <ModelChip />
         <button className="go" id="go" disabled aria-label={lang.attr('gui.send')} />
       </div>
 

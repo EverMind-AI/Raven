@@ -1,14 +1,15 @@
 """Two invariants of the context-builder design.
 
-Invariant 1 — Curator output boundary: the Curator contributes only
-``*history`` and segment 6 (``# Curator Working State``). It never
-touches system segments 1–5. Concretely, injecting a working state is
-purely additive at the tail; the rest of the prompt is byte-identical.
+Invariant 1 — history-slot output boundary: the history strategy's builder
+contributes only ``*history`` and, when it has one, its own segment 6 text.
+It never touches system segments 1–5. Concretely, injecting a working state
+is purely additive at the tail; the rest of the prompt is byte-identical.
 
 Invariant 2 — one owner per segment: each memory / skill block has
 exactly one home. The transitional ``# Recalled memory`` and
 ``# Retrieved skills`` blocks are gone; recall merges into ``# Memory``
-and router hits render into ``# Skills`` — one of each, no duplicates.
+and router hits reach the model only as the scent menu in the turn's user
+envelope — one of each, no duplicates.
 
 Invariant 3 — the cacheable prefix: under turn scratch nothing
 query-conditioned sits in the system slot, and nothing from the turn
@@ -24,14 +25,14 @@ import pytest
 from raven.agent.context import ContextBuilder
 from raven.config.raven import ContextConfig
 from raven.context_engine import ContextAssembler, TurnContext
+from raven.context_engine.history.compacting import CompactingHistoryBuilder
+from raven.context_engine.scent import ScentMenu
 from raven.context_engine.segments import (
     ActiveSkillsSegmentBuilder,
     BootstrapSegmentBuilder,
     IdentitySegmentBuilder,
     MemorySegmentBuilder,
-    SkillsSegmentBuilder,
 )
-from raven.context_engine.segments.curator import CuratorSegmentBuilder
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.context import AssemblyContext, Segment
 from raven.contracts.memory import Memory
@@ -43,10 +44,10 @@ def builder(tmp_path: Path) -> ContextBuilder:
     return ContextBuilder(workspace=tmp_path)
 
 
-class _FakeCurator:
+class _FakeHistory:
     """Stand-in phase-B builder: emits a fixed working-state seg + history."""
 
-    name = "curator"
+    name = "compacting"
     order = 6
     needs_prefix = True
 
@@ -56,7 +57,7 @@ class _FakeCurator:
 
     async def build(self, ctx: AssemblyContext) -> Segment:
         assert ctx.prefix is not None  # phase B contract
-        text = f"# Curator Working State\n\n{self._ws}" if self._ws else ""
+        text = f"# History Working State\n\n{self._ws}" if self._ws else ""
         return Segment(text=text, history=self._history)
 
 
@@ -64,9 +65,9 @@ def _budget() -> TokenBudget:
     return TokenBudget(100_000, 4_000, 2_000, 1_000, 93_000)
 
 
-async def _assemble(builder: ContextBuilder, curator, **kw):
+async def _assemble(builder: ContextBuilder, history_builder, **kw):
     eng = ContextAssembler(
-        [IdentitySegmentBuilder(builder.workspace), curator],
+        [IdentitySegmentBuilder(builder.workspace), history_builder],
         lambda: [],
     )
     return await eng.assemble("s", [], _budget(), turn=TurnContext(current_message="hi"))
@@ -75,8 +76,8 @@ async def _assemble(builder: ContextBuilder, curator, **kw):
 def _full_prompt(ac) -> str:
     """System slot plus the turn's user content.
 
-    ``# Memory`` and ``# Skills`` ride in the user message's turn-scratch tail
-    rather than the system prompt, so an assertion about "the prompt" has to
+    ``# Memory`` rides in the user message's turn-scratch tail and the scent
+    menu in its envelope, rather than the system prompt, so an assertion about "the prompt" has to
     read both slots to keep meaning what it used to.
     """
     parts = [ac.messages[0]["content"]]
@@ -89,38 +90,38 @@ def _full_prompt(ac) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Invariant 1 — Curator only writes *history + segment 6
+# Invariant 1 — the history slot writes *history + its own segment 6
 # ---------------------------------------------------------------------------
 
 
-class TestCuratorBoundary:
+class TestHistorySlotBoundary:
     async def test_working_state_is_purely_additive_tail(
         self,
         builder: ContextBuilder,
     ) -> None:
-        """The Curator's seg6 appends at the tail; the prefix (seg1–5) is
+        """The strategy's seg6 appends at the tail; the prefix (seg1–5) is
         byte-identical with or without it."""
-        base = await _assemble(builder, _FakeCurator(""))
-        with_ws = await _assemble(builder, _FakeCurator("goals: ship it"))
+        base = await _assemble(builder, _FakeHistory(""))
+        with_ws = await _assemble(builder, _FakeHistory("goals: ship it"))
         base_sys = base.messages[0]["content"]
         ws_sys = with_ws.messages[0]["content"]
         assert ws_sys.startswith(base_sys)
-        assert ws_sys[len(base_sys) :] == "\n\n---\n\n# Curator Working State\n\ngoals: ship it"
+        assert ws_sys[len(base_sys) :] == "\n\n---\n\n# History Working State\n\ngoals: ship it"
 
     async def test_segments_1_to_5_independent_of_working_state(
         self,
         builder: ContextBuilder,
     ) -> None:
-        a = (await _assemble(builder, _FakeCurator("state A"))).messages[0]["content"]
-        b = (await _assemble(builder, _FakeCurator("state B-different"))).messages[0]["content"]
-        assert a.split("# Curator Working State")[0] == b.split("# Curator Working State")[0]
+        a = (await _assemble(builder, _FakeHistory("state A"))).messages[0]["content"]
+        b = (await _assemble(builder, _FakeHistory("state B-different"))).messages[0]["content"]
+        assert a.split("# History Working State")[0] == b.split("# History Working State")[0]
 
-    async def test_history_slot_is_curator_owned(
+    async def test_history_slot_is_owned_by_the_strategy(
         self,
         builder: ContextBuilder,
     ) -> None:
         hist = [{"role": "user", "content": "earlier"}]
-        ac = await _assemble(builder, _FakeCurator("", history=hist))
+        ac = await _assemble(builder, _FakeHistory("", history=hist))
         # messages = [system, *history, user] → history sits in the middle.
         assert ac.messages[1] == {"role": "user", "content": "earlier"}
 
@@ -149,23 +150,24 @@ class TestOneOwnerPerSegment:
             [
                 IdentitySegmentBuilder(builder.workspace),
                 MemorySegmentBuilder(builder.memory, backend),
-                SkillsSegmentBuilder(router),
-                _FakeCurator("ws"),
+                _FakeHistory("ws"),
             ],
             lambda: [],
+            scent=ScentMenu(router),
         )
-        ac = await eng.assemble("s", [], _budget(), turn=TurnContext(current_message="hi"))
+        ac = await eng.assemble("s", [], _budget(), turn=TurnContext(current_message=_FAT_MESSAGE))
         prompt = _full_prompt(ac)
         # Transitional split blocks are gone for good.
         assert "# Recalled memory" not in prompt
         assert "# Retrieved skills" not in prompt
-        # Recall owned by # Memory; router hits owned by # Skills.
+        # Recall owned by # Memory; router hits owned by the scent menu.
         assert "# Memory" in prompt and prompt.index("# Memory") < prompt.index("user fact")
-        assert "### Skill: s  [local/s]" in prompt
-        assert "skill body" in prompt
+        assert prompt.count("local/s") == 1
+        assert "local/s" in _user_text(ac)
+        assert "# Skills" not in prompt
         # Working state is the single, final segment of the system slot.
-        assert prompt.count("# Curator Working State") == 1
-        assert ac.messages[0]["content"].rstrip().endswith("# Curator Working State\n\nws")
+        assert prompt.count("# History Working State") == 1
+        assert ac.messages[0]["content"].rstrip().endswith("# History Working State\n\nws")
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +193,15 @@ class _Backend:
 
     async def recall(self, query, *, user_id=None, agent_id=None, top_k):
         return list(self._mems)
+
+
+# Long enough, and carrying a task verb, for the scent menu to look skills up.
+_FAT_MESSAGE = "please review how we rebase a git branch"
+
+
+def _user_text(ac) -> str:
+    content = ac.messages[-1]["content"]
+    return content if isinstance(content, str) else "".join(p.get("text", "") for p in content)
 
 
 class _Source:
@@ -243,8 +254,7 @@ class TestEngineAssembledInvariants:
                 BootstrapSegmentBuilder(builder.workspace),
                 MemorySegmentBuilder(builder.memory, backend),
                 ActiveSkillsSegmentBuilder(builder.skills),
-                SkillsSegmentBuilder(router),
-                CuratorSegmentBuilder(
+                CompactingHistoryBuilder(
                     workspace=builder.workspace,
                     config=ContextConfig(),
                     provider=_Provider(),
@@ -254,21 +264,22 @@ class TestEngineAssembledInvariants:
                 ),
             ],
             lambda: [],
+            scent=ScentMenu(router),
         )
         ac = await eng.assemble(
             "s",
             [],
             _budget(),
-            turn=TurnContext(current_message="hi"),
+            turn=TurnContext(current_message=_FAT_MESSAGE),
         )
         prompt = _full_prompt(ac)
         assert "# Recalled memory" not in prompt
         assert "# Retrieved skills" not in prompt
-        # Recall merged under # Memory; router hit rendered under # Skills.
+        # Recall merged under # Memory; the router hit is offered in the menu.
         assert "# Memory" in prompt
         assert prompt.index("# Memory") < prompt.index("user prefers dark mode")
-        assert "### Skill: g  [local/g]" in prompt
-        assert "how to git" in prompt
+        assert "local/g: how to git" in _user_text(ac)
+        assert "local/g" not in ac.messages[0]["content"]
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +309,10 @@ class _EchoSource:
         return [RouterHit(qualified_id="local/e", name="e", content=f"skill for {query}", score=0.9)]
 
 
-class _HistoryCurator(_FakeCurator):
+_ESPRESSO = "compare espresso brewing methods"
+
+
+class _HistoryReplayer(_FakeHistory):
     """A phase-B builder that hands back the session it was given."""
 
     async def build(self, ctx: AssemblyContext) -> Segment:
@@ -313,10 +327,10 @@ def _prefix_engine(builder: ContextBuilder, **kw) -> ContextAssembler:
             BootstrapSegmentBuilder(builder.workspace),
             MemorySegmentBuilder(builder.memory, _EchoBackend()),
             ActiveSkillsSegmentBuilder(builder.skills),
-            SkillsSegmentBuilder(SkillForgeRouter([_EchoSource()])),
-            _HistoryCurator(""),
+            _HistoryReplayer(""),
         ],
         lambda: [],
+        scent=ScentMenu(SkillForgeRouter([_EchoSource()])),
         **kw,
     )
 
@@ -324,14 +338,13 @@ def _prefix_engine(builder: ContextBuilder, **kw) -> ContextAssembler:
 class TestCacheablePrefix:
     async def test_system_slot_holds_nothing_query_conditioned(self, builder: ContextBuilder) -> None:
         eng = _prefix_engine(builder)
-        ac = await eng.assemble("s", [], _budget(), turn=TurnContext(current_message="espresso"))
+        ac = await eng.assemble("s", [], _budget(), turn=TurnContext(current_message=_ESPRESSO))
 
         system = ac.messages[0]["content"]
         assert "# Memory" not in system
-        assert "# Skills" not in system
         assert "espresso" not in system
-        assert "recalled for espresso" in _full_prompt(ac)
-        assert "skill for espresso" in _full_prompt(ac)
+        assert f"recalled for {_ESPRESSO}" in _full_prompt(ac)
+        assert "local/e: skill for compare espresso" in _user_text(ac)
         assert ac.metadata["turn_scratch"] is True
 
     async def test_prefix_is_byte_identical_across_two_queries(self, builder: ContextBuilder) -> None:
@@ -347,10 +360,12 @@ class TestCacheablePrefix:
 
     async def test_turn_scratch_off_puts_the_segments_back_in_system(self, builder: ContextBuilder) -> None:
         eng = _prefix_engine(builder, turn_scratch=False)
-        ac = await eng.assemble("s", [], _budget(), turn=TurnContext(current_message="espresso"))
+        ac = await eng.assemble("s", [], _budget(), turn=TurnContext(current_message=_ESPRESSO))
 
         system = ac.messages[0]["content"]
         assert "# Memory" in system
-        assert "# Skills" in system
-        assert "recalled for espresso" in system
+        assert f"recalled for {_ESPRESSO}" in system
+        # The menu is per-turn material either way: it rides the user envelope.
+        assert "local/e" not in system
+        assert "local/e" in _user_text(ac)
         assert ac.metadata["turn_scratch"] is False

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.agent import turn_clock
 from raven.agent.subagent import activity
 from raven.agent.subagent import charter as charter_mod
 from raven.agent.subagent.attachments import with_attachment_note
@@ -29,14 +30,16 @@ from raven.agent.subagent.mcp_grant import (
 )
 from raven.agent.subagent.tool_vocabulary import RAVEN_NAME
 from raven.agent.tools import snapshot
+from raven.agent.tools.background_exec import reap_execution
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry, call_failed
 from raven.agent.tools.removals import RemovalWatch
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.snapshot import take as take_snapshot
 from raven.agent.tools.web import ImageSearchTool, WebFetchTool, WebSearchTool, image_search_vendor, resolve_vendor_key
+from raven.agent.turn_report import REPORT_INSTRUCTION
 from raven.config.held_secrets import scrub_tool_output
-from raven.config.live import LiveConfig, exec_extra_deny_patterns, live_vendor_key
+from raven.config.live import LiveConfig, exec_extra_deny_patterns, live_vendor_key, skill_blocklist
 from raven.config.schema import LLM_ERROR_RETRY_DELAYS_DEFAULT, ExecToolConfig
 from raven.contracts.llm_provider import LLMProvider
 from raven.contracts.participant import StepView
@@ -47,9 +50,11 @@ from raven.providers.streaming import generation_kwargs, stream_llm_call
 from raven.providers.tool_calls import openai_tool_call
 from raven.security.trust import wrap_untrusted
 from raven.spine.message import Media
+from raven.spine.turn import TurnReport
 from raven.utils.messages import build_assistant_message
 
 if TYPE_CHECKING:
+    from raven.memory_engine import LocalSkillCatalog
     from raven.providers.binding import ModelBinding
 
 _LIVE_CONFIG = LiveConfig()
@@ -70,8 +75,22 @@ def _live_exec_extra_deny() -> list[str] | None:
 
 
 def _append_participant_note(messages: list[dict[str, Any]], note: str) -> None:
-    """Append generated advice without importing the main loop back into this backend."""
+    """One round's generated advice, written where a tool result is not.
+
+    A tool result is fenced as untrusted input, so guidance appended into one
+    reaches the model as something a tool told it: a note that lands after a
+    tool round is a message of its own. Everything else is written exactly as
+    before.
+
+    Nothing is deduplicated here. Whether the words have already been said is a
+    question about the transcript, and the participant answers it by reading
+    that transcript (``CharterParticipant.advise``) -- which is what makes a
+    note a rollback popped deliver again instead of being counted as spent.
+    """
     if not messages or not note:
+        return
+    if messages[-1].get("role") == "tool":
+        messages.append({"role": "user", "content": note})
         return
     body = messages[-1].get("content")
     if isinstance(body, str):
@@ -130,6 +149,8 @@ def build_subagent_prompt(
     work_dir: Path,
     tool_names: Collection[str] = (),
     skills_allow: Collection[str] | None = None,
+    *,
+    catalog: "LocalSkillCatalog | None" = None,
 ) -> str:
     """Build a focused system prompt for an in-process raven subagent.
 
@@ -156,7 +177,16 @@ def build_subagent_prompt(
     ``None`` keeps the current full-catalog behaviour, ``[]`` hides the menu
     entirely, and a list shows only the named skills. It stacks with the tool
     filter rather than replacing it, so a whitelisted skill whose required
-    tools this sub-agent lacks is still withheld.
+    tools this sub-agent lacks is still withheld. The run's ``read_skill``
+    takes the same list, so the tool and the menu name the same skills.
+
+    The menu names ``read_skill`` as the way in whenever the registry holds it:
+    a builtin skill's SKILL.md sits inside the installed package, which a run
+    confined to its directories cannot open with ``read_file``, while
+    ``read_skill`` reads the body out of the registry. ``catalog`` is the one
+    the run's ``read_skill`` reads, so the menu and the tool agree on what
+    exists, the operator blocklist included; without it the menu builds its
+    own.
     """
     from raven.agent.context import ContextBuilder
     from raven.config.live import LiveConfig
@@ -178,14 +208,19 @@ Stay focused on the assigned task. Your final response will be reported back to 
 - Agent home: {agent_home} — the agent's memory and skills."""
     ]
 
-    catalog = LocalSkillCatalog(agent_home, config=LiveConfig().get().skill_forge, start_watcher=False)
+    if catalog is None:
+        catalog = LocalSkillCatalog(agent_home, config=LiveConfig().get().skill_forge, start_watcher=False)
     visible = filter_by_required_tools(catalog.registry.list_all(), tool_names)
     if skills_allow is not None:
         allowed = set(skills_allow)
         visible = [s for s in visible if s.name in allowed]
     skills_summary = catalog.build_skills_summary(only=visible) if visible else ""
     if skills_summary:
-        parts.append(f"## Skills\n\nRead SKILL.md with read_file to use a skill.\n\n{skills_summary}")
+        if "read_skill" in tool_names:
+            route = 'Read a skill\'s instructions with read_skill("local/<name>"), using the name shown below.'
+        else:
+            route = "Read SKILL.md with read_file to use a skill."
+        parts.append(f"## Skills\n\n{route}\n\n{skills_summary}")
 
     return "\n\n".join(parts)
 
@@ -314,8 +349,23 @@ class RavenLoopBackend:
                 len(charter.checks),
                 ", judge" if charter.code else "",
             )
+        run = activity.current()
+        control = run.control if run is not None else None
+        report = TurnReport(run.uid) if control is not None and run is not None else None
+        run_session = session_key or task_id
+        if control is not None and report is not None:
+
+            async def request_report() -> str:
+                report.requested.set()
+                return "report_requested"
+
+            control.report_now = request_report
         try:
-            with annotate_mcp_failure(grant), charter_mod.charter_scope(charter):
+            with (
+                annotate_mcp_failure(grant),
+                charter_mod.charter_scope(charter),
+                turn_clock.execution_scope(run_session, report.execution_id if report else None),
+            ):
                 return await self._run(
                     task,
                     task_id=task_id,
@@ -330,8 +380,18 @@ class RavenLoopBackend:
                     on_messages=on_messages,
                     on_delta=on_delta,
                     media=media,
+                    report=report,
                 )
+        except asyncio.CancelledError:
+            if report is not None:
+                try:
+                    await reap_execution(run_session, report.execution_id)
+                except TimeoutError:
+                    logger.error("Subagent {} could not stop all its background commands", task_id)
+            raise
         finally:
+            if control is not None:
+                control.report_now = None
             IN_SUBAGENT_RUN.reset(token)
 
     async def _run(  # noqa: C901 -- this is the bounded in-process worker loop
@@ -350,6 +410,7 @@ class RavenLoopBackend:
         on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         media: Sequence[Media] = (),
+        report: TurnReport | None = None,
     ) -> str:
         # The spawn's snapshot wins over the pair this backend was built with;
         # see ``SubagentBackend.run``. The constructor pair remains the fallback
@@ -432,6 +493,26 @@ class RavenLoopBackend:
             tools.register(EditFileTool(workspace=workspace, allowed_dirs=allowed_dirs, follow_binding=False))
         if allowed("list_dir"):
             tools.register(ListDirTool(workspace=workspace, allowed_dirs=allowed_dirs, follow_binding=False))
+        # The skills agent home holds, read the way the main agent reads them:
+        # out of the registry, so a builtin skill's body reaches a run whose
+        # file tools are fenced to its own directories. The tool takes the
+        # same effective skill list the menu does, so it reads nothing the
+        # row or the node left out.
+        from raven.memory_engine import LocalSkillCatalog
+
+        skill_catalog = LocalSkillCatalog(
+            self.agent_home, start_watcher=False, blocklist_reader=lambda: skill_blocklist(_LIVE_CONFIG)
+        )
+        if allowed("read_skill"):
+            from raven.agent.tools.skill_hub import ReadSkillTool
+
+            tools.register(
+                ReadSkillTool(
+                    registry=skill_catalog.registry,
+                    blocklist_reader=lambda: skill_blocklist(_LIVE_CONFIG),
+                    allow=self.skills_allow,
+                )
+            )
         if allowed("exec"):
             tools.register(
                 ExecTool(
@@ -507,7 +588,9 @@ class RavenLoopBackend:
             else [
                 {
                     "role": "system",
-                    "content": build_subagent_prompt(self.agent_home, workspace, tools.tool_names, self.skills_allow),
+                    "content": build_subagent_prompt(
+                        self.agent_home, workspace, tools.tool_names, self.skills_allow, catalog=skill_catalog
+                    ),
                 }
             ]
         )
@@ -577,6 +660,8 @@ class RavenLoopBackend:
         # backend object is shared and other runs write beside this one.
         removal_watch = RemovalWatch()
         while iteration < self._MAX_ITERATIONS:
+            if report and report.requested.is_set():
+                break
             iteration += 1
             if participants:
                 advice = await participant_answer("advise", participant_step("iteration"))
@@ -703,6 +788,17 @@ class RavenLoopBackend:
                     )
                 )
                 for call_index, tool_call in enumerate(response.tool_calls):
+                    if report and report.requested.is_set():
+                        for skipped in response.tool_calls[call_index:]:
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": skipped.id,
+                                    "name": skipped.name,
+                                    "content": "Skipped because the host requested a final reply.",
+                                }
+                            )
+                        break
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.debug("Subagent [{}] executing: {} with arguments: {}", task_id, tool_call.name, args_str)
                     # Before the call, not after: a tool that raises is still
@@ -841,8 +937,13 @@ class RavenLoopBackend:
             # another, it answers from what it has. Observed need -- a research
             # node spent all fifteen rounds on web_fetch and wrote nothing, and
             # the run's whole output was the placeholder that used to sit here.
-            ran_out = not answered_blank
-            if answered_blank:
+            reporting = report is not None and report.requested.is_set()
+            ran_out = not answered_blank and not reporting
+            if reporting and report is not None:
+                reason = REPORT_INSTRUCTION
+                if tails := await reap_execution(session_key or task_id, report.execution_id):
+                    reason += "\n\nOutput from stopped background commands:\n" + wrap_untrusted(tails, source="tool")
+            elif answered_blank:
                 logger.warning("Subagent [{}] ended its turn with an empty reply; asking once with no tools", task_id)
                 reason = "Your reply was empty."
             else:
@@ -875,6 +976,8 @@ class RavenLoopBackend:
                 )
                 raise SubagentNoAnswerError("sub-agent's wrap-up model call failed: " + (wrap_up.content or "")[:200])
             final_result = (wrap_up.content or "").strip() or None
+            if final_result is not None and reporting and (run := activity.current()) is not None:
+                run.reported_early = True
             await activity.note_provider_usage(
                 wrap_up.usage,
                 model=str(model or ""),

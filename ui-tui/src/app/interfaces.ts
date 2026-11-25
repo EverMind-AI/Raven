@@ -340,6 +340,7 @@ export interface SlashHandlerContext {
     setCatalog: StateSetter<null | SlashCatalog>
   }
   session: {
+    /** Reports a refused close in the transcript and resolves; never rejects, so a caller may `void` it. */
     closeSession: (targetSid?: null | string) => Promise<unknown>
     deleteSessionWithFallback: (targetId: string) => Promise<boolean>
     die: () => void

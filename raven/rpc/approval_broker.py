@@ -6,7 +6,8 @@ and blocks that tool call until the user answers. The broker grants nothing
 itself: it carries the human's choice back -- once, for this session, or a
 prefix rule to persist -- and the gate is what remembers or writes.
 ``suggested_pattern`` on the request is the prefix the gate found safe to
-offer; a client that shows no editor for it simply never sends ``allow_always``.
+offer; a request that offers none refuses an ``allow_always`` answer, so a
+client cannot save a rule the person was never shown.
 
 The request carries what a prompt is drawn from, beside the action line the
 gate already wrote: ``kind`` picks the layout, ``family`` the wording,
@@ -135,6 +136,7 @@ class ApprovalBroker:
         origin: str = "",
         origin_name: str = "",
         evidence: dict[str, Any] | None = None,
+        needs_person: bool = False,
     ) -> ApprovalOutcome:
         """Wait for an approval decision and fail closed on every error path.
 
@@ -260,7 +262,10 @@ class ApprovalBroker:
         ``feedback`` rides along on a refusal for the model to read; it is
         clipped rather than refused, because a long sentence is still an answer.
         ``allow_always`` without a pattern is not an answer this side can act
-        on, so it is refused here rather than turned into a plain allow.
+        on, so it is refused here rather than turned into a plain allow. The
+        same goes for a request that offered no suggested pattern at all: it
+        has no rule to save, and accepting the answer would write one the
+        person was never shown.
         """
         if choice not in {"allow", "allow_session", "allow_always", "deny", "deny_stop"}:
             return False
@@ -268,6 +273,8 @@ class ApprovalBroker:
             return False
         pending = self._pending.get(approval_id)
         if pending is None or pending.conversation_id != conversation_id or pending.future.done():
+            return False
+        if choice == "allow_always" and not str(pending.params.get("suggested_pattern") or "").strip():
             return False
         pending.future.set_result((choice, feedback[:2000], pattern.strip()[:500]))
         return True

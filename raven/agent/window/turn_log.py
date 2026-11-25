@@ -27,23 +27,43 @@ pass's copies of a turn message already carry the stamp, and the list it
 returns is adopted with nothing appended to the old one lost. Messages removed
 by a hook rollback were appended after the last ``follow`` and are never seen,
 which is what a rollback means.
+
+The record keeps a tool body as it was, because the window passes only rewrite
+their own copies of it. The loop binds the projection that decides what the
+model read (:meth:`TurnLog.bind_projection`), so the body is filed as the
+preview a call sent, or -- when a window pass replaced the body before any call
+projected it -- as the stand-in that call did read. Filing the full body in
+that case is what made a session replay bytes no model call ever read.
 """
 
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any
 
+from raven.agent.window import compaction
+from raven.agent.window.images import without_pictures
+from raven.utils.images import is_image_part
+
 TURN_LOG_KEY = "_turn_log_seq"
+ROW_ID_KEY = "_row_id"
 """The stamp. Underscored so no provider payload carries it (every transport
 sends an allowlist of keys); the copies :meth:`TurnLog.messages` hands out do
 not carry it."""
 
+OPENING_KEY = "_turn_log_opening"
+"""Set on the turn's opening message (the last of what it opened with). A window pass that
+rewrites the opening -- a withdrawn picture -- copies it with ``dict(m)``, so the copy still
+says it is the opening; a summary that takes its place does not. A constant, not the log's
+token: a rerun's log marks the same question again, and the question must read the same to
+both attempts."""
+
 STAND_IN_KEY = "_window_stand_in"
 """Set by a window pass on a copy that replaces what a message said (an elided
 body) rather than restating it (a withdrawn picture's note). The record keeps
-the message the stand-in stood for."""
+the message the stand-in stood for; the projection decides whether that is the
+body's preview or the stand-in itself (see :meth:`TurnLog.bind_projection`)."""
 
 
 class TurnLog:
@@ -59,11 +79,70 @@ class TurnLog:
     def __init__(self, base: list[dict[str, Any]], start: int) -> None:
         self._head = list(base[:start])
         self._token = uuid.uuid4().hex
+        # The opening in the form the window last held it: a pass's copy replaces it.
+        self._opening: dict[str, Any] | None = None
+        if self._head and self._head[-1].get("role") != "system":
+            self._head[-1][OPENING_KEY] = True
+            self._opening = self._head[-1]
         self._entries: list[dict[str, Any]] = []
         self._index: dict[str, int] = {}
         self._live: list[dict[str, Any]] = base
         self._mark = start
+        self._projection: Callable[[dict[str, Any]], str | None] | None = None
         self._sync(base)
+
+    def owns(self, message: dict[str, Any]) -> bool:
+        """Whether ``message`` is one this log recorded, by its stamp.
+
+        The stamp, not a ``tool_call_id``: history can carry the same id as a
+        call this turn makes, and a set of ids would mistake that row for this
+        turn's own.
+        """
+        seq = message.get(TURN_LOG_KEY)
+        return isinstance(seq, str) and seq.startswith(f"{self._token}:")
+
+    def bind_projection(self, project: Callable[[dict[str, Any]], str | None]) -> None:
+        """File each recorded tool body in the form ``project`` says the model read it.
+
+        The loop owns the projection because it owns the preview cache: the same
+        call has to name the same bytes for the same result, or the filed turn
+        would carry a managed path no call sent and the next replay would
+        diverge. Binding is also what lets a row a window pass elided be filed
+        in the form a call carried -- the window never rewrites the record, so
+        the record cannot learn it any other way.
+        """
+        self._projection = project
+
+    def project_tool_results(self) -> None:
+        """Rewrite the recorded tool bodies through the bound projection."""
+        if self._projection is None:
+            return
+        self._sync(self._live)
+        for entry in self._entries:
+            if entry.get("role") != "tool":
+                continue
+            preview = self._projection(entry)
+            if preview is not None:
+                entry["content"] = preview
+
+    def filed_messages(self) -> list[dict[str, Any]]:
+        """:meth:`messages`, with each tool body in the form the bound projection files it.
+
+        For a write made while the turn runs. The record keeps the full body for
+        the hooks and observers that read it until the turn ends, so the
+        projection is applied to the copies handed out here and the record is
+        left as it was; :meth:`project_tool_results` is the rewrite at the end.
+        """
+        self._sync(self._live)
+        rows = []
+        for entry in self._entries:
+            row = _unstamped(entry)
+            if self._projection is not None and entry.get("role") == "tool":
+                preview = self._projection(entry)
+                if preview is not None:
+                    row["content"] = preview
+            rows.append(row)
+        return [*self._head, *rows]
 
     def follow(self, messages: list[dict[str, Any]]) -> None:
         """Adopt ``messages`` as the list the loop works on from here.
@@ -96,6 +175,32 @@ class TurnLog:
         self._sync(self._live)
         return [_unstamped(m) for m in self._entries]
 
+    def cut_to_turn(self, window: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """``window`` without the history before this turn: its system message when it
+        opens with one, then the turn's opening message and every row after it, each as the
+        window last sent it -- a picture a pass withdrew stays withdrawn. When a head summary
+        took the opening's place, the opening comes back in the last form the window held it,
+        without pictures if the window no longer carries any, followed by the summary: it
+        stands for the turn's early rows, a message sent while the turn ran among them. The
+        whole ``window`` when it holds no row of this turn."""
+        self._sync(self._live)
+        mark = f"{self._token}:"
+        first = next(
+            (i for i, m in enumerate(window) if str(m.get(TURN_LOG_KEY, "")).startswith(mark)),
+            None,
+        )
+        if first is None:
+            return list(window)
+        system = [window[0]] if window[0].get("role") == "system" else []
+        opened = next((i for i in range(first - 1, -1, -1) if window[i].get(OPENING_KEY) is True), None)
+        if opened is not None:
+            return [*system, *window[opened:]]
+        opening = [self._opening] if self._opening is not None else []
+        if opening and _pictures(opening[0]) and not any(_pictures(m) for m in window):
+            opening = [without_pictures(opening[0], reason="summary")]
+        summary = next((i for i in range(first - 1, -1, -1) if compaction.is_summary(window[i])), first)
+        return [*system, *opening, *window[summary:]]
+
     def drop(self, removed: Iterable[dict[str, Any]]) -> None:
         """Forget messages the loop took back (a hook rollback), and anything
         recorded after them, so the record matches a turn in which they never
@@ -120,6 +225,8 @@ class TurnLog:
         # or what is appended into the gap would be read as already seen.
         self._mark = min(self._mark, len(messages))
         for i, m in enumerate(messages):
+            if m.get(OPENING_KEY) is True and not m.get(STAND_IN_KEY):
+                self._opening = m
             seq = m.get(TURN_LOG_KEY)
             if isinstance(seq, str) and seq.startswith(self._token):
                 at = self._index.get(seq)
@@ -130,13 +237,22 @@ class TurnLog:
                 continue
             seq = f"{self._token}:{len(self._entries)}"
             m[TURN_LOG_KEY] = seq
+            # The identifier a later turn_meta names this row by: the session
+            # file keeps it, and the turn's end can restate a stamp on a row it
+            # can no longer reach as a list position.
+            m.setdefault(ROW_ID_KEY, uuid.uuid4().hex[:16])
             self._index[seq] = len(self._entries)
             self._entries.append(m)
         self._mark = len(messages)
+
+
+def _pictures(message: dict[str, Any]) -> bool:
+    content = message.get("content")
+    return isinstance(content, list) and any(is_image_part(part) for part in content)
 
 
 def _unstamped(message: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in message.items() if k != TURN_LOG_KEY}
 
 
-__all__ = ["STAND_IN_KEY", "TURN_LOG_KEY", "TurnLog"]
+__all__ = ["OPENING_KEY", "ROW_ID_KEY", "STAND_IN_KEY", "TURN_LOG_KEY", "TurnLog"]

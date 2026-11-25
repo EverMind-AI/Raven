@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { t } from '../../i18n/t'
 import * as menu from '../../state/menu'
 import { resetSources, sources } from '../../state/sources'
 import { KnowledgeApp } from './KnowledgePage'
@@ -54,6 +55,12 @@ const added: string[] = []
 const removedDocs: string[] = []
 const wrote: Array<[string, KbSettings]> = []
 const removed: string[] = []
+/** What a create answers with instead of a row, when it is set. */
+let createFails = ''
+/** Held open to watch the sheet while a create is still in flight. */
+let createBlocks: Promise<void> | null = null
+/** Lets a held create finish, once the test has looked at the sheet. */
+let release: (() => void) | null = null
 
 /** A row for a document that has just arrived, as the server would answer. */
 function newDoc(source: string): KbDoc {
@@ -76,8 +83,7 @@ function newDoc(source: string): KbDoc {
 function install(rows: KbBase[]): void {
   sources.knowledge = {
     bases: async () => rows,
-    documents: async () => docs,
-    reindex: async (id) => ({ ...docs.find((d) => d.id === id)!, status: 'ready' }),
+    documents: async () => docs,    reindex: async (id) => ({ ...docs.find((d) => d.id === id)!, status: 'ready' }),
     removeDoc: async (id) => {
       removedDocs.push(id)
     },
@@ -140,7 +146,11 @@ function install(rows: KbBase[]): void {
       added.push(title)
       return newDoc(title)
     },
-    create: async (name, description) => base({ id: name, name, description }),
+    create: async (name, description) => {
+      if (createBlocks) await createBlocks
+      if (createFails) throw new Error(createFails)
+      return base({ id: name, name, description })
+    },
     settings: async (id, settings) => {
       wrote.push([id, settings])
       return { ...rows.find((row) => row.id === id)!, ...settings } as KbBase
@@ -256,6 +266,9 @@ beforeEach(() => {
   moved.length = 0
   added.length = 0
   removedDocs.length = 0
+  createFails = ''
+  createBlocks = null
+  release = null
 })
 
 afterEach(() => {
@@ -265,6 +278,14 @@ afterEach(() => {
 })
 
 describe('the knowledge page', () => {
+  it('starts with the title row every module page starts with', async () => {
+    await mount([base({ id: 'a' })])
+    const bar = document.querySelector('.knowledge-page > .page-bar')!
+    expect(bar.querySelector('.page-bar-title')!.textContent).toBe(t('gui.knowledge.title'))
+    expect(bar.querySelector('.knowledge-tabs')).not.toBeNull()
+    expect(bar.querySelector('.page-bar-end .knowledge-new')).not.toBeNull()
+  })
+
   it('draws a card for every base', async () => {
     await mount([base({ id: 'a', name: 'handbook' }), base({ id: 'b', name: 'runbook' })])
 
@@ -579,6 +600,51 @@ describe('the knowledge page', () => {
     /* Nothing to save until it is named. */
     const save = [...document.querySelectorAll('.knowledge-actions button')].at(-1) as HTMLButtonElement
     expect(save.disabled).toBe(true)
+  })
+
+  it('says why the create failed, on the sheet that stays open', async () => {
+    await mount([])
+    await act(async () => {
+      ;(document.querySelector('.knowledge-new') as HTMLButtonElement).click()
+    })
+    await type(document.querySelector('.knowledge-sheet input') as HTMLInputElement, '11')
+    createFails = 'a knowledge base called "11" already exists'
+
+    await act(async () => {
+      ;([...document.querySelectorAll('.knowledge-actions button')].at(-1) as HTMLButtonElement).click()
+    })
+
+    /* The sheet is still up, so the reason has to be on it: the notice that
+       carries it lapses in under three seconds, and a reader who looked away
+       reported the button as doing nothing. */
+    expect(document.querySelector('.knowledge-sheet')).not.toBeNull()
+    expect(document.querySelector('.knowledge-sheet')!.textContent).toContain(
+      'a knowledge base called "11" already exists',
+    )
+  })
+
+  it('shows the create in flight instead of looking dead', async () => {
+    await mount([])
+    await act(async () => {
+      ;(document.querySelector('.knowledge-new') as HTMLButtonElement).click()
+    })
+    await type(document.querySelector('.knowledge-sheet input') as HTMLInputElement, 'handbook')
+
+    createBlocks = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await act(async () => {
+      ;([...document.querySelectorAll('.knowledge-actions button')].at(-1) as HTMLButtonElement).click()
+    })
+
+    const save = [...document.querySelectorAll('.knowledge-actions button')].at(-1) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    expect(save.textContent).toBe(t('gui.knowledge.creating'))
+
+    await act(async () => {
+      release!()
+      await createBlocks
+    })
   })
   it('lists Root and the folders beside the documents', async () => {
     folders = [{ id: 'f1', name: 'specs', documents: 1 }]

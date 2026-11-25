@@ -32,6 +32,7 @@ from raven.providers.base import (
     format_llm_error,
     send_max_tokens,
 )
+from raven.providers.call_timeout import bounded_stream
 from raven.providers.first_byte import (
     BOUND_NAME,
     FirstByteTimeoutError,
@@ -1003,9 +1004,28 @@ class AnthropicMessagesProvider(LLMProvider):
             tool_choice=tool_choice,
             stream=stream,
         )
+        # Request fields merge lowest to highest priority:
+        #   1. defaults built above;
+        #   2. keys inside extra_body;
+        #   3. explicit top-level override keys, which win over a same-named
+        #      extra_body key -- the reverse of the OpenAI SDK, where extra_body wins;
+        #   4. late repairs below can still replace a merged value: a learned
+        #      max_tokens ceiling lowers max_tokens, and cache_control markers are
+        #      stripped for a model that cannot read them.
         for pattern, overrides in self.model_overrides.items():
             if isinstance(overrides, dict) and pattern.lower() in (model or self.default_model).lower():
-                body.update(overrides)
+                extra_body = overrides.get("extra_body")
+                if isinstance(extra_body, dict):
+                    body.update(extra_body)
+                    body.update({key: value for key, value in overrides.items() if key != "extra_body"})
+                else:
+                    if "extra_body" in overrides:
+                        logger.warning(
+                            "model_overrides[{!r}].extra_body is {}, not a dict; forwarding it as a literal field",
+                            pattern,
+                            type(extra_body).__name__,
+                        )
+                    body.update(overrides)
         learned = self._ceilings.get(body["model"])
         if learned:
             clamp_to_model_limit(body, f"max_tokens: {body.get('max_tokens')} > {learned}")
@@ -1087,6 +1107,7 @@ class AnthropicMessagesProvider(LLMProvider):
                 failed.error_classification = forced_tool_choice.already_relaxed(failed.error_classification)
             return failed
 
+    @bounded_stream
     async def chat_stream(
         self,
         messages: list[dict[str, Any]],

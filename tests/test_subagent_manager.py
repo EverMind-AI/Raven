@@ -116,31 +116,100 @@ def _make_manager(max_concurrent: int, **over) -> SubagentManager:
 
 def test_a_graph_nodes_executor_comes_from_the_spawn_paths_own_builder(monkeypatch, tmp_path: Path) -> None:
     """The graph executor builder is the spawn paths' single source of truth:
-    the config, owned-id set, home mount and sandbox dir a node's VM is built
-    with are the ones a spawn's VM is, so the two dispatch routes cannot drift
-    back apart once a node execs sandboxed."""
+    the config and home mount a node's VM is built with are the ones a spawn's
+    VM is, so the two dispatch routes cannot drift back apart once a node
+    execs sandboxed."""
     from raven.agent.subagent import manager as manager_module
-    from raven.config.paths import get_sandbox_dir
     from raven.sandbox.config import SandboxConfig
 
     config = SandboxConfig(backend="none")
     mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, sandbox_config=config)
-    sentinel = object()
+    sentinel = _Built()
     captured: dict[str, Any] = {}
 
-    def fake_build(cfg, workspace, owned_ids, extra_volumes, *, sandbox_dir):
-        captured.update(
-            cfg=cfg, workspace=workspace, owned_ids=owned_ids, extra_volumes=extra_volumes, sandbox_dir=sandbox_dir
-        )
+    def fake_build(cfg, workspace, extra_volumes, **kwargs):
+        captured.update(cfg=cfg, workspace=workspace, extra_volumes=extra_volumes, **kwargs)
         return sentinel
 
     monkeypatch.setattr(manager_module, "build_executor", fake_build)
     assert mgr.sandbox_executor_for(tmp_path) is sentinel
     assert captured["cfg"] is config
     assert captured["workspace"] == tmp_path
-    assert captured["owned_ids"] is mgr._owned_ids
     assert captured["extra_volumes"] == mgr._home_volume(tmp_path)
-    assert captured["sandbox_dir"] is get_sandbox_dir
+
+
+class _Built:
+    """What a stubbed build_executor returns: a sandbox the grant registry can hold."""
+
+
+def _scoped_build(monkeypatch, tmp_path):
+    from raven.agent.subagent import manager as manager_module
+    from raven.permissions import network_grants
+    from raven.sandbox.config import SandboxConfig
+
+    registry = network_grants.GrantRegistry()
+    monkeypatch.setattr(network_grants, "GRANTS", registry)
+    sources: list = []
+
+    def fake_build(cfg, workspace, extra_volumes, *, network_source=None):
+        sources.append(network_source)
+        return _Built()
+
+    monkeypatch.setattr(manager_module, "build_executor", fake_build)
+    mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, sandbox_config=SandboxConfig(backend="none"))
+    return mgr, registry, sources
+
+
+def _granted(policies: dict) -> list[str]:
+    return sorted(name for name in policies if name.startswith("raven_grant_"))
+
+
+def test_a_spawn_sandbox_is_built_in_the_parent_conversations_scope(tmp_path, monkeypatch) -> None:
+    from raven.permissions.turn import start_permission_turn
+    from raven.sandbox.network_policy import NetworkGrant, grant_rules
+
+    mgr, registry, sources = _scoped_build(monkeypatch, tmp_path)
+    start_permission_turn(None, conversation_id="conv-parent", turn_id="t")
+    executor = mgr.sandbox_executor_for(tmp_path)
+    mine, theirs = NetworkGrant("/usr/bin/pip", "pypi.org", 443), NetworkGrant("/usr/bin/git", "github.com", 22)
+    registry.grant("conv-parent", mine)
+    registry.grant("conv-other", theirs)
+    (source,) = sources
+    assert _granted(source()) == list(grant_rules([mine]))
+    assert registry.executors_for("conv-parent") == [executor]
+    assert registry.executors_for("conv-other") == []
+
+
+@pytest.mark.asyncio
+async def test_a_graph_node_sandbox_is_built_in_the_dispatching_conversations_scope(tmp_path, monkeypatch) -> None:
+    """A graph's nodes run in tasks the dispatching turn started, and build their sandboxes there."""
+    import asyncio
+
+    from raven.permissions.turn import start_permission_turn
+    from raven.sandbox.network_policy import NetworkGrant, grant_rules
+
+    mgr, registry, sources = _scoped_build(monkeypatch, tmp_path)
+    start_permission_turn(None, conversation_id="conv-graph", turn_id="t")
+
+    async def node() -> object:
+        return mgr.sandbox_executor_for(tmp_path)
+
+    executor = await asyncio.create_task(node())
+    grant = NetworkGrant("/usr/bin/curl", "example.com", 443)
+    registry.grant("conv-graph", grant)
+    assert _granted(sources[0]()) == list(grant_rules([grant]))
+    assert registry.executors_for("conv-graph") == [executor]
+
+
+def test_a_run_outside_any_conversation_gets_no_grants(tmp_path, monkeypatch) -> None:
+    from raven.permissions.turn import start_permission_turn
+    from raven.sandbox.network_policy import NetworkGrant
+
+    mgr, registry, sources = _scoped_build(monkeypatch, tmp_path)
+    start_permission_turn(None, conversation_id="", turn_id="t")
+    mgr.sandbox_executor_for(tmp_path)
+    registry.grant("conv-a", NetworkGrant("/usr/bin/curl", "example.com", 443))
+    assert _granted(sources[0]()) == []
 
 
 class _MissingMcpSource:
@@ -1465,6 +1534,126 @@ def test_generated_participant_notes_preserve_each_supported_message_shape() -> 
     empty = [{"content": None}]
     _append_participant_note(empty, "note")
     assert empty[-1]["content"] == "note"
+
+
+def test_generated_participant_guidance_is_kept_out_of_a_tool_result() -> None:
+    """A tool result is fenced as untrusted input, so advice appended into one
+    reaches the model as something a tool told it. After a tool round the note
+    is a message of its own."""
+    from raven.agent.subagent.backends.raven_loop import _append_participant_note
+
+    messages = [
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+        {"role": "tool", "tool_call_id": "c1", "name": "read_file", "content": "<untrusted>file text</untrusted>"},
+    ]
+    _append_participant_note(messages, "check the second table")
+
+    assert messages[1]["content"] == "<untrusted>file text</untrusted>"
+    assert messages[-1] == {"role": "user", "content": "check the second table"}
+
+
+def test_generated_participant_notes_keep_the_order_the_rounds_produce() -> None:
+    """The writer places a note and remembers nothing: whether the same words
+    were already said is the participant's question, answered by reading the
+    transcript, because a counter cannot see a rollback pop the note. What is
+    settled here is that a second, different note still lands, after the first.
+    """
+    from raven.agent.subagent.backends.raven_loop import _append_participant_note
+
+    messages: list[dict] = [{"role": "user", "content": "the task"}]
+    _append_participant_note(messages, "hold the line")
+    _append_participant_note(messages, "a second thought")
+    assert messages[-1]["content"] == "the task\n\nhold the line\n\na second thought"
+
+
+@pytest.mark.asyncio
+async def test_generated_advice_reaches_a_delegated_run_once_and_outside_the_tool_result(tmp_path) -> None:
+    """Both rules watched on a run that really makes a tool call: the note rides
+    a message of its own after the tool result rather than the fenced text
+    inside it, and a stateless generated function is told once, not once per
+    round."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.subagent.delegate import dispatch_charter
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("the second table", encoding="utf-8")
+
+    class _ReadsThenAnswers(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key="test")
+            self.seen: list[list[dict]] = []
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+        async def chat(self, messages, tools=None, model=None, **_):  # noqa: ANN001, ANN003
+            self.seen.append([dict(m) for m in messages])
+            if not any(m.get("role") == "tool" for m in messages):
+                return LLMResponse(
+                    content="",
+                    finish_reason="tool_calls",
+                    tool_calls=[ToolCallRequest(id="c1", name="read_file", arguments={"path": "notes.txt"})],
+                )
+            return LLMResponse(content="done", finish_reason="stop")
+
+    provider = _ReadsThenAnswers()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path / "home")
+    source = "def advise(step):\n    return 'note-' + str(step.get('phase'))"
+    with dispatch_charter({"functions": {"advise": source}}):
+        await backend.run("read the notes", task_id="t1", workspace=workspace, executor=None)
+
+    sent = provider.seen[-1]
+    results = [m for m in sent if m.get("role") == "tool"]
+    assert results, "the sub-agent never ran the read"
+    assert "note-after_iteration" not in str(results[0]["content"])
+
+    after = [m for m in sent if m == {"role": "user", "content": "note-after_iteration"}]
+    assert len(after) == 1, "the note after a tool round is a message of its own"
+    assert sent.index(after[0]) > sent.index(results[0])
+    assert str(sent).count("note-iteration") == 1, "the same words were delivered once per round"
+
+
+@pytest.mark.asyncio
+async def test_generated_advice_a_resumed_transcript_already_carries_is_not_repeated(tmp_path) -> None:
+    """A resumed run replays the messages it was handed. The note in them has
+    already been delivered, so a stateless function's same words do not ride a
+    second copy into the transcript."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.subagent.delegate import dispatch_charter
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("the second table", encoding="utf-8")
+
+    class _ReadsThenAnswers(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key="test")
+            self.seen: list[list[dict]] = []
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+        async def chat(self, messages, tools=None, model=None, **_):  # noqa: ANN001, ANN003
+            self.seen.append([dict(m) for m in messages])
+            if not any(m.get("role") == "tool" for m in messages):
+                return LLMResponse(
+                    content="",
+                    finish_reason="tool_calls",
+                    tool_calls=[ToolCallRequest(id="c1", name="read_file", arguments={"path": "notes.txt"})],
+                )
+            return LLMResponse(content="done", finish_reason="stop")
+
+    provider = _ReadsThenAnswers()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path / "home")
+    source = "def advise(step):\n    return 'hold the line'"
+    with dispatch_charter({"functions": {"advise": source}}):
+        await backend.run("read the notes", task_id="t1", workspace=workspace, executor=None)
+        resumed = [dict(m) for m in provider.seen[-1]]
+        await backend.run("read the notes", task_id="t2", workspace=workspace, executor=None, history=resumed)
+
+    sent = provider.seen[-1]
+    assert str(sent).count("hold the line") == 1, "the note was already in the transcript"
 
 
 def test_build_subagent_prompt_hides_orchestration_skills(tmp_path):
@@ -4652,6 +4841,22 @@ async def test_spawn_accepts_the_old_task_spelling() -> None:
     assert manager.calls[-1]["task"] == "do the thing"
 
 
+async def test_spawn_advertises_cancel_for_an_instance_it_announced() -> None:
+    """A run with a handle is interruptible, and the receipt says how: the model
+    reaches the controls through a tool call, so an unadvertised control is one
+    it never calls."""
+    from raven.agent.subagent.spawn_tool import SpawnTool
+
+    manager = _stub_manager()
+    tool = SpawnTool(manager=manager, control_advert=lambda: "cancellation is available")
+    result = await tool.execute(node_id="n-cancel", task_summary="s", prompt_template="do it", instance="refactor-auth")
+
+    assert manager.calls[-1]["instance"] == "refactor-auth"
+    assert '"cancel_subagent"' in result
+    assert '"call_id": "n-cancel"' in result
+    assert "cancellation is available" in result
+
+
 async def test_spawn_refuses_a_path_form_for_a_no_local_files_agent() -> None:
     from raven.agent.subagent.spawn_tool import SpawnTool
 
@@ -4730,6 +4935,51 @@ def _manager_capturing_announcements(*, workspace: Path) -> tuple[SubagentManage
 async def _drain(manager: SubagentManager) -> None:
     """Wait for every spawn task the manager is tracking to finish."""
     await asyncio.gather(*manager._running_tasks.values(), return_exceptions=True)
+
+
+async def test_a_long_running_spawn_notifies_the_host_and_can_be_interrupted(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.dag_control_tools import CancelSubagentTool
+
+    class WaitingBackend:
+        async def run(self, task, **kwargs):
+            entered.set()
+            await asyncio.Future()
+
+    entered = asyncio.Event()
+    notified = asyncio.Event()
+    notices = []
+
+    def submit(req):
+        if req.delegated and req.delegated["status"] == "notice":
+            notices.append(req)
+            notified.set()
+
+    manager = SubagentManager(
+        provider=_StubProvider(),
+        workspace=tmp_path,
+        long_run_notice_seconds=0.01,
+        control_reachable=lambda: True,
+    )
+    monkeypatch.setattr(manager, "_resolve_backend", lambda _agent: WaitingBackend())
+    manager.set_submit(submit)
+    tool = CancelSubagentTool(SimpleNamespace())
+    tool.set_context("web", "s1", "web:s1")
+    await manager.spawn(task="work", session_key="web:s1", origin_channel="web", origin_chat_id="s1", instance="draft")
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.wait_for(notified.wait(), 2)
+        req = notices[0]
+        assert req.conversation == "web:s1"
+        assert "is still active" in req.text and '"instance": "draft"' in req.text
+        assert manager.get_running_count() == 1
+        receipt = await tool.execute(agent=GENERIC_AGENT, instance="draft", call_id=req.delegated["call_id"])
+        assert receipt.startswith("interrupt_requested:")
+        await asyncio.wait_for(_drain(manager), 2)
+        assert manager.get_running_count() == 0
+    finally:
+        await manager.cancel_all()
 
 
 class _StubBackendWithFailedCalls:
@@ -5419,6 +5669,31 @@ async def test_an_unprompted_report_teaches_the_silence_marker() -> None:
     assert text.rindex(SILENCE_INSTRUCTION) > text.rindex("END UNTRUSTED")
     assert "no reply to the user are needed" not in text
     assert "If it is routine progress only, no action is needed." in text
+
+
+async def test_an_unprompted_report_names_the_agent_that_sent_it() -> None:
+    """A report answers no call, so no spawn call and no task row can say who sent
+    it; the mark itself has to, or a reader draws an anonymous row. Every published
+    shape of the mark takes it, because a client draws the row from any of the three."""
+    from raven.rpc.models import SubagentDeliveredPayload, TranscriptDelegated, TurnStartedDelegated
+
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list = []
+    mgr.set_submit(submitted.append)
+    delivered: list[dict] = []
+    mgr._emit_delivered = lambda _origin, mark: delivered.append(mark)
+    mgr.remember_origin({"channel": "web", "chat_id": "d", "session_key": "web:s1"})
+
+    await mgr.announce_unprompted_turn("web:s1", "Claude Code-Mirasim", "1264-6b8125", "merged, worktree removed")
+
+    stored = submitted[0].delegated
+    assert stored["agent"] == delivered[0]["agent"] == "Claude Code-Mirasim"
+    for model in (
+        TranscriptDelegated(**stored),
+        TurnStartedDelegated(**stored, content=submitted[0].text),
+        SubagentDeliveredPayload(**delivered[0]),
+    ):
+        assert (model.kind, model.status, model.agent) == ("unprompted", "report", "Claude Code-Mirasim")
 
 
 async def test_a_relayed_result_quoting_the_instruction_does_not_teach_silence() -> None:

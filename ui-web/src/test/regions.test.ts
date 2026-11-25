@@ -46,6 +46,7 @@ const REGIONS = [
   'detail',
   'setVeil',
   'exportVeil',
+  'findVeil',
   'veil',
   'menu',
   'toasts',
@@ -82,7 +83,7 @@ function pageBody(): string {
 }
 
 /* Where each region's markup comes from: page.html for the three it still
-   carries, and App.tsx for the sixteen it no longer does.
+   carries, and App.tsx for the thirteen it no longer does.
 
    The root is detached and the regions reach the body through one portal, which
    is how the page itself renders them (src/main.tsx): a root AT the body would

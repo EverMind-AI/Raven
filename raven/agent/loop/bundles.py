@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from raven.config.schema import DEFAULT_LONG_RUN_NOTICE_SECONDS
+
 
 @dataclass
 class ToolWiring:
@@ -48,6 +50,7 @@ class SubagentWiring:
     subagent_dag_config: Any = None
     subagent_questions_config: Any = None
     workdir_resolver: Any = None
+    long_run_notice_seconds: float = DEFAULT_LONG_RUN_NOTICE_SECONDS
 
 
 @dataclass

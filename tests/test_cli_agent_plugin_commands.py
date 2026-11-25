@@ -547,11 +547,16 @@ def test_check_reports_a_changed_package_as_stale(env: _Env) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _write_mcp_config(package: Path, servers: dict) -> None:
+def _write_mcp_config(
+    package: Path,
+    servers: dict,
+    *,
+    schema: str = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+) -> None:
     (package / "mcp.json").write_text(
         json.dumps(
             {
-                "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+                "$schema": schema,
                 "mcpServers": servers,
             }
         ),
@@ -567,8 +572,13 @@ def test_list_marks_a_packages_mcp_servers_as_not_enabled(env: _Env) -> None:
     assert result.exit_code == 0, result.stdout
     assert "1 not enabled" in result.stdout
 
+    mcp = _json_payload(_run(env, "list", "--json"))["packages"][0]["mcp"]
+    assert mcp["allowed"] is False
+    # ``running`` is the deprecated alias of ``allowed``: one fact, one value.
+    assert mcp["allowed"] == mcp["running"]
 
-def test_list_marks_an_opted_in_packages_mcp_servers_as_running(env: _Env) -> None:
+
+def test_list_marks_an_opted_in_packages_mcp_servers_as_enabled(env: _Env) -> None:
     _write_mcp_config(env.package, {"demo": {"type": "stdio", "command": "npx"}})
     env.config.write_text(
         json.dumps(
@@ -583,7 +593,73 @@ def test_list_marks_an_opted_in_packages_mcp_servers_as_running(env: _Env) -> No
     result = _run(env, "list")
 
     assert result.exit_code == 0, result.stdout
-    assert "1 running" in result.stdout
+    assert "1 enabled" in result.stdout
+
+
+def test_list_json_calls_the_opt_in_allowed(env: _Env) -> None:
+    """``mcp.allowed`` is the field; ``mcp.running`` is its deprecated alias."""
+    _write_mcp_config(env.package, {"demo": {"type": "stdio", "command": "npx"}})
+    env.config.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"workspace": str(env.workspace)}},
+                "agentPlugins": {"packages": [str(env.package)], "mcpPackages": [PACKAGE_NAME]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run(env, "list", "--json")
+
+    assert result.exit_code == 0, result.stdout
+    mcp = _json_payload(result)["packages"][0]["mcp"]
+    assert mcp["allowed"] is True
+    assert mcp["running"] is True
+    assert mcp["disabled"] == ""
+
+
+def test_list_json_reports_why_a_packages_mcp_is_disabled(env: _Env) -> None:
+    _write_mcp_config(
+        env.package,
+        {"demo": {"type": "stdio", "command": "npx"}},
+        schema="https://agent-plugins.org/schemas/2.0.0/mcp.schema.json",
+    )
+
+    result = _run(env, "list", "--json")
+
+    assert result.exit_code == 0, result.stdout
+    mcp = _json_payload(result)["packages"][0]["mcp"]
+    assert isinstance(mcp["disabled"], str)
+    assert mcp["disabled"]
+    assert "2.0.0" in mcp["disabled"]
+    assert mcp["servers"] == []
+
+
+def test_list_leaves_out_a_server_the_host_already_configures(env: _Env) -> None:
+    composed = f"{PACKAGE_NAME}__demo"
+    _write_mcp_config(env.package, {"demo": {"type": "stdio", "command": "npx"}})
+    env.config.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"workspace": str(env.workspace)}},
+                "agentPlugins": {"packages": [str(env.package)], "mcpPackages": [PACKAGE_NAME]},
+                "tools": {"mcpServers": {composed: {"command": "host-own"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    table = _run(env, "list")
+    assert table.exit_code == 0, table.stdout
+    assert "1 enabled" not in table.stdout
+    assert "none" in table.stdout
+    assert "(1 skipped)" in table.stdout
+
+    payload = _json_payload(_run(env, "list", "--json"))
+    mcp = payload["packages"][0]["mcp"]
+    assert mcp["servers"] == []
+    assert [item["server"] for item in mcp["problems"]] == ["demo"]
+    assert "already configured on this host" in mcp["problems"][0]["reason"]
 
 
 def test_inspect_reports_the_packages_mcp_servers(env: _Env) -> None:
@@ -611,6 +687,29 @@ def test_inspect_json_carries_the_mcp_section(env: _Env) -> None:
     mcp = _json_payload(result)["packages"][0]["mcp"]
     assert mcp["servers"] == [f"{PACKAGE_NAME}__demo"]
     assert mcp["disabled"] == ""
+
+
+def test_inspect_names_a_server_the_host_already_configures(env: _Env) -> None:
+    composed = f"{PACKAGE_NAME}__demo"
+    _write_mcp_config(env.package, {"demo": {"type": "stdio", "command": "npx"}})
+    env.config.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"workspace": str(env.workspace)}},
+                "agentPlugins": {"packages": [str(env.package)]},
+                "tools": {"mcpServers": {composed: {"command": "host-own"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    text = _run(env, "inspect", str(env.package))
+    assert text.exit_code == 0, text.stdout
+    assert "already configured on this host" in text.stdout
+
+    mcp = _json_payload(_run(env, "inspect", str(env.package), "--json"))["packages"][0]["mcp"]
+    assert mcp["servers"] == []
+    assert [item["server"] for item in mcp["problems"]] == ["demo"]
 
 
 # ---------------------------------------------------------------------------

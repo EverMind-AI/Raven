@@ -50,12 +50,14 @@ class ActiveSkillsSegmentBuilder:
         advertise a tool the agent does not hold: a tool registers only when
         its subsystem is configured, MCP tools come and go with their servers,
         and any tool can be withheld for one turn through
-        ``tools.disabled_tools``. Segment 5 gets the same protection from the
-        LLM gate's hard-constraint block; segment 5's is advisory, this one is
-        a filter.
+        ``tools.disabled_tools``.
 
         Unlike ``requires.bins`` / ``requires.env`` (process-static, resolved
-        in the registry) the tool set is live and hot-appliable, so it is
-        checked here, per turn, against the definitions actually being sent.
+        in the registry) the tool set is checked here, per turn, against the
+        definitions actually being sent. Inside a turn those are the session's
+        frozen array: a tool a live switch has turned off stays in it and is
+        reported as unavailable in the runtime context, so its skill stays
+        injected. The filter still drops a skill for a tool the session never
+        registered.
         """
         return filter_by_required_tools(skills, render.collect_tool_names(self._get_tool_definitions))

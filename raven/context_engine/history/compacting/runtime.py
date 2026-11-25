@@ -80,11 +80,18 @@ from raven.context_engine.history.compacting.writer import (
     checkpoint_key,
     session_message_key,
 )
-from raven.context_engine.history.markers import HISTORY_CHECKPOINT_KEY, HISTORY_PINNED_KEY, HISTORY_PRIVATE_KEYS
+from raven.context_engine.history.markers import (
+    HISTORY_CHECKPOINT_KEY,
+    HISTORY_COMPACTED_META,
+    HISTORY_PINNED_KEY,
+    HISTORY_PRIVATE_KEYS,
+)
 from raven.context_engine.history_trimmer import HistoryTrimmer, TrimOutcome
+from raven.context_engine.runtime_context import retell_notices
 from raven.contracts.context import AssemblyContext, OverflowOutcome, Segment
 from raven.providers import prompt_cache
 from raven.providers.binding import ModelBinding, active_window, resolve
+from raven.providers.capabilities import replay_gates
 from raven.session.refs import session_ref
 from raven.utils.tokens import estimate_message_tokens, estimate_prompt_tokens
 
@@ -271,7 +278,11 @@ class CompactingHistoryBuilder:
             raise RuntimeError("CompactingHistoryBuilder requires ctx.prefix (phase B)")
         session = list(ctx.session_messages or [])
         if not session:
-            return Segment(text="", history=[], meta={"path": SEGMENT_PATH, "compaction_action": "pass"})
+            return Segment(
+                text="",
+                history=[],
+                meta={"path": SEGMENT_PATH, "compaction_action": "pass", HISTORY_COMPACTED_META: False},
+            )
         revision = ctx.session_revision
         if revision is None:
             return self._unscoped(ctx, ctx.prefix, session)
@@ -281,9 +292,9 @@ class CompactingHistoryBuilder:
         binding = resolve(None, self._fallback)
         window = self.context_window_tokens
         # This strategy's own rule rather than the budget's: the Memory role
-        # reserves the model's whole output ceiling, which is the Curator's
-        # arithmetic, while the trigger here is defined against the reply room
-        # the headroom policy has learned (see ``raven.context_engine.headroom``).
+        # reserves the model's whole output ceiling, while the trigger here is
+        # defined against the reply room the headroom policy has learned (see
+        # ``raven.context_engine.headroom``).
         headroom_tokens = self._reply_headroom(binding, window)
 
         prefix = ctx.prefix
@@ -508,6 +519,9 @@ class CompactingHistoryBuilder:
         # markers its window passes read) and strips them on the way out, so a
         # reclaim that dropped them would blind every later pass in the turn.
         kept_history = [dict(history[index]) for index in ids if history[index].get("role")]
+        # The question was built against the full history, so a plugin note it
+        # left out because an older block told it goes with that block.
+        kept_history = retell_notices(history, kept_history)
         if not kept_history:
             # The closure found no user message to anchor on and discarded
             # everything. That reads as a total reclaim and is really a lost
@@ -795,6 +809,10 @@ class CompactingHistoryBuilder:
             )
         return None
 
+    def _summary_gates(self) -> tuple[bool, bool]:
+        """The replay verdicts for the summary request's own model."""
+        return replay_gates(self.provider, self.writer.summary_model(self.model))
+
     def _summary_input(
         self,
         prefix: "AssembledPrefix",
@@ -821,7 +839,13 @@ class CompactingHistoryBuilder:
         """
         end = ledger.align_forward(through + 1, self.cfg.boundary)
         ordinals = [index for index in range(end) if index not in retired]
-        messages = HistoryTrimmer.history_from_ids(session, ordinals)
+        can_see_images, tool_images_ok = self._summary_gates()
+        messages = HistoryTrimmer.history_from_ids(
+            session,
+            ordinals,
+            can_see_images=can_see_images,
+            tool_images_ok=tool_images_ok,
+        )
         if len(messages) != len(ordinals):
             return ((), ())
         keys: list[MessageKey] = [session_message_key(index) for index in ordinals]
@@ -933,6 +957,7 @@ class CompactingHistoryBuilder:
             meta={
                 "path": SEGMENT_PATH,
                 "compaction_action": "unscoped",
+                HISTORY_COMPACTED_META: len(outcome.included_ids) < len(session),
                 "history_kept": len(outcome.included_ids),
                 "history_total": len(session),
                 "history_tokens": outcome.estimated_tokens,
@@ -956,6 +981,7 @@ class CompactingHistoryBuilder:
         return {
             "path": SEGMENT_PATH,
             "compaction_action": plan.action,
+            HISTORY_COMPACTED_META: plan.action == "compact",
             "compaction_trigger": str(plan.trigger),
             "compaction_generation": generation,
             "prompt_tokens": plan.prompt_tokens,

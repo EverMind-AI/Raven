@@ -230,6 +230,16 @@ async def test_normalize_masks_only_fence_nonces_and_the_clock_line() -> None:
     assert _normalize_text("run at 09:15:22") != _normalize_text("run at 23:59:59")
 
 
+async def test_normalize_masks_the_managed_tool_output_filename() -> None:
+    """The managed file name is regenerated per run; only its id is masked."""
+    first = "Full output saved to: /ws/tool-output/tool_0123456789abcdef0123456789abcdef.txt\nUse read_file"
+    second = "Full output saved to: /ws/tool-output/tool_fedcba9876543210fedcba9876543210.txt\nUse read_file"
+
+    assert _normalize_text(first) == _normalize_text(second)
+    assert "tool_<id>.txt" in _normalize_text(first)
+    assert _normalize_text(first) != _normalize_text(first + "\n" + first)
+
+
 async def test_compare_ignores_system_content_cache_control_and_nonces() -> None:
     recorded = {
         "model": "stub",
@@ -730,6 +740,33 @@ async def test_pre_attempt_messages_cut_at_first_turn_content(tmp_path) -> None:
     pre = _pre_attempt_messages(load_recording(bundle))
 
     assert [m["content"] for m in pre] == ["earlier question", "earlier answer"]
+
+
+async def test_pre_attempt_messages_skip_turn_meta_records(tmp_path) -> None:
+    """A turn_meta record restates stamps on rows; it is not a message.
+
+    The reader used to skip only metadata rows, so a transcript from the
+    incremental session writer handed the stamp record to the history builder,
+    which has no role to read.
+    """
+    from raven.trajectory.replay import _pre_attempt_messages
+
+    bundle = _make_bundle(tmp_path, turns=[{"content": "go", "channel": "cli", "chat_id": "d"}])
+    _write_session(
+        bundle,
+        [
+            {"role": "user", "content": "earlier question", "timestamp": "2026-08-19T10:00:00"},
+            {"_type": "turn_meta", "patches": [{"row_id": "r1", "keys": {"replied_via_tool": True}}]},
+            {"role": "assistant", "content": "earlier answer", "timestamp": "2026-08-19T10:00:05"},
+            {"role": "user", "content": "go", "timestamp": "2026-08-20T10:00:00"},
+            {"role": "assistant", "content": "attempt answer", "timestamp": "2026-08-20T10:00:05"},
+        ],
+    )
+
+    pre = _pre_attempt_messages(load_recording(bundle))
+
+    assert [m["content"] for m in pre] == ["earlier question", "earlier answer"]
+    assert all(m.get("role") for m in pre), "a record without a role reached the history"
 
 
 async def test_pre_attempt_messages_timestamp_fallback_and_no_anchor(tmp_path) -> None:

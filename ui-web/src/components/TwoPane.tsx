@@ -19,6 +19,8 @@
  * a switch, a memory has a date -- so the row below takes
  * those as children and decides only the shape.
  */
+import { createContext, useCallback, useContext, useId, useLayoutEffect, useRef, useState } from 'react'
+
 import { t } from '../i18n/t'
 
 import type { JSX, ReactNode } from 'react'
@@ -73,9 +75,55 @@ export function TwoPaneFind({ value, onChange, placeholder, onAdd, addLabel }: {
   )
 }
 
-/** The scrolling column of rows. */
+/* The scrolling column of rows, and the card that marks the selected one.
+ *
+ * The card is the list's, not the row's: one element that slides from the row
+ * that was selected to the row that is, so a selection is seen to move rather
+ * than to blink.
+ *
+ * The list cannot go looking for the row itself -- a component reaches for
+ * the elements it renders, not for the page's (see
+ * scripts/gates/state-dom-touch.test.mjs) -- so a row hands up its own box
+ * instead, and the list keeps the mark. The row that owns the mark is the
+ * only one that can take it away, so a row that stops being current never
+ * clears a mark that has already moved on.
+ */
+interface Mark { id: string; top: number; height: number }
+type Report = (id: string, box: Omit<Mark, 'id'> | null) => void
+
+const RowBox = createContext<Report | null>(null)
+
 export function TwoPaneList({ children }: { children: ReactNode }): JSX.Element {
-  return <div className="two-pane-list">{children}</div>
+  const [mark, setMark] = useState<Mark | null>(null)
+  const report = useCallback<Report>((id, box) => {
+    setMark((prev) => {
+      if (box) {
+        return prev && prev.id === id && prev.top === box.top && prev.height === box.height
+          ? prev
+          : { id, ...box }
+      }
+      /* Only the row the mark is on can take it away. */
+      return prev && prev.id === id ? null : prev
+    })
+  }, [])
+  return (
+    <RowBox.Provider value={report}>
+      <div className="two-pane-list">
+        {children}
+        {/* After the rows, not before: a card inserted in front of them
+            renumbers every row the first time one is selected, and React
+            rebuilds each row from scratch. Absolutely positioned, so where it
+            sits in the source has no bearing on where it is drawn. */}
+        {mark ? (
+          <span
+            className="two-pane-sel"
+            aria-hidden="true"
+            style={{ transform: `translateY(${mark.top}px)`, height: `${mark.height}px` }}
+          />
+        ) : null}
+      </div>
+    </RowBox.Provider>
+  )
 }
 
 /* The list before its rows are in.
@@ -116,7 +164,11 @@ export function TwoPaneGroup({ children }: { children: ReactNode }): JSX.Element
 /* One row. `current` is what the right column is showing, `off` is a row whose
    subject is turned off -- the name greys, which is the whole of the
    difference, because a row you cannot read is not a row you can turn back
-   on. */
+   on.
+
+   The selected row says where it is, so the list can mark it (see TwoPaneList):
+   a row knows its own box, and the list knows which row is selected, so
+   neither has to go looking for the other. */
 export function TwoPaneRow({ current, off, icon, name, sub, tone, when, trailing, onOpen }: {
   current: boolean
   off?: boolean
@@ -133,8 +185,33 @@ export function TwoPaneRow({ current, off, icon, name, sub, tone, when, trailing
   trailing?: ReactNode
   onOpen(): void
 }): JSX.Element {
+  const report = useContext(RowBox)
+  const id = useId()
+  const el = useRef<HTMLDivElement>(null)
+  /* The box this row last handed up, so a commit that moved nothing says
+     nothing. */
+  const said = useRef<{ top: number; height: number } | null>(null)
+  /* After every commit, not only when `current` changes. A row that stays
+     selected still moves: a search can filter away the rows above it, and a
+     refresh can regroup it -- the selection did not change, but the box did,
+     and a mark left at the old coordinate outlines a different row. */
+  useLayoutEffect(() => {
+    if (!report) return
+    const box = el.current
+    const next = current && box ? { top: box.offsetTop, height: box.offsetHeight } : null
+    const last = said.current
+    const same = next === null
+      ? last === null
+      : last !== null && last.top === next.top && last.height === next.height
+    if (same) return
+    said.current = next
+    report(id, next)
+  })
+  /* Leaving is not a commit: a row unmounting while it is the selected one
+     takes the mark with it. */
+  useLayoutEffect(() => () => report?.(id, null), [id, report])
   return (
-    <div className={off ? 'two-pane-row two-pane-off' : 'two-pane-row'} aria-current={current}>
+    <div ref={el} className={off ? 'two-pane-row two-pane-off' : 'two-pane-row'} aria-current={current}>
       <button type="button" className="two-pane-hit" onClick={onOpen}>
         {icon}
         <span className="two-pane-txt">

@@ -427,9 +427,9 @@ def _offered(reg: ToolRegistry) -> set[str]:
 
 @pytest.mark.parametrize("action", ["connect", "authorize"])
 async def test_the_tools_a_call_connects_are_usable_in_the_same_turn(_isolated, monkeypatch, action) -> None:
-    """The result says "from the next step on", and the turn freeze used to make
-    that false: the agent saw the tools named and could not call them until the
-    user sent another message."""
+    """The session's schema array is frozen, so a newly connected plugin's tools
+    join it at the next refresh. They are usable now through ``tool_call``, and
+    the result says exactly that -- not "from the next step on"."""
     _patch_catalog(monkeypatch, _entry("none"))
     if action == "authorize":
         _isolated["cfg_path"].write_text(
@@ -440,12 +440,14 @@ async def test_the_tools_a_call_connects_are_usable_in_the_same_turn(_isolated, 
     tool = PluginTool(loop=loop, registry=reg)
     reg.register(tool)
 
-    with reg.turn_scope():
+    with reg.session_scope_for("s1"), reg.turn_scope():
+        reg.get_definitions()  # the session's array, captured before the connect
         reg.register(_Named("mcp_svc_a"))
         assert "mcp_svc_a" not in _offered(reg)
         out = await reg.execute("plugin", {"action": action, "name": "svc"})
         assert "mcp_svc_a" in out
-        assert "mcp_svc_a" in _offered(reg)
+        assert "next compaction or new conversation" in out
+        assert "mcp_svc_a" not in _offered(reg), "the frozen array does not move mid-session"
         assert await reg.execute("mcp_svc_a", {}) == "ran"
 
 

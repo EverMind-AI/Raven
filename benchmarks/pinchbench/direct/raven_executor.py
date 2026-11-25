@@ -396,6 +396,7 @@ async def execute_task(
         usage, cost_usd, models_used
     """
     from raven.agent.loop import AgentLoop
+    from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
     from raven.config.schema import ExecToolConfig
     from raven.session.manager import SessionManager
 
@@ -418,10 +419,10 @@ async def execute_task(
     session_mgr = SessionManager(task_workspace)
     session_key = f"bench:{task.task_id}"
 
-    # Load skill_forge config so injection_mode / inject_max / mass_library_db
-    # etc. are honored under benchmark runs. Without this AgentLoop receives
-    # ``skill_forge_config=None`` → SkillService falls back to dataclass
-    # defaults (e.g. injection_mode="summary"), regardless of user config.
+    # Load skill_forge config so local_dirs / blocklist / always_max etc. are
+    # honored under benchmark runs. Without this AgentLoop receives
+    # ``skill_forge_config=None`` and falls back to the model defaults,
+    # regardless of user config.
     from raven.config.raven import load_raven_config
 
     _ec_cfg = load_raven_config()
@@ -431,18 +432,21 @@ async def execute_task(
         provider=tracked_provider,  # wrapped provider — transparent to AgentLoop
         workspace=task_workspace,
         model=model,
-        max_iterations=40,
-        context_window_tokens=65_536,
-        exec_config=ExecToolConfig(),
-        restrict_to_workspace=True,  # sandbox for benchmark safety
         session_manager=session_mgr,
         router=router,
-        skill_forge_config=skill_forge_cfg,
-        runtime_config=getattr(_ec_cfg, "runtime", None),
+        tools=ToolWiring(
+            exec_config=ExecToolConfig(),
+            restrict_to_workspace=True,  # sandbox for benchmark safety
+        ),
+        engine=EngineWiring(
+            context_window_tokens=65_536,
+            skill_forge_config=skill_forge_cfg,
+            runtime_config=getattr(_ec_cfg, "runtime", None),
+        ),
         # Benchmarks are non-interactive batch runs — opt out of the
         # per-turn shadow-git checkpoint (no recovery channel to inject
         # into, and we don't want ``.raven/shadow.git`` in task workspaces).
-        interactive=False,
+        policy=TurnPolicy(max_iterations=40, interactive=False),
     )
 
     timeout_seconds = task.timeout_seconds * timeout_multiplier

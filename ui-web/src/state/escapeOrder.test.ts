@@ -45,15 +45,16 @@ import * as workdir from './workdir'
 
 import type { ComposerSource } from '../features/composer/types'
 
-/* The seventeen, in the order Escape reaches them. Each item is the text the chain
-   tests to decide whether that layer is on screen -- a selector for the seven
-   elements, the predicate's own name for the three that have no element of
+/* The eighteen, in the order Escape reaches them. Each item is the text the chain
+   tests to decide whether that layer is on screen -- a selector for the fourteen
+   elements, the predicate's own name for the four that have no element of
    their own to look at.
 
    The composer bar's three sit next to last: every layer above them covers the
    bar, and the turn below them is the last resort. */
 const LAYER_IDS = [
   '.lightbox',
+  '#findVeil',
   '#veil',
   '#exportVeil',
   '#detail',
@@ -97,6 +98,7 @@ const PAGE = [
   '<aside class="detail" id="detail" data-open="false"><div class="body" id="dBody"></div></aside>',
   '<div class="veil setveil" id="setVeil" data-open="false"><div id="setModal"></div></div>',
   '<div class="veil" id="exportVeil" data-open="false"><button id="exportClose"></button></div>',
+  '<div class="veil" id="findVeil" data-open="false"><input id="sfind"></div>',
   '<div class="veil" id="veil" data-open="false"><button id="cfNo"></button></div>',
   '</div>',
   '<button id="railShow"></button>',
@@ -137,6 +139,9 @@ const LAYERS: Record<string, { up: () => void; taken: () => boolean }> = {
     },
     taken: () => !document.querySelector('.lightbox'),
   },
+  /* The dialog writes `data-open` from the store, and nothing renders while
+     this file drives the table, so the store is what answers both ways. */
+  '#findVeil': { up: () => { find.set({ open: true }); flag('findVeil')() }, taken: () => !find.get().open },
   '#veil': { up: flag('veil'), taken: () => cancelled.includes('cfNo') },
   '#exportVeil': { up: flag('exportVeil'), taken: () => cancelled.includes('exportClose') },
   '#detail': { up: flag('detail'), taken: lowered('detail') },
@@ -237,11 +242,11 @@ const key = (k: string, over: Partial<KeyboardEventInit> = {}): KeyboardEvent =>
 }
 
 describe('the Escape priority order', () => {
-  it('is the order the table reaches the seventeen layers in', () => {
+  it('is the order the table reaches the eighteen layers in', () => {
     expect(escapeOrder.ESCAPE_ORDER.map((layer) => layer.id)).toEqual([...LAYER_IDS])
   })
 
-  it('has no seventeenth entry, and every entry is in the fixture', () => {
+  it('has no eighteenth entry, and every entry is in the fixture', () => {
     expect(escapeOrder.ESCAPE_ORDER).toHaveLength(LAYER_IDS.length)
     expect(Object.keys(LAYERS)).toEqual([...LAYER_IDS])
   })
@@ -277,8 +282,8 @@ describe('the Escape priority order', () => {
   const pairs = LAYER_IDS.flatMap((first, i) =>
     LAYER_IDS.slice(i + 1).filter((second) => !shared(first, second)).map((second) => ({ first, second })))
 
-  it('has a hundred and thirty-three pairs to answer for, every pair but the three that share a close', () => {
-    expect(pairs).toHaveLength(133)
+  it('has a hundred and fifty pairs to answer for, every pair but the three that share a close', () => {
+    expect(pairs).toHaveLength(150)
   })
 
   it('reaches the three pages that share a close in table order', () => {
@@ -321,13 +326,16 @@ describe('the one listener that reads the order', () => {
     expect(spies.stop).not.toHaveBeenCalled()
   })
 
-  /* The row's `hidden` is <FindRow/>'s to render off this flag (C5), so the
-     flag is what the shortcut is read by; the rail's is written by hand. */
-  it('shows the rail and the search row on Cmd+F', () => {
-    const e = key('f', { metaKey: true })
-    expect(e.defaultPrevented).toBe(true)
-    expect(document.documentElement.dataset.rail).toBe('on')
-    expect(find.get().open).toBe(true)
+  /* The dialog's `data-open` is <SearchDialog/>'s to render off this flag, so
+     the flag is what the shortcut is read by. Cmd+F stays as an alias for
+     readers who used it while the search was a row in the rail. */
+  it('opens the search dialog on Cmd+K and on Cmd+F', () => {
+    for (const k of ['k', 'f']) {
+      const e = key(k, { metaKey: true })
+      expect(e.defaultPrevented).toBe(true)
+      expect(find.get().open).toBe(true)
+      find.toggle(false)
+    }
   })
 
   it('folds and unfolds the rail on Cmd+backslash', () => {
@@ -366,19 +374,11 @@ describe('the one listener that reads the order', () => {
       .toEqual([', chipKey', ', onEscapeOrder', ', onSettingsKey'])
   })
 
-  /* And bubbling is what lets a field keep the key: the search row stops
-     Escape on its own input so that dismissing the row does not also take a
-     page down behind it (state/find.ts). A capture-phase listener would have
-     read the key before the field ever saw it. */
-  it('does not see a key an element stopped', () => {
-    find.install()
-    find.toggle(true)
-    LAYERS['#extAgentsPage']!.up()
-    document.getElementById('sfind')!
-      .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
-    expect(find.get().open).toBe(false)
-    expect(spies.extAgentsClose).not.toHaveBeenCalled()
-  })
+  /* And bubbling is what lets a field keep the key: the search dialog stops
+     Escape on its own field so that dismissing it does not also take a page
+     down behind it (src/chrome/SearchDialog.tsx, pinned by
+     src/chrome/SearchDialog.test.tsx). A capture-phase listener would have read
+     the key before the field ever saw it. */
 
   it.each(['shell.exec', 'file.write', 'mcp.call', 'config.change', 'unknown'])(
     'Escape denies %s approval and leaves stopping to the next Escape', (kind) => {

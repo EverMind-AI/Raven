@@ -5,9 +5,9 @@ The compacting history strategy bounds its prompts by
 budget to -- and the loop sizes a near-window request's ``max_tokens`` with
 :func:`request_max_tokens`; refusals are learned here whichever strategy runs.
 The per-turn :class:`~raven.contracts.assembled.TokenBudget` still reserves
-the model's whole output ceiling (``reserved_output``): that is the Curator's
-arithmetic, and the compacting strategy computes its own room rather than
-reading it. The table is one number per model for the whole process, not a
+the model's whole output ceiling (``reserved_output``): that is the Memory
+role's arithmetic, and the compacting strategy computes its own room rather
+than reading it. The table is one number per model for the whole process, not a
 strategy's private tuning, which is why this module sits beside
 ``history_trimmer`` rather than inside a strategy package.
 

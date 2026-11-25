@@ -46,6 +46,7 @@ const TOP_LEVEL_TREES = [
   "agents",
   "benchmarks",
   "bridge",
+  "desktop",
   "docs",
   "evolver",
   "plugins-dist",

@@ -561,6 +561,19 @@ def test_list_content_is_compared_by_its_text_parts(state, tmp_path, utc):
     assert len(sel.cut_session_record(path, _plan("trace-a")).messages) == 1
 
 
+def test_a_turn_meta_record_is_not_a_transcript_row(state, tmp_path, utc):
+    """The file carries stamp records beside its rows. A raw reader that counts
+    one as a message hands the cut a dict with no role to split a turn on."""
+    _write(state, _turn("trace-a", minute=1, artifact=_input_artifact(state, "a", "hello")))
+    path = _session_file(tmp_path, [_user("hello", "2026-10-01T10:01:00")])
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"_type": "turn_meta", "patches": [{"row_id": "abc", "keys": {}}]}) + "\n")
+
+    cut = sel.cut_session_record(path, _plan("trace-a"))
+
+    assert [m["content"] for m in cut.messages] == ["hello"]
+
+
 def test_messages_inside_a_turn_stay_with_it(state, tmp_path):
     _write(state, _turn("trace-a", minute=1), _turn("trace-b", minute=2), _turn("trace-c", minute=3))
     path = _session_file(

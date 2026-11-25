@@ -15,7 +15,7 @@
       "temperature": 1.0,
       "maxTokens": 32768,
       "contextWindowTokens": 400000,
-      "maxToolIterations": 150,
+      "maxToolIterations": null,
       "llmCallTimeout": 1800,
       "compaction": {
         "enabled": true
@@ -31,7 +31,7 @@
       "backend": "none"
     },
     "exec": {
-      "timeout": 600
+      "timeout": 120
     },
     "connectionAdd": true,
     "web": {
@@ -95,7 +95,7 @@
           "enabled": true,
           "restrictToWorkspace": false,
           "exec": {
-            "maxTimeout": 1200
+            "maxTimeout": 600
           }
         },
         "projectFiles": [

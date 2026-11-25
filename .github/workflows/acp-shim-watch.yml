@@ -1,0 +1,86 @@
+# Watches the three ACP adapter pins Raven fetches with npx and keeps one
+# issue open while npm offers a newer release. The pins themselves are never
+# changed here: a bump needs the handshake, model-menu and cross-version
+# session/load measurements raven/agent/subagent/presets.py describes, and
+# those need a signed-in agent.
+name: ACP shim watch
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: acp-shim-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: adapter pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: make install-deps
+
+      - name: Check the pins
+        id: check
+        run: |
+          set +e
+          uv run --frozen python scripts/check_acp_shim_pins.py --markdown > "$RUNNER_TEMP/pins.md"
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/pins.md"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
+            echo "the pin check did not finish (status $status); any open reminder is left as it is." >&2
+            exit 1
+          fi
+
+      - name: Open or update the reminder
+        if: steps.check.outputs.status == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "chore(acp): adapter pins are behind npm"
+        run: |
+          {
+            cat "$RUNNER_TEMP/pins.md"
+            printf '\nChecked %s by [the pin watch](%s/%s/actions/runs/%s).\n' \
+              "$(date -u +%Y-%m-%d)" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+          } > "$RUNNER_TEMP/body.md"
+          number="$(gh issue list --state open --label dependencies --limit 100 \
+            --json number,title --jq '.[] | "\(.number)\t\(.title)"' \
+            | awk -F '\t' -v title="$TITLE" '$2 == title { print $1; exit }')"
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh issue create --title "$TITLE" --body-file "$RUNNER_TEMP/body.md" --label dependencies
+          fi
+
+      - name: Close the reminder when current
+        if: steps.check.outputs.status == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "chore(acp): adapter pins are behind npm"
+        run: |
+          number="$(gh issue list --state open --label dependencies --limit 100 \
+            --json number,title --jq '.[] | "\(.number)\t\(.title)"' \
+            | awk -F '\t' -v title="$TITLE" '$2 == title { print $1; exit }')"
+          if [ -n "$number" ]; then
+            gh issue close "$number" --comment "Every pin is current as of $(date -u +%Y-%m-%d)."
+          fi

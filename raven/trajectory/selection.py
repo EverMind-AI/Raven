@@ -411,6 +411,11 @@ def _read_session(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any
             continue
         if row.get("_type") == "metadata":
             metadata = row
+        elif row.get("_type"):
+            # A record kind beside the messages (turn_meta today). It carries
+            # stamps for rows, not a row of its own, and a consumer handed one
+            # as a message has no role to read.
+            continue
         else:
             messages.append(row)
     return metadata, messages

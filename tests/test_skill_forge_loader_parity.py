@@ -861,7 +861,8 @@ class TestBuildSkillsSummary:
 
 class TestCatalogBlocklist:
     """skillForge.blocklist enforcement on the catalog paths that bypass
-    the router pool: BM25 index, always-skills, and prompt rendering."""
+    the router pool: BM25 index, always-skills, prompt rendering, and the
+    dict listing the session banner reads."""
 
     def _catalog(self, workspace, builtin, blocklist):
         from types import SimpleNamespace
@@ -901,6 +902,59 @@ class TestCatalogBlocklist:
     def test_gather_all_skills_keeps_blocked_for_inspection(self, tmp_workspace, tmp_builtin):
         svc = self._catalog(tmp_workspace, tmp_builtin, ["simple"])
         assert "simple" in {m.name for m in svc.gather_all_skills()}
+
+    def test_list_skills_omits_blocklisted_skills(self, tmp_workspace, tmp_builtin):
+        """The dict listing is a runtime view, so it drops blocked skills.
+
+        Built through the live reader, not the config snapshot: that is how
+        the agent loop wires it, and it is what makes a settings-page flip
+        visible on the next turn.
+        """
+        svc = LocalSkillCatalog(
+            tmp_workspace,
+            builtin_skills_dir=tmp_builtin,
+            blocklist_reader=lambda: frozenset({"simple"}),
+        )
+        items = svc.list_skills()
+        assert not any(i["name"] == "simple" for i in items)
+        assert any(i["name"] == "user_custom" for i in items)
+
+    def test_list_skills_reads_the_live_blocklist_once(self, tmp_workspace, tmp_builtin):
+        """The reader re-reads the config file on every ask. Asking once per
+        skill paid a file read per row, and a file rewritten mid-loop could
+        judge the first rows with the old list and the last with the new one."""
+        calls = 0
+
+        def reader():
+            nonlocal calls
+            calls += 1
+            return frozenset({"simple"})
+
+        svc = LocalSkillCatalog(
+            tmp_workspace,
+            builtin_skills_dir=tmp_builtin,
+            start_watcher=False,
+            blocklist_reader=reader,
+        )
+        before = calls
+        items = svc.list_skills()
+        assert calls - before == 1
+        assert not any(i["name"] == "simple" for i in items)
+
+    def test_list_skills_unfiltered_still_omits_blocklisted_skills(self, tmp_workspace, tmp_builtin):
+        """``filter_unavailable`` is about requirements, not about the blocklist.
+
+        Folding the blocklist filter into that branch would make "show me the
+        unavailable ones too" quietly mean "and the blocked ones" -- which is
+        the opposite of what the caller asked for.
+        """
+        svc = LocalSkillCatalog(
+            tmp_workspace,
+            builtin_skills_dir=tmp_builtin,
+            blocklist_reader=lambda: frozenset({"simple"}),
+        )
+        items = svc.list_skills(filter_unavailable=False)
+        assert not any(i["name"] == "simple" for i in items)
 
     def test_init_logs_one_line_skip_notice(self, tmp_workspace, tmp_builtin, caplog):
         import logging
@@ -943,46 +997,29 @@ class TestRenderingHelpers:
 
 
 class TestContextBuilderIntegration:
-    def test_skill_names_narrows_xml_directory(self, tmp_workspace, tmp_builtin, monkeypatch):
-        # ContextBuilder uses the real built-in directory by default; point it
-        # at our synthetic one so the test is deterministic.
-        from raven.agent.context import ContextBuilder
+    def test_the_estimate_carries_the_always_skills_and_no_skill_directory(self, tmp_workspace, tmp_builtin):
+        """The estimate sizes the system prompt a turn actually sends.
 
-        cb = ContextBuilder(tmp_workspace)
-        # Swap the skills service for one that uses our synthetic builtin.
-        from raven.memory_engine.skill_forge import LocalSkillCatalog
-
-        cb.skills = LocalSkillCatalog(tmp_workspace, builtin_skills_dir=tmp_builtin)
-
-        # With selected_skills=None → full directory
-        prompt_full = cb.build_system_prompt(selected_skills=None)
-        assert "<name>simple</name>" in prompt_full
-        assert "<name>always_flag_top</name>" in prompt_full
-
-        # With selected_skills=[simple_meta] → only simple shows up in the XML
-        # (always-loaded skills are still injected in the # Active Skills
-        # section — that's separate from the XML directory)
-        simple_meta = [m for m in cb.skills._registry.list_all() if m.name == "simple"]
-        prompt_filtered = cb.build_system_prompt(selected_skills=simple_meta)
-        # XML directory: only simple
-        xml_start = prompt_filtered.index("<skills>")
-        xml_end = prompt_filtered.index("</skills>") + len("</skills>")
-        xml_block = prompt_filtered[xml_start:xml_end]
-        assert "<name>simple</name>" in xml_block
-        assert "<name>always_flag_top</name>" not in xml_block
-
-    def test_empty_skill_names_falls_back_to_full_directory(self, tmp_workspace, tmp_builtin):
-        """A stub selector returning [] must fall back, not strip all."""
+        A turn's system prompt carries the always-on skills and nothing else of
+        the pool: the rest reach the model through the scent menu and the skill
+        tools. An estimate that also rendered the pool's directory would reserve
+        room for a section no request carries, and the reservation would grow
+        with every skill installed.
+        """
         from raven.agent.context import ContextBuilder
         from raven.memory_engine.skill_forge import LocalSkillCatalog
 
         cb = ContextBuilder(tmp_workspace)
         cb.skills = LocalSkillCatalog(tmp_workspace, builtin_skills_dir=tmp_builtin)
 
-        prompt = cb.build_system_prompt(selected_skills=[])
-        # Non-empty XML block — this is the safety net
-        assert "<skills>" in prompt
-        assert "<name>simple</name>" in prompt
+        prompt = cb.build_system_prompt()
+
+        assert "# Active Skills" in prompt
+        assert "always_flag_top" in prompt
+        assert "<skills>" not in prompt
+        assert "# Skills" not in prompt
+        assert "A simple builtin skill" not in prompt
+        assert "A workspace-only skill" not in prompt
 
 
 # Note: the remote-skill materialization tests (``_materialize_remote``

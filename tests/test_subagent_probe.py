@@ -2291,3 +2291,88 @@ def test_manual_test_merges_current_failure_flags_with_old_capabilities(needs_au
     assert saved.can_load
     assert saved.fingerprint == "new"
     assert (saved.needs_auth, saved.unfetched) == (needs_auth, unfetched)
+
+
+async def test_cli_probe_finds_a_relative_launcher_in_the_rows_own_directory(tmp_path: Path) -> None:
+    """The launch starts the program in the row's own directory, so the probe looks there."""
+    row = tmp_path / "row"
+    row.mkdir()
+    launcher = row / ("agent.exe" if os.name == "nt" else "agent")
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    cfg = ThirdPartyCliSubagentConfig(name="rowagent", command="./agent", cwd=str(row))
+
+    res = await probe_one(cfg, source="config", path=str(tmp_path))
+
+    assert res.status == "ready"
+    assert res.target == str(launcher)
+
+
+async def test_cli_probe_does_not_answer_for_this_processs_own_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A launcher that is here is not the row's: the launch looks in the row's own directory."""
+    here = tmp_path / "here"
+    here.mkdir()
+    launcher = here / ("agent.exe" if os.name == "nt" else "agent")
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    monkeypatch.chdir(here)
+    row = tmp_path / "row"
+    row.mkdir()
+    cfg = ThirdPartyCliSubagentConfig(name="rowagent", command="./agent", cwd=str(row))
+
+    res = await probe_one(cfg, source="config", path=str(tmp_path))
+
+    assert res.status == "missing"
+
+
+async def test_cli_probe_names_the_directory_it_looked_in(tmp_path: Path) -> None:
+    """The reader is told where the launcher was looked for, not that it is off the PATH."""
+    row = tmp_path / "row"
+    row.mkdir()
+    cfg = ThirdPartyCliSubagentConfig(name="rowagent", command="./agent", cwd=str(row))
+
+    res = await probe_one(cfg, source="config", path=str(tmp_path))
+
+    assert res.status == "missing"
+    assert str(row) in res.detail
+
+
+async def test_cli_probe_reports_unknown_for_a_relative_launcher_with_no_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run resolves the launcher in its own workspace, which this check cannot see."""
+    here = tmp_path / "here"
+    here.mkdir()
+    launcher = here / ("agent.exe" if os.name == "nt" else "agent")
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    monkeypatch.chdir(here)
+    cfg = ThirdPartyCliSubagentConfig(name="rowagent", command="./agent")
+
+    res = await probe_one(cfg, source="config", path=str(tmp_path))
+
+    assert res.status == "unknown"
+    assert "cwd" in res.detail
+
+
+async def test_acp_probe_finds_a_relative_launcher_in_the_rows_own_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The acp launch starts the server in the row's cwd, so the probe looks there too."""
+    here = tmp_path / "here"
+    here.mkdir()
+    monkeypatch.chdir(here)
+    row = tmp_path / "row"
+    row.mkdir()
+    launcher = row / ("server.exe" if os.name == "nt" else "server")
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    cfg = ThirdPartyAcpSubagentConfig(name="rowacp", command="./server", cwd=str(row))
+
+    res = await probe_one(cfg, source="config", path=str(tmp_path))
+
+    assert res.status == "attention"
+    assert res.target == str(launcher)
+    assert "installed at" in res.detail

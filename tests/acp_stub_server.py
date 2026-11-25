@@ -224,6 +224,9 @@ CAPABILITIES = {
     },
     "authMethods": [{"id": "stub-auth", "name": "Stub auth"}],
 }
+if MODE == "reportable":
+    CAPABILITIES["agentCapabilities"]["_meta"]["raven.reportNow"] = True
+
 # An agent that never learned the extension, for the test that a client must
 # not call what was not declared.
 if os.environ.get("ACP_STUB_NO_STEER"):
@@ -327,8 +330,33 @@ def handle_clarify_respond(request_id, params) -> None:
 _AWAITING_STEER: list = []
 
 
+def hold_prompt_for_steer(request_id, session_id, params) -> None:
+    if MODE == "reportable":
+        _AWAITING_STEER.append((request_id, session_id, (params.get("_meta") or {}).get("raven.reportNowId")))
+    else:
+        _AWAITING_STEER.append((request_id, session_id))
+        update(session_id, {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "starting"}})
+    update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "on it"}})
+
+
 def handle_steer(request_id, params) -> None:
     text = params.get("text") or ""
+    if MODE == "reportable":
+        if not _AWAITING_STEER or params.get("intent") != "report_now":
+            ok(request_id, {"status": "not_running"})
+            return
+        prompt_id, session_id, token = _AWAITING_STEER[0]
+        if not token or token != params.get("promptId") or session_id != params.get("sessionId"):
+            ok(request_id, {"status": "not_running"})
+            return
+        _AWAITING_STEER.pop(0)
+        ok(request_id, {"status": "report_requested"})
+        update(
+            session_id,
+            {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Early work summary"}},
+        )
+        ok(prompt_id, {"stopReason": "end_turn", "_meta": {"raven.reportedEarly": True}})
+        return
     if MODE != "steerable" or not _AWAITING_STEER:
         ok(request_id, {"status": "no_turn"})
         return
@@ -741,10 +769,8 @@ def handle_prompt(request_id, params) -> None:
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "working"}})
         _AWAITING_CANCEL.append((request_id, session_id))
         return
-    if MODE == "steerable":
-        update(session_id, {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "starting"}})
-        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "on it"}})
-        _AWAITING_STEER.append((request_id, session_id))
+    if MODE in ("steerable", "reportable"):
+        hold_prompt_for_steer(request_id, session_id, params)
         return
     if MODE == "cancelled":
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "I will "}})

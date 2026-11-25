@@ -286,7 +286,10 @@ camelCase 节点字段。未知节点字段会被拒绝，不会静默成为指�
 
 ## 检查与恢复 { #inspect-and-recover }
 
-可让 Raven 用 `dag_status` 查看运行，用 `cancel_dag` 停止运行。这些是模型工具，
+可让 Raven 用 `dag_status` 查看运行，用 `cancel_subagent` 的 `run_id` 停止整张 DAG。
+传 `agent` 和 `instance` 可以中断单个正在运行的委派。后端支持时，传
+`mode: "report_now"` 可要求子智能体按已有进展给出最终答复。宿主默认在实际运行满一小时后收到提醒，
+将 `subagents.longRunNoticeSeconds` 设为 `0` 可关闭提醒。这些是模型工具，
 不是 `raven dag` Shell 命令。TUI 与 WebUI 接收实时进度并可读取已保存的图；RPC 提供
 `dag.get` 和 `dag.node`。
 

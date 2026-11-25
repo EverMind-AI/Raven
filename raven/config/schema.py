@@ -250,8 +250,16 @@ class AgentDefaults(Base):
     # transport phases, and no bound at all on the loop's pre-request awaits,
     # which is the state a turn that never issued a request went unnoticed in.
     llm_first_byte_timeout: int = 120
-    max_tool_iterations: int = 40
-    # Cap on subagent VMs running at once, counting spawns and DAG nodes
+    max_tool_iterations: int | None = Field(default=40, ge=0)
+    """ReAct iterations one turn may run. ``None`` or ``0`` means unbounded.
+
+    A product with a wall clock of its own (``wallClockSeconds``) sets this to
+    ``None`` and is bounded by that clock instead; when its caller names no
+    deadline the turn has neither a clock nor a cap, which is that product's
+    own choice. A negative value is refused at load rather than read as "no
+    cap".
+    """
+    # Cap on subagent sandboxes running at once, counting spawns and DAG nodes
     # together (excess queues). ge=1: a 0/negative cap would deadlock every
     # subagent (Semaphore(0)).
     max_concurrent_subagents: int = Field(default=8, ge=1)
@@ -303,6 +311,11 @@ class AgentDefaults(Base):
     # unknown top-level key is auto-forwarded into extra_body by LiteLLM for
     # OpenAI-compatible backends (e.g. sglang's repetition_penalty); a nested
     # structure can be written directly as extra_body: {...}.
+    # The Responses and Anthropic adapters flatten that nested extra_body. The
+    # Responses adapter additionally writes its own prompt_cache_key, tools,
+    # tool_choice and parallel_tool_calls after these overrides, and the
+    # Anthropic adapter applies its learned max_tokens ceiling and cache_control
+    # stripping afterwards, so those values can replace an override.
     model_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
     enable_personalization: bool = False  # 4-step PAHF-inspired personalization flow (classify → ask → execute → learn)
 
@@ -876,8 +889,9 @@ class AcpModeConfig(Base):
 
     name: str
     description: str = ""
-    max_tool_iterations: int | None = None
-    """``None`` inherits ``agents.defaults.maxToolIterations``."""
+    max_tool_iterations: int | None = Field(default=None, ge=0)
+    """``None`` inherits ``agents.defaults.maxToolIterations``; ``0`` means no
+    cap, and a negative value is refused at load."""
     reasoning_effort: str | None = None
     """``None`` inherits ``agents.defaults.reasoningEffort``; set, every call a
     session in this mode makes asks the provider for this effort instead."""
@@ -886,6 +900,12 @@ class AcpModeConfig(Base):
 
 def _builtin_modes() -> dict[str, "AcpModeConfig"]:
     return {tier: AcpModeConfig(name=tier.capitalize(), description=_TIER_TEXTS[tier]) for tier in TIER_LADDER}
+
+
+#: The default for ``acp.maxBackgroundHoldSeconds``. The ACP layer falls back to
+#: it when no config is injected, so the config default and that fallback stay one
+#: value instead of two that can drift.
+DEFAULT_MAX_BACKGROUND_HOLD_SECONDS = 1800
 
 
 class AcpConfig(Base):
@@ -904,6 +924,14 @@ class AcpConfig(Base):
     its first entry (``build_mode_catalogue``) rather than being failed at startup
     by a value it never chose. Naming something is checked -- see the validator
     below for why those two are different cases."""
+
+    max_background_hold_seconds: int = Field(default=DEFAULT_MAX_BACKGROUND_HOLD_SECONDS, ge=60)
+    """How long a ``session/prompt`` may stay held for this session's background
+    commands when the turn set no wall clock of its own. ACP sessions carry no
+    clock by default, so this is what keeps a command that never exits from
+    holding the prompt forever. At the limit the remaining commands are stopped
+    and the closing turn runs. The limit covers the wait for the commands only:
+    the closing turn is an ordinary turn and ends the way any turn does."""
 
     @model_validator(mode="after")
     def _resolve_the_named_default(self) -> "AcpConfig":
@@ -1505,6 +1533,57 @@ class ToolSearchConfig(Base):
     """Extra tool names kept exposed every turn, on top of the core set."""
 
 
+class NetworkRule(Base):
+    """One host a sandbox may (``allow``) or may not (``deny``) reach.
+
+    ``ports`` empty means the common ports (22, 80, 443, 8080, 8443, 9418);
+    ``binary`` empty means any program. A wildcard host needs three labels or
+    more (``*.example.com``): OpenShell refuses ``*``, ``**`` and ``*.com``.
+    """
+
+    host: str
+    ports: list[int] = Field(default_factory=list)
+    binary: str = ""
+    tier: Literal["allow", "deny"] = "allow"
+
+    @field_validator("host")
+    @classmethod
+    def _enforceable_host(cls, host: str) -> str:
+        host = host.strip().lower()
+        if not host:
+            raise ValueError("a host is required")
+        if "/" in host or ":" in host:
+            raise ValueError(f"{host!r} is not a host name; put the port under ports and leave out the scheme")
+        labels = host.split(".")
+        if "*" in host and (len(labels) < 3 or not all(labels)):
+            raise ValueError(f"{host!r}: a wildcard host needs three labels or more, such as *.example.com")
+        if any("*" in label and label not in ("*", "**") for label in labels):
+            raise ValueError(f"{host!r}: a wildcard stands for whole labels, as in *.example.com or **.example.com")
+        return host
+
+    @field_validator("ports")
+    @classmethod
+    def _real_ports(cls, ports: list[int]) -> list[int]:
+        bad = [port for port in ports if not 1 <= port <= 65535]
+        if bad:
+            raise ValueError(f"ports must be between 1 and 65535, got {bad}")
+        return ports
+
+    @field_validator("binary")
+    @classmethod
+    def _absolute_binary(cls, binary: str) -> str:
+        if binary and not binary.startswith("/"):
+            raise ValueError(f"{binary!r}: name the program by its absolute path in the sandbox, such as /usr/bin/curl")
+        return binary
+
+
+class NetworkPermissions(Base):
+    """What every sandbox may reach: the open default, or only the ``allow`` rules."""
+
+    default: Literal["open", "closed"] = "open"
+    rules: list[NetworkRule] = Field(default_factory=list)
+
+
 class PermissionsConfig(Base):
     """Permission gating over tool dispatch (``raven.permissions``).
 
@@ -1525,6 +1604,7 @@ class PermissionsConfig(Base):
 
     mode: Literal["ask", "smart", "full"] = "smart"
     tools: dict[str, str | dict[str, str]] = Field(default_factory=dict)
+    network: NetworkPermissions = Field(default_factory=NetworkPermissions)
     judge_model: str = ""
     judge_timeout_seconds: float = 10.0
 
@@ -2664,6 +2744,9 @@ class SubagentRuntimeConfig(Base):
     way. Has no effect on other systems."""
 
 
+DEFAULT_LONG_RUN_NOTICE_SECONDS = 3600
+
+
 class SubagentsConfig(Base):
     """The one table of agents raven can dispatch to.
 
@@ -2682,6 +2765,8 @@ class SubagentsConfig(Base):
         validation_alias=AliasChoices("agents", "thirdParty", "third_party"),
     )
     runtime: SubagentRuntimeConfig = Field(default_factory=SubagentRuntimeConfig)
+    long_run_notice_seconds: float = Field(default=DEFAULT_LONG_RUN_NOTICE_SECONDS, ge=0, allow_inf_nan=False)
+    """Elapsed seconds before notifying the delegating host. Zero disables notices."""
 
     @model_validator(mode="after")
     def _dedupe_names(self) -> "SubagentsConfig":

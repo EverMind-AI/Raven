@@ -16,6 +16,7 @@ from raven.providers.base import (
     LLMResponse,
     format_llm_error,
 )
+from raven.providers.call_timeout import call_timeout
 from raven.providers.first_byte import httpx_timeout, stream_first_byte_budget
 from raven.providers.openai_codex_provider import (
     _consume_sse,
@@ -111,9 +112,30 @@ class OpenAIResponsesProvider(LLMProvider):
                 body["max_output_tokens"] = max(1, max_tokens)
         if reasoning_effort:
             body["reasoning"] = {"effort": reasoning_effort}
+        # Request fields merge lowest to highest priority:
+        #   1. adapter defaults written above (model, input, stream, temperature, ...);
+        #   2. keys inside extra_body;
+        #   3. explicit top-level override keys, which win over a same-named
+        #      extra_body key -- the reverse of the OpenAI SDK, where extra_body wins;
+        #   4. the adapter's own late writes below: prompt_cache_key when
+        #      instructions are present, and tools, tool_choice and
+        #      parallel_tool_calls when tools are present. Those writes silently
+        #      replace any value from steps 2 or 3, so an override for one of
+        #      those four keys has no effect on the branch that writes it.
         for pattern, overrides in self.model_overrides.items():
             if isinstance(overrides, dict) and pattern.lower() in stored_model.lower():
-                body.update(overrides)
+                extra_body = overrides.get("extra_body")
+                if isinstance(extra_body, dict):
+                    body.update(extra_body)
+                    body.update({key: value for key, value in overrides.items() if key != "extra_body"})
+                else:
+                    if "extra_body" in overrides:
+                        logger.warning(
+                            "model_overrides[{!r}].extra_body is {}, not a dict; forwarding it as a literal field",
+                            pattern,
+                            type(extra_body).__name__,
+                        )
+                    body.update(overrides)
         if instructions:
             body["prompt_cache_key"] = _prompt_cache_key(instructions, stored_model)
         if tools:
@@ -126,9 +148,12 @@ class OpenAIResponsesProvider(LLMProvider):
         raw_usage: dict[str, Any] = {}
         relaxed = False
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx_timeout(self.generation) or self.generation.timeout, verify=self.tls_verify
-            ) as client:
+            async with (
+                call_timeout(self.generation.timeout),
+                httpx.AsyncClient(
+                    timeout=httpx_timeout(self.generation) or self.generation.timeout, verify=self.tls_verify
+                ) as client,
+            ):
                 while True:
                     async with client.stream(
                         "POST",

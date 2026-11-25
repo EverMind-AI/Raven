@@ -27,6 +27,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from raven.context_engine.history.markers import HISTORY_PRIVATE_KEYS
+from raven.context_engine.runtime_context import RUNTIME_CONTEXT_KEY
 
 SUMMARY_MARKER = "[Context summary — earlier steps were compacted to fit the context window]"
 
@@ -179,6 +180,24 @@ def protected_prefix_end(messages: list[dict]) -> int | None:
     return end
 
 
+def _question_envelope(messages: list[dict], protect_end: int) -> int | None:
+    """Index of the turn's question envelope: the newest user message that
+    recorded its runtime-context block, or ``None`` when the list carries none.
+
+    The block is what a later turn's plugin notes are compared against, and a
+    summary that takes it away leaves the question and any retold notice
+    without a place to land.
+    """
+    return next(
+        (
+            i
+            for i in range(len(messages) - 1, protect_end - 1, -1)
+            if messages[i].get("role") == "user" and messages[i].get(RUNTIME_CONTEXT_KEY)
+        ),
+        None,
+    )
+
+
 def select_split(
     messages: list[dict],
     budget: int,
@@ -189,8 +208,11 @@ def select_split(
     Walks backward from the end accumulating estimated tokens until ``budget``
     is spent (the last message is always kept), then backs up so the tail
     never opens on a ``role=="tool"`` message — that would orphan it from the
-    assistant tool_call it answers. Returns ``None`` when the remaining head
-    is too small to be worth a summary call.
+    assistant tool_call it answers. The tail also never opens after the turn's
+    question envelope: the summary may not take the words the turn is
+    answering, nor the block a notice the summary removed is said again on.
+    Returns ``None`` when the remaining head is too small to be worth a
+    summary call.
     """
     protect_end = protected_prefix_end(messages)
     if protect_end is None:
@@ -205,6 +227,9 @@ def select_split(
         split = i
     while protect_end < split < len(messages) and messages[split].get("role") == "tool":
         split -= 1
+    question = _question_envelope(messages, protect_end)
+    if question is not None and question < split:
+        split = question
     if split - protect_end < 2:
         return None
     return split
@@ -230,6 +255,12 @@ def render_transcript(messages: list[dict]) -> str:
         if parts:
             lines.append(f"[{role}] " + "\n".join(parts))
     return "\n\n".join(lines)
+
+
+def is_summary(message: dict) -> bool:
+    """Whether ``message`` is a head summary :func:`build_compacted` wrote."""
+    content = message.get("content")
+    return isinstance(content, str) and content.startswith(SUMMARY_MARKER)
 
 
 def build_compacted(messages: list[dict], split: int, summary: str) -> list[dict]:

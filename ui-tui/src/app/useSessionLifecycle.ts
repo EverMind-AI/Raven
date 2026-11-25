@@ -24,8 +24,9 @@ import { buildSetupRequiredSections, SETUP_REQUIRED_TITLE } from '../content/set
 import { hydrateDagRuns, hydrateSpawnRuns, introMsg, toTranscriptMessages } from '../domain/messages.js'
 import { ZERO } from '../domain/usage.js'
 import { type GatewayClient } from '../gatewayClientStub.js'
-import { asRpcResult } from '../lib/rpc.js'
+import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import { resetSpawnOpen } from '../lib/spawnOpen.js'
+import { SessionLockedError } from '../rpc/errors.js'
 import { resetDagNodeTraces } from './dagNodeStore.js'
 import { resetDirectChat } from './directChatStore.js'
 import { resetFolds } from './foldStore.js'
@@ -91,6 +92,16 @@ export const performDeleteWithFallback = async (targetId: string, deps: DeleteFa
   return removed
 }
 
+/**
+ * What a refused `session.close` tells the reader. `session_locked` is the store
+ * refusing a second writer: the copy this process held is dropped with whatever
+ * it had not saved, so that is said rather than a bare error code.
+ */
+export const closeFailureNotice = (err: unknown) =>
+  err instanceof SessionLockedError
+    ? 'warning: another process is writing the session you left; its unsaved messages were not kept'
+    : `warning: could not close the session you left: ${rpcErrorMessage(err)}`
+
 export interface UseSessionLifecycleOptions {
   colsRef: { current: number }
   composerActions: ComposerActions
@@ -122,10 +133,26 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
     sys
   } = opts
 
+  // Reports a refused close and resolves; never rejects. Closing is the cleanup
+  // of the session being left, so every caller -- /new, a resume, a branch -- goes
+  // on with the switch it was asked for. Nothing is gained by staying: a session
+  // another process is writing has already dropped this process's copy, and
+  // closing it again would find nothing left to save.
   const closeSession = useCallback(
-    (targetSid?: null | string) =>
-      targetSid ? rpc<SessionCloseResponse>('session.close', { session_id: targetSid }) : Promise.resolve(null),
-    [rpc]
+    async (targetSid?: null | string) => {
+      if (!targetSid) {
+        return null
+      }
+
+      try {
+        return await rpc<SessionCloseResponse>('session.close', { session_id: targetSid }, { quiet: true })
+      } catch (err) {
+        sys(closeFailureNotice(err))
+
+        return null
+      }
+    },
+    [rpc, sys]
   )
 
   // Minted once per newSession()/resumeById() call, at that call's own entry --
@@ -297,17 +324,17 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       patchOverlayState({ picker: false })
       patchUiState({ status: 'resuming…' })
 
-      rpc<SetupStatusResponse>('setup.status', {}).then(setup => {
-        if (setup?.provider_configured === false) {
-          panel(SETUP_REQUIRED_TITLE, buildSetupRequiredSections())
-          patchUiState({ status: 'setup required' })
+      rpc<SetupStatusResponse>('setup.status', {})
+        .then(setup => {
+          if (setup?.provider_configured === false) {
+            panel(SETUP_REQUIRED_TITLE, buildSetupRequiredSections())
+            patchUiState({ status: 'setup required' })
 
-          return
-        }
+            return
+          }
 
-        closeSession(getUiState().sid === id ? null : getUiState().sid).then(() =>
-          gw
-            .request<SessionResumeResponse>('session.resume', { cols: colsRef.current, session_id: id })
+          return closeSession(getUiState().sid === id ? null : getUiState().sid)
+            .then(() => gw.request<SessionResumeResponse>('session.resume', { cols: colsRef.current, session_id: id }))
             .then(async raw => {
               // A newer switch may have been minted while session.resume was in
               // flight; resetSession() below would otherwise clear the state
@@ -360,12 +387,14 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
               })
               setTimeout(() => scrollRef.current?.scrollToBottom(), 0)
             })
-            .catch((e: Error) => {
-              sys(`error: ${e.message}`)
-              patchUiState({ status: 'ready' })
-            })
-        )
-      })
+        })
+        // One handler for the whole chain. Attached to the resume request alone,
+        // a rejection before it -- the status read, the close -- skipped every
+        // step after it and left the status line saying it was still resuming.
+        .catch((e: unknown) => {
+          sys(`error: ${rpcErrorMessage(e)}`)
+          patchUiState({ status: 'ready' })
+        })
     },
     [closeSession, colsRef, gw, panel, resetSession, rpc, scrollRef, setHistoryItems, setSessionStartedAt, sys]
   )

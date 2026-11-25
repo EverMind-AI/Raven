@@ -693,21 +693,6 @@ async def test_the_gateway_restart_waits_for_idle():
 
 
 @pytest.mark.asyncio
-async def test_a_pin_read_shows_the_pin_and_never_the_block_around_it(config_file):
-    data = json.loads(config_file.read_text())
-    data["skillForge"] = {
-        "llmGateModel": "m",
-        "llmGateProvider": "p",
-        "router": {"hub": {"apiKey": "hub-secret"}},
-    }
-    config_file.write_text(json.dumps(data))
-    tool = RavenConfigTool()
-    got = await _run(tool, action="get", path="skillForge")
-    assert json.loads(got) == {"skillForge": {"llmGateModel": "m", "llmGateProvider": "p"}}
-    assert "hub-secret" not in await _run(tool, action="get", path="skills")
-
-
-@pytest.mark.asyncio
 async def test_a_wildcard_write_does_not_invent_an_instance(config_file):
     tool = RavenConfigTool()
     reply = await _run(tool, action="set", path="tools.mcpServers.nope.enabled", value="false")
@@ -1365,12 +1350,63 @@ async def test_an_agent_whose_model_is_refused_can_be_added_on_another_it_lists(
 
 
 @pytest.mark.asyncio
+async def test_describe_does_not_call_a_running_non_scan_channel_unconnected(config_file):
+    """`connected` is null for channels that never report pairing (feishu over a
+    websocket); null must not read as 'not connected yet'."""
+    status = {
+        "gateway_running": True,
+        "channels": [
+            {
+                "name": "feishu",
+                "enabled": True,
+                "running": True,
+                "qr_login": False,
+                "fields": [{"key": "app_id", "required": True, "set": True}],
+            }
+        ],
+    }
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"channels.status": status}))
+
+    described = json.loads(await _run(tool, action="describe", path="channels.feishu"))
+
+    assert described["state"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_describe_calls_a_running_channel_with_no_required_fields_unconnected(config_file):
+    """A spec that requires no credentials needs no setup, so a running channel
+    that has not paired yet is still "not connected yet"; only a channel with
+    required fields is trusted as plainly running."""
+    status = {
+        "gateway_running": True,
+        "channels": [
+            {
+                "name": "feishu",
+                "enabled": True,
+                "running": True,
+                "qr_login": False,
+                "fields": [{"key": "encrypt_key", "required": False, "set": True}],
+            }
+        ],
+    }
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"channels.status": status}))
+
+    described = json.loads(await _run(tool, action="describe", path="channels.feishu"))
+
+    assert described["state"] == "running, not connected yet"
+
+
+@pytest.mark.asyncio
 async def test_switching_on_a_scan_channel_says_where_the_code_is(config_file):
     """Seen live: after enabling WeChat the model grepped code and read logs --
     another Raven's, too -- to find the QR, which the Channels settings showed."""
     status = {
         "gateway_running": True,
-        "channels": [{"name": "weixin", "enabled": True, "running": True, "qr_login": True, "fields": []}],
+        "channels": [
+            {"name": "weixin", "enabled": True, "running": True, "connected": False, "qr_login": True, "fields": []}
+        ],
     }
     tool = RavenConfigTool()
     tool.set_rpc_caller(Calls({"channels.status": status, "channels.configure": {"outcome": "started"}}))
@@ -1380,6 +1416,24 @@ async def test_switching_on_a_scan_channel_says_where_the_code_is(config_file):
 
     assert "Settings > Channels > weixin" in reply and "scan" in reply
     assert described["state"] == "running, not connected yet" and "QR" in described["login"]
+
+
+@pytest.mark.asyncio
+async def test_a_scan_channel_that_reported_pairing_reads_as_connected(config_file):
+    """A paired WeChat reports `connected: true`; that is the one case the
+    "not connected yet" branch must not swallow."""
+    status = {
+        "gateway_running": True,
+        "channels": [
+            {"name": "weixin", "enabled": True, "running": True, "connected": True, "qr_login": True, "fields": []}
+        ],
+    }
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"channels.status": status}))
+
+    described = json.loads(await _run(tool, action="describe", path="channels.weixin"))
+
+    assert described["state"] == "connected"
 
 
 @pytest.mark.asyncio

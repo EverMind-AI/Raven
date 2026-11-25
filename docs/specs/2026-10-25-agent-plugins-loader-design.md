@@ -332,9 +332,11 @@ validated and reported, and no server is started. The opt-in is per
 package, not global.
 
 **Namespacing.** A package's server names are qualified with the package
-name (`<package>__<server>`) so they cannot collide with the host's own
+name (`<package>__<server>`) so they are namespaced away from the host's own
 `tools.mcpServers` entries, and so a sub-agent row's `mcps` list
-(`raven/agent/subagent/mcp_grant.py:364-448`) can name them precisely. The
+(`raven/agent/subagent/mcp_grant.py:364-448`) can name them precisely. A
+composed name the host already configured is the host's: the package's
+server is skipped and reported rather than replacing it. The
 separator is `__` because the manifest's name rules forbid an underscore in
 a package name, so the first occurrence is unambiguous.
 
@@ -353,9 +355,9 @@ every MCP apply; the data directory is
 `<RAVEN_HOME>/plugin-data/<package>/`, created before a server starts;
 `raven agent-plugins list` and `inspect` report the servers and the
 problems without starting anything. `SandboxExecutor.start_process` gained
-an optional `cwd`, and the boxlite executor translates the command, every
+an optional `cwd`, and the sandboxed executor translates the command, every
 argument, every environment value and the working directory to their guest
-mounts before passing them to `Box.exec`; a package's data root is mounted
+mounts before running them in the sandbox; a package's data root is mounted
 at `/plugin-data` when a package stdio server is configured, so
 `PLUGIN_DATA` translates with the rest. A working directory outside every
 mounted volume raises rather than falling back to `/workspace`, because a

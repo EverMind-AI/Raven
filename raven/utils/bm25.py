@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Callable
 
 # Match length-≥2 alphanumeric runs OR a single CJK ideograph.
 # ``re`` precompile is module-level to dodge per-call regex setup.
@@ -56,11 +57,24 @@ class BM25Okapi:
         # weighting; the ``1 +`` guard keeps it non-negative when n ≈ N.
         self.idf = {term: math.log(1 + (n - count + 0.5) / (count + 0.5)) for term, count in df.items()}
 
-    def get_scores(self, query_tokens: list[str]) -> list[float]:
+    def get_scores(
+        self,
+        query_tokens: list[str],
+        *,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> list[float]:
+        """The score of every document against ``query_tokens``.
+
+        ``should_stop``, when given, is read once per query term: a True answer
+        abandons the scoring and returns no scores at all -- the caller has
+        given up, so partial scores would be read as a finished ranking.
+        """
         scores = [0.0] * self.corpus_size
         if not query_tokens or self.corpus_size == 0:
             return scores
         for term in query_tokens:
+            if should_stop is not None and should_stop():
+                return []
             idf = self.idf.get(term, 0.0)
             if idf <= 0.0:
                 continue

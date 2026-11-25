@@ -908,6 +908,51 @@ def _through_litellm(monkeypatch: pytest.MonkeyPatch, upstream: Any = _refusing_
     monkeypatch.setattr("raven.providers.litellm_provider.acompletion", acompletion)
 
 
+# ---------- a stream request answered by a document --------------------------------
+
+
+async def test_a_stream_request_answered_by_a_document_is_a_protocol_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The endpoint answered the stream request with a JSON document, as Zhipu's
+    Anthropic-compatible address does for an OpenAI-shaped call: nothing parses as
+    an event, and the library makes up a terminal chunk, so the accumulator sees a
+    cut. The content-type that says why has to survive the whole production chain
+    -- the client wrapper's headers, ``call_record.from_stream`` and
+    ``keep_headers`` -- for the verdict to name the protocol instead of the
+    connection, and the recommendation has to survive the detail bound.
+
+    The verdict is not retryable: the endpoint will answer the same way, so there
+    is nothing for the loop's ladder to wait for."""
+    import json
+
+    import httpx
+
+    from raven.providers.streaming import stream_llm_call
+
+    def upstream(request: Any) -> Any:
+        return httpx.Response(
+            200,
+            request=request,
+            content=json.dumps({"code": 500, "msg": "404 NOT_FOUND", "success": False}).encode(),
+            headers={"content-type": "application/json"},
+        )
+
+    _through_litellm(monkeypatch, upstream)
+
+    response = await stream_llm_call(
+        _make_provider(), messages=[{"role": "user", "content": "hi"}], tools=None, model="openai/gpt-4o"
+    )
+
+    content = response.content or ""
+    assert response.error_classification is not None
+    assert response.error_classification.category == "protocol_mismatch"
+    assert response.error_classification.retryable is False
+    assert response.error_classification.should_fallback is True
+    assert content.startswith("Error calling LLM (protocol_mismatch): check this provider's protocol and base URL")
+    assert content.endswith("not an event stream"), f"the account was cut: {content!r}"
+    assert "reasoning were lost" not in content
+    assert "cut off by the connection" not in content
+
+
 @pytest.mark.asyncio
 async def test_an_openai_refusal_is_read_where_litellm_files_it(monkeypatch: pytest.MonkeyPatch) -> None:
     """Converting the upstream's body, litellm moves every field its ``Message`` does

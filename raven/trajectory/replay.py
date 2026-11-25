@@ -137,6 +137,7 @@ _STREAM_CHUNK_CHARS = 80
 _NONCE_RE = re.compile(r"#[0-9a-f]{8}\b")
 _CLOCK_LINE_RE = re.compile(r"^(Current Time:).*$", re.MULTILINE)
 _UNTRUSTED_MARKER_LINE_RE = re.compile(r"^\[(?:BEGIN|END) UNTRUSTED [^\n]*$", re.MULTILINE)
+_MANAGED_OUTPUT_RE = re.compile(r"tool_[0-9a-f]{32}\.txt")
 
 
 @dataclass(frozen=True)
@@ -465,12 +466,14 @@ def load_recording(bundle_dir: Path) -> Recording:
 def _normalize_text(text: str) -> str:
     """Mask only the text the harness regenerates freshly on every run.
 
-    Scoped to the runtime-context clock line and the untrusted-fence marker
-    lines — never applied to arbitrary content, so a date in a user message or
-    a tool argument still counts as a real divergence.
+    Scoped to the runtime-context clock line, the untrusted-fence marker
+    lines and the managed tool-output filename — never applied to arbitrary
+    content, so a date in a user message or a tool argument still counts as a
+    real divergence.
     """
     text = _CLOCK_LINE_RE.sub(r"\1 <clock>", text)
-    return _UNTRUSTED_MARKER_LINE_RE.sub(lambda m: _NONCE_RE.sub("#<nonce>", m.group(0)), text)
+    text = _UNTRUSTED_MARKER_LINE_RE.sub(lambda m: _NONCE_RE.sub("#<nonce>", m.group(0)), text)
+    return _MANAGED_OUTPUT_RE.sub("tool_<id>.txt", text)
 
 
 def _canonical(value: Any) -> Any:
@@ -918,7 +921,13 @@ def _parse_ts(value: Any) -> datetime | None:
 
 
 def _session_records(session_path: Path) -> list[dict[str, Any]]:
-    """The message records of a ``session.jsonl`` file (metadata rows skipped)."""
+    """The message records of a ``session.jsonl`` file (record kinds skipped).
+
+    A transcript carries records beside its messages: ``metadata`` for the
+    session record, ``turn_meta`` for stamps restated on rows already written.
+    Neither has a role, so a reader that hands one on as a message fails where
+    it builds a history.
+    """
     records: list[dict[str, Any]] = []
     for line in session_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -928,7 +937,7 @@ def _session_records(session_path: Path) -> list[dict[str, Any]]:
             data = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(data, dict) and data.get("_type") != "metadata":
+        if isinstance(data, dict) and not data.get("_type"):
             records.append(data)
     return records
 

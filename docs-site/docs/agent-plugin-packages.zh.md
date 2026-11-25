@@ -134,14 +134,17 @@ Raven 就不会写入它，也不会删除它。这包括：
 ```
 
 按包授权，是因为一条 server 配置就是要在你机器上启动一个进程。包贡献的
-server 以 `<包名>__<server 名>` 命名，因此不会和你自己的 `tools.mcpServers`
-条目冲突。
+server 以 `<包名>__<server 名>` 命名；若这个名字已经出现在你自己的
+`tools.mcpServers` 里，以你的为准——包那条 server 会被跳过并报告，
+不会顶掉你已配置的 server。
 
-包的 server 以包根目录为工作目录（除非条目另指一个），环境里带
+包的 stdio server 以包根目录为工作目录（除非条目另指一个），环境里带
 `PLUGIN_ROOT` 与 `PLUGIN_DATA`：前者是包目录，后者是 Raven 为该包保留、
-跨更新不丢的目录（`<home>/plugin-data/<包名>/`）。格式定义的两个占位符
-`${PLUGIN_ROOT}` 与 `${PLUGIN_DATA}` 会在 server 的参数、环境变量和工作目录
-中展开。
+跨更新不丢的目录（`<home>/plugin-data/<包名>/`）。HTTP server 两者都没有。
+格式定义的两个占位符
+`${PLUGIN_ROOT}` 与 `${PLUGIN_DATA}` 会在 server 的参数和环境变量值中展开。
+工作目录不是这样展开的：它必须是包内相对路径（`./...`），或与两个占位符之一
+相同、或位于其之下，并且不得越出它所锚定的目录。
 
 展开之后，参数或环境变量里带 `..` 路径分量的条目会被拒绝并报告。该检查按
 `/` 和 `\` 切分，所以 URL 里出现 `..` 分段（例如
@@ -150,6 +153,21 @@ server 以 `<包名>__<server 名>` 命名，因此不会和你自己的 `tools.
 一条坏配置不会让整个包失效：该条目被跳过并报告，其余照常运行。若包的
 `mcp.json` 声明的 Agent Plugins 版本和它的 `plugin.json` 不一致，或文件本身
 不是合法的 MCP 配置，则只关闭该包的 MCP，技能仍然可用。
+
+## 网页端 { #in-the-web-ui }
+
+网页端设置弹窗的「插件」页列出 Raven 能看到的包：每个包的版本、来源目录、技能和
+MCP server，以及它的技能是否已导入当前工作区。`agentPlugins.packages` 里没有可用
+包的路径也会列出来，并附上原因。
+
+带 MCP server 的包有一个开关「启动它的 MCP 服务」，用来把包名加进或移出
+`agentPlugins.mcpPackages`。运行中的引擎沿用启动时的 server 集合，所以改动在
+Raven 重启后生效，在此之前该行会显示「需重启」。导入和移除技能仍然用
+`raven agent-plugins`：两者都要填 Raven 主机上的路径，而打开页面的浏览器不一定在
+那台机器上。
+
+旁边的「MCP」页是另一份列表，列的是 `tools.mcpServers` 里配置的 server，包里的
+server 不在那里。
 
 ## 当前限制 { #current-limits }
 

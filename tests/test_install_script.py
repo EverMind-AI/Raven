@@ -14,8 +14,9 @@ script itself under `curl | sh`), and they stay above install.sh's closing
 launch -- that call holds the terminal until Ctrl-C, so anything placed after
 it would not run at all on a normal install.
 
-install.ps1 mirrors the capability steps for Windows (Install-Browser,
-Install-Office) and the closing launch (Start-Web): same decisions, same
+install.ps1 mirrors the capability steps for Windows (Install-Resources,
+Install-Browser, Install-Office) and the closing launch (Start-Web): same
+decisions, same
 degrade-loudly warns, with the /dev/tty gate traded for a console gate --
 under `irm | iex` Read-Host still reads the console, but CI has none, so the
 guard must make a non-interactive run skip the winget offer cleanly instead of
@@ -81,10 +82,11 @@ def test_the_installers_read_the_release_plugin_list_and_never_the_api() -> None
 
 def test_the_optional_capability_steps_exist_and_are_skippable() -> None:
     text = INSTALL_SH.read_text(encoding="utf-8")
-    for fn in ("install_browser", "install_office"):
+    for fn in ("install_browser", "install_office", "install_resources"):
         assert f"{fn}() {{" in text
     assert '[ -n "${RAVEN_MINIMAL:-}" ] || install_browser' in text
     assert '[ -n "${RAVEN_MINIMAL:-}" ] || install_office' in text
+    assert '[ -n "${RAVEN_MINIMAL:-}" ] || install_resources' in text
 
 
 def test_the_install_ends_on_a_running_page() -> None:
@@ -1026,10 +1028,27 @@ def test_the_windows_release_lookup_reads_the_redirect_in_both_powershells() -> 
 
 def test_the_windows_capability_steps_exist_and_are_skippable() -> None:
     text = INSTALL_PS1.read_text(encoding="utf-8")
-    for fn in ("Install-Browser", "Install-Office"):
+    for fn in ("Install-Resources", "Install-Browser", "Install-Office"):
         assert f"function {fn}" in text
+    assert "if (-not $env:RAVEN_MINIMAL) { Install-Resources $uv }" in text
     assert "if (-not $env:RAVEN_MINIMAL) { Install-Browser $uv }" in text
     assert "if (-not $env:RAVEN_MINIMAL) { Install-Office }" in text
+
+
+def test_both_installers_fetch_the_knowledge_reader_models() -> None:
+    """A native Windows install made with install.ps1 started without the
+    deepdoc models and the word dictionary until someone ran `raven resources`
+    by hand: only install.sh fetched them. Both now run the tool venv's python
+    with `-m raven.resources --optional`, best-effort under the same contract
+    -- the step reports its own failure and leaves a working raven."""
+    sh = INSTALL_SH.read_text(encoding="utf-8")
+    assert '"$py" -m raven.resources --optional' in sh
+
+    ps1 = INSTALL_PS1.read_text(encoding="utf-8")
+    step = ps1[ps1.index("function Install-Resources") :]
+    assert "& $py -m raven.resources --optional | Out-Host" in step
+    assert 'Join-Path $toolDir "raven\\Scripts\\python.exe"' in step
+    assert "Resource download failed; raven still runs" in step
 
 
 def test_the_windows_install_ends_on_a_running_page() -> None:

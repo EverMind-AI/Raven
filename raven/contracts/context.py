@@ -84,7 +84,7 @@ class OverflowOutcome:
 
 @dataclass(frozen=True)
 class AssembledPrefix:
-    """Phase-A output handed to phase-B builders (the Curator).
+    """Phase-A output handed to phase-B builders (the history builder).
 
     A phase-B builder needs the already-assembled system prefix + the
     user message + tool defs so it can size the *fixed* prompt overhead
@@ -161,7 +161,7 @@ class Segment:
 
 @runtime_checkable
 class SegmentBuilder(Protocol):
-    """One context contributor. seg1–5 and the Curator all implement it.
+    """One context contributor. seg1–5 and the history builder all implement it.
 
     ``order`` fixes the segment's position in the system prompt.
     ``needs_prefix`` routes the builder to phase B (it reads
@@ -218,8 +218,8 @@ class ContextEngine(ABC):
     @abstractmethod
     def owns_compaction(self) -> bool:
         """If True, AgentLoop skips ``MemoryEngine.maybe_consolidate`` and
-        lets the engine manage history compaction itself (Curator archives
-        messages out-of-band)."""
+        lets the engine manage history compaction itself (the history
+        strategy reclaims the window on its own terms)."""
 
     @property
     def mints_source_refs(self) -> bool:
@@ -266,9 +266,9 @@ class ContextEngine(ABC):
         session_key: str,
         outcome: dict[str, Any],
     ) -> None:
-        """Optional post-turn hook. Curator updates its manifest / archives
-        here; Legacy ignores it. Default is no-op so future engines can
-        opt in incrementally.
+        """Optional post-turn hook. The history strategy may update its own
+        bookkeeping here. Default is no-op so future engines can opt in
+        incrementally.
         """
         return None
 

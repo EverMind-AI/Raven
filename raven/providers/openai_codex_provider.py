@@ -32,6 +32,7 @@ from raven.providers.base import (
     ToolCallRequest,
     format_llm_error,
 )
+from raven.providers.call_timeout import call_timeout
 from raven.providers.first_byte import (
     FirstByteTimeoutError,
     httpx_timeout,
@@ -132,15 +133,16 @@ class OpenAICodexProvider(LLMProvider):
         caps = httpx_timeout(self.generation) or timeout
         raw_usage: dict[str, Any] = {}
         try:
-            content, tool_calls, finish_reason = await _request_codex(
-                url,
-                headers,
-                body,
-                timeout=caps,
-                idle_timeout=idle_timeout,
-                first_byte=first_byte,
-                usage_sink=raw_usage,
-            )
+            async with call_timeout(timeout):
+                content, tool_calls, finish_reason = await _request_codex(
+                    url,
+                    headers,
+                    body,
+                    timeout=caps,
+                    idle_timeout=idle_timeout,
+                    first_byte=first_byte,
+                    usage_sink=raw_usage,
+                )
             return LLMResponse(
                 content=content,
                 tool_calls=tool_calls,

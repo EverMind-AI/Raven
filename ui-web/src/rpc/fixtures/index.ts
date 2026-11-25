@@ -23,6 +23,7 @@
  * push their frames on the injected timer.
  */
 
+import { createAgentPlugins } from './agentPlugins'
 import { createBrowser } from './browser'
 import { createBugReport } from './bugreport'
 import { createChannels } from './channels'
@@ -77,6 +78,7 @@ export function demoFixtures(env: FixtureEnv): Fixtures {
     ...ext.fixtures,
     ...createSkillhub(env, ext).fixtures,
     ...createPlughub(env, ext).fixtures,
+    ...createAgentPlugins().fixtures,
     ...createSubagents(env).fixtures,
     ...createMachines(env).fixtures,
     ...createTasks(env).fixtures,

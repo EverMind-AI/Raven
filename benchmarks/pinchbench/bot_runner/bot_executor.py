@@ -163,6 +163,7 @@ async def execute_task(
         task_id, status, transcript, workspace, execution_time, timed_out
     """
     from raven.agent.loop import AgentLoop
+    from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
     from raven.config.schema import ExecToolConfig
     from raven.session.manager import SessionManager
     from raven.spine import ChatType, Origin, Source, Text, TurnRequest
@@ -176,9 +177,9 @@ async def execute_task(
     session_mgr = SessionManager(task_workspace)
     session_key = f"{CHANNEL_NAME}:{task.task_id}"
 
-    # Load skill_forge config so injection_mode / inject_max / mass_library_db
-    # etc. are honored under bot benchmark runs. Without this AgentLoop gets
-    # skill_forge_config=None → SkillService falls back to dataclass defaults.
+    # Load skill_forge config so local_dirs / blocklist / always_max etc. are
+    # honored under bot benchmark runs. Without this AgentLoop gets
+    # skill_forge_config=None and falls back to the model defaults.
     from raven.config.raven import load_raven_config
 
     _ec_cfg = load_raven_config()
@@ -188,17 +189,20 @@ async def execute_task(
         provider=provider,
         workspace=task_workspace,
         model=model,
-        max_iterations=40,
-        context_window_tokens=65_536,
-        exec_config=ExecToolConfig(),
-        restrict_to_workspace=True,
         session_manager=session_mgr,
-        skill_forge_config=skill_forge_cfg,
-        runtime_config=getattr(_ec_cfg, "runtime", None),
+        tools=ToolWiring(
+            exec_config=ExecToolConfig(),
+            restrict_to_workspace=True,
+        ),
+        engine=EngineWiring(
+            context_window_tokens=65_536,
+            skill_forge_config=skill_forge_cfg,
+            runtime_config=getattr(_ec_cfg, "runtime", None),
+        ),
         # Benchmarks are non-interactive batch runs — opt out of the
         # per-turn shadow-git checkpoint (no recovery channel to inject
         # into, and we don't want ``.raven/shadow.git`` in task workspaces).
-        interactive=False,
+        policy=TurnPolicy(max_iterations=40, interactive=False),
     )
 
     timeout_seconds = task.timeout_seconds * timeout_multiplier

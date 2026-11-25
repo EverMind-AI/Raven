@@ -2067,7 +2067,9 @@ def _minimax_image_tool(monkeypatch, handler, workspace: Path, **section) -> Ima
     address and key in place."""
     transport = httpx.MockTransport(handler)
     real_client = httpx.AsyncClient
-    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    monkeypatch.setattr(
+        media_gen.httpx, "AsyncClient", lambda **kw: real_client(transport=transport, timeout=kw["timeout"])
+    )
     recorder = section.pop("usage_recorder", None)
     fields = {"provider": "minimax", "api_base": "https://api.minimax.io/v1", "api_key": "mm-key", "model": "image-01"}
     return ImageGenerateTool(SimpleNamespace(**{**fields, **section}), workspace=workspace, usage_recorder=recorder)
@@ -2083,6 +2085,20 @@ def _minimax_answer(*, pictures: list[str] | None = None, failed: str = "0", **e
         "base_resp": {"status_code": 0, "status_msg": "success"},
     }
     return httpx.Response(200, json={**body, **extra})
+
+
+def _h3_answer(*, pictures: list[str] | None = None) -> httpx.Response:
+    """H3's image answer: ``data`` entries and ``usage``, and no ``base_resp``."""
+    pictures = [_B64] if pictures is None else pictures
+    return httpx.Response(
+        200,
+        json={
+            "created": 1_795_280_658,
+            "data": [{"b64_json": picture} for picture in pictures],
+            "usage": {"generated_images": len(pictures), "input_tokens": 1952, "output_tokens": 16384},
+            "request_id": "trace-1",
+        },
+    )
 
 
 @pytest.mark.parametrize(
@@ -2164,9 +2180,44 @@ async def test_a_minimax_address_alone_never_selects_minimax_s_request_shape(mon
     assert "MiniMax" not in json.dumps(tool.to_schema()), "nor does the address alone pick the schema"
 
 
-async def test_a_minimax_picture_keeps_one_character_and_a_local_one_travels_inline(monkeypatch, tmp_path) -> None:
-    """MiniMax keeps a character from one reference image per request: of several
-    the first is sent, a file on disk as a data URL."""
+def test_a_minimax_image_schema_follows_the_model_family_and_the_default_is_unchanged(tmp_path) -> None:
+    """The schema follows the model the section names: a legacy model keeps one
+    reference and warns about its 2013 refusal, H3 edits from up to sixteen and is
+    held to that route's limit, and elsewhere an image is still an edit input. Off
+    MiniMax the served shape is the class's own, untouched."""
+    section = SimpleNamespace(provider="minimax", api_base="https://api.minimax.io/v1", api_key="k", model="image-01")
+    legacy = ImageGenerateTool(section, workspace=tmp_path).to_schema()["function"]
+    section.model = "MiniMax-H3-Image"
+    h3 = ImageGenerateTool(section, workspace=tmp_path).to_schema()["function"]
+    default = ImageGenerateTool(
+        SimpleNamespace(api_base="https://openrouter.ai/api/v1", api_key="k", model="openai/gpt-image-2"),
+        workspace=tmp_path,
+    ).to_schema()["function"]
+
+    assert legacy["description"] == ImageGenerateTool._MINIMAX_DESCRIPTION
+    assert legacy["parameters"] == ImageGenerateTool._MINIMAX_PARAMETERS
+    images = legacy["parameters"]["properties"]["images"]["description"]
+    assert "one reference per picture" in images and "2013" in images and "not sent" not in images
+    batched = legacy["parameters"]["properties"]["prompts"]["items"]["properties"]["images"]["description"]
+    assert "one per picture" in batched
+
+    assert h3["description"] == ImageGenerateTool._MINIMAX_DESCRIPTION
+    assert h3["parameters"] == ImageGenerateTool._H3_PARAMETERS
+    images = h3["parameters"]["properties"]["images"]["description"]
+    assert "1 to 16" in images and "2013" in images
+    batched = h3["parameters"]["properties"]["prompts"]["items"]["properties"]["images"]["description"]
+    assert "up to 16" in batched
+
+    assert default["description"] == ImageGenerateTool._DESCRIPTION
+    assert default["parameters"] == ImageGenerateTool._PARAMETERS
+    assert "edit/vary" in default["parameters"]["properties"]["images"]["description"]
+
+
+async def test_a_minimax_picture_sends_every_named_reference(monkeypatch, tmp_path) -> None:
+    """MiniMax takes one reference image per request and refuses more with a status
+    of its own. The host sends every one named rather than choosing for the caller,
+    so that refusal reaches the model instead of a picture drawn from a silent first
+    pick. A file on disk travels inline as a data URL."""
     workspace = tmp_path / "ws"
     workspace.mkdir()
     portrait = workspace / "portrait.png"
@@ -2182,7 +2233,94 @@ async def test_a_minimax_picture_keeps_one_character_and_a_local_one_travels_inl
     out = json.loads(await tool.execute("in a garden", images=refs, aspect_ratio="3:4", filename="garden"))
 
     assert Path(out["paths"][0]).name == "garden.png"
-    assert seen[0]["subject_reference"] == [{"type": "character", "image_file": f"data:image/png;base64,{_B64}"}]
+    assert seen[0]["subject_reference"] == [
+        {"type": "character", "image_file": f"data:image/png;base64,{_B64}"},
+        {"type": "character", "image_file": "https://example.test/second.png"},
+        {"type": "character", "image_file": "https://example.test/third.png"},
+    ]
+
+
+async def test_an_h3_picture_with_references_edits_at_the_edits_route(monkeypatch, tmp_path) -> None:
+    """H3's text-to-image route takes the prompt alone and drops a reference field
+    without an error (HTTP 200, billed), so a call naming references goes to
+    ``/v1/images/edits`` instead, which takes one to sixteen of them as
+    ``images[].image_url``. Every reference named is sent: one is not picked for the
+    caller, and a file on disk travels inline as a data URL."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    first = workspace / "first.png"
+    first.write_bytes(_PNG)
+    seen: list[tuple[str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, json.loads(request.content)))
+        return _h3_answer()
+
+    tool = _minimax_image_tool(monkeypatch, handler, workspace, model="MiniMax-H3-Image")
+    refs = [str(first), "https://example.test/second.png"]
+    out = json.loads(await tool.execute("in a garden", images=refs, aspect_ratio="3:2", filename="garden"))
+
+    assert out["success"] and Path(out["paths"][0]).name == "garden.png"
+    assert [path for path, _ in seen] == ["/v1/images/edits"]
+    body = seen[0][1]
+    assert body["images"] == [
+        {"image_url": f"data:image/png;base64,{_B64}"},
+        {"image_url": "https://example.test/second.png"},
+    ]
+    assert "subject_reference" not in body
+    assert (body["model"], body["aspect_ratio"]) == ("MiniMax-H3-Image", "3:2")
+
+
+async def test_an_h3_picture_without_references_stays_on_the_generations_route(monkeypatch, tmp_path) -> None:
+    """The text-to-image route is the one H3 was measured working on, and a call
+    with no reference has nothing to edit from: it keeps that route and carries no
+    reference field at all."""
+    seen: list[tuple[str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, json.loads(request.content)))
+        return _h3_answer()
+
+    tool = _minimax_image_tool(monkeypatch, handler, tmp_path, model="MiniMax-H3-Image")
+    out = json.loads(await tool.execute("a portrait"))
+
+    assert out["success"]
+    assert [path for path, _ in seen] == ["/v1/images/generations"]
+    body = seen[0][1]
+    assert "images" not in body and "subject_reference" not in body
+
+
+async def test_h3_references_past_the_edits_route_limit_are_refused_before_sending(monkeypatch, tmp_path) -> None:
+    """``/v1/images/edits`` takes one to sixteen references. A seventeenth is
+    answered here, naming the limit and the count, rather than sent to be refused
+    as a whole or truncated to sixteen without the caller's word."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        pytest.fail("a call with more references than the edits route takes must not reach the API")
+
+    tool = _minimax_image_tool(monkeypatch, handler, tmp_path, model="MiniMax-H3-Image")
+    refs = [f"https://example.test/{index}.png" for index in range(17)]
+    out = json.loads(await tool.execute("a portrait", images=refs))
+
+    assert "1 to 16" in out["error"] and "17" in out["error"]
+    assert out["model"] == "MiniMax-H3-Image"
+
+
+async def test_h3_sends_a_call_at_the_route_limit_itself(monkeypatch, tmp_path) -> None:
+    """Sixteen is the last count the edits route takes, so a call naming sixteen is
+    sent rather than refused: the guard is the route's own bound, not one stricter."""
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return _h3_answer()
+
+    tool = _minimax_image_tool(monkeypatch, handler, tmp_path, model="MiniMax-H3-Image")
+    refs = [f"https://example.test/{index}.png" for index in range(16)]
+    out = json.loads(await tool.execute("a portrait", images=refs))
+
+    assert out["success"]
+    assert seen[0]["images"] == [{"image_url": ref} for ref in refs]
 
 
 async def test_a_minimax_batch_keeps_each_picture_s_own_reference(monkeypatch, tmp_path) -> None:
@@ -2283,9 +2421,144 @@ async def test_a_minimax_picture_keeps_the_format_its_bytes_declare(monkeypatch,
     assert Path(out["paths"][0]).suffix == ".jpg" and Path(out["paths"][0]).read_bytes() == _JPG
 
 
+@pytest.mark.parametrize(
+    ("model", "provider", "base", "host"),
+    [
+        ("MiniMax-H3-Image", "minimax", "https://api.minimax.io/v1", "api.minimax.io"),
+        ("MiniMax-H3-Image-Highspeed", "minimax_cn_api", "https://api.minimaxi.com/v1", "api.minimax.cn"),
+        ("MiniMax-H3-Image", "minimax", "https://relay.example/proxy/v1", "relay.example/proxy"),
+    ],
+)
+async def test_minimax_h3_generates_text_at_the_configured_region(monkeypatch, tmp_path, model, provider, base, host):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+
+    tool = _minimax_image_tool(monkeypatch, handler, tmp_path, model=model, provider=provider, api_base=base)
+    answer = json.loads(await tool.execute("portrait", aspect_ratio="3:2"))
+    assert answer["success"] and Path(answer["paths"][0]).read_bytes() == _PNG
+    (request,) = requests
+    assert str(request.url) == f"https://{host}/v1/images/generations"
+    assert request.headers["authorization"] == "Bearer mm-key"
+    assert request.extensions["timeout"]["read"] >= 600
+    assert tool.timeout_for({}) > request.extensions["timeout"]["read"]
+    assert json.loads(request.content) == {
+        "model": model,
+        "prompt": "portrait",
+        "n": 1,
+        "response_format": "b64_json",
+        "aspect_ratio": "3:2",
+    }
+
+
+def test_the_h3_deadline_covers_a_batch_of_prompts(monkeypatch, tmp_path):
+    """The batch is the slow path -- one request per picture, four in flight -- so
+    a `prompts` call must carry the H3 window exactly like a single picture does."""
+    tool = _minimax_image_tool(monkeypatch, None, tmp_path, model="MiniMax-H3-Image")
+    assert tool.timeout_for({"prompt": "a lantern"}) == 660.0
+    assert tool.timeout_for({"prompts": [{"prompt": f"p{i}"} for i in range(5)]}) == 660.0
+    assert tool.timeout_for({"prompt": "a cover", "prompts": [{"prompt": f"p{i}"} for i in range(3)]}) == 660.0
+
+
+@pytest.mark.parametrize("case", ["unreadable_reference", "timeout", "http_error", "item_error", "url"])
+async def test_minimax_h3_returns_failures_without_resubmitting(monkeypatch, tmp_path, case):
+    posts = []
+    error = {"code": "1027", "message": "withheld"}
+
+    def handler(request):
+        if request.method == "GET":
+            assert "authorization" not in request.headers
+            return httpx.Response(200, content=_PNG, headers={"content-type": "image/png"})
+        posts.append(request)
+        if case == "timeout":
+            raise httpx.ReadTimeout("timed out")
+        if case == "http_error":
+            return httpx.Response(
+                422, json={"type": "error", "error": {"type": "invalid_request_error", "message": "withheld"}}
+            )
+        if case == "url":
+            return httpx.Response(200, json={"data": [{"url": "https://8.8.8.8/result.png"}]})
+        return httpx.Response(200, json={"data": [{"error": error}]})
+
+    tool = _minimax_image_tool(monkeypatch, handler, tmp_path, model="MiniMax-H3-Image")
+    answer = json.loads(
+        await tool.execute("portrait", images=["missing.jpg"] if case == "unreadable_reference" else None)
+    )
+    assert len(posts) == (0 if case == "unreadable_reference" else 1)
+    if case == "unreadable_reference":
+        assert answer["error"] == "could not read input image"
+    elif case == "timeout":
+        assert answer["retryable"] is False and answer["error"] == "ReadTimeout"
+    elif case == "http_error":
+        assert answer["error"] == "HTTP 422" and "withheld" in answer["detail"]
+    elif case == "url":
+        assert Path(answer["paths"][0]).read_bytes() == _PNG
+    else:
+        assert answer["detail"] == [error] and answer["retryable"] is False
+
+
+async def test_h3_deadline_follows_the_model_selected_for_this_call(monkeypatch, tmp_path):
+    from raven.agent.tools.registry import ToolRegistry
+
+    tool = _minimax_image_tool(monkeypatch, None, tmp_path, model="")
+    registry = ToolRegistry()
+    registry.register(tool)
+    deadlines = []
+    timeout = asyncio.timeout
+
+    def tracked(seconds):
+        deadlines.append(seconds)
+        return timeout(seconds)
+
+    async def execute(**kwargs):
+        return "done"
+
+    monkeypatch.setattr(asyncio, "timeout", tracked)
+    monkeypatch.setattr(tool, "execute", execute)
+    for model, provider, override, ceiling in (
+        ("", "minimax", "minimax/MiniMax-H3-Image", 660),
+        ("image-01", "minimax", "MiniMax-H3-Image", registry.DEFAULT_TOOL_TIMEOUT_S),
+        ("MiniMax-H3-Image", "", "", registry.DEFAULT_TOOL_TIMEOUT_S),
+    ):
+        tool._config.model, tool._config.provider = model, provider
+        assert await registry.execute("image_generate", {"prompt": "portrait", "model": override}) == "done"
+        assert deadlines[-1] == ceiling
+
+
+async def test_a_tool_call_forward_carries_the_h3_deadline(monkeypatch, tmp_path):
+    """``tool_call`` is how a folded-out schema reaches ``image_generate``, and the
+    registry reads the forwarder's ceiling: the target's deadline has to travel."""
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.agent.tools.tool_search import ToolCallTool, ToolSearchController
+
+    tool = _minimax_image_tool(monkeypatch, None, tmp_path, model="MiniMax-H3-Image")
+    registry = ToolRegistry()
+    registry.register(tool)
+    registry.register(ToolCallTool(ToolSearchController(registry, always_visible=set())))
+    deadlines = []
+    timeout = asyncio.timeout
+
+    def tracked(seconds):
+        deadlines.append(seconds)
+        return timeout(seconds)
+
+    async def execute(**kwargs):
+        return "done"
+
+    monkeypatch.setattr(asyncio, "timeout", tracked)
+    monkeypatch.setattr(tool, "execute", execute)
+    assert (
+        await registry.execute("tool_call", {"name": "image_generate", "arguments": {"prompt": "portrait"}}) == "done"
+    )
+    assert deadlines[0] == 660
+
+
 def test_the_image_tool_says_what_references_do_on_the_provider_it_runs_on() -> None:
-    """Edited or varied on most routes, kept as a character on MiniMax: the model reads
-    the one its section's provider applies, per turn."""
+    """Edited or varied on most routes, a kept character on the legacy MiniMax models,
+    and an edit from up to sixteen on H3: the model reads what its section's provider
+    and model apply, per turn."""
     from raven.agent.tools.registry import ToolRegistry
 
     section = SimpleNamespace(provider="", api_base="", api_key="k", model="")
@@ -2298,7 +2571,104 @@ def test_the_image_tool_says_what_references_do_on_the_provider_it_runs_on() -> 
     assert "MiniMax" not in json.dumps(offered())
     section.provider, section.api_base = "minimax", "https://api.minimax.io/v1"
     assert "character" in offered()["parameters"]["properties"]["images"]["description"]
-    assert "edit" not in offered()["description"].split(".")[0]
+    section.model = "MiniMax-H3-Image"
+    assert "1 to 16" in offered()["parameters"]["properties"]["images"]["description"]
+
+
+def test_the_h3_schema_takes_any_ratio_while_a_legacy_section_keeps_the_eight() -> None:
+    """H3's endpoint takes `auto` or any `W:H`; the legacy models take the eight
+    fixed ratios. Offering the H3 shape to a legacy section would let the registry
+    pass a value the legacy endpoint refuses, so the variant follows the model."""
+    from raven.agent.tools.registry import ToolRegistry
+
+    section = SimpleNamespace(
+        provider="minimax", api_base="https://api.minimax.io/v1", api_key="k", model="MiniMax-H3-Image"
+    )
+    registry = ToolRegistry()
+    registry.register(ImageGenerateTool(lambda: section, workspace=None))
+
+    def offered() -> dict:
+        definition = next(
+            d["function"] for d in registry.get_definitions() if d["function"]["name"] == "image_generate"
+        )
+        return definition["parameters"]
+
+    h3 = offered()
+    assert "enum" not in h3["properties"]["aspect_ratio"]
+    assert "auto" in h3["properties"]["aspect_ratio"]["description"]
+    assert "enum" not in h3["properties"]["prompts"]["items"]["properties"]["aspect_ratio"]
+
+    section.model = "image-01"
+    legacy = offered()
+    assert legacy["properties"]["aspect_ratio"]["enum"] == list(media_gen._SIZES)
+    assert legacy["properties"]["prompts"]["items"]["properties"]["aspect_ratio"]["enum"] == list(media_gen._SIZES)
+
+    section.provider, section.api_base, section.model = "", "", "openai/gpt-image-2"
+    assert offered()["properties"]["aspect_ratio"]["enum"] == list(media_gen._SIZES)
+
+
+def test_an_h3_model_name_on_another_provider_keeps_the_eight_ratios() -> None:
+    """The H3 shape follows the route, not the model string. `_via_minimax` is the
+    only path that sends `aspect_ratio` untouched, and only a MiniMax section takes
+    it; an OpenRouter or relay section that happens to name an H3 model runs the
+    Images API, which drops a ratio outside the eight instead of sending it. Offering
+    the H3 shape there would admit a value the route never delivers."""
+    from raven.agent.tools.registry import ToolRegistry
+
+    section = SimpleNamespace(
+        provider="openrouter", api_base="https://openrouter.ai/api/v1", api_key="k", model="MiniMax-H3-Image"
+    )
+    registry = ToolRegistry()
+    registry.register(ImageGenerateTool(lambda: section, workspace=None))
+
+    def ratios() -> tuple[dict, dict]:
+        parameters = next(
+            d["function"] for d in registry.get_definitions() if d["function"]["name"] == "image_generate"
+        )["parameters"]
+        return parameters["properties"]["aspect_ratio"], parameters["properties"]["prompts"]["items"]["properties"][
+            "aspect_ratio"
+        ]
+
+    outside = "an H3 model name must not widen the schema on a non-MiniMax route"
+    top, item = ratios()
+    assert top.get("enum") == list(media_gen._SIZES), outside
+    assert item.get("enum") == list(media_gen._SIZES), outside
+
+    section.provider, section.api_base = "", "https://relay.example/v1"
+    top, item = ratios()
+    assert top.get("enum") == list(media_gen._SIZES), outside
+    assert item.get("enum") == list(media_gen._SIZES), outside
+
+    section.provider, section.api_base = "minimax", "https://api.minimax.io/v1"
+    top, item = ratios()
+    assert "enum" not in top
+    assert "enum" not in item
+
+
+async def test_an_h3_ratio_outside_the_eight_reaches_the_endpoint(monkeypatch, tmp_path) -> None:
+    """`5:4` is inside H3's own acceptance and outside the fixed enum, so it is the
+    value the registry used to refuse before any request was sent. The legacy route
+    keeps the enum and still refuses it."""
+    from raven.agent.tools.registry import ToolRegistry
+
+    seen: list[dict] = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+
+    h3 = _minimax_image_tool(monkeypatch, handler, tmp_path, model="MiniMax-H3-Image")
+    registry = ToolRegistry()
+    registry.register(h3)
+    out = json.loads(await registry.execute("image_generate", {"prompt": "portrait", "aspect_ratio": "5:4"}))
+    assert out["success"]
+    assert seen[0]["aspect_ratio"] == "5:4"
+
+    legacy = _minimax_image_tool(monkeypatch, handler, tmp_path, model="image-01")
+    legacy_registry = ToolRegistry()
+    legacy_registry.register(legacy)
+    refusal = await legacy_registry.execute("image_generate", {"prompt": "portrait", "aspect_ratio": "5:4"})
+    assert refusal.startswith("Error: Invalid parameters")
 
 
 @pytest.mark.parametrize("tool_class", [ImageGenerateTool, VideoGenerateTool])

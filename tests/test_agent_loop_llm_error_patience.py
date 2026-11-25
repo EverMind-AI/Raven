@@ -20,7 +20,14 @@ from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.agent.loop.recovery import RecoveryLimits, limits_from_defaults
 from raven.agent.window import shrink
 from raven.contracts.tool import Tool, ToolResult
-from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import (
+    CallRecord,
+    ChatDelta,
+    ErrorClassification,
+    LLMProvider,
+    LLMResponse,
+    ToolCallRequest,
+)
 from raven.spine.events import NoticeKind
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
@@ -155,6 +162,131 @@ async def test_an_error_nobody_will_ask_again_about_is_not_announced(workspace):
         await _turn(_agent(workspace, provider, delays=(0.0, 0.0, 0.0)), notices)
 
     assert notices == []
+
+
+class _AnswersWithADocument(LLMProvider):
+    """A streaming provider whose every call is answered by a JSON document.
+
+    That is the shape an endpoint answers an OpenAI-shaped stream request with
+    when it speaks another protocol: no ``data:`` frame parses, the client
+    library makes up a terminal chunk, and the accumulator reaches its cut
+    branch. The header is what tells the accumulator *why*, so the verdict can
+    name the protocol instead of the connection.
+    """
+
+    provider_name = "zai"
+
+    def __init__(self, content_type: str = "application/json") -> None:
+        super().__init__(api_key="test")
+        self.content_type = content_type
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    _CHAT_RETRY_DELAYS = ()  # the provider's own ladder, exhausted at once
+
+    async def chat_stream(self, **kwargs):
+        self.calls += 1
+        yield ChatDelta(
+            content=None,
+            finish_reason="stop",
+            finish_synthesized=True,
+            call_record=CallRecord(headers={"content-type": self.content_type}),
+        )
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the stream path is under test
+        raise NotImplementedError
+
+
+async def _streamed_turn(agent: AgentLoop, notices: list[tuple[NoticeKind, str]]):
+    """One turn on the streaming path, which is the only path this verdict comes from."""
+
+    async def on_notice(kind: NoticeKind, detail: str) -> None:
+        notices.append((kind, detail))
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    return await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="build the deck",
+        ),
+        session_key="s1",
+        on_token_delta=on_delta,
+        on_notice=on_notice,
+    )
+
+
+@pytest.mark.parametrize("content_type", ["application/json", "application/json; charset=utf-8"])
+async def test_a_document_answered_stream_is_asked_once_and_never_announced_as_a_retry(workspace, content_type):
+    """The endpoint does not speak the provider's protocol, so asking again gets
+    the same document back. The verdict must not be retryable: the ladder is three
+    waits and a hundred seconds of a reader being told "the model did not answer,
+    trying again" before the one sentence that says what to fix -- advice that a
+    retry disproves while it is being given. ``should_fallback`` still holds,
+    because another model may speak the endpoint.
+
+    The account also has to name the provider: the advice says to check a
+    provider's settings, and a reader running more than one needs to know which.
+    """
+    provider = _AnswersWithADocument(content_type)
+    notices: list[tuple[NoticeKind, str]] = []
+    agent = _agent(workspace, provider, delays=(0.0, 0.0, 0.0))
+
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await _streamed_turn(agent, notices)
+
+    assert provider.calls == 1, "a fixed mismatch is answered identically, so it is not asked again"
+    assert notices == [], "nothing waits, so nothing may announce a wait"
+    reason = str(failed.value)
+    assert "protocol_mismatch@zai" in reason
+    assert "check this provider's protocol and base URL" in reason
+    assert "reasoning were lost" not in reason
+
+
+async def test_a_document_answered_stream_still_tries_the_fallback_model(workspace):
+    """Not retryable is not the same as fatal: the flag that was taken away is the
+    one the ladder waits on. ``should_fallback`` is untouched, so a model that
+    speaks the endpoint is still tried -- and it is tried without a wait first,
+    which is the whole point of demoting the retry."""
+
+    class _DocumentThenAnswer(_AnswersWithADocument):
+        async def chat_stream(self, model=None, **kwargs):
+            self.calls += 1
+            if model != "stub":
+                yield ChatDelta(content="the fallback answered")
+                yield ChatDelta(content=None, finish_reason="stop")
+                return
+            yield ChatDelta(
+                content=None,
+                finish_reason="stop",
+                finish_synthesized=True,
+                call_record=CallRecord(headers={"content-type": self.content_type}),
+            )
+
+    provider = _DocumentThenAnswer()
+    notices: list[tuple[NoticeKind, str]] = []
+    agent = _agent(workspace, provider, delays=(0.0, 0.0, 0.0))
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    async def on_notice(kind: NoticeKind, detail: str) -> None:
+        notices.append((kind, detail))
+
+    final, _used, _messages, outcome = await agent._run_agent_loop(
+        [{"role": "user", "content": "build the deck"}],
+        on_token_delta=on_delta,
+        on_notice=on_notice,
+        fallback_models=["backup"],
+    )
+
+    assert provider.calls == 2, "the primary once, then the fallback -- no ladder in between"
+    assert notices == [], "the fallback is taken before any wait, so nothing is announced"
+    assert final == "the fallback answered" and outcome.status == "completed"
 
 
 class _WordsItsOwnFailure(LLMProvider):
@@ -667,20 +799,24 @@ def test_the_budget_window_collapses_once_when_the_pictures_outgrow_it_and_not_b
     assert shrink.window_images(messages, 2, budget=40, reason="budget") == (0, 0), "idempotent under budget"
 
 
-def test_the_budget_weighs_inline_bytes_only_and_the_users_picture_is_outside_it() -> None:
+def test_the_budget_counts_history_user_pictures_and_protects_the_current_question() -> None:
     remote = {"type": "image_url", "image_url": {"url": "https://example.test/a.png"}}
     sketch = {"role": "user", "content": [_picture("SKETCHSKETCH")]}
+    current = {"role": "user", "content": [_picture("CURRENTCURRE")]}
     messages = [
         sketch,
         {"role": "tool", "tool_call_id": "1", "content": [remote]},
         _batch("b1", 2, 1),
         _batch("b2", 2, 2),
+        current,
     ]
 
-    # 16 wire bytes across the two batches, the remote reference weighing nothing.
-    assert shrink.window_images(messages, 1, budget=16, reason="budget") == (0, 0)
-    assert shrink.window_images(messages, 1, budget=15, reason="budget") == (2, 3)
-    assert messages[0] is sketch, "the user's own picture is neither weighed nor withdrawn"
+    # 12 + 0 + 8 + 8 + 12 = 40 wire bytes; the remote reference weighs nothing.
+    assert shrink.window_images(messages, 1, budget=40, reason="budget") == (0, 0)
+    assert shrink.window_images(messages, 1, budget=39, reason="budget") == (3, 4)
+    assert _pictures_in(messages[0]) == 0, "the earlier turn's picture is withdrawn"
+    assert "earlier turn" in messages[0]["content"][0]["text"]
+    assert _pictures_in(messages[-1]) == 1, "the current question keeps its picture"
 
 
 def test_the_budget_is_charged_the_base64_the_request_carries_not_the_bytes_it_decodes_to() -> None:
@@ -721,10 +857,10 @@ def test_a_picture_without_provenance_is_still_accounted_for() -> None:
     assert notes[0].endswith("To see it again, ask for it again]")
 
 
-def test_a_picture_the_user_sent_is_not_part_of_the_window() -> None:
-    """The user's own picture is the subject of the turn, not a result the model has
-    finished with: however many renders follow it, it stays -- until the endpoint has
-    refused the request and the window is closed with nothing else left to take out."""
+def test_the_current_questions_picture_is_kept_until_the_last_resort() -> None:
+    """The picture on this turn's question is the subject of the turn: it stays
+    while any tool or earlier-turn picture can go. The refusal ladder's last pass
+    can take it, because a text answer beats a failed turn."""
     sketch = {"role": "user", "content": [text_block("make it look like this"), _picture("SKETCH")]}
     messages = [sketch, *_with_pictures()[1:]]
 
@@ -733,8 +869,25 @@ def test_a_picture_the_user_sent_is_not_part_of_the_window() -> None:
 
     assert shrink.window_images(messages, 0, reason="refused") == (1, 2), "the tool pictures, not the sketch"
     assert _pictures_in(messages[0]) == 1
-    assert shrink.window_images(messages, 0, reason="refused", any_role=True) == (1, 1)
-    assert _pictures_in(messages[0]) == 0 and "refused this request's pictures" in messages[0]["content"][1]["text"]
+    assert shrink.window_images(messages, 0, reason="refused") == (0, 0), "nothing else is left to withdraw"
+    assert _pictures_in(messages[0]) == 1
+
+    assert shrink.window_images(messages, 0, reason="refused", last_resort=True) == (1, 1)
+    assert _pictures_in(messages[0]) == 0
+    assert "refused this request's pictures" in messages[0]["content"][1]["text"]
+
+
+def test_the_window_withdraws_a_post_question_picture() -> None:
+    """Only the current question's picture is exempt. A picture the reader sent
+    after it, or before it, is a result and can be withdrawn under pressure."""
+    question = {"role": "user", "content": [text_block("do it"), _picture("Q")]}
+    correction = {"role": "user", "content": [_picture("M")], "_mid_turn_user": True}
+    messages = [question, correction]
+
+    assert shrink.window_images(messages, 0, reason="budget") == (1, 1)
+    assert _pictures_in(messages[0]) == 1, "the current question keeps its picture"
+    assert _pictures_in(messages[1]) == 0
+    assert "This turn's pictures" in messages[1]["content"][0]["text"]
 
 
 def test_a_closed_window_withdraws_the_newest_picture_and_says_why() -> None:
@@ -767,11 +920,10 @@ def test_the_overflow_path_uses_the_same_notes() -> None:
     assert shrink.elide_older_images(out) == (out, 0)
 
 
-def test_the_overflow_path_sheds_the_users_own_pictures_last() -> None:
-    """A turn that is nothing but pasted screenshots overflows on them alone, and the
-    overflow path could always reach them: they go after every result picture and
-    tool body, newest kept, with the same note. While a result picture is still in
-    the transcript it goes first and the user's stay."""
+def test_the_overflow_path_sheds_earlier_pictures_and_keeps_the_current_question() -> None:
+    """A turn that is nothing but pasted screenshots overflows on them alone. The
+    pictures from earlier turns go after every result picture and tool body, with
+    the same note; the picture on the current question stays."""
     pasted = [
         {"role": "user", "content": [text_block("first screenshot"), _picture("U1")]},
         {"role": "assistant", "content": "seen"},
@@ -784,15 +936,15 @@ def test_the_overflow_path_sheds_the_users_own_pictures_last() -> None:
     assert elided == 2 and out is not pasted
     assert [_pictures_in(m) for m in pasted] == [1, 0, 1, 0, 1], "the input is left alone"
     assert [_pictures_in(m) for m in out] == [0, 0, 0, 0, 1]
-    assert "elided to fit the context window" in out[0]["content"][1]["text"]
+    assert "earlier turn" in out[0]["content"][1]["text"]
     assert shrink.emergency_shrink(out) == (out, 0)
 
     mixed = [*_with_pictures(), {"role": "user", "content": [_picture("U9")]}]
     first, freed = shrink.emergency_shrink(mixed)
-    assert freed == 2 and _pictures_in(first[-1]) == 1, "result pictures go first, the user's stays"
+    assert freed == 2 and _pictures_in(first[-1]) == 1, "result pictures go first, the current question stays"
     again, freed_again = shrink.emergency_shrink(first)
-    assert freed_again == 1 and _pictures_in(again[5]) == 0, "then the older result picture goes"
-    assert _pictures_in(again[-1]) == 1, "the newest picture, the user's, is kept"
+    assert freed_again == 1 and _pictures_in(again[5]) == 0, "the last-resort pass takes the newest result picture"
+    assert _pictures_in(again[-1]) == 1, "the current question is the newest, and stays"
     assert shrink.emergency_shrink(again) == (again, 0)
 
 
@@ -1030,7 +1182,7 @@ async def test_a_note_on_the_tool_result_transport_is_filed_with_its_facts_only(
 
 @pytest.mark.parametrize(
     ("reason", "keep"),
-    [("refused", 2), ("context", 2), ("budget", 2), ("superseded", 0), ("superseded", 2)],
+    [("refused", 2), ("context", 2), ("budget", 2), ("superseded", 0), ("superseded", 2), ("summary", 0)],
 )
 @pytest.mark.parametrize(
     "source",

@@ -18,12 +18,13 @@ import base64
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
 from raven.agent.tools.media_gen import ImageGenerateTool
-from raven.config.schema import MediaToolConfig
+from raven.config.schema import ImageToolConfig, MediaToolConfig
 from raven_ppt.contracts import Project
 from raven_ppt.tools.generate_image import PptGenerateImageTool
 
@@ -82,6 +83,73 @@ def _images_api(png: bytes):
 def _tool(tmp_path: Path, config: MediaToolConfig | None = None, **kwargs) -> PptGenerateImageTool:
     config = config or MediaToolConfig(api_key="test", api_base=OPENROUTER, model="openai/gpt-image-2")
     return PptGenerateImageTool(tmp_path, config=config, **kwargs)
+
+
+def _h3_tool(tmp_path: Path) -> PptGenerateImageTool:
+    section = SimpleNamespace(
+        provider="minimax", api_base="https://api.minimax.io/v1", api_key="mm-key", model="MiniMax-H3-Image"
+    )
+    return PptGenerateImageTool(tmp_path, config=section)
+
+
+def test_the_deck_deadline_follows_an_h3_host_once_per_wave(tmp_path: Path) -> None:
+    """A deck makes one host image request per picture and keeps four in flight, so
+    an H3 batch needs the host's H3 window once per wave; the fixed six minutes
+    would kill the second wave of a slow one."""
+    tool = _h3_tool(tmp_path)
+    assert tool.timeout_for({"prompt": "a lantern", "filename": "lantern"}) == 660
+    pictures = [{"prompt": f"p{i}", "filename": f"f{i}"} for i in range(9)]
+    assert tool.timeout_for({"prompts": pictures}) == 660 * 3
+    # A top-level prompt rides beside the batch as its first picture, so four
+    # items plus the prompt are five pictures and two waves, not one.
+    mixed = [{"prompt": f"p{i}", "filename": f"f{i}"} for i in range(4)]
+    assert tool.timeout_for({"prompt": "a cover", "prompts": mixed}) == 660 * 2
+    assert _tool(tmp_path).timeout_for({"prompt": "a lantern", "filename": "lantern"}) is None
+
+
+@pytest.mark.asyncio
+async def test_the_registered_deck_tool_carries_the_h3_deadline(monkeypatch, tmp_path: Path) -> None:
+    """The registered face is a ``SessionTool``, and the registry reads the deadline
+    off that face. Forwarding the prototype alone leaves the wrapper on its fixed
+    360 seconds, so this drives the factory's own tool through a real registry."""
+    import asyncio
+
+    from raven.agent import workdir
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.plugins.context import PluginContext, ServiceLocator
+    from raven_ppt import plugin as plugin_module
+
+    section = SimpleNamespace(
+        provider="minimax", api_base="https://api.minimax.io/v1", api_key="mm-key", model="MiniMax-H3-Image"
+    )
+    ctx = PluginContext(
+        config={"enabled": True, "profile": "script_author"},
+        services=ServiceLocator(
+            workspace=tmp_path, user_id="u", agent_id="a", media_config=lambda kind: section, media_proxy=None
+        ),
+    )
+    tool = plugin_module.make_ppt_generate_image(ctx)
+    assert tool is not None, "the deck route is available in this environment"
+    registry = ToolRegistry()
+    registry.register(tool)
+    deadlines: list[float] = []
+    timeout = asyncio.timeout
+
+    def tracked(seconds):
+        deadlines.append(seconds)
+        return timeout(seconds)
+
+    async def execute(**kwargs):
+        return "done"
+
+    monkeypatch.setattr(asyncio, "timeout", tracked)
+    monkeypatch.setattr(tool, "execute", execute)
+    with workdir.bind(tmp_path):
+        assert (
+            await registry.execute("ppt_generate_image", {"project": "talk", "prompt": "a lantern", "filename": "x"})
+            == "done"
+        )
+    assert deadlines == [660.0], "the host H3 window reached the registry through SessionTool"
 
 
 @pytest.mark.asyncio
@@ -373,3 +441,111 @@ async def test_a_transparent_request_asks_for_a_green_screen_and_keys_it_out(mon
     assert result["transparent_share"] > 0.6
     saved = Image.open(result["path"])
     assert saved.mode == "RGBA" and saved.getpixel((2, 2))[3] == 0
+
+
+def test_the_deck_image_tool_says_what_references_do_on_the_model_it_runs_on(tmp_path: Path) -> None:
+    """The deck's own words follow the model its image tool runs on, through the
+    seam production registers: the factory hands the loop a SessionTool, and what
+    the model is served is what that wrapper reports to the registry.
+
+    The legacy MiniMax models take one reference per request and refuse more, so
+    there a schema that offers six pictures to match or vary is a promise the
+    transport cannot keep; H3 edits from up to sixteen, so the default words hold.
+    The section can change between turns, so the registry has to serve the answer
+    live rather than the shape it admitted."""
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.plugins.context import PluginContext, ServiceLocator
+    from raven_ppt import plugin as plugin_module
+
+    section: dict[str, ImageToolConfig | None] = {
+        "now": ImageToolConfig(api_key="k", model="openai/gpt-image-2"),
+    }
+    ctx = PluginContext(
+        config={"enabled": True, "profile": "script_author"},
+        services=ServiceLocator(
+            workspace=tmp_path,
+            user_id="u",
+            agent_id="a",
+            media_config=lambda kind: section["now"],
+            media_proxy=None,
+        ),
+    )
+    tool = plugin_module.make_ppt_generate_image(ctx)
+    assert tool is not None
+    registry = ToolRegistry()
+    registry.register(tool)
+
+    def offered() -> dict:
+        return next(d["function"] for d in registry.get_definitions() if d["function"]["name"] == "ppt_generate_image")
+
+    served = offered()
+    assert "MiniMax" not in json.dumps(served)
+    assert "Up to six" in served["parameters"]["properties"]["references"]["description"]
+    # Off it the batched ask keeps the shape it had, which carries no words of its own.
+    assert "description" not in served["parameters"]["properties"]["prompts"]["items"]["properties"]["references"]
+
+    section["now"] = ImageToolConfig(
+        provider="minimax",
+        api_base="https://api.minimax.io/v1",
+        api_key="k",
+        model="image-01",
+    )
+    served = offered()
+    assert "character" in served["description"]
+    references = served["parameters"]["properties"]["references"]["description"]
+    assert "one" in references and "Up to six" not in references
+    assert "prompt" in references and "refuse" in references
+    batched = served["parameters"]["properties"]["prompts"]["items"]["properties"]["references"]
+    assert batched["description"] == references
+
+    section["now"] = ImageToolConfig(
+        provider="minimax",
+        api_base="https://api.minimax.io/v1",
+        api_key="k",
+        model="MiniMax-H3-Image",
+    )
+    served = offered()
+    assert "Up to six" in served["parameters"]["properties"]["references"]["description"]
+    assert "description" not in served["parameters"]["properties"]["prompts"]["items"]["properties"]["references"]
+
+
+@pytest.mark.asyncio
+async def test_a_minimax_refusal_reaches_the_deck_author_with_the_vendors_sentence(monkeypatch, tmp_path: Path) -> None:
+    """MiniMax answers a request naming two references with HTTP 200 and status 2013
+    in `base_resp`; the host splits that into the class and the vendor's sentence, and
+    the deck tool has to carry both, or the author cannot learn what to change."""
+    requested: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "data": None,
+                "base_resp": {"status_code": 2013, "status_msg": "invalid params, image_reference must be one"},
+            },
+        )
+
+    deck = Project(workspace=tmp_path, slug="deck")
+    deck.sources_dir.mkdir(parents=True)
+    (deck.sources_dir / "first.png").write_bytes(_png("red", (100, 100)))
+    (deck.sources_dir / "second.png").write_bytes(_png("green", (100, 100)))
+    tool = _tool(
+        tmp_path,
+        ImageToolConfig(provider="minimax", api_base="https://api.minimax.io/v1", api_key="mm-key", model="image-01"),
+    )
+    _mock(monkeypatch, handler)
+
+    out = json.loads(
+        await tool.execute(
+            project="deck",
+            prompt="a portrait in this manner",
+            filename="portrait",
+            references=["first.png", "second.png"],
+        )
+    )
+
+    assert out["ok"] is False
+    assert "2013" in out["error"]
+    assert "image_reference must be one" in out["detail"]
+    assert len(requested[0]["subject_reference"]) == 2

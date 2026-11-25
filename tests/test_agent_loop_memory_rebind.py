@@ -123,6 +123,41 @@ async def test_rebind_replaces_the_live_references_and_lifecycle(tmp_path) -> No
     assert (loop.memory_config.agent_id, loop.memory_config.memory_top_k) == ("a2", 7)
 
 
+class _AgentTrack(_Backend):
+    """A backend whose agent track answers with one skill naming its owner."""
+
+    def __init__(self, body: str) -> None:
+        super().__init__()
+        self._body = body
+
+    async def recall(self, query, *, agent_id=None, top_k=5, **_):
+        from raven.contracts.memory import Memory
+
+        return [Memory(text=f"{self._body} for {agent_id}", score=0.9, metadata={"id": "sk_42"})]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_name", ["everos", "everos-cloud"])
+async def test_an_in_place_rebind_forgets_the_hits_the_old_backend_returned(new_name) -> None:
+    """The source is rewritten in place, not removed, so nothing on the
+    remove path runs: a held hit from the old backend or agent must not stay
+    readable by id once the switch lands."""
+    old, new = _AgentTrack("OLD-BODY"), _AgentTrack("NEW-BODY")
+    source = BackendSkillSource(old, agent_id="a1", name="everos")
+    router = SkillForgeRouter([source])
+    loop = _loop(builders=[], router=router)
+    loop.backend = old
+    await router.select("q", history=[], k=5)
+    assert router.held_hit("everos/sk_42").content == "OLD-BODY for a1"
+
+    await loop.rebind_memory_backend(new, name=new_name, user_id="u2", agent_id="a2", memory_top_k=5)
+
+    assert source._backend is new
+    assert router.held_hit("everos/sk_42") is None
+    await router.select("q", history=[], k=5)
+    assert router.held_hit(f"{new_name}/sk_42").content == "NEW-BODY for a2"
+
+
 @pytest.mark.asyncio
 async def test_rebind_out_of_memory_off_adds_the_backend_source(tmp_path) -> None:
     """A router built with no backend has no source to update, and the page can
@@ -146,6 +181,27 @@ async def test_rebind_out_of_memory_off_adds_the_backend_source(tmp_path) -> Non
     assert isinstance(source, BackendSkillSource)
     assert (source._backend, source._agent_id, source.name) == (new, "a1", "everos")
     assert source.weight == 0.8
+
+
+@pytest.mark.asyncio
+async def test_rebind_mounts_no_source_when_the_router_master_switch_is_off() -> None:
+    """The master switch leaves the engine with no router, and a memory switch
+    thrown on live afterwards must not grow one behind its back."""
+    new = _Backend()
+    memory = MemorySegmentBuilder(None, None)
+    loop = _loop(builders=[memory], router=None)
+
+    await loop.rebind_memory_backend(
+        new,
+        name="everos",
+        user_id="u1",
+        agent_id="a1",
+        memory_top_k=5,
+    )
+
+    assert loop.backend is new and new.starts == 1
+    assert memory._backend is new
+    assert loop.context_engine.skills_router is None
 
 
 @pytest.mark.asyncio

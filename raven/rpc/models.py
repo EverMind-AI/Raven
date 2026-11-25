@@ -12,10 +12,11 @@ schema (or vice versa) within the same commit.
 
 from __future__ import annotations
 
-import re
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from raven.spine.message import SOURCE_NAME_RE
 
 # ---------------------------------------------------------------------------
 # Re-usable model config.  ``extra="forbid"`` makes Pydantic emit
@@ -93,6 +94,19 @@ class SkillInfo(_Strict):
     pinned: bool
     description: str
     tags: list[str]
+
+
+class SubagentRoutePayload(_Strict):
+    """One route a row offers to another agent, and whether it can open now."""
+
+    to: str
+    image_search_ready: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the route's target can search pictures right now. Null on a route that does not "
+            "declare image_search."
+        ),
+    )
 
 
 class SubagentRow(_Strict):
@@ -242,6 +256,13 @@ class SubagentRow(_Strict):
             "The reasoning efforts this row's agent offers on the row's own model: its thought_level option, "
             "or its mode menu when every mode is a reasoning level. Empty when it offers neither. An agent that "
             "packs effort into model ids instead has no such menu."
+        ),
+    )
+    routes: list[SubagentRoutePayload] = Field(
+        default_factory=list,
+        description=(
+            "The routes this row offers to other agents, with the picture-search readiness the router "
+            "applies. Empty on a row that offers none."
         ),
     )
 
@@ -539,9 +560,16 @@ class TurnStartedDelegated(_Strict):
     its own ``text``.
     """
 
-    kind: Literal["spawn", "dag"]
+    kind: Literal["spawn", "dag", "unprompted"]
     label: str
-    status: Literal["ok", "error", "exception", "notice", "cancelled"]
+    agent: str | None = Field(
+        default=None,
+        description=(
+            "The agent that sent it. Set on an unprompted report, which answers no call, so no "
+            "spawn call or task row exists to read the sender off."
+        ),
+    )
+    status: Literal["ok", "error", "exception", "notice", "cancelled", "report"]
     run_id: str | None = None
     node_id: str | None = Field(
         None,
@@ -905,6 +933,13 @@ class ErrorEventPayload(_Strict):
         ),
     )
     target: DirectTarget | None = None
+    hint: str | None = Field(
+        None,
+        description=(
+            "What the reader can do about the failure, in the words this surface can act on. "
+            "Absent when the failure has no category to advise about."
+        ),
+    )
 
 
 class ErrorEvent(_Strict):
@@ -925,9 +960,19 @@ class CronDeliveredEvent(_Strict):
 
 
 class SubagentDeliveredPayload(_Strict):
-    kind: Literal["spawn", "dag"]
-    label: str = Field(..., description="The spawn's display label, or the dag's run_id.")
-    status: Literal["ok", "error", "exception", "notice", "cancelled"]
+    kind: Literal["spawn", "dag", "unprompted"]
+    label: str = Field(
+        ...,
+        description="The spawn's display label, the dag's run_id, or `<agent>/<instance>` for an unprompted report.",
+    )
+    agent: str | None = Field(
+        default=None,
+        description=(
+            "The agent that sent it. Set on an unprompted report, which answers no call, so no "
+            "spawn call or task row exists to read the sender off."
+        ),
+    )
+    status: Literal["ok", "error", "exception", "notice", "cancelled", "report"]
     run_id: str | None = Field(default=None, description="Set for kind=dag, so a client can open the run.")
     node_id: str | None = Field(
         default=None,
@@ -2185,6 +2230,14 @@ class SessionUsageResult(_Strict):
     )
     context_percent: int = Field(..., description="context_used as a percentage of context_max.")
     context_estimated: bool = Field(..., description="True when context_used is a tiktoken estimate.")
+    context_parts: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "The window divided: tokens by part, keyed system / tools / conversation / "
+            "files / memory / skills, as the last measured turn recorded them. Absent when "
+            "that turn measured none, or the conversation predates the record."
+        ),
+    )
 
 
 class SessionHistoryParams(_Strict):
@@ -2207,9 +2260,6 @@ class SessionHistoryResult(_Strict):
 # ---------------------------------------------------------------------------
 # turn.* methods
 # ---------------------------------------------------------------------------
-
-
-_CHANNEL_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
 
 
 class TurnSendParams(_Strict):
@@ -2248,7 +2298,7 @@ class TurnSendParams(_Strict):
     def _channel_is_a_token(cls, value: str | None) -> str | None:
         # The channel is written into the system prompt, so a client may not put
         # prose in it: a newline would open a heading of its own there.
-        if value and not _CHANNEL_TOKEN.fullmatch(value):
+        if value and not SOURCE_NAME_RE.fullmatch(value):
             raise ValueError("channel must be a short token such as 'tui' or 'telegram'")
         return value
 
@@ -4180,6 +4230,67 @@ class PlugConfigureResult(_Strict):
 
 
 # ---------------------------------------------------------------------------
+# agent_plugins.* -- Agent Plugin packages (Agent Plugins 1.0)
+# ---------------------------------------------------------------------------
+
+
+class AgentPluginServerRow(_Strict):
+    name: str = Field(..., description="Composed server name, '<package>__<server>'.")
+    state: str = Field(
+        ...,
+        description="The connection manager's state, or 'off' when the running process does not run this server.",
+    )
+    error: str | None = None
+
+
+class AgentPluginMcpRow(_Strict):
+    servers: list[AgentPluginServerRow]
+    allowed: bool = Field(..., description="Named in agentPlugins.mcpPackages.")
+    live: bool = Field(
+        ...,
+        description="The running process started this package's servers. Differs from allowed until the next start.",
+    )
+    problems: list[str]
+
+
+class AgentPluginRow(_Strict):
+    name: str
+    version: str
+    description: str
+    source: str = Field(..., description="The package root on the host's disk.")
+    notes: list[str]
+    skills: list[str] = Field(..., description="The usable skills the package holds.")
+    skills_imported: bool = Field(..., description="A verified import of this package stands in the workspace.")
+    problems: list[str] = Field(..., description="Skills the package holds that cannot be used, with the reason.")
+    mcp: AgentPluginMcpRow
+
+
+class AgentPluginProblem(_Strict):
+    path: str
+    reason: str
+
+
+class AgentPluginsListParams(_Strict):
+    pass
+
+
+class AgentPluginsListResult(_Strict):
+    packages: list[AgentPluginRow]
+    problems: list[AgentPluginProblem] = Field(..., description="Configured paths that hold no usable package.")
+
+
+class AgentPluginsSetMcpParams(_Strict):
+    name: str
+    enabled: bool
+
+
+class AgentPluginsSetMcpResult(_Strict):
+    name: str
+    enabled: bool
+    changed: bool = Field(..., description="False when the package was already in the asked state.")
+
+
+# ---------------------------------------------------------------------------
 # skillhub.* results (the params models are above)
 # ---------------------------------------------------------------------------
 
@@ -4267,6 +4378,14 @@ class SessionUsage(_Strict):
     context_estimated: bool | None = Field(
         default=None,
         description="True when context_used is a tiktoken estimate of a resumed transcript, not a measurement.",
+    )
+    context_parts: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "The window divided: tokens by part, keyed system / tools / conversation / "
+            "files / memory / skills, as the last measured turn recorded them. Absent when "
+            "that turn measured none, or the conversation predates the record."
+        ),
     )
 
 
@@ -4368,9 +4487,16 @@ class TranscriptDelegated(_Strict):
     and a live stream draw the same row from the same fields.
     """
 
-    kind: Literal["spawn", "dag"]
+    kind: Literal["spawn", "dag", "unprompted"]
     label: str
-    status: Literal["ok", "error", "exception", "notice", "cancelled"]
+    agent: str | None = Field(
+        default=None,
+        description=(
+            "The agent that sent it. Set on an unprompted report, which answers no call, so no "
+            "spawn call or task row exists to read the sender off."
+        ),
+    )
+    status: Literal["ok", "error", "exception", "notice", "cancelled", "report"]
     run_id: str | None = Field(default=None, description="Set for kind=dag, so a client can open the run.")
     node_id: str | None = Field(
         default=None,
@@ -4606,6 +4732,13 @@ class ExtSkillRow(_Strict):
     always: bool
     hub: bool = Field(..., description="Installed from the skill hub, so skillhub.remove can uninstall it.")
     hub_id: str
+    blocked: bool = Field(
+        ...,
+        description=(
+            "On skillForge.blocklist, so retrieval and injection skip it. The row is still listed here "
+            "because this is the surface a person turns it back on from."
+        ),
+    )
 
 
 class ExtPluginRow(_Strict):
@@ -4755,6 +4888,39 @@ class SettingsGetParams(_Strict):
     pass
 
 
+class PictureSearchStatus(_Strict):
+    """What the Settings page shows about the deck engine's picture search."""
+
+    vendor: str = Field(
+        ...,
+        description=(
+            "The picture vendor the deck engine would use now, or an empty string when none resolves. "
+            "Answered from effective credentials -- the config file, the vendor's environment variable, "
+            "and the deck lane's own .env -- so it agrees with what ppt_image_search would do."
+        ),
+    )
+    ready: bool
+    fallback: bool = Field(
+        ...,
+        description=(
+            "True when the deck could not use the selected search vendor and a keyed fallback vendor "
+            "answers instead, so the page can say deck generation will fall back to it. A deck pinned "
+            "to its own vendor is not a fallback."
+        ),
+    )
+    reason: Literal["ok", "fallback_no_key", "no_surface", "not_ready"] = Field(
+        default="not_ready",
+        description=(
+            "Why `vendor` is the picture vendor: `ok` when the deck searches on the vendor it is "
+            "configured to use (the selected search vendor, or the deck's own pin), `fallback_no_key` "
+            "when the selected vendor has a picture surface but no key the deck can use (an "
+            "environment-only host key does not reach the deck lane), `no_surface` when the selected "
+            "vendor has no picture surface for decks, `not_ready` when no vendor resolves. Absent on "
+            "gateways older than this field, hence the default."
+        ),
+    )
+
+
 class SettingsGetResult(_Strict):
     settings: dict[str, JsonValue] = Field(..., description="Raw config.json with secret-looking values masked.")
     config_path: str
@@ -4764,6 +4930,13 @@ class SettingsGetResult(_Strict):
         description=(
             "Whether conversational Skill Hub retrieval is on, read the way the runtime reads the config: "
             "enabled=false turns it off, and the default is on."
+        ),
+    )
+    picture_search: PictureSearchStatus = Field(
+        ...,
+        description=(
+            "The deck engine's picture search as the runtime would resolve it now: the vendor it would "
+            "use and whether a key resolves, environment and product-folder credentials included."
         ),
     )
 
@@ -7063,7 +7236,7 @@ class ShellExecResult(_Strict):
 
 
 class SkillsManageParams(_Strict):
-    action: str = Field(..., description="One of list, inspect, search, browse, install, open.")
+    action: str = Field(..., description="One of list, inspect, search, browse, install, open, block, unblock.")
     query: str | None = None
     page: int | None = None
     file: str | None = Field(default=None, description="`open`: a file name relative to the skill's directory.")
@@ -7082,6 +7255,8 @@ class SkillsManageResult(_Strict):
     installed: bool | None = Field(default=None, description="`install`.")
     opened: bool | None = Field(default=None, description="`open`.")
     name: str | None = None
+    blocked: bool | None = Field(default=None, description="`block`/`unblock`: the state that was written.")
+    blocklist: list[str] | None = Field(default=None, description="`block`/`unblock`: the list after the write.")
 
 
 class SubagentInterruptParams(_Strict):
@@ -7584,6 +7759,8 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "plug.retry": (PlugRetryParams, PlugRetryResult),
     "plug.revoke": (PlugRevokeParams, PlugRevokeResult),
     "plug.configure": (PlugConfigureParams, PlugConfigureResult),
+    "agent_plugins.list": (AgentPluginsListParams, AgentPluginsListResult),
+    "agent_plugins.set_mcp": (AgentPluginsSetMcpParams, AgentPluginsSetMcpResult),
     "skillhub.search": (SkillhubSearchParams, SkillhubSearchResult),
     "skillhub.detail": (SkillhubDetailParams, SkillhubDetailResult),
     "skillhub.install": (SkillhubInstallParams, SkillhubInstallResult),
@@ -7891,6 +8068,14 @@ __all__ = [
     "PlugRemoveResult",
     "PlugToggleParams",
     "PlugToggleResult",
+    "AgentPluginServerRow",
+    "AgentPluginMcpRow",
+    "AgentPluginRow",
+    "AgentPluginProblem",
+    "AgentPluginsListParams",
+    "AgentPluginsListResult",
+    "AgentPluginsSetMcpParams",
+    "AgentPluginsSetMcpResult",
     "PlughubCatalogItem",
     "PlughubDetailParams",
     "PlughubDetailResult",

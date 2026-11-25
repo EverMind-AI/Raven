@@ -32,7 +32,6 @@
 | `raven cron` | 创建、查看、运行、启用、禁用或删除定时任务 |
 | `raven sentinel` | 配置主动行为，查看关注事项、例行任务、决策和提醒 |
 | `raven ops connection` | 注册和列出机器；`add` 默认探测连接，`doctor` 校验注册表条目 |
-| `raven sandbox` | 列出沙箱虚拟机、执行命令或打开 Shell；需要设置 `tools.sandbox.debug.enabled=true` |
 | `raven tracing` | 打开本地追踪面板 |
 | `raven tracing compact` | 合并重复的追踪产物，回收磁盘空间 |
 | `raven tracing compress [--logs]` | 以 zstd 重写追踪载荷（加 `--logs` 时还包括轮转后的日志），回收磁盘空间 |
@@ -73,5 +72,5 @@
 rg -n 'ACP|A2A|run_subagent_dag' docs-site/docs raven tests
 ```
 
-`run_subagent_dag`、`dag_status`、`cancel_dag` 和 `a2a_send` 是模型工具，不是 Shell
+`run_subagent_dag`、`dag_status`、`cancel_subagent` 和 `a2a_send` 是模型工具，不是 Shell
 子命令。参数与行为请查对应指南。

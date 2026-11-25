@@ -206,7 +206,9 @@ const ERROR_DETAIL_MAX = 200
  * the same frame differently, and a stop reads the same live as replayed.
  *
  * The detail is clamped to its first line and to what a single line can carry;
- * the whole of it stays in the runtime's own log.
+ * the whole of it stays in the runtime's own log. The runtime's own advice for
+ * the failure -- what the reader can do about it, in the words this screen can
+ * act on -- closes the line when it sent one.
  */
 export const turnErrorLine = (payload: ErrorEvent['payload'], kept = false): string => {
   if (payload.reason === 'cancelled_by_client') {
@@ -214,12 +216,14 @@ export const turnErrorLine = (payload: ErrorEvent['payload'], kept = false): str
   }
 
   const detail = payload.detail ? payload.detail.split('\n')[0]!.slice(0, ERROR_DETAIL_MAX) : ''
+  const hint = payload.hint ?? ''
 
-  if (payload.message === 'turn_failed') {
-    return failedTurnLine(detail)
-  }
+  const line =
+    payload.message === 'turn_failed'
+      ? failedTurnLine(detail)
+      : `error: ${payload.message} (code=${payload.code})${detail ? `: ${detail}` : ''}`
 
-  return `error: ${payload.message} (code=${payload.code})${detail ? `: ${detail}` : ''}`
+  return hint ? `${line} ${hint}` : line
 }
 
 const FENCE_OPEN = /\[BEGIN UNTRUSTED ([^ #\]]+) #([^ \]]+) [^\n]*\n/g

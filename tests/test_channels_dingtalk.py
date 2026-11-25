@@ -687,9 +687,26 @@ async def test_read_media_bytes_local_file(tmp_path, monkeypatch):
     assert data == b"hello" and name == "doc.txt"
 
 
+async def test_read_media_bytes_file_uri(tmp_path, monkeypatch):
+    ch = _make_channel(tmp_path, monkeypatch)
+    f = tmp_path / "plain name.csv"
+    f.write_bytes(b"csv")
+    data, name, _ct = await ch._read_media_bytes(f.as_uri())
+    assert data == b"csv" and name == "plain name.csv"
+
+
 async def test_read_media_bytes_missing(tmp_path, monkeypatch):
     ch = _make_channel(tmp_path, monkeypatch)
     assert await ch._read_media_bytes(str(tmp_path / "nope.txt")) == (None, None, None)
+
+
+async def test_read_media_bytes_remote_file_uri_refused(tmp_path, monkeypatch):
+    """A file:// URI naming another machine is not a local path, even when the
+    same path exists locally: the host is refused, not a missing file."""
+    real = tmp_path / "x.csv"
+    real.write_bytes(b"csv")
+    ch = _make_channel(tmp_path, monkeypatch)
+    assert await ch._read_media_bytes(f"file://server{real}") == (None, None, None)
 
 
 async def test_send_media_ref_http_image_shortcut(tmp_path, monkeypatch):

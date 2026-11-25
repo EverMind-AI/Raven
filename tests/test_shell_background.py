@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from raven.agent import turn_clock
 from raven.agent.tools import background_exec
 from raven.agent.tools.shell import ExecTool
 
@@ -72,6 +75,53 @@ def test_status_reports_liveness_and_reap_ends_the_group(home):
 def test_an_unknown_task_is_none_not_a_traceback(home):
     assert background_exec.status("bg-nope") is None
     assert background_exec.tail("bg-nope") == ""
+
+
+async def test_reap_execution_only_stops_its_own_tasks(home):
+    with turn_clock.execution_scope("same-session", "earlier"):
+        unrelated = background_exec.start("sleep 30")
+    with turn_clock.execution_scope("same-session", "current"):
+        current = background_exec.start("sleep 30")
+    try:
+        assert current.task_id != unrelated.task_id
+        assert background_exec.status(current.task_id)["session_key"] == "same-session"
+        await background_exec.reap_execution("same-session", "current")
+        assert not background_exec.status(current.task_id)["running"]
+        assert background_exec.status(unrelated.task_id)["running"]
+    finally:
+        background_exec.reap(current.task_id)
+        background_exec.reap(unrelated.task_id)
+
+
+async def test_reap_execution_returns_tails_when_a_command_survives_the_force_kill(home, monkeypatch, tmp_path):
+    """A process that cannot be killed must not fail the turn that asked for
+    its final answer: the log tail is still the best account it can give."""
+    log = tmp_path / "survivor.log"
+    log.write_text("last words\n", encoding="utf-8")
+    task = {"task_id": "bg-survivor", "command": "stuck", "log_path": str(log)}
+    missing = {"task_id": "bg-missing", "command": "gone", "log_path": str(tmp_path / "missing.log")}
+    reaped: list[tuple[str, bool]] = []
+
+    class _ImmediateTimeout:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            raise TimeoutError
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(background_exec, "running", lambda *args, **kwargs: [task, missing])
+    monkeypatch.setattr(
+        background_exec, "reap", lambda task_id, *, force=False: reaped.append((task_id, force)) or True
+    )
+    monkeypatch.setattr(background_exec, "asyncio", SimpleNamespace(timeout=_ImmediateTimeout, sleep=asyncio.sleep))
+
+    tails = await background_exec.reap_execution("s", "e")
+
+    assert "last words" in tails
+    assert ("bg-survivor", False) in reaped and ("bg-survivor", True) in reaped
 
 
 def test_the_start_note_hands_over_the_handle_and_the_log(home):
@@ -334,3 +384,56 @@ def test_the_schema_advertises_the_lane(home, tmp_path):
     assert prop["type"] == "boolean"
     assert "ops_submit" in prop["description"], "the boundary is taught where the parameter is read"
     assert "timeout" in prop["description"], "that the lane reads no timeout is said where the model can see it"
+
+
+def test_adopted_work_is_listed_under_its_session(monkeypatch, tmp_path):
+    """A command that outlived its call is still that session's work.
+
+    Nothing about adopting it starts a process: the adopter keeps writing the
+    log, and this registry only has to see it, cap it and reap it like the rest.
+    """
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        log = tmp_path / "adopted.log"
+        log.write_text("started\n", encoding="utf-8")
+        task = background_exec.adopt("sleep 30", proc.pid, log_path=str(log), session_key="cli:a")
+
+        mine = background_exec.running(session_key="cli:a")
+        assert [t["task_id"] for t in mine] == [task.task_id]
+        assert background_exec.running(session_key="cli:b") == []
+        assert "started" in background_exec.tail(task.task_id)
+        assert background_exec.reap(task.task_id) is True
+        proc.wait(timeout=5)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+
+def test_tail_reads_only_the_end_of_a_large_log(home):
+    """A log's tail is read from the end, not by loading the whole file first."""
+    log = home / "background" / "large.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("HEAD-MARKER\n" + "padding line\n" * 20_000 + "TAIL-MARKER\n", encoding="utf-8")
+    task = background_exec.adopt("chatty", 4_000_002, log_path=str(log))
+
+    text = background_exec.tail(task.task_id, max_bytes=128)
+
+    assert "TAIL-MARKER" in text
+    assert "HEAD-MARKER" not in text
+    assert len(text.encode()) <= 128
+
+
+def test_two_adoptions_in_one_millisecond_get_distinct_ids(home, monkeypatch):
+    """The ids are how the record and the log are found; a collision overwrites
+    the first command's record while both keep running."""
+    # Replace the module's own reference, not an attribute of the shared ``time``
+    # module, which would freeze every caller's clock while the test runs.
+    monkeypatch.setattr(background_exec, "time", SimpleNamespace(time=lambda: 1_700_000_000.0))
+    first = background_exec.adopt("first", 4_000_003)
+    second = background_exec.adopt("second", 4_000_004)
+
+    assert first.task_id != second.task_id
+    assert background_exec.status(first.task_id)["command"] == "first"
+    assert background_exec.status(second.task_id)["command"] == "second"
+    assert first.log_path != second.log_path

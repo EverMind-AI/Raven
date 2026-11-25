@@ -311,6 +311,22 @@ class PackageLedger:
     def legacy_entry(self, name: str) -> LedgerEntry | None:
         return self._legacy.get(name)
 
+    def install_state(self, name: str, *, workspace: Path) -> str:
+        """What stands at ``<workspace>/skills/<name>`` according to the ledger.
+
+        ``verified`` is the only state that means the package's skills are
+        installed here: ``none`` has no record, ``legacy`` has only a version 1
+        record that proves nothing, ``missing`` has a record whose directory is
+        gone, and ``unverified`` has a record whose directory no longer carries
+        the recorded install marker.
+        """
+        if self.entry(name, workspace=workspace) is None:
+            return "legacy" if self.legacy_entry(name) is not None else "none"
+        root = Path(workspace) / "skills" / name
+        if not root.exists():
+            return "missing"
+        return "verified" if self.claim(root, workspace=workspace).owned else "unverified"
+
     def other_workspaces_with(self, name: str, *, workspace: Path) -> list[str]:
         """The workspace keys holding a record of *name* besides *workspace*."""
         key = workspace_key(Path(workspace))

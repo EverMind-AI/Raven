@@ -30,9 +30,9 @@ raven skill get --help
 raven skill block --help
 ```
 
-SkillForge 有三个来源：本地文件、通过配置的记忆后端召回的技能/案例，以及远程
-Skill Hub 候选。可用性取决于配置和服务连通性；目录搜索命中不证明 bundle 已安装，
-也不证明所需工具存在。
+SkillForge 有四个来源：本地文件、通过配置的记忆后端召回的技能/案例、远程
+Skill Hub 候选，以及工作目录所在仓库携带的项目技能。可用性取决于配置和服务连通性；
+目录搜索命中不证明 bundle 已安装，也不证明所需工具存在。
 
 搜索 Skill Hub 会把文字发出本机。该来源默认开启，使用共享目录
 （`https://skillhub.evermind.ai`）；配置可以在 `skillForge.router.hub.endpoint`
@@ -43,17 +43,39 @@ Skill Hub 候选。可用性取决于配置和服务连通性；目录搜索命�
 重新打开时回到同一个目录。旧配置里显式的 `null` endpoint 表示保持关闭。两个方向都在下一次
 搜索时生效，不需要重新加载。
 
-`skillForge.discovery` 默认 `pull`：在符合条件的轮次中提供简短的名称/描述菜单，
-模型用 `find_skill` 搜索、用 `read_skill` 读取正文。`push` 则运行选择/注入管线，
-把选中正文放入上下文。Pull 避免 push 路径逐轮的重写与门控模型调用，但不意味着所有
-检索都无成本，也不意味着每轮获得相同菜单。
+检索到的技能以简短的名称/描述菜单出现在符合条件的轮次中，模型用 `find_skill` 搜索、
+用 `read_skill` 读取正文。只有标记为 `always` 的技能常驻系统提示词。挑选技能不会让一轮
+多出模型调用，不过查找时仍可能访问 Skill Hub，也不是每轮都会出现菜单。
+
+### 技能目录 { #skill-directories }
+
+技能装在两个目录之一，取决于它是给用户用，还是给单个项目用：
+
+- **Agent home 的 `skills/`** —— 用户级目录，即 agent home 下的 `skills/`：默认
+  `~/.raven/workspace/skills`，可由 `RAVEN_HOME` 以及 `raven agent`、`raven gateway`、
+  `raven tui` 的 `--home` 选项改变位置。
+- **项目的 `.agents/skills`** —— 从本轮工作目录向上读到 git 根目录，途经的每一层各贡献
+  一个目录；两个目录出现同名技能时，以最近的目录提供的为准。工作目录之上没有 git 根目录
+  时，只读该目录本身。只识别扁平的 `<name>/SKILL.md` 布局；符号链接只有解析后的目标仍在
+  git 根目录内才算数。用户主目录、agent home 及其各层祖先目录永远不作为项目目录。
+
+项目技能也以 `project/<name>` 出现在名称/描述菜单和 `find_skill` 的结果中，
+`read_skill` / `use_skill` 按轮、按本轮自己的工作目录解析这些 id，因此两个 checkout
+中的会话不会看到对方的项目技能。项目技能不论 frontmatter 怎么写都不会被注入系统提示词。
+只有主 Agent 读取这些技能，子 Agent 不读取。该来源默认开启，可用
+`skillForge.projectSkills.enabled` 关闭；两个方向都在下一次搜索时生效，不需要重启。
+
+写入同一布局的安装器可以把技能装进项目：
+
+```bash
+gh skill install <owner>/<repo> skills/<name>/SKILL.md --dir .agents/skills
+```
 
 Bundle 下载有独立的同意设置：
 
 ```json
 {
   "skillForge": {
-    "discovery": "pull",
     "autoInstall": "prompt"
   }
 }
@@ -80,7 +102,7 @@ EverOS 是默认记忆后端插件，与 Raven core 独立发行，通过 Memory
 3. 经验提炼由选用的记忆后端提供，通过该后端的插件设置配置。
    宿主不使用 `skillForge.extraction` 启动本地提炼管线。
 
-SkillForge 负责技能检索、注入和下载包管理。宿主未实现反馈驱动的技能版本管理与退役。
+SkillForge 负责技能检索、提供和下载包管理。宿主未实现反馈驱动的技能版本管理与退役。
 可通过记忆后端存储的 case、skill 和健康状态检查保留了哪些经验。Harness
 自进化由独立 Evolver 工具执行，并经过基准评估，先读
 [Evolver：使用与实验](evolver.md)，实现细节见[设计与实现](self-evolution-map.md)。
@@ -117,9 +139,10 @@ SkillForge 候选。希望连接的会话应保持预期 `userId` 和 `agentId` 
 
 ## 上下文压力不等于长期学习 { #context-pressure-is-not-long-term-learning }
 
-Curator 为下一上下文窗口选择历史。压力较低时走不调用模型的 fast path；
-slow path 可消耗有限模型调用生成计划，无有效计划时使用确定性 fallback。
-归档消息可在磁盘原样保存、后续取回，但不一定出现在每个 prompt 中。
+历史策略在上下文窗口接近触发线前逐字保留对话。超过后先把大工具结果压缩成
+一行记录加 `[[ref ...]]` 指针（模型可回读），再把整组消息折叠，仍不够时写入
+八段式摘要 checkpoint。被移除的消息可在磁盘原样保存、后续取回，
+但不一定出现在每个 prompt 中。
 
 轮内 **Compaction** 是另一机制：可以裁剪旧工具结果正文、总结 transcript 头部，
 保留最近消息。默认关闭，不写长期记忆笔记。显式启用示例：
@@ -137,7 +160,7 @@ slow path 可消耗有限模型调用生成计划，无有效计划时使用确�
 ```
 
 请合并而不是覆盖其他 Agent 配置。Compaction 可调用本轮模型并产生费用，
-不会扩大 provider 的真实上下文上限。Curator 和 compaction 都不能替代明确任务说明
+不会扩大 provider 的真实上下文上限。历史策略和轮内 compaction 都不能替代明确任务说明
 或可重新读取的来源文件。
 
 ## 排查缺少召回或技能 { #diagnose-missing-recall-or-skills }
@@ -148,7 +171,7 @@ slow path 可消耗有限模型调用生成计划，无有效计划时使用确�
 | Skill 已列出但未使用 | 正文是否读取、所需工具、blocklist 和当前 Agent |
 | 任务完成后没有新技能 | 后端实际提炼支持；`skillForge.extraction` 本身不启动宿主管线 |
 | 长任务丢失细节 | 归档与当前窗口的区别、compaction、可重新读取的来源 |
-| 模型成本增加 | 后端提炼、embedding、Curator slow path，以及启用时的技能 rewrite/gating |
+| 模型成本增加 | 后端提炼、embedding 和历史策略的摘要调用 |
 
 记忆视图可能暴露私有会话和推断偏好。应另行检查后端的删除与保留控制；
 删除宿主 session 或屏蔽 skill 不证明所有后端记录也已删除。
@@ -159,9 +182,10 @@ slow path 可消耗有限模型调用生成计划，无有效计划时使用确�
 最后才允许修改。`raven plugin auth <server>` 处理已配置 MCP 的 OAuth，不是任意
 插件安装器。
 
-网页端设置弹窗的「插件」页负责开关、重试和授权已配置的服务；页上的「新增」会把你带到
+网页端设置弹窗的「MCP」页负责开关、重试和授权已配置的服务；页上的「新增」会把你带到
 会话里，由 Raven 从 PlugHub 目录接入服务；目录里没有的服务，要手改 `config.json` 的
-`tools.mcpServers`。
+`tools.mcpServers`。旁边的「插件」页列出 [Agent 插件包](agent-plugin-packages.md)，
+它们会带来自己的技能和 MCP 服务。
 
 需要进程内工具、hook、服务或记忆后端时使用 Raven plugin。声明式
 `raven-plugin.toml` 列出贡献，代码运行于宿主信任域内。`raven plugins` 列出已安装

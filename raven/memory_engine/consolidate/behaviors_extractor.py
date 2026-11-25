@@ -500,7 +500,10 @@ def _load_session_messages(path: Path) -> list[dict[str, Any]]:
                     continue
                 if not isinstance(data, dict):
                     continue
-                if data.get("_type") == "metadata":
+                if data.get("_type"):
+                    # metadata and the stamp records beside the messages: this
+                    # reader builds turns from roles, which a record kind has
+                    # none of.
                     continue
                 messages.append(data)
     except OSError:

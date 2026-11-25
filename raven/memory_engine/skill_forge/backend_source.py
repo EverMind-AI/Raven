@@ -4,7 +4,7 @@ This is the source through which **the self-evolving skill track**
 plugs into the router. The backend's ``recall(agent_id=...)``
 returns :class:`Memory` records; we re-wrap them as :class:`RouterHit`
 prefixed with the configured ``memory.backend`` name so
-:class:`SkillForgeRouter` can RRF-fuse them against Local + Mass.
+:class:`SkillForgeRouter` can RRF-fuse them against the other sources.
 
 The source is **host code, not part of any plugin**. The actual
 backend behind it can be the bundled EverOS plugin or any other

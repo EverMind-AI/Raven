@@ -13,6 +13,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from raven.agent.context import ContextBuilder
 from raven.config.raven import ContextConfig
 from raven.context_engine import ContextAssembler, TurnContext, headroom
@@ -294,6 +296,7 @@ class TestTheEstimateCountsTheLines:
 
 
 _HEADER = "MCP plugin changes since the last note (an earlier note stands until one here replaces it):"
+TOOL_HEADER = "Tool availability changes since the last note (an earlier note stands until one here replaces it):"
 _AUTH = "MCP plugin 'github': installed, awaiting authorization."
 _CONNECTING = "MCP plugin 'notion': installed, still connecting."
 _FOLDED = "MCP plugin 'notion': connected, offering 3 tool(s)."
@@ -544,3 +547,272 @@ class TestToolNoticesAreSentWhenTheyChange:
         assert _mcp_lines(second[-1]) == []
         assert "the user likes tea" in second[-1][TURN_SCRATCH_KEY]
         assert second[-1]["content"].endswith(second[-1][TURN_SCRATCH_KEY])
+
+
+class TestNotesAReclaimTookAwayAreToldAgain:
+    """An overflow reclaim trims the history after the question was built, so the
+    question's block may have left out a note only a reclaimed message carried."""
+
+    @staticmethod
+    def _envelope(lines: str, words: Any = "and now?") -> dict[str, Any]:
+        return {"role": "user", "content": with_runtime_context(lines, words), RUNTIME_CONTEXT_KEY: lines}
+
+    def test_a_note_only_a_reclaimed_message_carried_is_put_back(self) -> None:
+        from raven.context_engine.runtime_context import retell_notices
+
+        older = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_AUTH}", "q0")}
+        question = self._envelope(f"{_TAG}\nChat ID: x")
+
+        [kept] = retell_notices([older, question], [question])
+
+        block = kept["content"].split("\n\n", 1)[0]
+        assert block.splitlines()[-2:] == [_HEADER, _AUTH]
+        assert kept[RUNTIME_CONTEXT_KEY] == block
+        assert kept["content"].endswith("\n\nand now?")
+
+    def test_a_clearing_only_a_reclaimed_message_carried_is_put_back(self) -> None:
+        from raven.context_engine.runtime_context import retell_notices
+
+        noted = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_AUTH}", "q0")}
+        cleared = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_GITHUB_CLEARED}", "q1")}
+        question = self._envelope(f"{_TAG}\nChat ID: x")
+
+        [*_, kept] = retell_notices([noted, cleared, question], [noted, question])
+
+        assert _GITHUB_CLEARED in kept[RUNTIME_CONTEXT_KEY]
+
+    def test_a_block_list_question_gets_the_note_in_its_first_block(self) -> None:
+        from raven.context_engine.runtime_context import retell_notices
+
+        older = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_AUTH}", "q0")}
+        question = self._envelope(f"{_TAG}\nChat ID: x", [{"type": "text", "text": "look"}])
+
+        [kept] = retell_notices([older, question], [question])
+
+        assert kept["content"][0]["text"].endswith(_AUTH)
+        assert kept["content"][1:] == [{"type": "text", "text": "look"}]
+
+    _RECOVERY = "[Recovery - the previous turn was interrupted before finishing]"
+    _IMAGE = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+
+    def test_a_question_behind_a_recovery_notice_gets_the_note_in_its_own_block(self) -> None:
+        """Recovery puts its notice in front of the question after assembly; the
+        note still goes into the block that holds the question's lines."""
+        from raven.context_engine.runtime_context import retell_notices, told_notices
+
+        older = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_AUTH}", "q0")}
+        question = self._envelope(f"{_TAG}\nChat ID: x", [self._IMAGE, {"type": "text", "text": "look"}])
+        question["content"] = [{"type": "text", "text": self._RECOVERY}, *question["content"]]
+
+        [kept] = retell_notices([older, question], [question])
+
+        recovery, block, *rest = kept["content"]
+        assert recovery == {"type": "text", "text": self._RECOVERY}
+        assert block["text"] == kept[RUNTIME_CONTEXT_KEY]
+        assert block["text"].endswith(f"{_HEADER}\n{_AUTH}")
+        assert rest == [self._IMAGE, {"type": "text", "text": "look"}]
+        assert told_notices([kept]) == {("mcp", "github"): _AUTH}
+
+    def test_a_note_the_question_changed_behind_a_recovery_notice_is_not_put_back(self) -> None:
+        """The question's own block is read wherever it sits, so a reclaim does
+        not add back an older note the question had already replaced."""
+        from raven.context_engine.runtime_context import retell_notices, told_notices
+
+        older = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_CONNECTING}", "q0")}
+        question = self._envelope(f"{_TAG}\nChat ID: x\n{_HEADER}\n{_FOLDED}")
+        question["content"] = f"{self._RECOVERY}\n\n{question['content']}"
+
+        [kept] = retell_notices([older, question], [question])
+
+        assert kept["content"] == question["content"]
+        assert told_notices([kept]) == {("mcp", "notion"): _FOLDED}
+
+    @pytest.mark.parametrize("words", ["q1", [{"type": "text", "text": "q1"}]], ids=["string", "block-list"])
+    def test_a_recorded_block_the_content_no_longer_holds_is_neither_read_nor_retold(self, words: Any) -> None:
+        """What counts as told is what was sent, so a record whose block is gone
+        from the content is not read, and no note is written into the record alone."""
+        from raven.context_engine.runtime_context import retell_notices, told_notices
+
+        older = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_AUTH}", "q0")}
+        rewritten = {"role": "user", "content": words, RUNTIME_CONTEXT_KEY: f"{_TAG}\n{_HEADER}\n{_FOLDED}"}
+        after = [rewritten]
+
+        assert told_notices([rewritten]) == {}
+        assert retell_notices([older, rewritten], after) is after
+
+    def test_a_question_that_already_has_the_header_is_not_given_a_second(self) -> None:
+        from raven.context_engine.runtime_context import retell_notices
+
+        older = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_AUTH}", "q0")}
+        question = self._envelope(f"{_TAG}\nChat ID: x\n{_HEADER}\n{_FOLDED}")
+
+        [kept] = retell_notices([older, question], [question])
+
+        assert kept[RUNTIME_CONTEXT_KEY].splitlines().count(_HEADER) == 1
+        assert _AUTH in kept[RUNTIME_CONTEXT_KEY]
+
+    def test_the_question_is_found_behind_the_turns_own_tool_calls(self) -> None:
+        """A reclaim's history ends with this turn's calls and results, after the question."""
+        from raven.context_engine.runtime_context import retell_notices
+
+        older = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_AUTH}", "q0")}
+        question = self._envelope(f"{_TAG}\nChat ID: x")
+        call = {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function"}]}
+        result = {"role": "tool", "tool_call_id": "c1", "content": "done"}
+
+        kept = retell_notices([older, question, call, result], [question, call, result])
+
+        assert _AUTH in kept[0][RUNTIME_CONTEXT_KEY]
+        assert kept[1:] == [call, result]
+
+    def test_no_envelope_with_its_lines_recorded_leaves_the_messages_alone(self) -> None:
+        from raven.context_engine.runtime_context import retell_notices
+
+        older = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_AUTH}", "q0")}
+        bare = {"role": "user", "content": "q1"}
+        after = [bare]
+
+        assert retell_notices([older, bare], after) is after
+
+    def test_nothing_lost_leaves_the_messages_alone(self) -> None:
+        from raven.context_engine.runtime_context import retell_notices
+
+        older = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_AUTH}", "q0")}
+        question = self._envelope(f"{_TAG}\nChat ID: x")
+        after = [older, question]
+
+        assert retell_notices([older, question], after) is after
+
+    def test_a_summary_brief_quoting_a_note_does_not_count_as_told(self) -> None:
+        """The brief that replaces a summarized head is prose, not a notice
+        block: it may quote a note line verbatim, and that must not read as the
+        turn having told it, or the repair would skip what it owes."""
+        from raven.agent.window.compaction import SUMMARY_MARKER
+        from raven.context_engine.runtime_context import told_notices
+
+        brief = {"role": "user", "content": f"{SUMMARY_MARKER}\n\n[{_HEADER}\n{_AUTH}]\n{_AUTH}"}
+
+        assert told_notices([brief]) == {}
+
+
+class TestTheQuestionWithoutItsLines:
+    """A reclaim may retell a note into the question's block without touching the
+    words it opened with, so a comparison has to read the words, not the block."""
+
+    def test_a_string_question_loses_the_lines_it_recorded(self) -> None:
+        from raven.context_engine.runtime_context import without_runtime_context
+
+        question = {"role": "user", "content": with_runtime_context(_LINES, "hi"), RUNTIME_CONTEXT_KEY: _LINES}
+
+        assert without_runtime_context(question) == "\n\nhi"
+
+    def test_a_block_list_question_loses_the_block_it_recorded(self) -> None:
+        from raven.context_engine.runtime_context import without_runtime_context
+
+        question = {
+            "role": "user",
+            "content": with_runtime_context(_LINES, [{"type": "text", "text": "look"}]),
+            RUNTIME_CONTEXT_KEY: _LINES,
+        }
+
+        assert without_runtime_context(question) == [{"type": "text", "text": ""}, {"type": "text", "text": "look"}]
+
+
+class TestAPluginNameKeysItsOwnLine:
+    """A line is keyed by the plugin name it carries, so the name has to read back
+    exactly, whatever it contains."""
+
+    def test_any_name_reads_back_from_its_line(self) -> None:
+        from raven.context_engine.runtime_context import mcp_notice, notice_subject
+
+        for name in ("github", "a': b", "it's", "back\\slash'", "x': y': z"):
+            assert notice_subject(mcp_notice(name, "connected, offering 1 tool(s).")) == name
+
+    def test_two_plugins_whose_names_share_a_prefix_keep_their_own_lines(self) -> None:
+        from raven.context_engine.runtime_context import mcp_notice, notice_changes
+
+        lines = [mcp_notice("a", "connected, offering 1 tool(s)."), mcp_notice("a': b", "still connecting.")]
+
+        assert notice_changes(lines, {}) == [_HEADER, *lines]
+
+    def test_a_cleared_name_with_a_quote_is_read_as_cleared(self) -> None:
+        from raven.context_engine.runtime_context import mcp_notice, notice_changes, told_notices
+
+        told = {("mcp", "a': b"): mcp_notice("a': b", "still connecting.")}
+        [_, cleared] = notice_changes([], told)
+        replay = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{cleared}", "q")}
+
+        assert told_notices([replay]) == {}
+
+    @pytest.mark.parametrize(
+        ("line", "name"),
+        [
+            ("MCP plugin 'a'b': still connecting.", "a'b"),
+            ("MCP plugin 'c\\d': still connecting.", "c\\d"),
+            ("MCP plugin 'c\\d'e': still connecting.", "c\\d'e"),
+        ],
+        ids=["quote", "backslash", "both"],
+    )
+    def test_a_line_filed_before_the_escaping_reads_back_the_way_it_was_written(self, line: str, name: str) -> None:
+        """A session filed before ``mcp_notice`` escaped its names holds the raw
+        name, up to the first ``': ``; the reader recovers it as far as that format allows."""
+        from raven.context_engine.runtime_context import notice_subject
+
+        assert notice_subject(line) == name
+
+    def test_a_name_written_escaped_is_not_read_as_a_raw_one(self) -> None:
+        """A raw name can look escaped; the escaped reading still wins, so every
+        line ``mcp_notice`` writes keeps reading back exactly."""
+        from raven.context_engine.runtime_context import mcp_notice, notice_subject
+
+        assert notice_subject(mcp_notice("c\\d", "still connecting.")) == "c\\d"
+
+    def test_a_note_filed_before_the_escaping_keys_its_plugin(self) -> None:
+        from raven.context_engine.runtime_context import told_notices
+
+        legacy = "MCP plugin 'a'b': installed, still connecting."
+        replay = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{legacy}", "q")}
+
+        assert told_notices([replay]) == {("mcp", "a'b"): legacy}
+
+    def test_a_cleared_line_filed_before_the_escaping_still_clears(self) -> None:
+        """The line that clears a plugin was written raw too; it has to be read as
+        the clearing, not as one more note."""
+        from raven.context_engine.runtime_context import _CLEARED, mcp_notice, told_notices
+
+        noted = mcp_notice("a'b", "installed, still connecting.")
+        legacy = f"MCP plugin 'a'b': {_CLEARED}"
+        replay = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{noted}\n{legacy}", "q")}
+
+        assert told_notices([replay]) == {}
+
+    def test_a_tool_line_keys_itself(self) -> None:
+        from raven.context_engine.runtime_context import notice_key, tool_notice
+
+        assert notice_key(tool_notice("web_search", "currently unavailable.")) == ("tool", "web_search")
+
+    def test_a_tool_and_a_plugin_with_the_same_name_keep_their_own_lines(self) -> None:
+        from raven.context_engine.runtime_context import mcp_notice, notice_changes, tool_notice
+
+        plugin = mcp_notice("web_search", "still connecting.")
+        tool = tool_notice("web_search", "currently unavailable.")
+
+        assert notice_changes([plugin, tool], {}) == [_HEADER, plugin, TOOL_HEADER, tool]
+
+    def test_an_unchanged_tool_line_is_not_resent(self) -> None:
+        from raven.context_engine.runtime_context import notice_changes, told_notices, tool_notice
+
+        line = tool_notice("web_search", "currently unavailable.")
+        replay = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{TOOL_HEADER}\n{line}", "q")}
+
+        assert notice_changes([line], told_notices([replay])) == []
+
+    def test_a_tool_that_returns_gets_a_cleared_line(self) -> None:
+        from raven.context_engine.runtime_context import notice_changes, notice_key, tool_notice
+
+        told = {("tool", "web_search"): tool_notice("web_search", "currently unavailable.")}
+        [header, cleared] = notice_changes([], told)
+
+        assert header == TOOL_HEADER
+        assert notice_key(cleared) == ("tool", "web_search")
+        assert "available again" in cleared

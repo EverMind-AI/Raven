@@ -66,7 +66,9 @@ class AgentPluginAuthor(BaseModel):
     """The manifest's ``author`` object.
 
     The official schema closes it, so a field other than ``name``,
-    ``email`` or ``url`` makes the manifest invalid.
+    ``email`` or ``url`` makes the manifest invalid. Each of those three
+    is typed as a plain string: the key may be omitted, but a present
+    ``null`` is a type error, not an absent value.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -74,6 +76,15 @@ class AgentPluginAuthor(BaseModel):
     name: str | None = None
     email: str | None = None
     url: str | None = None
+
+    @field_validator("name", "email", "url")
+    @classmethod
+    def _null_is_not_a_string(cls, value: str | None) -> str | None:
+        # ``str | None`` accepts an explicit null; the schema's ``type:
+        # "string"`` does not. Absent keys never reach this validator.
+        if value is None:
+            raise ValueError("null is not a string")
+        return value
 
 
 class AgentPluginManifest(BaseModel):
@@ -102,6 +113,24 @@ class AgentPluginManifest(BaseModel):
                 f"name {value!r} must be lowercase letters, digits, '-' or '.', start "
                 "and end alphanumeric, and carry no '--' or '..'"
             )
+        return value
+
+    @field_validator("version", "description", "homepage", "repository", "license")
+    @classmethod
+    def _null_is_not_a_string(cls, value: str | None) -> str | None:
+        # ``str | None`` accepts an explicit null; the schema's ``type:
+        # "string"`` does not. Absent keys never reach this validator.
+        if value is None:
+            raise ValueError("null is not a string")
+        return value
+
+    @field_validator("author")
+    @classmethod
+    def _author_may_be_omitted_but_not_null(cls, value: AgentPluginAuthor | None) -> AgentPluginAuthor | None:
+        # The schema types author as an object, so a present null is a
+        # type error; an absent key keeps the None default.
+        if value is None:
+            raise ValueError("null is not an object")
         return value
 
     @field_validator("extensions", mode="before")

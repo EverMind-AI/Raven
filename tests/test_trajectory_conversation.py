@@ -283,13 +283,13 @@ def test_nested_chain_does_not_offset_main_loop(state):
             parent="curate",
             start=2,
             end=2,
-            attrs=_llm_attrs(state, "cur-llm", [{"role": "user", "content": "curator prompt"}]),
+            attrs=_llm_attrs(state, "cur-llm", [{"role": "user", "content": "history prompt"}]),
         )
     )
     _write_log(state, spans)
     records = _by_label(tconv.attempt_conversation(["t1"], state), "LLM input")
-    curator = next(r for r in records if "curator prompt" in r.text)
-    assert "unchanged" not in curator.text and curator.degraded is None
+    history_record = next(r for r in records if "history prompt" in r.text)
+    assert "unchanged" not in history_record.text and history_record.degraded is None
     main_second = next(r for r in records if r.span_id == "l2")
     assert main_second.text.startswith("(… 1 earlier messages unchanged)")
 

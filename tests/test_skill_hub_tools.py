@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 from collections.abc import Iterable
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,10 +11,19 @@ from types import SimpleNamespace
 import pytest
 
 from raven.agent.tools.skill_hub import (
+    FindSkillTool,
     ReadSkillTool,
     UseSkillTool,
+    router_held_hit,
     split_qualified_id,
 )
+from raven.context_engine.scent import ScentMenu
+from raven.contracts.memory import Memory
+from raven.memory_engine import ProjectSkills
+from raven.memory_engine.skill_forge import RouterHit
+from raven.memory_engine.skill_forge.backend_source import BackendSkillSource
+from raven.memory_engine.skill_forge.project_skills import ProjectSkillCache
+from raven.memory_engine.skill_forge.router import SkillForgeRouter
 
 
 class _FakeRegistry:
@@ -97,6 +107,29 @@ def _registry_with(tmp_path: Path, *, workspace: Iterable[str] = (), builtin: It
             (root / name).mkdir()
             (root / name / "SKILL.md").write_text(f"---\nname: {name}\ndescription: d\n---\n\nbody\n", encoding="utf-8")
     return SkillRegistry(home, builtin_skills_dir=tmp_path / "builtin")
+
+
+def _project_repo(path: Path) -> Path:
+    (path / ".git").mkdir(parents=True)
+    return path.resolve()
+
+
+def _project_skill(repo: Path, name: str, body: str) -> Path:
+    skill_dir = repo / ".agents" / "skills" / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {name} skill\n---\n\n{body}\n", encoding="utf-8"
+    )
+    return skill_dir
+
+
+def _project(tmp_path: Path, repo: Path | None, *, enabled: bool = True) -> ProjectSkills:
+    return ProjectSkills(
+        agent_home=tmp_path / "agent-home",
+        workdir_reader=lambda: repo,
+        enabled_reader=lambda: enabled,
+        cache=ProjectSkillCache(),
+    )
 
 
 class TestSplitQualifiedId:
@@ -195,11 +228,115 @@ class TestReadSkill:
         assert out.startswith("Error")
 
 
+class TestProjectSkills:
+    """``project/<name>`` ids resolve against the working directory bound to the turn.
+
+    A project id is never served from the router's held hits: the router is
+    shared by every session, so a held body may belong to another session's
+    project.
+    """
+
+    async def test_read_skill_reads_a_project_skill_from_the_bound_project(self, tmp_path: Path) -> None:
+        repo = _project_repo(tmp_path / "repo")
+        skill_dir = _project_skill(
+            repo,
+            "pdf-tools",
+            "Extract text from PDF files.\n\nRead [guide](references/guide.md) before placing a page.",
+        )
+        guide = skill_dir / "references" / "guide.md"
+        guide.parent.mkdir()
+        guide.write_text("shapes", encoding="utf-8")
+
+        out = await ReadSkillTool(project=_project(tmp_path, repo)).execute(skill_id="project/pdf-tools")
+
+        assert "Extract" in out
+        assert f"({skill_dir}/references/guide.md)" in out
+
+    async def test_read_skill_project_miss_does_not_fall_back_to_held_hits(self, tmp_path: Path) -> None:
+        repo = _project_repo(tmp_path / "repo")
+        (repo / ".agents" / "skills").mkdir(parents=True)
+        held = RouterHit(qualified_id="project/ghost", name="ghost", content="HELD BODY", score=1.0)
+
+        out = await ReadSkillTool(project=_project(tmp_path, repo), held_hit=lambda _q: held).execute(
+            skill_id="project/ghost"
+        )
+
+        assert out.startswith("Error: no project skill 'ghost'")
+        assert "HELD BODY" not in out
+
+    async def test_read_skill_project_flags_foreign_home_paths_as_a_note(self, tmp_path: Path) -> None:
+        repo = _project_repo(tmp_path / "repo")
+        _project_skill(repo, "pdf-tools", "Write the output to ~/.config/opencode/results.json.")
+
+        out = await ReadSkillTool(project=_project(tmp_path, repo)).execute(skill_id="project/pdf-tools")
+
+        assert "note:" in out
+        assert "~/.config/opencode" in out
+        assert "Error" not in out
+
+    async def test_read_skill_project_respects_the_blocklist(self, tmp_path: Path) -> None:
+        repo = _project_repo(tmp_path / "repo")
+        _project_skill(repo, "pdf-tools", "Extract text from PDF files.")
+
+        out = await ReadSkillTool(project=_project(tmp_path, repo), blocklist=["pdf-tools"]).execute(
+            skill_id="project/pdf-tools"
+        )
+
+        assert "blocklist" in out
+
+    async def test_read_skill_project_when_switched_off(self, tmp_path: Path) -> None:
+        repo = _project_repo(tmp_path / "repo")
+        _project_skill(repo, "pdf-tools", "Extract text from PDF files.")
+
+        out = await ReadSkillTool(project=_project(tmp_path, repo, enabled=False)).execute(skill_id="project/pdf-tools")
+
+        assert out.startswith("Error")
+        assert "skillForge.projectSkills.enabled" in out
+
+    async def test_read_skill_project_skill_deleted_after_indexing(self, tmp_path: Path) -> None:
+        repo = _project_repo(tmp_path / "repo")
+        skill_dir = _project_skill(repo, "pdf-tools", "Extract text from PDF files.")
+        tool = ReadSkillTool(project=_project(tmp_path, repo))
+
+        assert "Extract" in await tool.execute(skill_id="project/pdf-tools")
+        shutil.rmtree(skill_dir)
+
+        second = await tool.execute(skill_id="project/pdf-tools")
+
+        assert second.startswith("Error: no project skill 'pdf-tools'")
+
+    async def test_read_skill_reads_both_ids_of_a_shared_name(self, tmp_path: Path) -> None:
+        repo = _project_repo(tmp_path / "repo")
+        _project_skill(repo, "fmt", "PROJECT BODY")
+        registry = _FakeRegistry({("builtin", "fmt"): _meta(tmp_path, "fmt", "LOCAL BODY", with_scripts=False)})
+        tool = ReadSkillTool(registry=registry, project=_project(tmp_path, repo))
+
+        local_out = await tool.execute(skill_id="local/fmt")
+        project_out = await tool.execute(skill_id="project/fmt")
+
+        assert "LOCAL BODY" in local_out
+        assert "PROJECT BODY" in project_out
+
+    async def test_a_tool_without_project_access_refuses_project_ids(self) -> None:
+        out = await ReadSkillTool().execute(skill_id="project/x")
+
+        assert out.startswith("Error: project skills are not available")
+
+    async def test_use_skill_project_returns_the_scripts_dir(self, tmp_path: Path) -> None:
+        repo = _project_repo(tmp_path / "repo")
+        skill_dir = _project_skill(repo, "pdf-tools", "Extract text from PDF files.")
+        (skill_dir / "scripts").mkdir()
+
+        out = await UseSkillTool(project=_project(tmp_path, repo)).execute(skill_id="project/pdf-tools")
+
+        assert f"scripts_dir: {repo / '.agents/skills/pdf-tools/scripts'}" in out
+
+
 @pytest.mark.parametrize("tool_cls", [ReadSkillTool, UseSkillTool])
 class TestLocalMiss:
     """What a ``local/`` miss tells the model, from either tool.
 
-    ``# Skills`` and ``# Active Skills`` render from the registry these tools
+    The scent menu and ``# Active Skills`` read the registry these tools
     read, so a local id it lacks has no body in context to fall back on. When
     another tool's skill folder was listed beside Raven's, the model tried each
     name there as ``local/<name>``, and every read failed until it opened the
@@ -287,16 +424,113 @@ class TestLocalMiss:
         assert scanned == []
 
 
-@pytest.mark.parametrize(
-    ("tool_cls", "hint"),
-    [(ReadSkillTool, "'# Skills' context"), (UseSkillTool, "already in your context")],
-)
-async def test_a_memory_backend_miss_still_points_at_the_injected_body(tool_cls, hint: str, tmp_path: Path) -> None:
-    """The router injects a memory-backend hit with its body, and that skill
-    need not be on disk, so for that source the context hint holds."""
-    out = await tool_cls(registry=_registry_with(tmp_path)).execute(skill_id="everos/abc123")
-    assert out.startswith("Error: no everos skill 'abc123' found")
-    assert hint in out
+class _AgentTrack:
+    """A memory backend whose agent track holds one evolved skill and one case."""
+
+    async def recall(self, query, *, agent_id=None, top_k=5, **_):
+        return [
+            Memory(
+                text="EVOLVED-STEP-1 rotate pg_dump files weekly",
+                score=0.9,
+                metadata={"id": "sk_42", "name": "pg-backup-rotation"},
+            ),
+            Memory(text="CASE-APPROACH last time the WAL was pruned first", score=0.8, metadata={"id": "case_7"}),
+        ]
+
+
+def _agent_track_router() -> tuple[SkillForgeRouter, BackendSkillSource]:
+    source = BackendSkillSource(_AgentTrack(), agent_id="agent-1", name="everos")
+    return SkillForgeRouter([source]), source
+
+
+@pytest.mark.parametrize("tool_cls", [ReadSkillTool, UseSkillTool])
+class TestMemoryBackendHits:
+    """An evolved skill or a case has no file: it exists only as the hit the
+    router returned, so that hit is where its body is read from."""
+
+    @staticmethod
+    def _tool(tool_cls, tmp_path: Path, router: SkillForgeRouter, **kwargs):
+        return tool_cls(registry=_registry_with(tmp_path), held_hit=router_held_hit(lambda: router), **kwargs)
+
+    async def test_an_id_find_skill_listed_reads_back_verbatim(self, tool_cls, tmp_path: Path) -> None:
+        router, _ = _agent_track_router()
+        listed = await FindSkillTool(lambda: router).execute(query="postgres backup rotation")
+        assert "everos/sk_42" in listed
+        assert "everos/case_7" in listed
+
+        tool = self._tool(tool_cls, tmp_path, router)
+        skill = await tool.execute(skill_id="everos/sk_42")
+        case = await tool.execute(skill_id="everos/case_7")
+
+        assert not skill.startswith("Error")
+        assert "EVOLVED-STEP-1 rotate pg_dump files weekly" in skill
+        assert not case.startswith("Error")
+        assert "CASE-APPROACH last time the WAL was pruned first" in case
+
+    async def test_an_id_the_scent_menu_offered_reads_back(self, tool_cls, tmp_path: Path) -> None:
+        router, _ = _agent_track_router()
+        menu = await ScentMenu(router).build("rotate the postgres backups weekly and prune old dumps", [])
+        assert "everos/sk_42" in menu.skill_ids
+
+        out = await self._tool(tool_cls, tmp_path, router).execute(skill_id="everos/sk_42")
+
+        assert "EVOLVED-STEP-1 rotate pg_dump files weekly" in out
+
+    async def test_a_miss_names_the_search_that_brings_the_id_back(self, tool_cls, tmp_path: Path) -> None:
+        """Nothing is held after a restart. The miss sends the model to
+        find_skill, and that holds: an id the search returns reads right after."""
+        router, _ = _agent_track_router()
+        tool = self._tool(tool_cls, tmp_path, router)
+
+        miss = await tool.execute(skill_id="everos/sk_42")
+        assert miss.startswith("Error: no everos skill 'sk_42'")
+        assert "find_skill" in miss
+        assert "context" not in miss
+
+        await FindSkillTool(lambda: router).execute(query="postgres backup rotation")
+        assert "EVOLVED-STEP-1 rotate pg_dump files weekly" in await tool.execute(skill_id="everos/sk_42")
+
+    async def test_turning_memory_off_forgets_its_hits(self, tool_cls, tmp_path: Path) -> None:
+        router, source = _agent_track_router()
+        await FindSkillTool(lambda: router).execute(query="postgres backup rotation")
+
+        router.remove_source(source)
+
+        assert (await self._tool(tool_cls, tmp_path, router).execute(skill_id="everos/sk_42")).startswith("Error")
+
+    async def test_a_held_hit_on_the_blocklist_is_refused_by_name(self, tool_cls, tmp_path: Path) -> None:
+        router, _ = _agent_track_router()
+        await FindSkillTool(lambda: router).execute(query="postgres backup rotation")
+
+        out = await self._tool(tool_cls, tmp_path, router, blocklist=["pg-backup-rotation"]).execute(
+            skill_id="everos/sk_42"
+        )
+
+        assert "blocklist" in out
+        assert "EVOLVED-STEP-1" not in out
+
+
+@pytest.mark.parametrize("tool_cls", [ReadSkillTool, UseSkillTool])
+async def test_a_tool_with_no_router_names_no_search_on_a_miss(tool_cls, tmp_path: Path) -> None:
+    """A built-in sub-agent's read_skill holds no hits and has no find_skill, so
+    its miss must not send the model to a tool it cannot call."""
+    out = await tool_cls(registry=_registry_with(tmp_path)).execute(skill_id="everos/sk_42")
+
+    assert out.startswith("Error: no everos skill 'sk_42' found")
+    assert "find_skill" not in out
+
+
+@pytest.mark.parametrize("tool_cls", [ReadSkillTool, UseSkillTool])
+async def test_a_switch_off_tool_names_no_search_it_cannot_run(tool_cls, tmp_path: Path) -> None:
+    """The master switch leaves the router absent while the tool keeps the
+    held-hit wiring, so a miss must not send the model to a find_skill that
+    answers "not available"."""
+    tool = tool_cls(registry=_registry_with(tmp_path), held_hit=router_held_hit(lambda: None))
+
+    out = await tool.execute(skill_id="everos/sk_42")
+
+    assert out.startswith("Error: no everos skill 'sk_42' found")
+    assert "find_skill" not in out
 
 
 class TestUseSkill:
@@ -343,8 +577,8 @@ class TestUseSkill:
         No fake can catch this one: the bug was handing ``source="local"``
         straight to ``SkillRegistry.get``, whose compound key only ever holds
         physical layers (workspace / builtin / external), so every ``local/*``
-        id — the exact form the router prints in the ``# Skills`` brackets and
-        both tool descriptions tell the agent to copy — resolved to None.
+        id — the exact form the scent menu prints and both tool descriptions
+        tell the agent to copy — resolved to None.
         """
         from raven.memory_engine.skill_local import SkillRegistry
 

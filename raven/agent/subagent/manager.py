@@ -7,7 +7,7 @@ from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -37,6 +37,7 @@ from raven.agent.subagent.direct_chat import (
 from raven.agent.subagent.history import SpawnRecord, session_history_root, spawn_live_key
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
 from raven.agent.subagent.instances import get_registry, hold_handle, mint_handle
+from raven.agent.subagent.live_control import LiveDelegation, controlling
 from raven.agent.subagent.mode_tiers import resolve_tier, turn_tier_in_force
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.registry import AgentRegistry, AgentRow
@@ -50,8 +51,7 @@ from raven.agent.subagent_memory import (
     trace_session_id,
 )
 from raven.config.agent_names import canonical_agent_name
-from raven.config.paths import get_sandbox_dir
-from raven.config.schema import TIER_LADDER, ExecToolConfig
+from raven.config.schema import DEFAULT_LONG_RUN_NOTICE_SECONDS, TIER_LADDER, ExecToolConfig
 from raven.context_engine.segments.render import (
     RESULT_REPORT_RULE,
     board_on_page,
@@ -68,6 +68,9 @@ from raven.sandbox import SandboxConfig, SandboxExecutor, build_executor
 from raven.security.trust import wrap_untrusted
 from raven.spine.message import Media
 from raven.tracing import trace
+
+if TYPE_CHECKING:
+    from raven.config.live import LiveConfig
 
 # One hour: a runaway re-injection loop fires fast and trips the limit quickly,
 # while legitimate spawns spread over time and age out before it bites.
@@ -252,7 +255,6 @@ class SubagentManager:
         exec_config: "ExecToolConfig | None" = None,
         restrict_to_workspace: bool = False,
         sandbox_config: "SandboxConfig | None" = None,
-        owned_ids: set[str] | None = None,
         jina_api_key: str | None = None,
         web_search_provider: str = "serper",
         web_fetch_provider: str = "jina",
@@ -268,12 +270,16 @@ class SubagentManager:
         retry_after_output: bool = False,
         provider_pool: ProviderPool | None = None,
         task_board: bool = False,
+        long_run_notice_seconds: float = DEFAULT_LONG_RUN_NOTICE_SECONDS,
+        control_reachable: Callable[[], bool] | None = None,
     ):
         from raven.config.schema import LLM_ERROR_RETRY_DELAYS_DEFAULT, ExecToolConfig
 
         # Agent home. Also the working-directory fallback for a spawn that
         # captured none, which is the pre-split behaviour.
         self.workspace = workspace
+        self.long_run_notice_seconds = long_run_notice_seconds
+        self._control_reachable = control_reachable
         # Whether the host keeps a Task Board: a graph's notice into a conversation
         # the page draws then leaves the questions still open to that board.
         self._task_board = task_board
@@ -334,7 +340,8 @@ class SubagentManager:
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
         self._sandbox_config = sandbox_config
-        self._owned_ids = owned_ids
+        # Read live by every run's network source; built on first use.
+        self._live_config: "LiveConfig | None" = None
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
         # Why a run is being cancelled, by task id: written by the cancel
@@ -1756,18 +1763,33 @@ class SubagentManager:
     def sandbox_executor_for(self, workspace: Path) -> "SandboxExecutor":
         """The executor a sandboxed run execs in: a spawn's or a graph node's.
 
-        The one sandbox config this manager holds, with the owned-id set and
-        home mount a spawn's executor gets, so both dispatch routes raise their
-        VMs the same way. Cheap to call: construction is synchronous, the VM
-        itself starts inside the caller's ``async with``.
+        The one sandbox config this manager holds, with the home mount a
+        spawn's executor gets, so both dispatch routes raise their VMs the
+        same way. Cheap to call: construction is synchronous, the VM itself
+        starts inside the caller's ``async with``.
+
+        Its network runs in the scope of the conversation the run belongs to:
+        the turn that dispatched it, which a spawned or graph task inherits. So
+        a connection someone allowed for this conversation reaches the run's
+        sandbox, one allowed in another conversation does not, and a run with
+        no conversation gets no grants (``raven.permissions.network_grants``).
         """
-        return build_executor(
+        from raven.config.live import LiveConfig, network_permissions
+        from raven.permissions import network_grants
+        from raven.permissions.turn import current_turn
+
+        scope = current_turn().session_key
+        if self._live_config is None:
+            self._live_config = LiveConfig()
+        live = self._live_config
+        executor = build_executor(
             self._sandbox_config,
             workspace,
-            self._owned_ids,
             self._home_volume(workspace),
-            sandbox_dir=get_sandbox_dir,
+            network_source=network_grants.network_source_for(lambda: network_permissions(live), scope),
         )
+        network_grants.GRANTS.register(executor, scope)
+        return executor
 
     def session_dir_for(self, session_key: str) -> Path:
         """The metadata directory of the session a spawn was made from.
@@ -1933,7 +1955,28 @@ class SubagentManager:
                     state_kwargs: dict[str, Any] = (
                         {"history": state.load(), "on_messages": state.save} if state is not None else {}
                     )
-                    with activity.watching_instance(did, (session_key or "", agent or "", handle)):
+
+                    def interrupt() -> None:
+                        self._cancel_reasons[task_id] = "the host interrupted this instance"
+                        run_task.cancel()
+
+                    run_task = asyncio.current_task()
+                    assert run_task is not None
+                    control = LiveDelegation(call_id, agent, handle, interrupt)
+
+                    async def notify_long_run(elapsed: int) -> None:
+                        await self.announce_long_run(
+                            control.notice(
+                                elapsed, controls=self._control_reachable is not None and self._control_reachable()
+                            ),
+                            origin,
+                            call_id=call_id,
+                        )
+
+                    with (
+                        activity.watching_instance(did, (session_key or "", agent or "", handle)),
+                        controlling(did, control, interval=self.long_run_notice_seconds, announce=notify_long_run),
+                    ):
                         final_result = await backend.run(
                             task,
                             task_id=task_id,
@@ -1983,6 +2026,7 @@ class SubagentManager:
                     "ok",
                     record_path=str(record.file("out.md")),
                     dispatch_link=link,
+                    **({"reported_early": True} if did.reported_early else {}),
                 )
                 announced = taken is not False
             except asyncio.CancelledError:
@@ -2218,6 +2262,7 @@ class SubagentManager:
         status: str,
         record_path: str | None = None,
         dispatch_link: tuple[str, str] | None = None,
+        reported_early: bool = False,
     ) -> bool:
         """Announce the subagent result to the main agent via the spine; whether a turn took it.
 
@@ -2298,6 +2343,9 @@ Result:
 
         assert self._submit is not None
         mark: dict[str, Any] = {"kind": "spawn", "label": task_summary, "status": status}
+        if reported_early:
+            announce_content = "The host requested an early reply.\n\n" + announce_content
+            mark["reported_early"] = True
         # Only when present -- the dag mark's `run_id` is unconditional because a
         # dag run always has one, but an origin built outside `spawn()` may carry
         # none, and the field is a bare optional string on the wire (no null).
@@ -2641,13 +2689,36 @@ This instance acted on its own schedule -- an armed wake, a watch round -- and s
 Read it against the plan this instance serves. If it reports finished work, results ready to collect, or a decision point, continue that plan now -- dispatch the next round or collect what is ready; do not leave finished work waiting for the owner to notice. If it is routine progress only, no action is needed.
 
 {SILENCE_INSTRUCTION}"""
-        mark = {"kind": "unprompted", "label": f"{agent}/{handle}", "status": "report"}
+        # `agent` rides the mark because nothing else names the sender: a report
+        # answers no call, so no spawn call or task row exists to read it off.
+        mark = {"kind": "unprompted", "label": f"{agent}/{handle}", "status": "report", "agent": agent}
         # No link: the span current here is whatever the ACP connection's read
         # loop was created under, which has nothing to do with this report.
         if not self._inject(content, origin, mark, dispatch_link=None):
             return
         self._emit_delivered(origin, {**mark, "content": content})
         logger.info("unprompted turn on {}/{} announced to {}", agent, handle, session_key)
+
+    async def announce_long_run(
+        self,
+        text: str,
+        origin: dict[str, str],
+        *,
+        call_id: str,
+        run_id: str | None = None,
+        node_id: str | None = None,
+    ) -> None:
+        """Deliver a running notice and coalesce reminders while its host turn is pending."""
+        if self._submit is None:
+            return
+        handles = []
+        mark = {"kind": "dag" if run_id else "spawn", "label": "Long-running subagent", "status": "notice"}
+        mark.update(call_id=call_id)
+        if run_id is not None:
+            mark.update(run_id=run_id, node_id=node_id or "")
+        self._inject(text, origin, mark, dispatch_link=trace.dispatch_link_of(origin), on_submit=handles.append)
+        if handles and (result := getattr(handles[0], "result", None)) is not None:
+            await result()
 
     def _inject(
         self,
@@ -2656,6 +2727,7 @@ Read it against the plan this instance serves. If it reports finished work, resu
         delegated: dict[str, Any] | None = None,
         *,
         dispatch_link: tuple[str, str] | None,
+        on_submit: Callable[[Any], None] | None = None,
     ) -> bool:
         """Re-inject ``content`` to trigger a main-agent turn in the originating session.
 
@@ -2696,7 +2768,7 @@ Read it against the plan this instance serves. If it reports finished work, resu
             dispatch_link=dispatch_link,
         )
         try:
-            self._submit(request)
+            handle = self._submit(request)
         except SchedulerDrainingError:
             logger.bind(agent_output=True).error(
                 "sub-agent announce to {} dropped: the scheduler is draining and no turn can carry it; "
@@ -2705,6 +2777,8 @@ Read it against the plan this instance serves. If it reports finished work, resu
                 content,
             )
             return False
+        if on_submit is not None:
+            on_submit(handle)
         return True
 
     async def _cancel(self, live: dict[str, asyncio.Task], reason: str) -> list[asyncio.Task]:

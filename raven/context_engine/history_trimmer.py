@@ -1,7 +1,7 @@
-"""History trimming — the Curator's contribution to ``*history``.
+"""History trimming — the shared projection from session messages to ``*history``.
 
-Owned by :class:`CuratorAssembler`, which calls these operations to decide
-which session messages reach the model:
+Called by the history strategy that needs it -- the compacting strategy calls
+these operations to decide which session messages reach the model:
 
 - **adjacency closure** (:meth:`canonical_ids`) — if a tool call is
   selected its result messages come along, and vice versa, so the
@@ -16,10 +16,8 @@ which session messages reach the model:
   it fits -- a tool call and its results as one unit (:meth:`tool_group`),
   so what fits is also what the provider accepts.
 
-This is the *only* code path that selects ``*history``. The
-``# Curator Working State`` section is rendered by
-:class:`CuratorSegmentBuilder` from the plan's working-state text — it is
-not this module's concern.
+This is the *only* code path that selects ``*history``. Any segment 6 text is
+the strategy builder's own concern, not this module's.
 """
 
 from __future__ import annotations
@@ -30,6 +28,7 @@ from typing import Any, Callable
 from raven.context_engine.runtime_context import replayed_content
 from raven.contracts.llm_provider import LLMProvider
 from raven.providers.binding import ModelBinding, active_window, resolve
+from raven.providers.capabilities import replay_gates
 from raven.utils.tokens import estimate_prompt_tokens_chain, reuse_prompt_tokenization
 
 # Provider-safe message keys. Anything else on a session message
@@ -46,6 +45,14 @@ _ALLOWED_KEYS = {
     "reasoning_content",
     "thinking_blocks",
 }
+
+STORED_MID_TURN_KEY = "mid_turn"
+"""The mark the session write leaves on an arrival the reader typed mid-turn.
+
+Spelled here rather than imported because a history strategy must not load the
+loop (``raven.agent.loop._shared`` owns the private spelling); the merge test
+pins the two against each other.
+"""
 
 
 def _tool_parents(messages: list[dict[str, Any]]) -> dict[int, int]:
@@ -103,10 +110,6 @@ class TrimOutcome:
     def ok(self) -> bool:
         return self.estimated_tokens <= self.max_prompt_tokens
 
-    @property
-    def over_by(self) -> int:
-        return max(0, self.estimated_tokens - self.max_prompt_tokens)
-
 
 class HistoryTrimmer:
     """Shapes and budget-trims the session history into ``*history``."""
@@ -162,20 +165,38 @@ class HistoryTrimmer:
         return []
 
     @staticmethod
-    def history_from_ids(messages: list[dict[str, Any]], ids: list[int]) -> list[dict[str, Any]]:
+    def history_from_ids(
+        messages: list[dict[str, Any]],
+        ids: list[int],
+        *,
+        can_see_images: bool = True,
+        tool_images_ok: bool = True,
+    ) -> list[dict[str, Any]]:
         """Project the selected messages down to provider-safe keys.
 
         A user message is replayed with the runtime-context lines it was sent
         with (:mod:`raven.context_engine.runtime_context`): the session keeps the
         user's words and the lines apart, and the request has to carry them
         joined as they were sent for the provider's cached prefix to match.
+
+        Archived pictures are expanded only when the receiving model and
+        transport can take them; a false gate leaves the archived placeholder.
+
+        An arrival the reader typed mid-turn keeps its mark, so the call seam
+        folds the run into the one message the turn was sent with.
         """
         history: list[dict[str, Any]] = []
         for mid in ids:
             clean = {k: v for k, v in messages[mid].items() if k in _ALLOWED_KEYS}
             if clean.get("role"):
                 if "content" in clean:
-                    clean["content"] = replayed_content(messages[mid])
+                    clean["content"] = replayed_content(
+                        messages[mid],
+                        can_see_images=can_see_images,
+                        tool_images_ok=tool_images_ok,
+                    )
+                if messages[mid].get(STORED_MID_TURN_KEY):
+                    clean[STORED_MID_TURN_KEY] = True
                 history.append(clean)
         return history
 
@@ -259,8 +280,8 @@ class HistoryTrimmer:
         Ranked by the group a candidate would remove, not by the candidate:
         a group with any protected member is a protected group, so a
         protection boundary that falls inside a parallel-call exchange
-        (``protect_first_n`` counting the call but not its results) cannot be
-        used to take the protected call out through an unprotected result.
+        cannot be used to take the protected call out through an unprotected
+        result.
         Unprotected groups go first, in selection order,
         skipping one whose removal would re-anchor a protected id out of the
         history; protected groups go only after that, under the same rule;
@@ -345,7 +366,13 @@ class HistoryTrimmer:
         :class:`TrimOutcome`.
         """
         canon = self.canonical_ids(session_messages, ids)
-        history = self.history_from_ids(session_messages, canon)
+        can_see_images, tool_images_ok = replay_gates(self.provider, self.model)
+        history = self.history_from_ids(
+            session_messages,
+            canon,
+            can_see_images=can_see_images,
+            tool_images_ok=tool_images_ok,
+        )
         messages = build_messages(history)
 
         estimated, source = estimate_prompt_tokens_chain(
@@ -369,7 +396,12 @@ class HistoryTrimmer:
             for mid in sorted(set(remaining) - set(reclosed)):
                 warnings.append(f"dropped message {mid}: nothing before the first remaining user message is kept")
             trimmed_ids = reclosed
-            history = self.history_from_ids(session_messages, trimmed_ids)
+            history = self.history_from_ids(
+                session_messages,
+                trimmed_ids,
+                can_see_images=can_see_images,
+                tool_images_ok=tool_images_ok,
+            )
             messages = build_messages(history)
             estimated, source = estimate_prompt_tokens_chain(
                 self.provider,
@@ -386,7 +418,12 @@ class HistoryTrimmer:
             trimmed_ids = [mid for mid in trimmed_ids if mid not in offenders]
             for mid in sorted(offenders):
                 warnings.append(f"dropped message {mid}: its tool call or result is not in the selection")
-            history = self.history_from_ids(session_messages, trimmed_ids)
+            history = self.history_from_ids(
+                session_messages,
+                trimmed_ids,
+                can_see_images=can_see_images,
+                tool_images_ok=tool_images_ok,
+            )
             messages = build_messages(history)
             estimated, source = estimate_prompt_tokens_chain(
                 self.provider,

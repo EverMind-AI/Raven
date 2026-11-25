@@ -31,7 +31,12 @@ from raven.config.raven import (
 from raven.context_engine import headroom
 from raven.context_engine.history.compacting import CompactingHistoryBuilder
 from raven.context_engine.history.compacting.store import CHECKPOINT_DIR, STATE_FILE, CheckpointStore
-from raven.context_engine.history.markers import HISTORY_CHECKPOINT_KEY, HISTORY_PINNED_KEY, HISTORY_PRIVATE_KEYS
+from raven.context_engine.history.markers import (
+    HISTORY_CHECKPOINT_KEY,
+    HISTORY_COMPACTED_META,
+    HISTORY_PINNED_KEY,
+    HISTORY_PRIVATE_KEYS,
+)
 from raven.context_engine.history_trimmer import HistoryTrimmer
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.context import AssembledPrefix, AssemblyContext, SessionRevision
@@ -138,6 +143,10 @@ def _budget(window: int = WINDOW, model: str = "stub") -> TokenBudget:
 
 
 def _config(**compacting) -> ContextConfig:
+    # These cases pin the geometry they were written against; the shipped
+    # default is exercised by the trigger, retention and defaults suites.
+    compacting.setdefault("retain_ratio", 0.40)
+    compacting.setdefault("tail_keep_ratio", 0.25)
     return ContextConfig(history=ContextHistoryConfig(compacting=ContextCompactionConfig(**compacting)))
 
 
@@ -273,6 +282,7 @@ class TestACompaction:
         segment = await _builder(tmp_path).build(_ctx(_session(80)))
         meta = segment.meta
         assert meta["compaction_action"] == "compact"
+        assert meta[HISTORY_COMPACTED_META] is True
         assert meta["prompt_tokens"] > meta["trigger_tokens"]
         assert meta["history_tokens"] <= meta["target_tokens"]
         assert meta["history_kept"] < meta["history_total"]
@@ -318,6 +328,8 @@ class TestACompaction:
         first = await builder.build(_ctx(session))
         second = await builder.build(_ctx(session))
         assert (first.meta["compaction_action"], second.meta["compaction_action"]) == ("compact", "pass")
+        assert first.meta[HISTORY_COMPACTED_META] is True
+        assert second.meta[HISTORY_COMPACTED_META] is False
         assert second.meta["compaction_generation"] == 1
         assert second.history == first.history
 
@@ -723,6 +735,82 @@ class TestOverflow:
         assert outcome.reclaimed_tokens > 0
         assert len(outcome.messages) < len(messages)
         assert estimate_prompt_tokens(outcome.messages) < estimate_prompt_tokens(messages)
+
+    async def test_a_plugin_note_only_a_reclaimed_message_carried_is_told_again(self, tmp_path: Path) -> None:
+        """The question's block left a plugin note out because an older block had
+        told it; once the reclaim takes that block away, the retry must say it."""
+        from raven.context_engine.runtime_context import (
+            MCP_NOTICE_HEADER,
+            RUNTIME_CONTEXT_KEY,
+            mcp_notice,
+            with_runtime_context,
+        )
+        from raven.context_engine.segments.render import RUNTIME_CONTEXT_TAG
+
+        note = mcp_notice("github", "installed, awaiting authorization.")
+        session = _session(60)
+        # The head is kept (no checkpoint stands for it), so the note rides an
+        # exchange from the middle, which the reclaim takes.
+        session[20] = {
+            "role": "user",
+            "content": with_runtime_context(
+                f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{note}", session[20]["content"]
+            ),
+        }
+        builder = _builder(tmp_path)
+        lines = f"{RUNTIME_CONTEXT_TAG}\nChat ID: x"
+        question = {"role": "user", "content": with_runtime_context(lines, "and now?"), RUNTIME_CONTEXT_KEY: lines}
+        messages = [*await self._refused(builder, session), question]
+
+        outcome = await builder.on_context_overflow("s1", messages, attempt=1, window=WINDOW)
+
+        assert outcome is not None
+        assert not any(note in str(m.get("content")) for m in outcome.messages[:-1]), "fixture must reclaim the note"
+        retry_question = outcome.messages[-1]
+        assert note in retry_question["content"].split("\n\n", 1)[0]
+        assert note in retry_question[RUNTIME_CONTEXT_KEY]
+
+    async def test_a_multimodal_question_behind_a_recovery_notice_is_told_the_note_too(self, tmp_path: Path) -> None:
+        """Recovery puts its notice in front of the question after assembly, so
+        the question's lines no longer open its content; the retry must still
+        carry the note in what the provider is sent."""
+        from types import SimpleNamespace
+
+        from raven.agent.loop.turn_path import TurnPathMixin
+        from raven.context_engine.runtime_context import (
+            MCP_NOTICE_HEADER,
+            RUNTIME_CONTEXT_KEY,
+            mcp_notice,
+            with_runtime_context,
+        )
+        from raven.context_engine.segments.render import RUNTIME_CONTEXT_TAG
+
+        note = mcp_notice("github", "installed, awaiting authorization.")
+        session = _session(60)
+        session[20] = {
+            "role": "user",
+            "content": with_runtime_context(
+                f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{note}", session[20]["content"]
+            ),
+        }
+        builder = _builder(tmp_path)
+        lines = f"{RUNTIME_CONTEXT_TAG}\nChat ID: x"
+        words = [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+            {"type": "text", "text": "and now?"},
+        ]
+        question = {"role": "user", "content": with_runtime_context(lines, words), RUNTIME_CONTEXT_KEY: lines}
+        messages = [*await self._refused(builder, session), question]
+        recovering = SimpleNamespace(_pending_recovery={"s1": {"files": ["a.py"]}})
+        TurnPathMixin._inject_recovery_block(recovering, "s1", messages)  # type: ignore[arg-type]
+        assert not recovering._pending_recovery, "fixture must put the recovery notice in front"
+
+        outcome = await builder.on_context_overflow("s1", messages, attempt=1, window=WINDOW)
+
+        assert outcome is not None
+        assert not any(note in str(m.get("content")) for m in outcome.messages[:-1]), "fixture must reclaim the note"
+        sent = [part.get("text", "") for part in outcome.messages[-1]["content"] if part.get("type") == "text"]
+        assert any(text.startswith(RUNTIME_CONTEXT_TAG) and note in text for text in sent)
 
     async def test_the_reclaimed_prompt_is_still_a_valid_one(self, tmp_path: Path) -> None:
         builder = _builder(tmp_path)
@@ -1231,6 +1319,22 @@ class TestTheTurnsOwnWords:
 
         assert _turn_held([{"role": "user", "content": "[image]", "_attached_image": True}]) == frozenset()
 
+    def test_the_row_a_hook_note_lands_on_is_not_read_as_the_question(self) -> None:
+        """The note is written as its own ``user`` row after a tool round. Read
+        as the question, the overflow path would hold from there on and trim
+        away the words the turn is actually answering."""
+        from raven.agent.loop._shared import append_hook_note
+        from raven.context_engine.history.compacting.runtime import _turn_held
+
+        history = [
+            {"role": "user", "content": "what failed?"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "trace"},
+        ]
+        assert append_hook_note(history, "check the second table") is True
+        held = _turn_held(history)
+        assert history[min(held)]["content"] == "what failed?", "the note is the harness, not the question"
+
     async def test_a_reclaim_keeps_the_question_and_the_correction(self, tmp_path: Path) -> None:
         builder = _builder(tmp_path)
         messages = _working_list(inject_at=10, picture_at=14)
@@ -1244,3 +1348,26 @@ class TestTheTurnsOwnWords:
         assert "MID-TURN only the auth module" in contents
         assert len(outcome.messages) < len(messages), "tool exchanges between them still go"
         assert HistoryTrimmer.structural_errors(outcome.messages) == []
+
+
+def test_the_summary_gate_uses_the_summary_model(tmp_path: Path, monkeypatch) -> None:
+    """A pinned summary model decides the summary request's image gates, not the
+    turn's model it is summarising for."""
+    import raven.context_engine.history.compacting.runtime as runtime_module
+
+    config = ContextConfig(
+        history=ContextHistoryConfig(
+            compacting=ContextCompactionConfig(summary=ContextSummaryConfig(model="blind-summary"))
+        )
+    )
+    builder = _builder(tmp_path, config=config)
+    seen: list[str] = []
+
+    def gates(provider, model):
+        seen.append(model)
+        return (model != "blind-summary", True)
+
+    monkeypatch.setattr(runtime_module, "replay_gates", gates)
+
+    assert builder._summary_gates() == (False, True)
+    assert seen == ["blind-summary"]

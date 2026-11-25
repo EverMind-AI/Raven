@@ -54,6 +54,7 @@ from raven.agent.subagent.dag_adjudication import (
     REASSIGN,
     AdjudicationDesk,
     Final,
+    Notice,
     Outbox,
     ReassignPlan,
     ReplanProposal,
@@ -93,6 +94,7 @@ from raven.agent.subagent.dag_verdict import RouteUndeterminedError, Verdict, de
 from raven.agent.subagent.delegate import current_delegate, dispatch_charter
 from raven.agent.subagent.history import dag_root, nodes_root, nodes_root_in, session_history_root
 from raven.agent.subagent.instances import mint_handle
+from raven.agent.subagent.live_control import LiveDelegation
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_capabilities import check_path_placeholders
 from raven.agent.subagent.prompt_errors import DagValidationError, RoundBudgetSpentError, RoundNotApprovedError
@@ -721,6 +723,8 @@ class SubAgentDagTool(Tool):
         gate: asyncio.Semaphore | None = None,
         announce: DagAnnouncer | None = None,
         announce_exception: ExceptionAnnouncer | None = None,
+        announce_long_run: "Callable[..., Awaitable[None]] | None" = None,
+        long_run_notice_seconds: float = 0,
         adopt: TaskAdopter | None = None,
         state_for: "Callable[[str, str | None, str], Any] | None" = None,
         memory_for: "Callable[[str], MemoryScope | None] | None" = None,
@@ -755,6 +759,8 @@ class SubAgentDagTool(Tool):
         self._gate = gate if gate is not None else asyncio.Semaphore(max_concurrency)
         self._announce = announce
         self._announce_exception = announce_exception
+        self._announce_long_run = announce_long_run
+        self._long_run_notice_seconds = long_run_notice_seconds
         self._stint_driver = stint_driver
         # run id -> the stint it is a round of, for the one question asked off
         # the dispatch path: may this run be replanned into another graph?
@@ -1022,7 +1028,7 @@ class SubAgentDagTool(Tool):
         outbox = self._outboxes.get(run_id)
         return outbox is not None and outbox.bound
 
-    async def await_run(self, run_id: str) -> "Report | Final | Stopped | None":
+    async def await_run(self, run_id: str) -> "Report | Notice | Final | Stopped | None":
         """The next event of a bound foreground run, or None when there is no such run to wait on."""
         outbox = self._outboxes.get(run_id)
         if outbox is None or not outbox.bound:
@@ -1059,7 +1065,7 @@ class SubAgentDagTool(Tool):
                 except Exception:  # noqa: BLE001 - one run must not strand the conversation's others
                     logger.opt(exception=True).warning("DAG run outbox could not be released")
 
-    def render_event(self, run_id: str, event: "Report | Final | Stopped") -> "str | ToolResult":
+    def render_event(self, run_id: str, event: "Report | Notice | Final | Stopped") -> "str | ToolResult":
         """One outbox event as a tool result, addressed to the agent that is waiting."""
         if isinstance(event, Report):
             # Fenced like an announced report is (SubagentManager.announce_dag_exception):
@@ -1077,6 +1083,8 @@ class SubAgentDagTool(Tool):
             )
         if isinstance(event, Final):
             return event.result
+        if isinstance(event, Notice):
+            return event.text
         if isinstance(event, Stopped):
             return f"DAG run {run_id} was stopped before it finished."
         raise TypeError(f"not an outbox event: {event!r}")
@@ -2168,15 +2176,16 @@ class SubAgentDagTool(Tool):
         # None of the three are in your tool schema, so the hint names the route
         # as well as the name -- a model that looks one up and does not find it
         # reads the whole advertisement as stale.
-        controls = (
-            f'Check its progress with tool_call name "dag_status" arguments {{"run_id": "{run_id}"}}, '
-            f'and stop it with tool_call name "cancel_dag" arguments {{"run_id": "{run_id}"}}. '
-            "If a node reports it could not accomplish its task, you will be told, and you answer the "
-            'same way with "resolve_dag_node". These three are not in your tool list; tool_call is how '
-            "you reach them." + self._advert_for("dag_status", "cancel_dag") + "\n\n"
-            if reachable
-            else ""
-        )
+        controls = ""
+        if reachable:
+            controls = f'Check its progress with tool_call name "dag_status" arguments {{"run_id": "{run_id}"}}. '
+            cancel_advert = self._advert_for("cancel_subagent")
+            if self._control_advert is None or (cancel_advert and self._advert_for("cancel_dag")):
+                controls += f'Stop it with tool_call name "cancel_subagent" arguments {{"run_id": "{run_id}"}}. '
+            controls += (
+                "If a node reports it could not accomplish its task, you will be told, and you answer the "
+                'same way with "resolve_dag_node". ' + self._advert_for("dag_status") + cancel_advert + "\n\n"
+            )
         return ToolResult(
             model_text=(
                 f"DAG run {run_id} started in the background ({len(spec.nodes)} nodes). "
@@ -3335,7 +3344,14 @@ class SubAgentDagTool(Tool):
             return None
 
         async def _judge(
-            *, node: Any, store: Any, output: str, error: str, crashed: bool, output_limited: bool = False
+            *,
+            node: Any,
+            store: Any,
+            output: str,
+            error: str,
+            crashed: bool,
+            output_limited: bool = False,
+            reported_early: bool = False,
         ) -> Verdict:
             # Read defensively: a caller may hand over a node that carries only its id.
             routes = getattr(node, "routes", None) or None
@@ -3349,7 +3365,11 @@ class SubAgentDagTool(Tool):
                 # one reads no route and keeps the failure it already has.
                 if routes and not crashed:
                     raise RouteUndeterminedError("no provider is bound to judge this node")
-                return Verdict(accomplished=True)
+                return (
+                    Verdict(accomplished=False, what_is_missing="No provider is bound to verify the early reply.")
+                    if reported_early
+                    else Verdict(accomplished=True)
+                )
             evidence, complete = await self._node_evidence(store, node.id, cfg.evidence_budget_chars)
             prompt = await self._node_prompt(store, node.id)
             follow_ups = await self._node_follow_ups(store, node.id)
@@ -3377,6 +3397,7 @@ class SubAgentDagTool(Tool):
                 output_limited=output_limited,
                 routes=routes,
                 select=select,
+                **({"reported_early": True} if reported_early else {}),
             )
 
         return _judge
@@ -3436,6 +3457,19 @@ class SubAgentDagTool(Tool):
         self._desks[run_id] = desk
         announce_exception = self._announce_exception
         released: asyncio.Event | None = None
+
+        async def notify_long_run(control: LiveDelegation, elapsed: int, run_id: str, node_id: str) -> None:
+            advert = (
+                self._advert_for("cancel_subagent") if self._control_reachable and self._control_reachable() else ""
+            )
+            text = control.notice(elapsed, controls=bool(advert), run_id=run_id, node_id=node_id) + advert
+            if outbox is not None and outbox.bound:
+                outbox.put_notice(Notice(control, text))
+            elif self._announce_long_run is not None:
+                await self._announce_long_run(
+                    text, origin.as_dict(), call_id=control.call_id, run_id=run_id, node_id=node_id
+                )
+
         if outbox is not None:
 
             async def _to_outbox(
@@ -3498,6 +3532,8 @@ class SubAgentDagTool(Tool):
                 judge_node=hooks.get("judge_node") or self._judge_node(),
                 on_node_start=hooks.get("on_node_start"),
                 announce_exception=announce_exception,
+                long_run_notice_seconds=self._long_run_notice_seconds,
+                announce_long_run=notify_long_run,
                 origin=origin.as_dict(),
                 max_continuations=(
                     self._verdict_config.max_continuations
@@ -3600,6 +3636,8 @@ class SubAgentDagTool(Tool):
             handle = entry.get("instance")
             tag = f" (instance: {handle})" if handle else ""
             lines.append(f"- {entry['node']} [{entry['status']}]{tag}: {of}")
+            if entry.get("reported_early"):
+                lines.append("    The host requested an early reply.")
             if entry.get("error"):
                 lines.append(f"    error: {entry['error']}")
             if entry.get("reason"):

@@ -26,9 +26,10 @@ import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import ToolWiring, TurnPolicy
+from raven.agent.subagent import activity
 from raven.agent.subagent import dag_tool as raven_agent_subagent
 from raven.agent.subagent.dag_adjudication import ABANDON, CONTINUE, REASSIGN, ReassignPlan, ReplanOutcome
-from raven.agent.subagent.dag_control_tools import CancelDagTool, DagStatusTool, ResolveDagNodeTool
+from raven.agent.subagent.dag_control_tools import CancelDagTool, CancelSubagentTool, DagStatusTool, ResolveDagNodeTool
 from raven.agent.subagent.dag_graph import parse_dag_spec
 from raven.agent.subagent.dag_live import awaiting_decision
 from raven.agent.subagent.dag_reader import DagReadError
@@ -36,6 +37,7 @@ from raven.agent.subagent.dag_runner import _exception_report
 from raven.agent.subagent.dag_tool import SubAgentDagTool
 from raven.agent.subagent.dag_verdict import Verdict
 from raven.agent.subagent.delegate import DelegateTable, Worker, delegate_scope, outbound_charter
+from raven.agent.subagent.live_control import LiveDelegation, controlling
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.tool_search import TOOL_CALL_NAME, ToolCallTool, ToolSearchController
@@ -144,6 +146,91 @@ async def test_cancel_dag_reports_the_stop_with_the_nodes() -> None:
     assert "task_summary: Plan, then write, then review." in out
     assert "- a [completed]" in out
     assert "- b [failed]" in out
+
+
+async def test_cancel_subagent_scopes_instance_and_defaults_to_interrupt() -> None:
+    tool = CancelSubagentTool(loop=_Loop())
+    registry = ToolRegistry()
+    registry.register(tool)
+    actions = []
+    control = LiveDelegation("call-1", "Coder", "i-1", lambda: actions.append("interrupt"))
+    args = {"agent": "Coder", "instance": "i-1"}
+
+    with activity.collecting(instance=("s1", "Coder", "i-1")) as run, controlling(run, control):
+        tool.set_context("web", "chat-2", "s2")
+        assert (await registry.execute(tool.name, args)).startswith("not_running:")
+        tool.set_context("web", "chat-1", "s1")
+        assert (await registry.execute(tool.name, {**args, "call_id": "retired"})).startswith("not_running:")
+        assert (await registry.execute(tool.name, {**args, "mode": "report_now"})).startswith("unsupported:")
+        assert actions == []
+
+        async def report() -> str:
+            actions.append("report")
+            return "report_requested"
+
+        control.report_now = report
+        for _ in range(2):
+            assert (await registry.execute(tool.name, {**args, "mode": "report_now"})).startswith("report_requested:")
+        for _ in range(2):
+            assert (await registry.execute(tool.name, args)).startswith("interrupt_requested:")
+        assert actions == ["report", "interrupt"]
+
+    assert (await registry.execute(tool.name, args)).startswith("not_running:")
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {},
+        {"agent": "Coder"},
+        {"agent": "Coder", "instance": "i-1", "mode": None},
+        {"agent": "Coder", "instance": "i-1", "mode": "stop"},
+        {"agent": "Coder", "instance": "i-1", "session_key": "other"},
+        {"run_id": "r1", "instance": "i-1"},
+        {"run_id": "r1", "mode": "report_now"},
+        {"run_id": "   "},
+    ],
+)
+async def test_cancel_subagent_rejects_invalid_selectors(args) -> None:
+    loop = _Loop(live={"r1"}, tool=_DagTool(_finished_run()))
+    tool = CancelSubagentTool(loop)
+    tool.set_context("web", "chat-1", "s1")
+    registry = ToolRegistry()
+    registry.register(tool)
+
+    assert "Invalid parameters" in await registry.execute(tool.name, args)
+    assert loop.cancel_calls == []
+
+
+@pytest.mark.parametrize("mode", [{}, {"mode": "interrupt"}])
+async def test_cancel_subagent_reuses_whole_dag_stop(mode) -> None:
+    loop = _Loop(live={"r1"}, tool=_DagTool(_finished_run()))
+    tool = CancelSubagentTool(loop)
+    tool.set_context("web", "chat-1", "s1")
+    receipt = await tool.execute(run_id="r1", **mode)
+    assert receipt.startswith("interrupt_requested:")
+    assert "- b [failed]" in receipt
+    assert loop.cancel_calls == ["r1"]
+
+
+@pytest.mark.parametrize("restricted", ["cancel_dag", "cancel_subagent"])
+async def test_neither_cancellation_name_bypasses_a_dag_deny_rule(restricted) -> None:
+    from raven.config.schema import PermissionsConfig
+    from raven.permissions.builtin import BuiltinRulings
+    from raven.permissions.gate import PermissionGate
+
+    cfg = PermissionsConfig(mode="full", tools={restricted: "deny"})
+    loop = _Loop(live={"r1"})
+    registry = ToolRegistry(permission_gate=PermissionGate(config_source=lambda: cfg, builtin=BuiltinRulings()))
+    loop.tools = registry
+    for tool in (CancelDagTool(loop), CancelSubagentTool(loop)):
+        tool.set_context("web", "chat-1", "s1")
+        registry.register(tool)
+
+    for name in ("cancel_dag", "cancel_subagent"):
+        reply = await registry.execute(name, {"run_id": "r1"})
+        assert "deny rule" in reply
+    assert loop.cancel_calls == []
 
 
 async def test_cancel_dag_reports_the_head_alone_when_the_run_cannot_be_read_back() -> None:
@@ -862,7 +949,7 @@ def workspace() -> Path:
         yield Path(td)
 
 
-async def test_the_loop_registers_all_three_tools_outside_the_schema(workspace: Path) -> None:
+async def test_the_loop_registers_the_control_tools_outside_the_schema(workspace: Path) -> None:
     loop = AgentLoop(
         provider=_StubProvider(),
         workspace=workspace,
@@ -872,10 +959,12 @@ async def test_the_loop_registers_all_three_tools_outside_the_schema(workspace: 
     )
 
     assert loop.tools.has("cancel_dag")
+    assert loop.tools.has("cancel_subagent")
     assert loop.tools.has("dag_status")
     assert loop.tools.has("resolve_dag_node")
     names = {t["function"]["name"] for t in loop.tools.get_definitions()}
     assert "cancel_dag" not in names
+    assert "cancel_subagent" not in names
     assert "dag_status" not in names
     assert "resolve_dag_node" not in names
 
@@ -920,7 +1009,7 @@ async def test_a_default_loop_can_still_reach_the_hidden_tools(workspace: Path) 
     assert off.dag_control_reachable() is True
 
 
-_HIDDEN = ("cancel_dag", "dag_status", "resolve_dag_node")
+_HIDDEN = ("cancel_dag", "cancel_subagent", "dag_status", "resolve_dag_node")
 
 
 async def _cross_referencing_texts(tmp_path) -> list[tuple[str, str]]:

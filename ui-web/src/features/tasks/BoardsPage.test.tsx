@@ -419,6 +419,15 @@ describe('the page', () => {
     vi.restoreAllMocks()
   })
 
+  it('starts with the title row every module page starts with', async () => {
+    const root = await mount()
+    const bar = root.querySelector('.tkbpage > .page-bar')!
+    expect(bar.querySelector('.page-bar-title')!.textContent).toBe('gui.tasks.page.title')
+    expect(bar.querySelector('select.tkbconvsel')).not.toBeNull()
+    expect(bar.querySelector('.page-bar-end .tkbswitch')).not.toBeNull()
+    expect(bar.querySelector('.page-bar-end .tkbseg')).not.toBeNull()
+  })
+
   it('the toolbar switches views and completed, and filters by conversation', async () => {
     const root = await mount()
     expect(root.querySelectorAll('.tkbcol')).toHaveLength(3)

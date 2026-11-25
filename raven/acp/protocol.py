@@ -72,6 +72,9 @@ fires, which is what makes it the right thing for raven to send too.
 
 STEER_METHOD = "_raven/session/steer"
 STEER_CAPABILITY = "raven.steer"
+REPORT_NOW_CAPABILITY = "raven.reportNow"
+REPORT_NOW_PROMPT_KEY = "raven.reportNowId"
+REPORTED_EARLY_KEY = "raven.reportedEarly"
 """raven's steer extension: text for a turn already in flight on a session.
 
 The same names raven's own ACP client uses (raven/acp_client/protocol.py); the

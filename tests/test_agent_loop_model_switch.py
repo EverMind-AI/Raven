@@ -5,8 +5,8 @@
 manager, the context engine's LLM-backed segments and the consolidator
 each captured the provider they were built with. When the switch stopped
 at ``loop.provider``, those three kept calling the abandoned endpoint --
-subagent spawns and the skill rewriter/gate failed to authenticate while
-the main loop worked fine.
+subagent spawns and the LLM-backed history builder failed to authenticate
+while the main loop worked fine.
 
 This file covers the out-of-turn fallback only -- the reference each holder
 keeps for work that runs with no turn bound. What a turn actually runs on is
@@ -25,10 +25,8 @@ from raven.agent.loop.main import AgentLoop
 from raven.agent.subagent.manager import SubagentManager
 from raven.config.raven import ContextConfig, SkillForgeConfig
 from raven.context_engine.assembler import ContextAssembler
-from raven.context_engine.segments.curator import CuratorSegmentBuilder
-from raven.context_engine.segments.skills import SkillsSegmentBuilder
+from raven.context_engine.history.compacting import CompactingHistoryBuilder
 from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
-from raven.memory_engine.skill_forge.gate import LLMGateFilter
 from raven.providers.binding import ModelBinding
 
 NEW_MODEL = "anthropic/claude-opus-4-8"
@@ -97,11 +95,9 @@ def _loop(tmp_path) -> AgentLoop:
         provider=_Provider(),
         workspace=tmp_path,
         model="fake/model",
-        # This test walks the push pipeline's holders (rewriter/gate); the
-        # pull default builds neither.
         engine=EngineWiring(
-            context_config=ContextConfig(history={"strategy": "curator"}),
-            skill_forge_config=SkillForgeConfig(discovery="push"),
+            context_config=ContextConfig(),
+            skill_forge_config=SkillForgeConfig(),
         ),
     )
 
@@ -142,10 +138,7 @@ def test_switch_reaches_the_real_holders_a_loop_builds(tmp_path) -> None:
     engine = loop.context_engine
     assert isinstance(engine, ContextAssembler)
 
-    skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))
-    curator = next(b for b in engine._builders if isinstance(b, CuratorSegmentBuilder))
-    assert skills._gate is not None, "llm_gate_enabled defaults True; the gate is a holder"
-    assert skills._rewriter is not None
+    history = next(b for b in engine._builders if isinstance(b, CompactingHistoryBuilder))
 
     new_provider = _Provider("new")
     loop.set_provider(new_provider, NEW_MODEL)
@@ -154,11 +147,8 @@ def test_switch_reaches_the_real_holders_a_loop_builds(tmp_path) -> None:
     assert loop.subagents.provider is new_provider
     assert loop.subagents.model == NEW_MODEL
     assert loop.memory_consolidator.provider is new_provider
-    assert skills._gate._fallback_provider is new_provider
-    assert skills._rewriter._fallback_provider is new_provider
-    assert curator.provider is new_provider
-    assert curator.assembler.provider is new_provider
-    assert curator.assembler.trimmer.provider is new_provider
+    assert history.provider is new_provider
+    assert history.trimmer.provider is new_provider
 
 
 def test_fan_out_targets_still_exist_on_a_real_loop(tmp_path) -> None:
@@ -221,7 +211,7 @@ def test_a_pair_free_switch_keeps_a_window_the_user_pinned(tmp_path) -> None:
         model="fake/model",
         engine=EngineWiring(
             context_window_tokens=32768,
-            context_config=ContextConfig(history={"strategy": "curator"}),
+            context_config=ContextConfig(),
             skill_forge_config=SkillForgeConfig(),
         ),
     )
@@ -234,7 +224,7 @@ def test_a_pair_free_switch_keeps_a_window_the_user_pinned(tmp_path) -> None:
 
 def test_assembler_forwards_to_llm_backed_builders_only() -> None:
     llm_builder = _Recorder()
-    llm_builder.name = "skills"
+    llm_builder.name = "compacting"
     llm_builder.order = 5
     llm_builder.needs_prefix = False
     text_builder = _TextOnlyBuilder()
@@ -248,43 +238,6 @@ def test_assembler_forwards_to_llm_backed_builders_only() -> None:
 
     assert llm_builder.provider is new_provider
     assert llm_builder.model == NEW_MODEL
-
-
-# ---------------------------------------------------------------------------
-# Pins
-# ---------------------------------------------------------------------------
-
-
-def test_pinned_gate_model_survives_the_switch() -> None:
-    """A switch moves the out-of-turn fallback; the pin is not the switch's to move."""
-    from raven.providers.binding import ModelBinding
-
-    pinned = SimpleNamespace(name="pinned-provider")
-    gate = LLMGateFilter("old-provider", pin_resolver=lambda: ModelBinding(pinned, "openai/gpt-5-mini"))
-    gate.set_provider(SimpleNamespace(name="new-provider"), NEW_MODEL)
-    assert gate._binding() == (pinned, "openai/gpt-5-mini")
-
-
-def test_an_empty_curator_model_follows_the_agent_model_both_times(tmp_path) -> None:
-    """The field has no ``min_length``, so ``curator_model: ""`` validates and
-    the constructor's ``or model`` follows the agent model. A switch has to
-    follow it too, or the same config means one thing at build time and
-    another after.
-    """
-    loop = AgentLoop(
-        provider=_Provider(),
-        workspace=tmp_path,
-        model="fake/model",
-        engine=EngineWiring(
-            context_config=ContextConfig(history={"strategy": "curator"}, curator_model=""),
-            skill_forge_config=SkillForgeConfig(),
-        ),
-    )
-    curator = next(b for b in loop.context_engine._builders if isinstance(b, CuratorSegmentBuilder))
-    assert curator.curator_model == "fake/model"
-
-    loop.set_provider(_Provider("new"), NEW_MODEL)
-    assert curator.curator_model == NEW_MODEL
 
 
 # ---------------------------------------------------------------------------

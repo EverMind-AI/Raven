@@ -9,6 +9,7 @@ raven/                 # 共享运行时、功能引擎，以及 CLI/RPC/ACP 接
 agents/                # 由已安装的 Raven 与插件组装而成的专用 Agent
 plugins-dist/          # everos-memory、everos-cloud-memory、design-engine 和 ppt-engine 发行包
 ui-web/                # 浏览器界面，桌面窗口也使用同一页面
+desktop/               # 围绕网页界面的原生桌面窗口（macOS）
 ui-tui/                # React/Ink 终端界面
 rpc-schema/            # 交互式客户端共用的 OpenRPC 契约
 schemas/               # 生成的 Agent 与插件 JSON Schema
@@ -58,7 +59,7 @@ docs-site/             # 双语用户文档与站点配置
 | `providers` | LLM 适配器、服务商池与模型到服务商的绑定 |
 | `routing` | 任务分类，以及根据质量和成本选择模型 |
 | `rpc` | 共享的带类型定义的 RPC 方法、流式事件与网关控制接口 |
-| `sandbox` | 隔离执行、虚拟机生命周期与调试工具 |
+| `sandbox` | 在 OpenShell 沙箱中隔离执行：生命周期、挂载与出站网络策略 |
 | `security` | 出站地址策略与提示词注入防护 |
 | `session` | 会话存储、会话解析、标题与会话记录导出 |
 | `skill_hub` | SkillHub 搜索、技能获取、技能包安装与安装策略 |

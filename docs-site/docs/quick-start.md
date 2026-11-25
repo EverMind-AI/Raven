@@ -167,6 +167,20 @@ treats a model neither names as the rest of its family in that catalogue. A
 kind you pick yourself wins over all of them. A chat model that reads images
 and answers in text stays under **Text**.
 
+### Zhipu GLM Coding Plan keys
+
+A GLM Coding Plan subscription is spent only on Zhipu's Anthropic-compatible
+endpoint: `https://api.z.ai/api/anthropic` for Z.ai, or
+`https://open.bigmodel.cn/api/anthropic` for BigModel in mainland China. The
+**Z.ai** and **BigModel** entries above speak the pay-as-you-go chat API, and a
+`glm` model name does not imply the Anthropic wire. A Coding Plan key on them
+buys nothing: the chat API answers that the account is out of credit, and
+repointing the entry's base URL at the Anthropic-compatible endpoint does not
+switch its protocol -- every call is then answered by a JSON document the entry
+cannot read, which Raven reports as a protocol mismatch. To use a Coding Plan,
+add a provider with `protocol: anthropic` and that address as its `apiBase`, in
+**Settings > Model providers** or as a section in `~/.raven/config.json`.
+
 ### Behind a corporate proxy or private CA
 
 Raven checks HTTPS certificates against your operating system's certificate

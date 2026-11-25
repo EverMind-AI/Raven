@@ -11,14 +11,19 @@ and that the terminal seam sees an answerless exit.
 
 from __future__ import annotations
 
+import asyncio
+import time
+from dataclasses import replace
+
 import pytest
 
 from raven.agent.hook import AgentHook, HookDecision
-from raven.agent.loop import AgentLoop
+from raven.agent.loop import TURN_BUDGETS_KEY, AgentLoop, turn_path
 from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
 from raven.agent.loop.turn_path import _stamp_turn_observers
 from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
 from raven.spine import ChatType, Origin, Source, TurnRequest
+from raven.spine.turn import TurnReport
 
 
 class _ScriptedProvider:
@@ -76,6 +81,48 @@ def _loop(tmp_path, provider, hooks, max_iterations: int = 6) -> AgentLoop:
     return loop
 
 
+async def test_a_report_request_skips_a_new_tool_and_synthesizes_from_existing_work(tmp_path, monkeypatch) -> None:
+    from raven.agent.tools import background_exec
+
+    entered = asyncio.Event()
+    let_model_return = asyncio.Event()
+    cleanup = []
+    report = TurnReport("execution-1")
+
+    class Provider(_ScriptedProvider):
+        async def chat_with_retry(self, **kwargs):
+            if not self.calls:
+                entered.set()
+                await let_model_return.wait()
+            return await super().chat_with_retry(**kwargs)
+
+    async def reap(session_key, execution_id):
+        cleanup.append((session_key, execution_id))
+        return "last completed log line"
+
+    monkeypatch.setattr(background_exec, "reap_execution", reap)
+    provider = Provider([_tool_call("read_file", {"path": "new-work"}), _text("Final progress summary")])
+    loop = _loop(tmp_path, provider, hooks=[])
+    req = replace(_req(), report=report)
+    turn = asyncio.create_task(loop._process_message(req))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        report.requested.set()
+        let_model_return.set()
+        outcome = await asyncio.wait_for(turn, 2)
+    finally:
+        let_model_return.set()
+        if not turn.done():
+            turn.cancel()
+            await asyncio.gather(turn, return_exceptions=True)
+    assert outcome[0] == "Final progress summary"
+    assert report.applied and cleanup == [("cli:c", "execution-1")]
+    assert len(provider.calls) == 2 and provider.calls[1]["tools"] == []
+    synthesis = provider.calls[1]["messages"]
+    assert any("Skipped because the host requested" in m.get("content", "") for m in synthesis)
+    assert any("last completed log line" in m.get("content", "") for m in synthesis)
+
+
 @pytest.mark.asyncio
 async def test_before_iteration_sees_the_turn_and_can_withhold_a_tool_for_one_iteration(tmp_path):
     seen: list[tuple[int, str, int]] = []
@@ -98,6 +145,48 @@ async def test_before_iteration_sees_the_turn_and_can_withhold_a_tool_for_one_it
     second_call_tools = {t["function"]["name"] for t in provider.calls[1]["tools"]}
     assert "list_dir" not in first_call_tools, "withheld for the first iteration"
     assert "list_dir" in second_call_tools, "and offered again on the next -- the registry was untouched"
+
+
+@pytest.mark.asyncio
+async def test_a_hook_note_after_a_tool_round_is_its_own_message_not_tool_text(tmp_path):
+    """A tool result is fenced as untrusted input, so a note written into one
+    reaches the model as something a tool told it. After a tool round the note
+    is a message of its own; the tool result is left exactly as it was."""
+
+    class NoteAfterTheTools(AgentHook):
+        async def before_iteration(self, ctx):
+            if ctx.iteration == 2:
+                return HookDecision(append_note="check the second table")
+            return HookDecision()
+
+    provider = _ScriptedProvider([_tool_call("list_dir", {"path": "."}), _text("done")])
+    loop = _loop(tmp_path, provider, [NoteAfterTheTools()])
+
+    await loop._process_message(_req())
+
+    sent = provider.calls[1]["messages"]
+    tool_result = next(m for m in sent if m.get("role") == "tool")
+    assert "check the second table" not in str(tool_result["content"])
+    assert any(m.get("role") == "user" and m.get("content") == "check the second table" for m in sent)
+
+
+@pytest.mark.asyncio
+async def test_generated_advice_is_said_once_across_a_turns_iterations(tmp_path):
+    """The generated function is stateless, so the same words come back at each
+    phase. The hook hands the participant the live transcript, and a note the
+    transcript already carries is not written a second time."""
+    from raven.agent.hook.participant import ParticipantHook
+    from raven.agent.subagent.charter import Charter, CharterParticipant, charter_scope
+
+    source = "def advise(step):\n    return 'hold the line'"
+    provider = _ScriptedProvider([_tool_call("list_dir", {"path": "."}), _text("done")])
+    loop = _loop(tmp_path, provider, [ParticipantHook("charter", CharterParticipant)])
+
+    with charter_scope(Charter(functions=(("advise", source),))):
+        await loop._process_message(_req())
+
+    sent = provider.calls[1]["messages"]
+    assert str(sent).count("hold the line") == 1, "the same words were delivered once"
 
 
 @pytest.mark.asyncio
@@ -296,7 +385,7 @@ async def test_a_session_policy_pins_the_reasoning_effort_of_its_calls(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_an_after_iteration_note_lands_on_the_last_message_before_the_next_call(tmp_path):
+async def test_an_after_iteration_note_is_a_message_of_its_own_before_the_next_call(tmp_path):
     class Nudge(AgentHook):
         async def after_iteration(self, ctx):
             if getattr(ctx.response, "has_tool_calls", False):
@@ -309,9 +398,11 @@ async def test_an_after_iteration_note_lands_on_the_last_message_before_the_next
     out = await loop._process_message(_req("what is here"))
 
     assert out is not None
-    last_seen = provider.calls[1]["messages"][-1]
-    assert last_seen["role"] == "tool"
-    assert str(last_seen["content"]).endswith("\n\n[budget warning: most of the budget is spent]")
+    sent = provider.calls[1]["messages"]
+    assert sent[-1]["role"] == "user"
+    assert sent[-1]["content"] == "[budget warning: most of the budget is spent]"
+    tool_result = next(m for m in sent if m.get("role") == "tool")
+    assert "[budget warning" not in str(tool_result["content"]), "a tool result is not where guidance goes"
     assert "[budget warning" not in str(provider.calls[0]["messages"][-1]["content"]), "landed after, not before"
 
 
@@ -512,9 +603,9 @@ def test_the_persist_stamp_never_crosses_the_turn_base_into_filed_history():
     """The stamp's bound: the paper files observers on THE TURN'S message.
 
     An answerless turn has no seat, and the assembled window can share dict
-    objects with the session record (the curator candidate view), so an
-    unbounded search would rewrite a previous turn's filed message in
-    place -- this turn's measurements stamped onto last turn's answer."""
+    objects with the session record, so an unbounded search would rewrite a
+    previous turn's filed message in place -- this turn's measurements stamped
+    onto last turn's answer."""
 
     prior_assistant = {"role": "assistant", "content": "earlier answer"}
     messages = [
@@ -581,6 +672,111 @@ def test_the_loop_wires_this_sessions_tier_into_the_subagent_manager(tmp_path):
     assert loop.subagents._session_tier("cli:other") == "high", "and only that session's"
 
 
+@pytest.mark.asyncio
+async def test_an_unbounded_turn_keeps_working_past_the_built_in_cap(tmp_path):
+    """No cap is a real setting, not a fallback to the loop's default.
+
+    The built-in cap is 40, so the turn has to run more than 40 tool rounds
+    before it answers. A run with a task budget hands the turn a wall clock
+    instead; the tool iteration cap it used to stop at must not fire first.
+    """
+    for index in range(45):
+        (tmp_path / f"d{index}").mkdir()
+    script = [_tool_call("list_dir", {"path": f"d{index}"}) for index in range(45)] + [_text("answered")]
+    provider = _ScriptedProvider(script)
+    loop = _loop(tmp_path, provider, None, max_iterations=None)
+
+    out = await loop._process_message(_req())
+
+    assert out is not None and "answered" in str(out)
+    assert len(provider.calls) == 46, "45 tool rounds plus the answer; the built-in 40-call cap did not fire"
+
+
+@pytest.mark.asyncio
+async def test_an_unbounded_turn_stopped_by_its_clock_wraps_up_instead_of_raising(tmp_path, monkeypatch):
+    """The unbounded path with a deadline must take the wall-clock exit.
+
+    ``iteration_cap`` is None here, so the exhaustion test cannot compare the
+    iteration count against it: doing so raises ``TypeError`` before the clock
+    branch can select the wrap-up. The loop's own clock seam is pinned rather
+    than waited on.
+    """
+    monkeypatch.setattr(turn_path, "monotonic", lambda: 10_000.0)
+    provider = _ScriptedProvider([_text("")])
+    loop = _loop(tmp_path, provider, None, max_iterations=None)
+    meta: dict = {TURN_BUDGETS_KEY: {"wall_clock_seconds": 0.001}}
+
+    final, _used, _msgs, outcome = await loop._run_agent_loop(
+        [{"role": "user", "content": "hi"}], hook_metadata=meta, turn_started_at=0.0
+    )
+
+    assert outcome.status == "interrupted"
+    assert final and "time limit" in final, "the wall-clock static fallback is the answer"
+    assert "iterations" not in final, "the iteration-cap text would be the wrong reason"
+
+
+@pytest.mark.asyncio
+async def test_a_zero_session_cap_means_unbounded_rather_than_inheriting(tmp_path):
+    """A mode's explicit ``0`` is the new spelling for no cap.
+
+    Before this change ``0`` was falsy and inherited the global cap. It now
+    means what null means, which is the semantics the schema documents.
+    """
+    for index in range(5):
+        (tmp_path / f"d{index}").mkdir()
+    script = [_tool_call("list_dir", {"path": f"d{index}"}) for index in range(5)] + [_text("answered")]
+    provider = _ScriptedProvider(script)
+    loop = _loop(tmp_path, provider, None, max_iterations=2)
+    loop.set_session_policy("cli:c", max_iterations=0)
+
+    out = await loop._process_message(_req(), session_key="cli:c")
+
+    assert out is not None and "answered" in str(out)
+    assert len(provider.calls) == 6, "five tool rounds plus the answer; a zero pin did not inherit the cap of 2"
+
+
+@pytest.mark.asyncio
+async def test_a_negative_session_cap_falls_back_instead_of_lifting_the_cap(tmp_path):
+    """A negative pin is a bad value, not a request for no cap.
+
+    The config gate refuses negatives, so a direct session policy is the only
+    way one arrives; the loop must clamp it to its own cap rather than read it
+    as unbounded.
+    """
+    for index in range(6):
+        (tmp_path / f"d{index}").mkdir()
+    script = [_tool_call("list_dir", {"path": f"d{index}"}) for index in range(6)] + [_text("answered")]
+    provider = _ScriptedProvider(script)
+    loop = _loop(tmp_path, provider, None, max_iterations=3)
+    loop.set_session_policy("cli:c", max_iterations=-1)
+
+    out = await loop._process_message(_req(), session_key="cli:c")
+
+    assert out is not None and "iterations (3)" in str(out), "the loop's own cap names the stop"
+    assert "answered" not in str(out)
+    assert len(provider.calls) == 4, "three loop calls plus the wrap-up; the negative pin lifted every bound"
+
+
+@pytest.mark.asyncio
+async def test_a_pinned_cap_names_itself_in_the_exhaustion_fallback(tmp_path):
+    """The wrap-up text names the cap the turn actually hit.
+
+    The loop-wide config is unbounded here and the mode pins 2, so reading the
+    loop default would print "unbounded" for a turn stopped at two iterations.
+    """
+    for index in range(2):
+        (tmp_path / f"d{index}").mkdir()
+    script = [_tool_call("list_dir", {"path": f"d{index}"}) for index in range(2)] + [_text("")]
+    provider = _ScriptedProvider(script)
+    loop = _loop(tmp_path, provider, None, max_iterations=None)
+    loop.set_session_policy("cli:c", max_iterations=2)
+
+    out = await loop._process_message(_req(), session_key="cli:c")
+
+    assert out is not None and "iterations (2)" in str(out)
+    assert "unbounded" not in str(out), "the turn had a cap, and the text has to name it"
+
+
 @pytest.fixture(autouse=True)
 def _fake_model_declares_every_level(monkeypatch):
     """The turn bounds the pick by the model's levels; fake/model declares them all."""
@@ -598,3 +794,54 @@ def _fake_model_declares_every_level(monkeypatch):
             "max",
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_the_loop_sets_the_turn_clock_from_its_budget(tmp_path):
+    """Tools read the same deadline the loop checks between iterations.
+
+    A command allowed to run past the turn's clock spends the overrun after
+    the turn was meant to stop; the tool needs the value, not a copy in prose.
+    """
+    from raven.agent import turn_clock
+    from raven.agent.loop import TURN_BUDGETS_KEY
+
+    seen: list[float | None] = []
+    sessions: list[tuple[str, str]] = []
+
+    class Watch(AgentHook):
+        async def before_user_inbound(self, ctx):
+            ctx.metadata[TURN_BUDGETS_KEY] = {"wall_clock_seconds": 60.0}
+            return HookDecision()
+
+        async def before_iteration(self, ctx):
+            seen.append(turn_clock.remaining())
+            sessions.append((ctx.session_key, turn_clock.session_key()))
+            return HookDecision()
+
+    loop = _loop(tmp_path, _ScriptedProvider([_text("answered")]), [Watch()])
+    await loop._process_message(_req())
+
+    assert seen and seen[0] is not None and 0 < seen[0] <= 60
+    assert sessions, "the hook ran inside the turn"
+    assert sessions[0][1] == sessions[0][0], "the adopted work is filed under the turn's session"
+
+
+@pytest.mark.asyncio
+async def test_a_turn_without_a_clock_clears_what_an_earlier_turn_set(tmp_path):
+    """Every turn sets the value, including to None: a stale clock would
+    silently shorten the next turn's commands in the same task."""
+    from raven.agent import turn_clock
+
+    seen: list[float | None] = []
+
+    class Watch(AgentHook):
+        async def before_iteration(self, ctx):
+            seen.append(turn_clock.remaining())
+            return HookDecision()
+
+    turn_clock.set_deadline(time.monotonic() + 5)
+    loop = _loop(tmp_path, _ScriptedProvider([_text("answered")]), [Watch()])
+    await loop._process_message(_req())
+
+    assert seen == [None]

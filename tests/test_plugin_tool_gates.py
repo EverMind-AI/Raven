@@ -281,6 +281,40 @@ class TestRegistryAdjudication:
         assert free.ran == 1, "the batch-mate is untouched"
 
     @pytest.mark.asyncio
+    async def test_a_tool_body_runs_under_the_strictest_mode_its_gates_declare(self) -> None:
+        """A gate that applies a permission mode of its own declares it, and a run-time
+        ask inside the body is decided no looser than that mode."""
+        from raven.config.schema import PermissionsConfig
+        from raven.permissions.builtin import BuiltinRulings
+        from raven.permissions.gate import PermissionGate
+        from raven.permissions.runtime import current_mode_floor
+
+        seen: list = []
+
+        class _Floor(_Probe):
+            async def execute(self, **kwargs) -> str:
+                seen.append(current_mode_floor())
+                return "probe ran"
+
+        smart = _Gate("a_smart")
+        smart.permission_mode = "smart"
+        ask = _Gate("b_ask")
+        ask.permission_mode = "ask"
+        odd = _Gate("c_odd")
+        odd.permission_mode = "strict"
+        trunk = PermissionGate(
+            config_source=lambda: PermissionsConfig(mode="full", tools={"gate_probe": "allow"}),
+            builtin=BuiltinRulings(),
+        )
+        reg = ToolRegistry(permission_gate=trunk, tool_gates=[smart, ask, odd])
+        reg.register(_Floor())
+        assert await reg.execute("gate_probe", {}) == "probe ran"
+        plain = ToolRegistry(permission_gate=trunk, tool_gates=[_Gate("plain")])
+        plain.register(_Floor())
+        assert await plain.execute("gate_probe", {}) == "probe ran"
+        assert seen == ["ask", None]
+
+    @pytest.mark.asyncio
     async def test_none_waves_the_call_through_to_the_tool(self) -> None:
         gate = _Gate("waves", verdict=None)
         probe = _Probe()

@@ -175,6 +175,12 @@ def _stamp_reasoning_ms(messages: list[dict[str, Any]], response: Any) -> None:
 # log whole, so the log is not that.
 _CONTEXT_USED_KEY = "_context_used"
 
+# The window divided, kept beside the reading it belongs to and on the same
+# terms: measured on the request that reading came from, so a resume can draw
+# the card's parts without re-measuring a stored log that is not what the model
+# was sent.
+_CONTEXT_PARTS_KEY = "_context_parts"
+
 
 def _window_reading(usage: dict[str, Any] | None) -> int:
     """How full a call left the window: its prompt plus its reply, in tokens.
@@ -214,15 +220,22 @@ def _call_window(response: Any) -> int:
     return 0 if _reads_no_window(response) else _window_reading(getattr(response, "usage", None))
 
 
-def _stamp_context_used(messages: list[dict[str, Any]], response: Any) -> None:
-    """Put a model call's window reading on the assistant entry that stands for it.
+def _stamp_context_used(
+    messages: list[dict[str, Any]],
+    response: Any,
+    parts: dict[str, int] | None = None,
+) -> None:
+    """Put a model call's window reading, and its breakdown, on the assistant entry.
 
     Absent when the provider reported no usage, and absent means unknown: a
-    resume reads the newest entry that has one.
+    resume reads the newest entry that has one. ``parts`` rides only with a
+    reading -- a breakdown of a prompt no reading describes is not filed.
     """
     used = _call_window(response)
     if used > 0 and messages:
         messages[-1][_CONTEXT_USED_KEY] = used
+        if parts:
+            messages[-1][_CONTEXT_PARTS_KEY] = dict(parts)
 
 
 def _first_line(text: str) -> str:
@@ -236,7 +249,7 @@ def _first_line(text: str) -> str:
 # NOTE: ``raven.context_engine`` is intentionally imported lazily (inside
 # ``__init__`` and ``_assemble_context_messages``) to break a runtime
 # import cycle: ``raven.agent.__init__`` eagerly loads AgentLoop,
-# while ``raven.context_engine.curator`` imports ``ContextBuilder`` from
+# while ``raven.context_engine.factory`` imports ``ContextBuilder`` from
 # ``raven.agent.context`` — a module-level top-down ``from
 # raven.context_engine import ...`` here re-enters a partially-initialized
 # package and raises ImportError on ``TurnContext``.
@@ -269,7 +282,6 @@ if TYPE_CHECKING:
     from raven.proactive_engine.schedulers.cron.service import CronService
     from raven.providers.pool import ProviderPool
     from raven.routing.router import ModelRouter
-    from raven.sandbox.debug_server import SandboxDebugServer
     from raven.skill_hub import SkillHubClient
     from raven.spine.events import NoticeKind
     from raven.spine.runner import Drain, Emit
@@ -468,11 +480,12 @@ def _stamp_replied_via_tool(messages: list[dict[str, Any]], turn_base: int) -> N
             return
 
 
-#: A message a hook injected on rollback: the harness re-prompting itself (a
-#: reviewer rejection, a commit nudge). It persists into history because the
-#: model was shown it, but no real user said it; the underscore key is dropped
-#: on the way to the provider, so what it changes is only how readers of the
-#: transcript classify the line.
+#: A message a hook put in the transcript rather than a person: the harness
+#: re-prompting itself on a rollback (a reviewer rejection, a commit nudge), or
+#: the note a hook leaves for the next call when it lands as a row of its own.
+#: It persists into history because the model was shown it, but no real user
+#: said it; the underscore key is dropped on the way to the provider, so what it
+#: changes is only how readers of the transcript classify the line.
 _HOOK_INJECTED_KEY = "_hook_injected"
 #: A user message the runtime merged into a turn that was already running
 #: (``BusyPolicy.INJECT``). It is a real user message and persists as one; the
@@ -484,6 +497,12 @@ _HOOK_INJECTED_KEY = "_hook_injected"
 #: given up -- from the research it is entitled to discard.
 _MID_TURN_USER_KEY = "_mid_turn_user"
 
+#: The same fact as the session write stores it. The private spelling above
+#: keeps the mark out of every provider payload; the loop renames it on the way
+#: to disk, and the history projection reads this one to rebuild what the turn
+#: was sent with.
+_STORED_MID_TURN_KEY = "mid_turn"
+
 #: Introduces the mid-turn arrivals on the way to the provider. Without it the
 #: model reads a correction the reader typed while it worked as a fresh question
 #: and answers it instead of steering, because nothing in the payload says the
@@ -491,7 +510,19 @@ _MID_TURN_USER_KEY = "_mid_turn_user"
 _MID_TURN_HEADER = "[Mid-turn messages — sent by the user while this turn was already running]"
 
 
-def merge_mid_turn(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _arrival_words(content: Any) -> tuple[str, dict[str, Any] | None]:
+    """An arrival's words, and the text block they end on when a strategy wrapped them.
+
+    An arrival is text by construction -- the inject names attached files in
+    its text -- so its text blocks carry all of it.
+    """
+    if not isinstance(content, list):
+        return str(content or ""), None
+    blocks = [part for part in content if isinstance(part, dict) and part.get("type") == "text"]
+    return "".join(str(part.get("text") or "") for part in blocks), (blocks[-1] if blocks else None)
+
+
+def merge_mid_turn(messages: list[dict[str, Any]], *, replay: bool = False) -> list[dict[str, Any]]:
     """One user message per adjacent run of mid-turn arrivals, under the header.
 
     Applied at the call seam, on the payload only: history keeps one entry per
@@ -499,27 +530,49 @@ def merge_mid_turn(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rides the merged message because the re-run seed reads it to find the
     mid-turn messages again.
 
-    Only the private spelling counts. A replayed transcript carries the plain
-    ``mid_turn`` of an entry already saved, and labelling that again would put
-    the header on a question the model answered turns ago.
+    Only the private spelling counts, except under ``replay``: a saved entry
+    carries the plain ``mid_turn``, and the history projection asks for the
+    same fold the turn was sent with so the provider's cached prefix matches.
+    The plain spelling is never honoured on the live path, where it would
+    label an entry this turn did not add.
+
+    The call seam folds after the ``before_llm_call`` strategies, and
+    ``CacheOptimizer`` wraps the newest messages' text into a text-block list to
+    hang a breakpoint on it. The fold reads an arrival's words through that
+    list, and a run whose last arrival was wrapped comes out as one text block
+    carrying that arrival's block keys: the breakpoint stays at the end of the
+    run, and the text is the same bytes the replay of the stored arrivals folds.
     """
-    if not any(m.get(_MID_TURN_USER_KEY) for m in messages):
+    mark = _MID_TURN_USER_KEY
+
+    def arrival(m: dict[str, Any]) -> bool:
+        return bool(m.get(mark)) or (replay and bool(m.get(_STORED_MID_TURN_KEY)))
+
+    if not any(arrival(m) for m in messages):
         return messages
     out: list[dict[str, Any]] = []
-    run: list[str] = []
+    run: list[tuple[str, dict[str, Any] | None]] = []
 
     def flush() -> None:
         if not run:
             return
-        body = "\n\n".join(run)
-        out.append({"role": "user", "content": f"{_MID_TURN_HEADER}\n\n{body}", _MID_TURN_USER_KEY: True})
+        text = f"{_MID_TURN_HEADER}\n\n" + "\n\n".join(words for words, _ in run)
+        tail = run[-1][1]
+        merged: dict[str, Any] = {"role": "user", "content": text if tail is None else [{**tail, "text": text}]}
+        if not replay:
+            # The live fold's output is a candidate for the next pass and for the
+            # re-run seed. A replayed one is payload only, and marking it would
+            # make a saved arrival look like one this turn added.
+            merged[mark] = True
+        out.append(merged)
         run.clear()
 
     for m in messages:
-        if m.get(_MID_TURN_USER_KEY):
+        if arrival(m):
             # The merged message keeps the mark, so a second pass over the same
             # list must not stack a second header onto its own output.
-            run.append(str(m.get("content") or "").removeprefix(f"{_MID_TURN_HEADER}\n\n"))
+            words, tail = _arrival_words(m.get("content"))
+            run.append((words.removeprefix(f"{_MID_TURN_HEADER}\n\n"), tail))
             continue
         flush()
         out.append(m)
@@ -547,17 +600,23 @@ class SessionPolicy:
 
 
 def append_hook_note(messages: list[dict[str, Any]] | None, note: str) -> bool:
-    """Land a hook's ``append_note`` on the last transcript message.
+    """Land a hook's ``append_note`` in the transcript the model reads.
 
-    A blank line separates it from the body, and a block-shaped body gains a
-    text block, so the note reads as part of what the model was already about
-    to read. False when there is nothing to land on or the body's shape is one
-    the loop does not know -- the note is dropped rather than guessed into
-    place, and the caller logs that.
+    After a tool round the last row is a tool result, which is fenced as
+    untrusted input: guidance written into one reaches the model as something a
+    tool told it. So the note becomes a message of its own there, marked as the
+    harness speaking -- no reader may take it for the turn's question. Every
+    other body gains it after a blank line (or as a text block), which reads as
+    part of what the model was already about to read. False when there is
+    nothing to land on or the body's shape is one the loop does not know -- the
+    note is dropped rather than guessed into place, and the caller logs that.
     """
     if not messages or not note:
         return False
     last = messages[-1]
+    if last.get("role") == "tool":
+        messages.append({"role": "user", "content": note, _HOOK_INJECTED_KEY: True})
+        return True
     body = last.get("content")
     if isinstance(body, str):
         last["content"] = f"{body}\n\n{note}" if body else note
@@ -614,11 +673,12 @@ _DELEGATED_KEY = "_delegated"
 
 
 def _strip_inline_images(content: list[Any]) -> list[Any]:
-    """Replace inline base64 images with a text placeholder, for persistence.
+    """Replace inline base64 images with a text placeholder.
 
-    Images live for exactly the turn that produced them. Keeping the bytes would
-    bloat the session JSONL by megabytes per picture, and every later turn would
-    replay them to the model — paying for an image nobody asked about again.
+    The placeholder-only projection, for callers that keep no archived refs. The
+    save path uses :func:`~raven.utils.image_store.capture_images`, which archives
+    the exact data URI in the message's private refs so a later turn can send the
+    same picture again.
 
     A *new* list is returned: the input is the live message the model is still
     working from this turn, and `_save_turn` only shallow-copies the entry, so
@@ -771,10 +831,11 @@ TURN_BUDGETS_KEY = "turn_budgets"
 """Where a product leaves the bounds it wants a turn run under, on the turn's metadata.
 
 The loop serves every agent and must not know any of them, so bounds arrive as data a
-hook writes rather than as config the loop reads: a hook that writes nothing leaves the
-turn bounded exactly as it was before this key existed, which is what keeps every other
-agent byte-identical. The value is a plain dict, and :func:`turn_budgets` is the only
-reader -- a malformed one leaves the turn unbounded rather than raising inside the loop.
+hook writes rather than as config the loop reads: a hook that writes nothing casts no
+bound of its own, leaving the turn on the cap its own config asks for -- none at all
+when it asks for none -- which is what keeps every other agent byte-identical. The value
+is a plain dict, and :func:`turn_budgets` is the only reader -- a malformed one leaves
+the turn unbounded rather than raising inside the loop.
 """
 
 

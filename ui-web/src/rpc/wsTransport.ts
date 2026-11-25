@@ -31,9 +31,11 @@ const REJOIN_MAX_WAIT_MS = 8_000
 const REJOIN_FIRST_WAIT_MS = 1_500
 const REJOIN_GROWTH = 1.6
 
-/* Not `WebSocket.CONNECTING`: the transport must be constructible where no
-   global WebSocket exists, which is how its own tests drive it. */
+/* Not `WebSocket.CONNECTING` / `WebSocket.OPEN`: the transport must be
+   constructible where no global WebSocket exists, which is how its own tests
+   drive it. */
 const CONNECTING = 0
+const OPEN = 1
 
 /** The slice of a WebSocket this transport uses, so a test can supply one. */
 export interface WebSocketLike {
@@ -293,6 +295,19 @@ export class WsTransport implements RpcTransport {
         { once: true }
       )
       ws.addEventListener('close', () => reject(new RpcError(-1, 'not connected')), { once: true })
+      /* Both listeners are on before the state is read. This read guards the
+         `WebSocketLike` contract, not a race the browser can run: a native
+         socket moves `readyState` only between tasks, so it cannot change
+         between `send`'s CONNECTING check and this line. An implementation
+         that settles synchronously, or a future `await` before these
+         registrations, can hand over a socket already closing or closed whose
+         close event has gone out, and waiting for the event alone would leave
+         that call pending for the life of the page. Only a connecting socket
+         is left to the listeners; an `OPEN` read is trusted because the
+         browser path cannot deliver the open event before `connect()` marks
+         the socket opened. */
+      const state = ws.readyState
+      if (state !== CONNECTING && state !== OPEN) reject(new RpcError(-1, 'not connected'))
     })
   }
 

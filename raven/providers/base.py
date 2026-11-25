@@ -31,6 +31,7 @@ from raven.contracts.llm_provider import (  # noqa: F401
 from raven.contracts.llm_provider import LLMProvider as _LLMProviderPaper
 from raven.observability import semconv
 from raven.providers import call_record, usage_record
+from raven.providers.call_timeout import CallTimeoutError
 from raven.providers.first_byte import FirstByteTimeoutError, StreamIdleTimeoutError
 from raven.tracing import trace
 
@@ -86,7 +87,9 @@ _ELLIPSIS = "..."
 
 #: One clause per category ``LLMProvider._classify`` can return (which is where
 #: ``tool_image_unsupported`` comes from too), plus ``upstream_transport_failure``,
-#: which ``transport_failure_response`` attaches directly. A category with no clause falls to
+#: which ``transport_failure_response`` attaches directly, and
+#: ``protocol_mismatch``, which the streaming accumulator attaches to a stream
+#: answered by a JSON document instead of an event stream. A category with no clause falls to
 #: the default rather than going unsaid -- the trajectory replay's
 #: ``replay_divergence`` is the one in-tree case -- and
 #: ``test_error_classification`` holds the table to the classifier.
@@ -100,6 +103,7 @@ _LLM_ERROR_SUMMARIES = {
     "invalid_request": "The provider rejected the request as malformed",
     "model_unavailable": "The model is not being served",
     "network": "The connection to the provider failed",
+    "protocol_mismatch": "The endpoint does not speak the protocol this provider is configured for",
     "rate_limit": "The provider is rate limiting this account",
     "server": "The provider returned a server error",
     "stream_idle_timeout": "The model's stream stalled until the idle timeout expired",
@@ -242,8 +246,9 @@ def send_max_tokens(generation: Any, model: str | None, *, pinned: int | None = 
     down: the first pin that is not would be a rejected request, and nothing
     about the call site would say why.
 
-    ``pinned`` is the per-call argument (``judge`` asks for 64, the curator for
-    2048); the settings object carries the per-provider one. The argument has
+    ``pinned`` is the per-call argument (``judge`` asks for 64, a summarising
+    compaction for its configured ceiling); the settings object carries the
+    per-provider one. The argument has
     to arrive here rather than bypass the function, or the two ways of asking
     for a short answer are bounded by different rules and only one of them is
     the number truncation is judged against.
@@ -524,6 +529,12 @@ class LLMProvider(_LLMProviderPaper):
         # branches below. Named here, no substring ever sees it.
         if isinstance(exc, StreamIdleTimeoutError):
             return ErrorClassification("stream_idle_timeout", retryable=True, should_fallback=True)
+        if isinstance(exc, CallTimeoutError) or "calltimeouterror" in names:
+            # The class name is the backward-compatible reading: a host that
+            # predates the call-timeout relay kind sends an opaque carrier whose
+            # MRO still spells it. A current host's payload rebuilds the real
+            # class above, so this clause is only ever the older wire.
+            return ErrorClassification("network", retryable=True, should_fallback=True)
 
         # Context-window overflow → compress and retry, NOT fallback (a smaller
         # window won't help; the same model after compaction will). Detected by

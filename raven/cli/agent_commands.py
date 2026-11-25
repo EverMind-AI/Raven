@@ -45,6 +45,11 @@ _ONE_SHOT_EXIT = {"code": 0}
 # run" from "the model ran without the mutations it asked for".
 EXIT_ACTIONS_REFUSED = 3
 
+#: How long a quiet moment has to last before the launcher calls the work done.
+_BACKGROUND_SETTLE_S = 2.0
+#: How often the launcher asks whether that work is still there.
+_BACKGROUND_POLL_S = 1.0
+
 
 def _report_refusals(refusals: list) -> None:
     """Say which calls the gate turned down, once, after the reply.
@@ -106,25 +111,36 @@ def _report_unanswered(questions: list) -> None:
 
 
 async def _wait_for_background_work(agent_loop, scheduler, conversation: str) -> None:
-    """Wait for sub-agents and their follow-up turns before one-shot teardown.
+    """Wait for running sub-agents, this session's background commands, and the turns they start.
 
     A sub-agent completion submits a ``SUBAGENT`` turn after its running count
-    drops, so the short second check closes that hand-off gap.
+    drops, so the short second check closes that hand-off gap. A held
+    unprompted report still inside its debounce window is not counted here.
+
+    Background commands are counted on their own: a command adopted past its
+    limit outlives the call that started it, and returning before it ends
+    would leave the reader with a task id and no output.
     """
+    from raven.agent.tools import background_exec
+
     subagents = getattr(agent_loop, "subagents", None)
-    if subagents is None:
-        return
     lanes = {conversation, "cli:direct"}
 
     def busy() -> bool:
+        if background_exec.running(session_key=conversation):
+            return True
+        if subagents is None:
+            return any(scheduler.has_inflight(lane) for lane in lanes)
         return subagents.get_running_count() > 0 or any(scheduler.has_inflight(lane) for lane in lanes)
 
+    if subagents is None and not background_exec.running(session_key=conversation):
+        return
     while True:
         if not busy():
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(_BACKGROUND_SETTLE_S)
             if not busy():
                 return
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(_BACKGROUND_POLL_S)
 
 
 def _print_turn_failure(text: str) -> None:
@@ -160,20 +176,6 @@ def _print_agent_response(response: str, render_markdown: bool) -> None:
     console.print()
 
 
-# Category-apt hints for non-auth provider errors. Credential guidance would
-# mislead here: a rate limit or a network drop is not fixed by re-checking the
-# key. Categories absent from this map (invalid_request, unknown, ...) render
-# the error line alone.
-_NON_AUTH_HINTS = {
-    "rate_limit": "Hint: the provider is rate limiting; retry in a moment.",
-    "network": "Hint: network problem; check connectivity and the provider apiBase, then retry.",
-    "context_overflow": "Hint: the input exceeds the model's context window; shorten it.",
-    "server": "Hint: provider-side error; retry later or switch models.",
-    "model_unavailable": "Hint: model not served; pick another with raven provider use <name>/<model>.",
-    "billing": "Hint: billing or quota issue; check your provider account.",
-}
-
-
 def _print_llm_error(content: str) -> bool:
     """Render a provider error as a diagnosis + fix hint instead of a fake
     agent reply. Returns True when handled; marks the one-shot path to exit
@@ -185,6 +187,7 @@ def _print_llm_error(content: str) -> bool:
     from rich.markup import escape
 
     from raven.providers.base import parse_llm_error
+    from raven.providers.error_hints import provider_error_hint
 
     parsed = parse_llm_error(content)
     if parsed is None:
@@ -197,13 +200,11 @@ def _print_llm_error(content: str) -> bool:
         # be a guess. The detail carries the provider's own reason instead.
         where = f" ({escape(provider)})" if provider else ""
         console.print(f"[red]Error: provider rejected the credentials{where}: {escape(detail)}[/red]")
-        target = provider or "<name>"
-        console.print(f"Fix: raven provider test {escape(target)}  or  raven onboard")
     else:
         console.print(f"[red]Error: LLM call failed ({escape(category)}): {escape(detail)}[/red]")
-        hint = _NON_AUTH_HINTS.get(category)
-        if hint:
-            console.print(hint)
+    hint = provider_error_hint(category, provider, surface="cli")
+    if hint:
+        console.print(escape(hint))
     console.print()
     _ONE_SHOT_EXIT["code"] = 1
     return True
@@ -475,8 +476,11 @@ def register(app: typer.Typer) -> None:
                     on_refusals=refusals.extend,
                     on_unanswered=unanswered.extend,
                 )
-                # A one-shot spawn rarely finishes before the hard-exit below,
-                # but wire submit for parity with the TUI.
+                # Wire submit so a sub-agent's completion can schedule its
+                # follow-up turn. There is no hard exit here: the one-shot
+                # awaits the turn, the wait below drains the running sub-agent
+                # work and the turns already submitted, and only then does
+                # teardown run.
                 agent_loop.subagents.set_submit(scheduler.submit)
                 with _thinking_ctx():
                     handle = scheduler.submit(

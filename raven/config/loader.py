@@ -6,7 +6,7 @@ import os
 import re
 import shutil
 import sys
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from raven.config import login_path
 from raven.config.schema import Config
 from raven.home import get_config_path, raven_home, set_config_path
+from raven.sandbox.config import RETIRED_BACKENDS, RETIRED_KEYS
 from raven.utils.atomic_io import atomic_replace, atomic_update
 
 # Generation counter for the run-once config migrations below. Bump it, and add
@@ -22,7 +23,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 15
+CURRENT_CONFIG_VERSION = 20
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -52,6 +53,11 @@ _DISPLAY_ONLY_ADDRESS_MIGRATION = 12
 _PLANTED_CRON_TIMEZONE_MIGRATION = 13
 _RETIRED_VERDICT_SWITCH_MIGRATION = 14
 _SHIM_PIN_REFRESH_MIGRATION = 15
+_RETIRED_SANDBOX_BACKEND_MIGRATION = 16
+_SANDBOX_NETWORK_MIGRATION = 17
+_RETIRED_PUSH_DISCOVERY_MIGRATION = 18
+_SHIM_PIN_REFRESH_2_MIGRATION = 19
+_RETIRED_CURATOR_MIGRATION = 20
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -421,6 +427,21 @@ def _persist_migrations(path: Path, from_version: int = 0, *, refresh_interprete
                 retired = _RETIRED_SHIM_COMMANDS[_SHIM_PIN_REFRESH_MIGRATION]
                 changed = _migrate_retired_shim_pins(raw, retired) or changed
                 pins_waiting = _shim_pins_waiting(raw, retired)
+            if from_version < _RETIRED_SANDBOX_BACKEND_MIGRATION:
+                changed = _migrate_retired_sandbox_backend(raw) or changed
+            if from_version < _SANDBOX_NETWORK_MIGRATION:
+                changed = _migrate_sandbox_network(raw) or changed
+            if from_version < _RETIRED_PUSH_DISCOVERY_MIGRATION:
+                changed = _migrate_retired_push_discovery(raw) or changed
+            if from_version < _SHIM_PIN_REFRESH_2_MIGRATION:
+                changed = (
+                    _migrate_retired_shim_pins(raw, _RETIRED_SHIM_COMMANDS[_SHIM_PIN_REFRESH_2_MIGRATION]) or changed
+                )
+            if from_version < _RETIRED_CURATOR_MIGRATION:
+                changed = _migrate_retired_curator(raw) or changed
+            # Ungated like the interpreter refresh below: a relation, not a
+            # generation, so a stamped file that broke it is rewritten too.
+            changed = _repair_compaction_tail_ratio(raw) or changed
             if refresh_interpreters:
                 changed = _refresh_bundled_shim_interpreters(raw) or changed
         if not changed:
@@ -510,6 +531,10 @@ def load_config(config_path: Path | None = None) -> Config:
             # rather than left to ``_migrate_config`` so its own answer -- did a
             # row move? -- is what decides whether the file is rewritten.
             reinterpreted = _refresh_bundled_shim_interpreters(data)
+            # Ungated for the same reason: the relation must hold for a config
+            # this build wrote too, so a stamped file that came back out of
+            # range is repaired here and rewritten by the persist call below.
+            tail_repaired = _repair_compaction_tail_ratio(data, notify=True)
             data = _migrate_config(data, from_version=from_version, config_path=path)
             _stash_channel_slices(data)
         except json.JSONDecodeError as e:
@@ -548,7 +573,7 @@ def load_config(config_path: Path | None = None) -> Config:
                 ) from e
             # Only once the migrated data is known to validate: a file we
             # cannot load is a file we have no business rewriting.
-            if unstamped or reinterpreted:
+            if unstamped or reinterpreted or tail_repaired:
                 # The shim rows' interpreter follows this install, not the
                 # watermark: a config already stamped still has to be rewritten
                 # when one of those rows names an interpreter that moved.
@@ -666,6 +691,348 @@ def _migrate_retired_verdict_switch(data: dict[str, Any], *, notify: bool = Fals
             if notify and notice not in _migration_notices:
                 _migration_notices.append(notice)
     return changed
+
+
+def _migrate_retired_sandbox_backend(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Point a boxlite-era ``tools.sandbox`` block at OpenShell, the only sandbox now.
+
+    ``SandboxConfig`` maps the same values on every load, so a block that comes
+    back after this floor ran still loads; the floor is what makes the file
+    agree with the runtime for the readers of the raw config (the ``raven_config``
+    tool, onboarding).
+    """
+    tools = data.get("tools")
+    sandbox = tools.get("sandbox") if isinstance(tools, dict) else None
+    if not isinstance(sandbox, dict):
+        return False
+    notices: list[str] = []
+    backend = sandbox.get("backend")
+    if backend in RETIRED_BACKENDS:
+        sandbox["backend"] = "openshell"
+        notices.append(
+            f'Changed `tools.sandbox.backend` from "{backend}" to "openshell" in your config: the boxlite '
+            "backend is retired, and sandboxed commands run in OpenShell."
+        )
+    for key in RETIRED_KEYS:
+        if key in sandbox:
+            sandbox.pop(key)
+            notices.append(
+                f"Removed `tools.sandbox.{key}` from your config: it applied to the retired boxlite backend."
+            )
+    if notify:
+        _migration_notices.extend(n for n in notices if n not in _migration_notices)
+    return bool(notices)
+
+
+def _allow_net_rules(entries: Iterable[Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    """The ``permissions.network`` rules an old allowlist's entries become, and the entries none can hold.
+
+    The old field took any string. ``host:port`` becomes a rule for that port;
+    anything else a rule refuses (a range, a scheme, a two-label wildcard) is
+    left out, which only narrows a list that names what is allowed.
+    """
+    from raven.config.schema import NetworkRule
+
+    rules: list[dict[str, Any]] = []
+    left_out: list[str] = []
+    for entry in entries:
+        host, ports = str(entry.host).strip(), list(entry.ports)
+        name, colon, port = host.rpartition(":")
+        if colon and name and ":" not in name and port.isdigit():
+            host, ports = name, [int(port)]
+        try:
+            rule = NetworkRule(host=host, ports=ports)
+        except ValidationError:
+            left_out.append(str(entry.host))
+            continue
+        rules.append({"host": rule.host, "ports": list(rule.ports)})
+    return rules, left_out
+
+
+def _migrate_sandbox_network(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Move ``tools.sandbox.allowNet`` into ``permissions.network``.
+
+    Network reach is part of the one permission set every agent and sandbox
+    reads, so it no longer lives with the sandbox's runtime settings. An existing
+    ``permissions.network`` wins; the old key leaves the file either way.
+    """
+    tools = data.get("tools")
+    sandbox = tools.get("sandbox") if isinstance(tools, dict) else None
+    if not isinstance(sandbox, dict):
+        return False
+    keys = [key for key in ("allowNet", "allow_net") if key in sandbox]
+    if not keys:
+        return False
+    value = sandbox[keys[0]]
+    for key in keys:
+        sandbox.pop(key)
+    permissions = data.setdefault("permissions", {})
+    if isinstance(permissions, dict) and "network" not in permissions:
+        from pydantic import TypeAdapter
+
+        from raven.sandbox.network_policy import network_from_allow_net
+
+        # Read as the old ``bool | list[str]`` field read it, so "false" still
+        # closes; a value that field would have refused closes the network too.
+        try:
+            allow_net = TypeAdapter(bool | list[str]).validate_python(value)
+        except ValidationError:
+            allow_net = False
+        network = network_from_allow_net(allow_net)
+        rules, left_out = _allow_net_rules(network.rules)
+        permissions["network"] = {"default": network.default, "rules": rules}
+        notice = (
+            f"Moved `tools.sandbox.{keys[0]}` to `permissions.network`: what sandboxes may reach is now part of "
+            "the permission set every agent and sandbox shares."
+        )
+        if left_out:
+            notice += (
+                f" Left out {', '.join(repr(entry) for entry in left_out)}: a rule names a host, with its ports "
+                "under `ports`, and a wildcard covers three labels or more."
+            )
+    else:
+        notice = (
+            f"Removed `tools.sandbox.{keys[0]}` from your config: `permissions.network` already sets what "
+            "sandboxes may reach."
+        )
+    if notify and notice not in _migration_notices:
+        _migration_notices.append(notice)
+    return True
+
+
+# The skillForge settings of the retired push pipeline (rewriter, gate, bodies in
+# the system prefix), in both spellings. Skills reach the model through the scent
+# menu and the skill tools only, so nothing reads these, and ``SkillForgeConfig``
+# forbids unknown keys.
+_RETIRED_PUSH_SKILL_FORGE_KEYS = (
+    "discovery",
+    "rewriteEnabled",
+    "rewrite_enabled",
+    "rewriteMaxTokens",
+    "rewrite_max_tokens",
+    "injectionMode",
+    "injection_mode",
+    "injectMax",
+    "inject_max",
+    "llmGateEnabled",
+    "llm_gate_enabled",
+    "llmGateMaxSelect",
+    "llm_gate_max_select",
+    "llmGatePoolSize",
+    "llm_gate_pool_size",
+    "llmGateModel",
+    "llm_gate_model",
+    "llmGateProvider",
+    "llm_gate_provider",
+    "llmGateTemperature",
+    "llm_gate_temperature",
+    "llmGateMaxTokens",
+    "llm_gate_max_tokens",
+)
+
+
+def _migrate_retired_push_discovery(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Drop the settings of the retired skill push pipeline.
+
+    Covers both spellings of the ``skillForge`` block, and ``topK`` both in its
+    ``router`` and in a legacy top-level ``skillRouter`` block: that block is
+    nested into ``skillForge.router`` in memory only, after this runs, so the
+    file and the load would otherwise disagree about the key. A config that
+    chose ``discovery: "push"`` is told that skills now arrive as a menu; any
+    other leftover is reported as unread.
+    """
+    changed = False
+    dropped: list[str] = []
+    chose_push = False
+    for block_key in ("skillForge", "skill_forge"):
+        block = data.get(block_key)
+        if not isinstance(block, dict):
+            continue
+        for spelling in _RETIRED_PUSH_SKILL_FORGE_KEYS:
+            if spelling not in block:
+                continue
+            was = block.pop(spelling)
+            changed = True
+            dropped.append(f"{block_key}.{spelling}")
+            if spelling == "discovery" and was == "push":
+                chose_push = True
+    for router_path in (("skillForge", "router"), ("skill_forge", "router"), ("skillRouter",), ("skill_router",)):
+        router: Any = data
+        for part in router_path:
+            router = router.get(part) if isinstance(router, dict) else None
+        if not isinstance(router, dict):
+            continue
+        for spelling in ("topK", "top_k"):
+            if spelling in router:
+                router.pop(spelling)
+                changed = True
+                dropped.append(f"{'.'.join(router_path)}.{spelling}")
+    if not changed:
+        return False
+    named = ", ".join(f"`{key}`" for key in dropped)
+    if chose_push:
+        notice = (
+            f"Removed {named} from your config. Skills now always reach the model as a short menu, "
+            "and it reads the ones it needs with read_skill, so choosing them costs a turn no model calls."
+        )
+    else:
+        notice = (
+            f"Removed {named} from your config. They tuned the old way of choosing skills, "
+            "which this version no longer has."
+        )
+    if notify and notice not in _migration_notices:
+        _migration_notices.append(notice)
+    return True
+
+
+# The flat ``context.*`` knobs the curator strategy read, in both spellings the
+# config accepts. The compacting strategy has its own block under
+# ``context.history.compacting``; none of these has a reader left.
+_RETIRED_CURATOR_CONTEXT_KEYS = (
+    "fastPathThreshold",
+    "fast_path_threshold",
+    "curatorModel",
+    "curator_model",
+    "curatorProvider",
+    "curator_provider",
+    "curatorTimeoutSeconds",
+    "curator_timeout_seconds",
+    "relevanceDecay",
+    "relevance_decay",
+    "relevanceReferenceBoost",
+    "relevance_reference_boost",
+    "protectFirstN",
+    "protect_first_n",
+    "archiveDir",
+    "archive_dir",
+)
+
+
+def _migrate_retired_curator(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Retire the curator history strategy and the keys only it read.
+
+    ``context.history.strategy`` moves to ``compacting`` when it still names
+    ``curator``, and ``dropSegments`` follows the builder rename so a product
+    that dropped the history slot keeps dropping it. The flat ``context.*``
+    knobs go because ``ContextConfig`` forbids unknown keys: a file that kept
+    them would fail the whole load rather than run without the strategy they
+    configured.
+    """
+    context = data.get("context")
+    if not isinstance(context, dict):
+        return False
+    changed = False
+    notices: list[str] = []
+
+    history = context.get("history")
+    if isinstance(history, dict):
+        was = history.get("strategy")
+        if isinstance(was, str) and was.strip().lower() == "curator":
+            history["strategy"] = "compacting"
+            changed = True
+            notices.append(
+                'Changed `context.history.strategy` from "curator" to "compacting" in your config: '
+                "the curator history strategy is retired, and compacting has been the default since 0.2.6."
+            )
+
+    dropped: list[str] = []
+    for spelling in _RETIRED_CURATOR_CONTEXT_KEYS:
+        if spelling in context:
+            context.pop(spelling)
+            changed = True
+            dropped.append(f"context.{spelling}")
+    if dropped:
+        notices.append(
+            "Removed "
+            + ", ".join(f"`{key}`" for key in dropped)
+            + " from your config. The curator history strategy that read these keys is retired; the "
+            "compacting strategy summarises on the turn's model unless `context.history.compacting.summary.model` names one."
+        )
+
+    for spelling in ("dropSegments", "drop_segments"):
+        names = context.get(spelling)
+        if not isinstance(names, list) or "curator" not in names:
+            continue
+        renamed: list[str] = []
+        for name in names:
+            name = "compacting" if name == "curator" else name
+            if name not in renamed:
+                renamed.append(name)
+        context[spelling] = renamed
+        changed = True
+        notices.append(
+            f'Renamed the "curator" entry in `context.{spelling}` to "compacting": the history slot\'s '
+            "builder is named for its strategy."
+        )
+
+    if notify:
+        for notice in notices:
+            if notice not in _migration_notices:
+                _migration_notices.append(notice)
+    return changed
+
+
+def _repair_compaction_tail_ratio(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Lower a compaction tail share that does not sit below its retain share.
+
+    ``ContextCompactionConfig`` requires ``tailKeepRatio < retainRatio``: a
+    protected tail at or above the target can never be compacted into it. The
+    retain default is now 0.10, so a file that set the tail to 0.10 or more --
+    a value that used to be valid against the pre-0.10 implicit 0.40 -- would
+    fail startup. The tail is lowered to the shipped share instead, which
+    keeps the file loading and the target the meaning this release gives it.
+
+    The comparison uses the retain the file would actually get: an explicit
+    ``retainRatio`` when present, the shipped default otherwise. A legal
+    explicit pair such as 0.40 with 0.30 is therefore left alone; only a tail
+    that cannot coexist with its own retain is replaced. When the shipped tail
+    share is not below that retain, the relation cannot be repaired here and
+    the pair is left for the model to refuse.
+
+    Runs on every load rather than once per generation: a hand edit or another
+    writer can produce the same shape on an already-stamped config, and the
+    value the model receives has to satisfy the relation either way. Silent,
+    and False, when it changes nothing.
+    """
+    context = data.get("context")
+    if not isinstance(context, dict):
+        return False
+    history = context.get("history")
+    if not isinstance(history, dict):
+        return False
+    compacting = history.get("compacting")
+    if not isinstance(compacting, dict):
+        return False
+    tail_key = "tailKeepRatio" if "tailKeepRatio" in compacting else "tail_keep_ratio"
+    if tail_key not in compacting:
+        return False
+    retain_key = "retain_ratio" if tail_key == "tail_keep_ratio" else "retainRatio"
+    tail = compacting[tail_key]
+    explicit_retain = compacting.get(retain_key)
+    if isinstance(tail, bool) or not isinstance(tail, (int, float)):
+        return False
+    if explicit_retain is not None and (
+        isinstance(explicit_retain, bool) or not isinstance(explicit_retain, (int, float))
+    ):
+        return False
+
+    # Local import: raven.config.raven imports this module at module level.
+    from raven.config.raven import SHIPPED_COMPACTION_RETAIN_RATIO, SHIPPED_COMPACTION_TAIL_KEEP_RATIO
+
+    retain = float(explicit_retain) if explicit_retain is not None else SHIPPED_COMPACTION_RETAIN_RATIO
+    shipped_tail = SHIPPED_COMPACTION_TAIL_KEEP_RATIO
+    if tail < retain or shipped_tail >= retain:
+        return False
+    compacting[tail_key] = shipped_tail
+
+    notice = (
+        f"Lowered `context.history.compacting.{tail_key}` from {tail:g} to {shipped_tail:g} in your config: "
+        f"a tail share at or above the retain ratio ({retain:g}) can never be compacted into the target. "
+        "Set a larger retainRatio if you need a larger protected tail."
+    )
+    if notify and notice not in _migration_notices:
+        _migration_notices.append(notice)
+    return True
 
 
 # A path token that reaches into the retired vendored tree, on either separator.
@@ -1140,8 +1507,8 @@ def _migrate_retired_deep_research(data: dict[str, Any], *, notify: bool = False
 # to the preset's own, so a pin bumped without retiring the one before it here
 # fails there instead of stranding every row configured on that one.
 _SHIM_COMMANDS: dict[str, str] = {
-    "claude_code": "npx -y @agentclientprotocol/claude-agent-acp@0.94.0",
-    "codex": "npx -y @agentclientprotocol/codex-acp@2.2.2",
+    "claude_code": "npx -y @agentclientprotocol/claude-agent-acp@0.108.0",
+    "codex": "npx -y @agentclientprotocol/codex-acp@2.7.0",
     "pi": "npx -y pi-acp@0.0.34",
 }
 
@@ -1164,6 +1531,10 @@ _RETIRED_SHIM_COMMANDS: dict[int, dict[str, frozenset[str]]] = {
         "claude_code": frozenset({"npx -y @agentclientprotocol/claude-agent-acp@0.81.1"}),
         "codex": frozenset({"npx -y @agentclientprotocol/codex-acp@1.13.1"}),
         "pi": frozenset({"npx -y pi-acp@0.0.33"}),
+    },
+    _SHIM_PIN_REFRESH_2_MIGRATION: {
+        "claude_code": frozenset({"npx -y @agentclientprotocol/claude-agent-acp@0.94.0"}),
+        "codex": frozenset({"npx -y @agentclientprotocol/codex-acp@2.2.2"}),
     },
 }
 
@@ -1309,7 +1680,9 @@ def _migrate_retired_shim_pins(
     measured, codex-acp 1.13.1 reopens a thread 1.1.14 created, and
     claude-agent-acp 0.81.1 reopens sessions 0.66.0 and 0.79.0 created; and
     claude-agent-acp 0.94.0, codex-acp 2.2.2 and pi-acp 0.0.34 reopen what the
-    pins before them created (confirmed 2026-10-23). The new command is also a
+    pins before them created (confirmed 2026-10-23), and claude-agent-acp 0.108.0
+    and codex-acp 2.7.0 reopen what 0.94.0 and 2.2.2 created (measured
+    2026-11-18). The new command is also a
     new snapshot fingerprint, so the boot backfill re-measures the menu instead
     of serving the old build's.
 
@@ -1546,6 +1919,35 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
         _log.info("Migrated: dropped the retired subagentDag.verdictEnabled switch again")
     if from_version < _SHIM_PIN_REFRESH_MIGRATION:
         _migrate_retired_shim_pins(data, _RETIRED_SHIM_COMMANDS[_SHIM_PIN_REFRESH_MIGRATION], notify=True)
+    if from_version < _SHIM_PIN_REFRESH_2_MIGRATION:
+        _migrate_retired_shim_pins(data, _RETIRED_SHIM_COMMANDS[_SHIM_PIN_REFRESH_2_MIGRATION], notify=True)
+    if from_version < _RETIRED_SANDBOX_BACKEND_MIGRATION:
+        _migrate_retired_sandbox_backend(data, notify=True)
+    if from_version < _SANDBOX_NETWORK_MIGRATION:
+        _migrate_sandbox_network(data, notify=True)
+    elif _migrate_sandbox_network(data):
+        # The key can come back after the floor ran: an older build reads the
+        # stamp as current and writes allowNet again. The loaded config must
+        # still run under it, so it is read into permissions on every load.
+        _log.info("Migrated: read a returning tools.sandbox.allowNet into permissions.network")
+    if from_version < _RETIRED_PUSH_DISCOVERY_MIGRATION:
+        _migrate_retired_push_discovery(data, notify=True)
+    elif _migrate_retired_push_discovery(data):
+        # Same return path as the verdict switch above: a build from before this
+        # floor reads the stamp as current and accepts the keys, so a rollback or
+        # a second install sharing the home can write them back.
+        _log.info("Migrated: dropped the retired skill push settings again")
+    if from_version < _RETIRED_CURATOR_MIGRATION:
+        _migrate_retired_curator(data, notify=True)
+    elif _migrate_retired_curator(data):
+        # Same return path: a pre-retirement build reads the stamp as current,
+        # keeps ``strategy: curator`` and the flat keys, and ``ContextConfig``
+        # would then refuse the whole load. Strip them on every load; the user
+        # was told once, when the floor ran.
+        _log.info("Migrated: dropped the retired curator history strategy settings again")
+    # Ungated: the relation is an invariant, not a generation, so a hand edit
+    # or another writer that broke it on a stamped config is repaired here too.
+    _repair_compaction_tail_ratio(data, notify=True)
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts
@@ -1628,9 +2030,8 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
         if isinstance(sf, dict) and isinstance(sf.get("router"), dict):
             if sf["router"].pop("mass", None) is not None:
                 _log.info("Migrated: dropped skillForge.router.mass (retired; use skillForge.router.hub)")
-            # ``hub.prefetch_bodies`` retired — body hydration moved into
-            # SkillsSegmentBuilder (always-on for Hub hits the segment is
-            # about to render), so the knob no longer has a reader.
+            # ``hub.prefetch_bodies`` retired: a Hub body is fetched when the
+            # model reads the skill, so the knob has no reader.
             hub = sf["router"].get("hub")
             if isinstance(hub, dict):
                 # An explicit falsy endpoint was how a config written before
@@ -1644,8 +2045,7 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
                     if hub.pop(legacy_key, None) is not None:
                         _log.info(
                             "Migrated: dropped skillForge.router.hub.%s "
-                            "(retired; SkillsSegmentBuilder always "
-                            "hydrates Hub bodies)",
+                            "(retired; a Hub body is fetched when the skill is read)",
                             legacy_key,
                         )
 

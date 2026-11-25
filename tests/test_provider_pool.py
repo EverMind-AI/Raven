@@ -1,6 +1,6 @@
 """Where a model id becomes a model id plus the credential that serves it.
 
-A pin like ``context.curator_model`` is a model id and nothing else, so
+A pin like ``subagents.explorer.model`` is a model id and nothing else, so
 resolving it has to answer a second question: which configured provider
 serves that vendor. Answering it in one place is what stops a subsystem
 from sending one vendor's key to another's endpoint -- either the pool
@@ -459,7 +459,7 @@ def test_a_pin_is_re_read_on_every_call() -> None:
     pool = _AskedPool()
     configured = {"pin": ("first", "deepseek")}
     resolve_pin = live_pin_resolver(
-        pool, lambda: configured["pin"], key="context.curator_model", follower="the curator"
+        pool, lambda: configured["pin"], key="subagents.explorer.model", follower="built-in agent 'explorer'"
     )
 
     assert resolve_pin().model == "first"
@@ -474,7 +474,7 @@ def test_an_unset_pin_asks_the_pool_nothing() -> None:
     from raven.providers.pool import live_pin_resolver
 
     pool = _AskedPool()
-    resolve_pin = live_pin_resolver(pool, lambda: (None, None), key="k", follower="the curator")
+    resolve_pin = live_pin_resolver(pool, lambda: (None, None), key="k", follower="built-in agent 'explorer'")
 
     assert resolve_pin() is None
     assert pool.asked == []
@@ -492,16 +492,19 @@ def test_an_unusable_pin_is_reported_once() -> None:
     sink_id = logger.add(lambda message: said.append(message.record["message"]), level="WARNING")
     try:
         resolve_pin = live_pin_resolver(
-            _AskedPool(), lambda: ("unpaired", None), key="context.curator_model", follower="the curator"
+            _AskedPool(),
+            lambda: ("unpaired", None),
+            key="subagents.explorer.model",
+            follower="built-in agent 'explorer'",
         )
         assert resolve_pin() is None
         assert resolve_pin() is None
     finally:
         logger.remove(sink_id)
 
-    mine = [m for m in said if "context.curator_model" in m]
+    mine = [m for m in said if "subagents.explorer.model" in m]
     assert len(mine) == 1
-    assert "the curator follows the conversation's model instead" in mine[0]
+    assert "built-in agent 'explorer' follows the conversation's model instead" in mine[0]
 
 
 def test_a_later_different_unusable_pin_is_reported_on_its_own() -> None:
@@ -518,7 +521,10 @@ def test_a_later_different_unusable_pin_is_reported_on_its_own() -> None:
     try:
         configured = {"pin": ("unpaired", None)}
         resolve_pin = live_pin_resolver(
-            _AskedPool(), lambda: configured["pin"], key="context.curator_model", follower="the curator"
+            _AskedPool(),
+            lambda: configured["pin"],
+            key="subagents.explorer.model",
+            follower="built-in agent 'explorer'",
         )
         assert resolve_pin() is None
         configured["pin"] = ("unpaired", "deepseek")
@@ -527,22 +533,21 @@ def test_a_later_different_unusable_pin_is_reported_on_its_own() -> None:
     finally:
         logger.remove(sink_id)
 
-    mine = [m for m in said if "context.curator_model" in m]
+    mine = [m for m in said if "subagents.explorer.model" in m]
     assert len(mine) == 2
 
 
 def test_a_pin_is_resolved_once_for_the_turn_that_holds_it() -> None:
-    """The curator asks for its pin once per step of a tool-calling
-    conversation that carries the previous steps with it. Answering two steps
-    differently sends the continuation to another provider, and the new model
-    picks up the old one's partial plan."""
+    """A subsystem can ask for its pin more than once inside one unit of work.
+    Answering two steps differently sends the continuation to another provider,
+    and the new model picks up the old one's partial plan."""
     from raven.config.live import hold_for_this_turn
     from raven.providers.pool import live_pin_resolver
 
     pool = _AskedPool()
     configured = {"pin": ("first", None)}
     resolve_pin = live_pin_resolver(
-        pool, lambda: configured["pin"], key="context.curator_model", follower="the curator"
+        pool, lambda: configured["pin"], key="subagents.explorer.model", follower="built-in agent 'explorer'"
     )
 
     with hold_for_this_turn():

@@ -8,14 +8,14 @@ The predecessor fork carried a general-purpose `raven/rendering/` -- twenty-two
 modules: a browser runtime driving headless Chromium, spreadsheet normalisation
 through a UNO worker, animated-image decoding, motion classification with
 keyframe extraction, per-format detection with support levels, a bundle layout
-with manifests and hashes, a path policy, and a container backend that ran the
-whole thing in a `boxlite` VM. A deck reaches exactly one path through it:
+with manifests and hashes, a path policy, and a sandbox backend that ran the
+whole thing in an isolated worker. A deck reaches exactly one path through it:
 LibreOffice to PDF, PDF to PNG. Everything else exists for the other formats that
 service also renders -- HTML, xlsx, GIF, video -- which deck authoring never
 sends it.
 
 Moving it wholesale would have imported all of that: dead branches that still
-have to be read when this chain misbehaves, dependencies (`fitz`, `boxlite`) that
+have to be read when this chain misbehaves, dependencies (`fitz`, the sandbox SDK) that
 a deck never needs, a `RenderConfig` with sixty fields of which four apply, and a
 `RenderRequest`/`RenderOutcome` pair whose bundle-relative records every caller
 had to walk to find "the PNG for page 3". So this is written from scratch against

@@ -172,6 +172,7 @@
   "context": {
     "dropSegments": [
       "identity",
+      "memory",
       "active_skills",
       "skills"
     ]

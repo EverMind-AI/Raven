@@ -37,8 +37,8 @@ A model id together with the provider whose credential serves it, as one value
 not say which key reaches it, and updating one half is how one vendor's key ends
 up on another vendor's endpoint. A turn resolves its binding once at `run_turn`
 entry and holds it in a context var for the whole turn tree, so everything under
-that turn -- the loop, the context engine's LLM-backed segments, the skill gate
-and rewriter, the consolidator, and any task the turn detaches -- reads the same
+that turn -- the loop, the context engine's LLM-backed segments, the
+consolidator, and any task the turn detaches -- reads the same
 pair. _Avoid_: "the current model" / "the active provider" for this; both name
 one half.
 
@@ -63,8 +63,8 @@ happens only here.
 
 **Subsystem pin**:
 A model configured for one subsystem rather than for the conversation, as a
-model and the provider serving it (`context.curator_model` +
-`curator_provider`, `skill_forge.llm_gate_model` + `llm_gate_provider`). Both
+model and the provider serving it (`sessionTitle.model` +
+`sessionTitle.provider`). Both
 halves because an id alone is ambiguous the moment a gateway is configured:
 `openrouter` + `anthropic/claude-haiku-4-5` and `anthropic` +
 `claude-haiku-4-5` are both valid and name different credentials. With the
@@ -115,9 +115,42 @@ produces nothing of its own and exists to put a question to this turn's Agent Pa
 merge what they answer (`ask_intake`, `ask_advice`, `ask_review`, `ask_salvage`, `ask_judge`,
 `ask_system_addendum`, `ask_archive`, `ask_select_tools`). Replacing a role therefore means two
 different things: a new way to produce, or a new rule for adjudicating what the products say.
-Frozen per Generation: the tool array is the prompt-cache prefix, so the set a turn runs on
-does not move between two of its model calls -- except for tools the turn's own `plugin` call
-connected, which join it on purpose (`ToolRegistry.admit_to_this_turn`).
+Frozen per Session: the tool array is the prompt-cache prefix, so the set a session
+assembles with does not move between its model calls or between its turns. It is
+captured on the session's first assembly and recaptured only at a refresh point -- a
+new session, a compaction (cashed by the next assembly), a `/clear`, or a release.
+Availability is judged at each refresh point: a tool the operator's switches have off,
+or whose credential or selected base is missing, does not enter the array then. A switch
+flipped after capture changes availability, not the array, and is reported in the
+runtime context; the next refresh re-judges it. The report has both directions: a tool in
+the array that is switched off gets an unavailable line, and a tool the capture excluded
+whose switch is put back is announced as usable with its definition copied from the
+array's own JSON -- the call already runs, because dispatch reads the live switches, but
+the model was never shown a schema it can now send. Which notes stand is read from the
+log, not kept beside it: at every assembly the registry is handed the subjects the
+replayed log's runtime-context blocks still hold, read back the way the engine reads
+them when it decides what to send. A refresh therefore retires a notice only when its
+array carries the subject or its switch is back on: a name the new array drops because
+its switch is still off keeps the unavailable line while the log holds one. The same
+read makes every lifecycle agree with the log -- a compaction keeps the log and its
+notes, a restart or a reopen after a release replays the stored log and speaks for what
+it holds, a log id adopted from another writer together with this copy's unsaved turns
+speaks for those turns, and a `/clear`, an empty log, speaks for nothing, so a tool off
+at its capture gets no notice, as in a new session. A tool that leaves the registry
+altogether while the log holds a note about it (a plugin removed, a runtime binding
+declined at a restart) is in no switch's reason, so a fourth lane reports it as no
+longer loaded, its calls answered as not available; if it is loaded again outside the
+array it is announced with its schema like a switch put back on. A key missing from the
+runtime context therefore means its condition was resolved, never that a refresh, a
+restart, a release or an unload left it unspoken for. Per-turn restrictions (a
+dispatch's charter, the turn freeze) are not availability and are not reported here. The
+per-server MCP notice follows the same rules, keyed by the server, and reports a server
+the log or the array still names as no longer loaded even when no MCP manager exists (MCP
+closed, or none configured after a restart). A call to a withheld tool the
+session holds a schema for is refused with the reason, and the refusal says whether this
+conversation's tool list still carries it: only a name in the frozen array stays in the
+list. A tool the turn's own `plugin` call connects is admitted to `offers` (reachable
+through `tool_call`) and joins the array at the next refresh.
 
 **Harness Curator** (`experimental/curator/`):
 Experimental generation of a worker's Harness from its task, the materials handed to it and
@@ -141,7 +174,7 @@ decision plus behavior requirements stated in observable terms, never a mechanis
 is the generic loop: `Trial`s run the worker (a conversation, a dataset, a simulation), `Evaluator`s
 measure the sessions into `Signal`s (text, per-item results, metrics, their own satisfied verdict), the
 analyst decides, and only a `curate` decision reaches `workflow.improve`.
-_Avoid_: conflating this experiment with the Context Engine's Curator; calling the analyst an
+_Avoid_: conflating this experiment with the context engine's history strategy; calling the analyst an
 evaluator, which names the source of a `Signal`.
 
 **Window Shrink** (`agent/window/`, paper `contracts/harness.py:MemoryModule.shrink`):
@@ -161,6 +194,17 @@ _Avoid_: treating the four as four architecture layers — they are L3 strategy 
 shell calls. And saying Action owns the loop: the shell keeps iteration accounting, hook
 phases, tool execution and approval, the three in-turn recoveries, persistence and event
 order. A replacement loop may name its own roles, which is why the paper is factory-loop tier.
+
+**Image Ref** (`utils/image_store.py`, field `_image_refs`):
+The index-and-URL record filed beside an inline picture's `[image]` placeholder when a
+message is saved. The exact data URI is archived in that private field, so the next
+turn's replay sends the same bytes, character for character, while the display content
+keeps the placeholder. Replay expands a picture only when the receiving model can see it
+(and, for a tool result, the transport can carry one); the image window may withdraw
+pictures from earlier turns when their byte budget is crossed, while the current
+question's picture stays. A malformed reference falls back to the placeholder.
+_Avoid_: calling the schema's `content` a copy of the model's picture — the display form
+keeps `[image]`, and the private refs hold the bytes.
 
 **Worker Table** (`agent/subagent/delegate.py`, generated by `playbook/agent_generator.py`):
 The workers one Turn may dispatch to, written for that Turn before it starts when
@@ -212,8 +256,9 @@ The turn-loop extension point: an `AgentHook` ABC with six async phases
 `terminal_answerless`, `after_send`), all fired by the loop. A decision may pass through,
 short-circuit, modify outbound content, or roll the iteration back and re-sample (with
 injected messages and generation overrides for that one call); `before_iteration` may also
-withhold tools for the iteration, the iteration phases may leave the model a harness note on
-the last message (`append_note`), and `before_user_inbound` may rewrite the inbound text
+withhold tools for the iteration, the iteration phases may leave the model a harness note
+(`append_note` -- on the last message, or as a message of its own after a tool round, since
+a tool result is fenced as untrusted input), and `before_user_inbound` may rewrite the inbound text
 (`modified_content`, chained through `inbound_content`). `after_send` also fires on a **Silent
 Turn**, with `outbound_content` None (hook surface version 4). Multiple hooks chain via `CompositeHook`; the EvalEngine
 wires three concrete implementations. It remains the loop's *timing* contract and stays open to
@@ -228,7 +273,9 @@ about one step of a Turn, answered against a read-only `StepView` whose `phase` 
 the six moments is asking, and answered in plain data -- a string, a narrower list of tool
 definitions, a mapping built by `Intake`, `Accept`, `Resample` or `End` -- never a write into the loop's own state and
 never an instance of a host class, so a judgement compiled from a dispatch's own source can
-answer the same verbs a plugin does. Three invariants hold for every participant whatever its
+answer the same verbs a plugin does. The step such a function is handed is the StepView as
+plain data, with a normalized `response.tool_calls` projected to `id`/`name`/`arguments`
+mappings and nothing of the provider's private fields. Three invariants hold for every participant whatever its
 origin: it is shown facts it cannot write, it answers with data the host interprets, and an
 answer that raises or does not parse counts as silence rather than as a refusal. The host builds
 one per Turn from a `ParticipantFactory`, so what a participant has already done this turn is an
@@ -674,11 +721,6 @@ negative, because "no tag" and "the roster does not say" are indistinguishable o
 row of any kind that names a **Machine** renders a fourth tag after them, `on machine <id>`:
 the one conditional tag, since a local row has nothing to say in that position, and the id
 only, never the address.
-Also spliced into the skill gate's prompt under push discovery, where it is the account of
-what can be delegated and so decides which candidate skills are dropped as already covered;
-that copy omits the generic `builtin` row, which claims no capability bias and would read as
-covering everything. Pull discovery builds no skills segment, so it has no gate and drops
-nothing on these grounds.
 A row marked `hidden` (an acp manifest field) is enabled and on the table yet off the roster and
 the `enum`: the model cannot name it, but a task *routed* to it runs there. `routes` on a row
 makes its backend a **Routing entry** (`agent/subagent/backends/routing.py:RoutingBackend`): the
@@ -721,9 +763,12 @@ user declaring the agent owns nothing and is never refilled.
 Two things never carry ownership. The generic row (`Raven-General`) claims none whatever a config
 says, because it carries no capability bias and a line about it would prohibit the agent
 reading it from doing its own work. And the section is withheld entirely on a turn holding
-no dispatch tool — `spawn` and `run_subagent_dag` can both be withheld by
-`tools.disabledTools`, and a prohibition outliving every means of handing the work over
-leaves a request with no compliant action at all. Only the paths the turn does hold are named.
+no dispatch tool — a hard-subset deploy or a charter narrowing can leave the array without
+`spawn` and `run_subagent_dag`, and a prohibition outliving every means of handing the work
+over leaves a request with no compliant action at all. A `tools.disabledTools` switch
+flipped after capture keeps the schema and reports the tool unavailable in the runtime
+context instead; a tool off at the capture point never enters the array, and the next
+refresh re-judges it. Only the paths the turn does hold are named.
 _Avoid_: putting it in `description` — that copy is spliced into the tool descriptions, where
 the model reads it only once it is already choosing an agent.
 
@@ -808,11 +853,11 @@ sub-agent -- those are a Turn, a coroutine, and a prompt.
 
 **Task Board** (`raven/agent/task_board/`, `<session_dir>/task_board.json`):
 one host session's set of Task Groups, kept by the host model in one extra call after each
-completed turn that answered or dispatched work, and read back through the `task_board` tool. A turn
-known to be about a group -- one a delegated result opened, one whose message a Move on or an
-Answer named the group for -- writes only to that group, to wherever it places the work it
-started, and to each matter its reply asked the user about; one that also took in a message the
-user sent while it ran writes wherever that message's matter lies too. Only the Raven host
+completed turn that answered or dispatched work, and read back through the `task_board` tool. That
+call sees the system message, the turn's own rows and the board record, not the conversation
+before the turn. It answers for each of the turn's Candidate Groups in `matters` and writes a
+step on every one the turn moved, whatever opened the turn; nothing it writes is confined to the
+group a delegated result or a Move on says the turn is about. Only the Raven host
 keeps one; a subagent or product agent never does
 (`docs/specs/2026-10-29-task-board-design.md`).
 _Avoid_: "task list" (that is `tasks.list`), "todo" (Raven-Code's Checklist).
@@ -861,6 +906,22 @@ the page with the board on (`render.board_on_page`); other channels and the term
 done otherwise; clicking it scrolls the transcript to that turn's reply.
 _Avoid_: "subtask" (it records progress, it is not a unit of work), "step" alone (the node
 record's steps are another thing).
+
+**Candidate Group** (`raven/agent/task_board/matters.py` `candidates`):
+a Task Group a turn's post-turn update has to answer for, whether or not the turn moved it: first
+the turn's owners -- the group that placed the run whose result opened the turn, or the one a Move
+on or an Answer picked -- then every other group the turn's own words name by its id, by the id
+of a Task its steps link, or by a title anchor (an issue or PR reference, a code span, a path or
+file name, a version, a number of three or more digits). The turn's own words are the user's
+message, each message the user sent while it ran, and the reply; a delegated result's body is
+not searched. A turn with none is asked and checked as before.
+_Avoid_: "scope" and "owning group" for the whole list -- the owners are only its head.
+
+**matters** (the `task_board` update's field; `matters_problems`):
+the update's answer for each Candidate Group, `{group, moved, evidence}`: `moved: false` for a
+group the turn only mentioned, which gets no step; `moved: true` with `evidence` -- the turn's own
+words, quoted -- for one it moved, which gets a step of its own. Every step on an existing group
+needs a moved answer, listed or not. Checked in code and refused like any fault, never stored.
 
 **Instance Title** / **Run Title** (`InstanceRow.title` / `InstanceRow.runTitle`):
 what one instance was asked, and what the graph it belongs to was asked. Computed by
@@ -911,9 +972,13 @@ Which interchangeable backend each web tool calls: `tools.web.search.provider` s
 `tavily`, `exa`, `firecrawl`, `keenable` or `deepseek`. Every endpoint is a literal in the tool,
 so a selection names a vendor and never a URL. `web_search` is registered whatever the config
 holds and *withheld* from the offered set while the selected vendor's key does not resolve
-(Keenable searches without one and is offered keyless, as Jina reads pages keyless), so a key
-pasted mid-run surfaces it without a restart -- read live from the vendor slot and, for Serper,
-from the pre-vendor leaf, in the order `WebToolsConfig.vendor_key` resolves them, and an empty
+(Keenable searches without one and is offered keyless, as Jina reads pages keyless). Whether
+its schema is in the session's frozen array is decided at the capture point: a key that
+resolved then put it there, and a key pasted after that capture makes it callable again
+without a restart -- the runtime context clears the notice -- but only joins the array at the
+next refresh. The key is read live from the vendor slot and, for Serper, from the pre-vendor
+leaf, in the order `WebToolsConfig.vendor_key`
+resolves them, and an empty
 slot is a revocation rather than a miss (except for a borrowing vendor, whose empty slot is the
 ordinary state and whose LLM provider key answers instead); `web_fetch` is always offered,
 falling back to Jina, which reads pages without a key. The two sub-agent launchers inherit the host's selection
@@ -928,6 +993,64 @@ status rather than the exception text, and the persisted log sink redacts a URL-
 credential (`cli/_log_file.py`), since httpx logs each request at INFO on the success path.
 _Avoid_: a per-vendor tool name — the model is always offered `web_search` and
 `web_fetch`, whichever vendor answers.
+
+**Picture Search** (`rpc/models.py`, `PictureSearchStatus`; `settings.get`):
+The deck engine's picture-search state as the runtime would resolve it now, not
+a reading of the Search service picker: `vendor` is the vendor that would answer
+(`""` when none resolves), `ready` says a key resolves for it, and `reason`
+names why that vendor answers: `ok` when it is the vendor the deck is
+configured to use (its folder's own `tools.web.search.provider` where it names
+one, else the host's selection the Search service picker shows -- or the
+deck's own keyed pin), `fallback_no_key` when that selection has a picture
+surface but no key the deck lane can use, `no_surface` when that selection has
+none, and `not_ready` when no vendor resolves. The reason is judged against
+that selection, not against the lane's rendered one: when the launcher
+declines the host's choice (an env-only host key, a lane key for another
+vendor) the deck searches on a vendor the picker does not show, and that is a
+fallback. `fallback` is derived from it -- true for `fallback_no_key` and
+`no_surface` -- so the page can say deck generation will fall back; a deck
+pinned to its own vendor stays `ok` and is not a fallback. `reason` is optional
+on the wire and defaults to `not_ready`, so an answer from a gateway older than
+the field still reads, and the page reads an absent `picture_search` as no note
+at all. `settings.get` computes the state through
+`picture_search_report` over the same rule the router applies, from the config,
+the product folder's own credentials and the vendors' environment variables --
+credentials the raw config cannot show. The lane's rendered selection is the
+launcher's own inheritance over those inputs, not the raw config's declaration
+alone. The offline settings fixture (`ui-web/src/rpc/fixtures/settings.ts`,
+`PPT_VENDORS` / `pictureSearchOf`) is its explicit mirror, and the Tools page
+keeps the deck vendor set (`PPT_IMAGE_VENDORS` in
+`ui-web/src/features/settings/source.ts`) only to word a missing picture tool:
+a selected deck vendor lacks a key, any other cannot fill a slide. Both lists
+are pinned to `PPT_IMAGE_SEARCH_VENDORS` by
+`tests/test_agent_tools_web_providers.py`.
+_Avoid_: reading `ready` as "the selected vendor has image search" -- Tavily
+answers the host's `image_search` but is not a deck vendor, so this state speaks
+of deck pictures, not search availability.
+
+**Deck Picture Vendor** (`plugins-dist/ppt-engine/raven_ppt/plugin/config.py`, `imageSearch.provider`; `agent/subagent/vendored_agents.py`, `product_picture_vendor`):
+Which vendor the deck engine's pictures come from. `imageSearch.provider:
+"host"` (the shipped value in `agents/raven-ppt/config.json`) is a sentinel, not
+a vendor: the deck follows its rendered `tools.web.search.provider` through
+`ppt_image_vendor` -- the lane's own selection where its folder names one, the
+host's inherited where it does not -- so one of the five vendors with a usable
+picture surface answers on its own key, and a selection on any other vendor, or
+on one of the five with no key, falls back to Serper. Any other accepted value
+pins that vendor, honoured only while its key resolves; without one the host
+rule answers instead, so a pin cannot leave the deck advertising a tool whose
+every call fails. `product_picture_vendor` reads the same declaration for
+routing and returns `"host"` -- the declaration, not the resolved vendor -- so
+`picture_search_status` applies the deck's five-vendor set rather than the
+host's six-vendor one, and the Agent Hub card and the dispatch cannot disagree.
+`product_page_search_vendor` derives that rendered selection for the readiness
+probe by running the launcher's own `inherit_web_vendors` over the folder's
+config, the host's config and the lane's keys -- the folder's declaration
+where it names one, the host's choice where the launch would carry it, and the
+schema default otherwise -- so a route cannot open on a vendor the rendered
+lane does not search with (an env-only host key is not payable there, and a
+deck key for another vendor blocks the host's choice).
+_Avoid_: treating `"host"` as a vendor name -- it names the host's selection,
+and `ppt_image_vendor` is what turns it into a vendor.
 
 **Tool Registry** (`agent/tools/registry.py`):
 The name→`Tool` table the Agent Loop dispatches into: resolves a tool by name and runs
@@ -1405,7 +1528,7 @@ _Avoid_: the turn-end wire payload is `TurnUsage` (rpc/models.py), not UsageSnap
 
 **Provider**:
 An LLM vendor adapter (`providers/`: Anthropic, OpenAI, Gemini, …), shared by the
-agent loop and the Curator.
+agent loop and the subsystems it runs on the side.
 _Avoid_: conflating provider (vendor) with model (a model name a provider serves)
 
 A Provider is described along four independent axes -- identity, connection, routing,
@@ -1567,8 +1690,8 @@ SegmentBuilders in two phases: Phase A builds the system prefix in parallel, Pha
 budgets history serially against that fixed overhead. The historical
 `legacy` / `curator` / `default` engine split was collapsed into this one engine;
 which builder fills the history slot is the History Strategy.
-_Avoid_: describing "compacting" and "Curator" as two engines — there is one
-engine, and they are two History Strategies for its Segment 6.
+_Avoid_: calling the history strategy an engine — it is one builder inside the
+one engine, and it is the only scheme registered for Segment 6.
 
 **SegmentBuilder**:
 A pluggable contributor to the prompt; each builder produces one Segment for a fixed
@@ -1583,10 +1706,12 @@ History Strategy's builder sets this), and metadata merged into the assembled co
 The scheme that fills the history slot, named by `context.history.strategy` and
 resolved through the registry in `context_engine/history/__init__.py`, which is
 the only importer of a strategy and refuses an unknown name at startup.
-`compacting` (default) hands history over verbatim until the window nears its
+`compacting` hands history over verbatim until the window nears its
 trigger, then prunes large tool results to a one-line record and a Source Ref,
-drops whole groups behind a fold, and past that writes a History Checkpoint;
-`curator` is the Curator. Each registry entry declares `owns_compaction` and
+drops whole groups behind a fold, and past that writes a History Checkpoint.
+It is the only registered strategy; a config still naming the retired
+`curator` is migrated to `compacting` once and told so. Each registry entry
+declares `owns_compaction` and
 `mints_source_refs`, which the host reads before any turn.
 _Avoid_: calling it an engine; it is one builder inside the one engine.
 
@@ -1604,20 +1729,24 @@ written mid-turn for the working transcript and is never filed.
 
 **Runtime Context** (`context_engine/runtime_context.py`, `segments/render.py:build_runtime_context`):
 The block each turn's user message opens with: the current time, the chat id, and
-any tool or session notices. The channel tag and the surface hold for the whole
+any tool or session notices. The channel tag and the surface usually hold for the whole
 conversation, so they close the system prompt instead, under `# This Conversation`
 (`segments/render.py:build_conversation_context`), which writes them only when they are
-names, never prose, and `turn.send` refuses any other channel; that prompt is shared by every
-conversation on the same channel and surface, which is why the chat id stays in the
-block. The assembler records the
-lines on the message, the session write keeps the user's words in `content` and
-files the lines beside them as `runtime_context`, and `HistoryTrimmer.history_from_ids`
-joins them back the way they were sent, so a later turn replays the block byte
-for byte and the provider's cached prefix still matches through it. The scent menu
-rides in the same paragraph when the message is sent but is not filed. Tool notices
-are sent as changes: a plugin's line goes out when it differs from what the replayed
-blocks already say, a plugin no longer noted gets a cleared line, and a compaction
-that takes the blocks out has them told again.
+names (`spine.message.SOURCE_NAME_RE`), and `turn.send` refuses any other channel; that
+prompt is shared by every conversation on the same channel and surface, which is why the
+chat id stays in the block. A conversation that moves (the heartbeat session picks its
+channel per run, a linked chat runs as its own channel inside a page session, two surfaces
+can share a session) gets a new prompt at the move. The assembler records the lines on the
+message, the session write keeps the user's words in `content` and files the lines beside
+them as `runtime_context`, and the history projection, `HistoryTrimmer.history_from_ids`,
+joins them back through `replayed_content` the way they were
+sent, so a later turn replays the block byte for byte and the provider's cached prefix
+still matches through it. The scent menu rides in the same paragraph when the message is
+sent but is not filed. Tool notices are sent as changes: a plugin's line goes out when it
+differs from what the replayed blocks already say, a plugin no longer noted gets a cleared
+line, and a compaction that takes the blocks out has them told again; an overflow reclaim,
+which trims the history after the question was built, puts what it took back into the
+question's block.
 
 **Source Ref** (`utils/refs.py`, `session/refs.py`):
 A `[[ref store/scope#lo-hi]]` token naming verbatim entries of an append-only
@@ -1638,7 +1767,7 @@ misses instead of naming a different message.
 **Turn Scratch** (`context_engine/scratch.py`):
 The tagged block appended to the end of the turn's user message carrying the
 phase-A segments whose builder declares `stable = False`, which today is
-`# Memory` and `# Skills`. It reaches the model but never `session.messages`:
+`# Memory`. It reaches the model but never `session.messages`:
 the assembler records on the envelope exactly what it appended (`_turn_scratch`),
 and the loop's `_save_turn`, the hooks' turn question, the watched-work judge and
 replay remove that recorded text, never whatever merely contains the tag. It
@@ -1655,10 +1784,11 @@ whatever the builders declared too volatile for the system prompt.
 **Prompt Segments**:
 The ordered blocks `ContextAssembler` renders into the system prompt, one per
 SegmentBuilder: `# Raven` (identity), the Bootstrap Files block, `# Active Skills`
-(always-on), `# Memory` (host `user.md` ⊕ EverOS recall) and `# Skills`
-(SkillForge-routed candidates — see SkillForge), and `# Curator Working State`
-(Segment 6). Under Turn Scratch, `# Memory` and `# Skills` ride in the user
-message instead. `context.dropSegments` names, by builder name, the host segments an agent does
+(always-on), and `# Memory` (host `user.md` ⊕ EverOS recall). The history
+strategy may append a segment 6 block of its own; the compacting strategy does
+not. Under Turn Scratch, `# Memory` rides in the user message instead.
+Retrieved skills have no segment: they reach the model as the Scent Menu (see
+Skill Discovery). `context.dropSegments` names, by builder name, the host segments an agent does
 without — an agent whose bootstrap files carry its own identity drops `identity`.
 _Avoid_: treating the system prompt as one opaque blob — each segment has an owner and order.
 
@@ -1668,7 +1798,8 @@ How an `always` skill occupies `# Active Skills`, declared per skill as
 (a digest entry: name, description, and the absolute SKILL.md path to read on
 demand). Description mode keeps a skill permanently discoverable at a few dozen
 tokens; it is the only way to surface an `always` skill cheaply, since being
-`always` also excludes it from BM25 routing into `# Skills`.
+`always` also excludes it from BM25 routing, so the scent menu and `find_skill`
+never name it.
 _Avoid_: calling a description-mode entry an "injected skill" — its body never enters the prompt.
 
 **Skill Requirements**:
@@ -1680,60 +1811,41 @@ actually being sent. Every sub-key is optional and every malformed shape
 degrades to "nothing declared" — see `requires_list`.
 _Avoid_: checking `requires.tools` in the registry — it has no view of the live ToolRegistry.
 
-**Curator**:
-An internal, bounded agent loop whose only job is to build the main agent's next
-context window; wired in as Segment 6 (`CuratorSegmentBuilder`). It never answers the
-user and never runs user-facing tools.
-_Avoid_: calling legacy's lossy summarization "curating"
-
-**Fast Path**:
-Curator's zero-LLM route, taken when history is under the pressure threshold:
-full history passes through unchanged.
-
-**Slow Path**:
-Curator's small-model agent loop, run under context pressure: inspects the Manifest,
-archives/retrieves, and submits a ContextPlan that a deterministic assembler validates.
-
-**ContextPlan**:
-The Curator's structured output that the deterministic assembler validates and applies:
-which message ids and archive refs to include, which to drop, plus memory sections and
-the Working State injection.
-
 **Context parts**:
 The window divided: one request's prompt by part — the system prompt, the tool
-schemas, the conversation, the memory and the skills
+schemas, the conversation, the files, the memory and the skills
 (`raven/agent/window/parts.py`). An estimate of the request the loop sent, not
 a provider's count: the provider reports a prompt as one number and does not
-split it. The memory is the recalled segment, wherever it rides: the turn's
+split it. The files are what the request carries besides talk: the attachment
+notes the assembler appended, recorded under `_attachment_notes` on the message
+that carries them, plus the pictures sent as `image_url` blocks. The record's
+scope is that one message, not the request: a reply that quotes a note, or a
+second message with the same `[Attachment: ...]` text and no record, stays
+conversation. The memory is the recalled segment, wherever it rides: the turn's
 scratch, or the system prompt when `context.cache.turn_scratch` is off. The
 skills are every byte the skill subsystem put in the prompt: the always-on
-digest in the system prompt, the routed segment beside the memory, the
-pull-mode scent menu in the user envelope, and the results of the skill tools
+digest in the system prompt, the scent menu in the user envelope, and the
+results of the skill tools
 (`find_skill`, `read_skill`, `use_skill`) — including one the model reached by
 forwarding through `tool_call`, whose message is named for the tool that
 produced it. A `SKILL.md` read through `read_file` or `exec` is not counted:
 the split follows what the skill subsystem wrote, not what a general-purpose
 tool happened to read. Carried on the wire as `context_parts` on a turn's
-usage, and absent until a turn has measured one.
+usage, and absent until a turn has measured one. A turn files its breakdown on
+the reply that carries its window reading, and a resumed session reads the two
+off that same reply -- an older breakdown describes a prompt the newer reading
+did not measure.
 _Avoid_: "segments" for these — a Segment is a piece the context engine assembles
 the prompt from, not a share of the window.
-
-**Fail-Safe**:
-The deterministic fallback when the Slow Path errors or produces no valid plan:
-protected + most relevant + most recent messages, no LLM involved.
-
-**Archive**:
-Curator's lossless eviction: messages written verbatim to disk with a reference,
-retrievable word-for-word later.
-_Avoid_: archive vs Consolidation confusion — Archive loses nothing
 
 **Consolidation**:
 The legacy path's lossy distillation: when the prompt outgrows the window, old
 messages are summarized into memory notes and leave the live history view; the
 originals never return to context.
-_Avoid_: summarize, compact -- three neighbours split this ground: Archive evicts
-losslessly to disk, Consolidation distills across turns into memory notes, Compaction
-(below) squeezes the live prompt inside one turn.
+_Avoid_: summarize, compact -- three neighbours split this ground: a Source Ref
+names verbatim messages the window no longer carries, Consolidation distills
+across turns into memory notes, Compaction (below) squeezes the live prompt
+inside one turn.
 
 **Compaction** (`agents.defaults.compaction`, `config/schema.py:CompactionConfig`):
 In-turn transcript compaction for long agentic turns, off by default: without it the
@@ -1749,25 +1861,19 @@ summary while a recent tail stays verbatim; and a reactive completion that lets 
 overflow retry with nothing left to elide take the summary path instead of surfacing a
 fatal error. Summaries always run on the turn's own model and provider. Compaction
 squeezes the live prompt inside one turn and writes no memory notes.
-_Avoid_: compact for Consolidation or Archive -- those are cross-turn; this is not.
-
-**Manifest**:
-Curator's per-message metadata index for one session (tokens, snippet, relevance,
-protected, pinned, archived) — what the Slow Path reads instead of full history.
+_Avoid_: compact for Consolidation -- that is cross-turn; this is not. Nor
+conflate this switch with the always-on compacting History Strategy (above):
+this is an opt-in layer inside one turn.
 
 **Pinned**:
-A Manifest flag on the messages that fetched a skill body the agent cannot
-re-derive (`context.pinnedSkillIds`, default the sub-agent DAG guide): the whole
-tool exchange is added to every later ContextPlan whether or not the plan names
-it, refused by Archive, and trimmed last. Set on the latest fetch per skill id
-only, so a re-read moves the pin instead of adding a second copy.
-_Avoid_: using "protected" for this — Protected means the head-of-session
-exchanges, and it only shields an id from budget trimming, not from a
-ContextPlan that never mentioned it.
-
-**Working State**:
-The distilled session notes (goals, open threads, decisions) the Curator maintains
-and injects into the main agent's system prompt so evicted facts stay present.
+A flag on the messages that fetched a skill body the agent cannot re-derive
+(`context.pinnedSkillIds`, default the sub-agent DAG guide): the whole tool
+exchange is held out of compaction and dropped last by budget trimming. It is
+set on the latest fetch per skill id only, so a re-read moves the pin instead of
+adding a second copy.
+_Avoid_: using "protected" for this -- protected messages are the head of the
+session, which ages out after the first compaction; a pinned body survives until
+it is fetched again.
 
 ### Memory
 
@@ -1779,7 +1885,7 @@ the box). Its own distribution rather than part of the raven wheel, found throug
 the group's other distributed members: a deck-building toolchain, a visual-design
 engine, and the hosted memory backend below.) Provides dual-track semantic recall — the user track (episodes/profiles,
 injected into the `# Memory` segment) and the agent track (skills/cases, one of
-SkillForge's three sources at RRF weight 0.9). The name refers to the external package
+SkillForge's four sources at RRF weight 0.9). The name refers to the external package
 [EverMind-AI/EverOS](https://github.com/EverMind-AI/EverOS); the in-tree code is only an
 adapter. The same plugin also contributes the `understand_media` multimodal-parsing tool.
 
@@ -1843,17 +1949,18 @@ endpoint.
 **Memory Engine face** (`memory_engine/__init__.py`):
 The one address the rest of the tree reaches memory machinery by: `MemoryStore`,
 `MemoryConsolidator`, the attention and behaviors parsers, the skill catalog,
-sources, router, gate and rewriter, the store pipeline. Names resolve lazily, so
+sources and router, the store pipeline. Names resolve lazily, so
 importing the face costs nothing until one is used, and `tests/test_memory_engine_face.py`
 keeps every consumer on it -- the modules underneath are the engine's to rearrange.
 _Avoid_: importing `memory_engine.consolidate.consolidator` (or any other submodule)
 from outside the engine.
 
 **SkillForge** (`memory_engine/skill_forge/`):
-A skill retrieval and injection subsystem — it fuses candidates from three sources
+A skill retrieval subsystem — it fuses candidates from four sources
 (local BM25-indexed files, self-evolved skills recalled from the pluggable `MemoryBackend`
-— typically the EverOS plugin — and remote skills from the Skill Hub) via weighted RRF,
-with optional LLM gating and query rewriting before injecting them into the agent prompt.
+— typically the EverOS plugin — remote skills from the Skill Hub, and the project's own
+skills under `.agents/skills`) via weighted RRF, and offers them to the agent through the
+Scent Menu and the skill tools (see Skill Discovery and Project skill).
 Skill distillation/evolution is handled by the local extraction pipeline
 (`skillForge.extraction`), not by SkillForge itself — that pipeline distils skills out of
 finished turns into the workspace cache, calls no service and needs no memory plugin;
@@ -1862,20 +1969,54 @@ versioning, and the retirement knobs (`retire_confidence`, `retirement_idle_days
 unwired config placeholders, not active behavior. The name is retained; it is now a live
 module under the Memory Engine, not the old top-level husk.
 
-**Skill Discovery** (`skillForge.discovery`, default `"pull"`):
-How retrieved skills reach the model. Under **pull**, a per-turn **Scent Menu**
-(`context_engine/scent.py`) rides the user envelope: on a *fat* turn (rule-judged —
-length, function-word residue, character-bigram novelty against the recent user
-window), one `SkillForgeRouter.select` renders a few `qualified_id: description`
-lines, and the model fetches bodies itself through `find_skill` (intent-bearing
-search over the same router) and `read_skill`; the system prefix carries no
-retrieved-skill bytes and no per-turn rewriter/gate LLM calls run. Under **push**,
-the pre-existing pipeline (rewriter, router, gate, selected bodies rendered into
-the system prefix) is restored unchanged.
-_Avoid_: conflating the Scent Menu with the `# Skills` segment — the menu is
-advisory tail-of-sequence data (wrapped untrusted), never a system segment; and
-conflating `find_skill` (search, returns ids + descriptions) with `read_skill`
-(body fetch by id).
+**Skill Discovery** (`context_engine/scent.py`, `agent/tools/skill_hub.py`):
+How retrieved skills reach the model, and there is one way. A per-turn **Scent Menu**
+rides the user envelope: on a *fat* turn (rule-judged — length, function-word
+residue, character-bigram novelty against the recent user window), one
+`SkillForgeRouter.select` renders a few `qualified_id: description` lines, and the
+model fetches bodies itself through `find_skill` (intent-bearing search over the
+same router) and `read_skill`. A local id reads from the registry; a memory-backend id
+(an evolved skill or a case from the agent track) has no file, so the router holds the
+hits it returned and `read_skill` / `use_skill` serve that hit's text, verbatim, until a
+restart or a memory switch drops it, after which `find_skill` puts it back. A
+`project/<name>` id is not read from those held hits: it resolves per turn against the
+project's own `.agents/skills` (see Project skill). The system prefix carries only the
+`always` skills (`# Active Skills`), and no model call is spent choosing skills. The push
+pipeline (an LLM query rewriter and gate, selected bodies in the prompt) and its
+`skillForge.discovery` / `llmGate*` / `rewrite*` / `injectionMode` settings were
+retired 2026-11-13; the config loader drops those keys from older files. A built-in
+(raven-loop) sub-agent is shown agent home's skills as a directory instead and reads one
+with its own `read_skill`, the same registry route, so a run fenced by
+`restrictToWorkspace` still reaches a builtin skill whose file sits inside the package.
+_Avoid_: calling the Scent Menu a segment — it is advisory tail-of-sequence data
+(wrapped untrusted), never part of the system prompt; and conflating `find_skill`
+(search, returns ids + descriptions) with `read_skill` (body fetch by id).
+
+**Project skill** (`memory_engine/skill_forge/project_skills.py`):
+A skill the repository itself carries: a flat `<name>/SKILL.md` under a `.agents/skills`
+directory found by walking from the running turn's working directory to the nearest
+ancestor holding a `.git` entry, inclusive (the working directory alone when it has none),
+the nearest directory winning a name collision. The `project` router source offers each as
+`project/<name>`, and `read_skill` / `use_skill` resolve that id against the turn's own
+project at read time — never from the router's held hits, which may belong to another
+session's project. Neither the user's home nor agent home is a project directory, and home
+is a ceiling: a working directory under home reaches no git root and no `.agents/skills`
+above it, while a working directory outside home keeps a shared ancestor as its own git
+root. Agent home and its ancestors are excluded unconditionally, so a checkout that
+contains agent home is never the boundary and its `.agents/skills` are not collected --
+the trade that keeps `<RAVEN_HOME>/config.json` unreachable; a symlink counts only when
+its resolved target stays inside the git root; a deeper `SKILL.md` is not a project skill.
+Project skills are never `always`-injected: `always` and `inject` frontmatter are ignored,
+and the system prefix carries none of them. The index is per project — a process-wide
+cache keyed by the resolved directory tuple and its git-root boundary, rebuilt when a
+fingerprint of the directories
+changes — and the leader agent is the only one that reads it: a process launched as a
+sub-agent mounts no project source and its tools answer `project/` with "not available to
+this agent". The switch is `skillForge.projectSkills.enabled`, default on, read live: off
+stops the next search and the next `project/` resolution, and a shape the loader refuses
+reads off too.
+_Avoid_: "workspace skill" — that is agent home's `skills/` layer, read by the local
+source and a different directory.
 
 **Skill Hub** (`skill_hub/`):
 A remote OpenAPI skill marketplace, configured via `skillForge.router.hub` (`endpoint` /
@@ -2035,8 +2176,8 @@ under session-token pressure it annotates evicted message chunks into Episodes,
 refreshes hot Profile sections, and (opt-in) emits Foresight. The single context
 engine declares `owns_compaction`, so a turn does not call it for token pressure;
 `/new` still archives an unconsolidated session through it.
-_Avoid_: conflating with the Curator -- the Curator builds the context window
-losslessly and archives history itself; the Consolidator is what writes long-term
+_Avoid_: conflating with the history strategy -- the strategy builds and
+compacts the context window itself; the Consolidator is what writes long-term
 memory.
 
 ### Knowledge
@@ -2264,12 +2405,13 @@ whose change implies WORK rather than a different answer (constructing a provide
 an MCP handshake, moving a workspace) keeps its apply path -- a door, the pool's
 fingerprint cache, or the generation swap. Timing is asymmetric by design: a revocation
 binds the next read (a tightened deny pattern gates the very next tool call), while an
-addition to the model's tool array lands on the next turn -- `ToolRegistry.turn_scope`
-freezes both registry membership and the withheld set at turn entry, because the array
-is the prompt-cache prefix and must not move between two model calls of one turn. The one
-exception is an addition the turn's own call produced: `ToolRegistry.admit_to_this_turn`
-lets the tools a `plugin` connect or authorize registered join that turn from its next
-model call, at the cost of one rebuilt prefix.
+addition to the model's tool array is held until a session refresh -- `ToolRegistry` freezes
+the array on the session's first assembly and recaptures it only at a new session, a
+compaction, a `/clear`, or a release, because the array is the prompt-cache prefix.
+`ToolRegistry.turn_scope` still freezes registry membership and the withheld set at turn
+entry, so a mid-turn arrival cannot change what `offers` or `execute` admits. The turn's own
+`plugin` call is the one admission: `ToolRegistry.admit_to_this_turn` lets the tools it
+connected reach `tool_call` from the next model call, without moving the array.
 _Avoid_: reading `config.json` keys ad hoc outside this module; treating a live
 preference as a door (doors reconcile members after a durable write; this lane never
 touches member identity).
@@ -2487,6 +2629,40 @@ lands on one, and is recorded on the call's tool.call span as
 wait on a human, and answers with a full ToolResult.
 _Avoid_: "tool gate" for this -- that name is the plugin paper's.
 
+**Runtime approval** (`permissions/runtime.py`):
+Asking about an action a tool finds while its body runs, not before dispatch:
+`PermissionGate.authorize_runtime`, reached through `current_gate()`, which the
+registry binds for the length of the tool body. It follows the gate's own order
+(this turn's earlier answers, the conversation's grants, the mode, the smart-mode
+reviewer, the person) and answers with a `RuntimeAnswer`: once, session, always,
+deny, deny and stop, lapsed (asked, nobody answered) or unattended. A person
+deciding stops the tool's deadline, which the registry runs under
+`asyncio.timeout` for this reason. The first such action is a Network denial.
+_Avoid_: "re-check" or "second gate" -- it is the one gate, asked later.
+
+**Network denial** (`sandbox/denials.py`):
+One connection an OpenShell sandbox's network policy refused, read from the
+gateway's OCSF log over the time a command (or, for a long-lived MCP server, a
+call) ran: the program, the host, the port and the reason (`NetworkDenial`). The
+log names the sandbox, not the command, so a denial in that window may be
+another process's in the same sandbox. A DNS refusal names only the host.
+Carried on `ExecResult.denials` and settled by `permissions/sandbox_network.py`.
+_Avoid_: "network error" -- a denial is the policy's decision, and the command
+sees only a failed connect.
+
+**Network grant** (`sandbox/network_policy.py`, `permissions/network_grants.py`):
+A person's yes to one program reaching one host and port, compiled into a named
+rule (`raven_grant_<hash>`) of the sandboxes it reaches: "once" in the refused
+sandbox until it stops, "this session" in every sandbox of the conversation
+until Raven restarts (the `GrantRegistry`, keyed by the conversation's
+`session_key`; the main agent's shared sandbox runs under every conversation's),
+"always" as a `permissions.network` rule. A deny rule naming the same target
+leaves a session grant out of the policy the conversation's sandboxes compile;
+what the refused sandbox was granted directly, once or for the session, stays
+there until it stops. Distinct from a session grant in
+`permissions/session.py`, which remembers the action's keys so the gate does not
+ask again; a network grant is what makes the sandbox let the connection through.
+
 **Credential scope**:
 Which credential store an MCP server's secrets are read from and written to.
 `None` is the host's own -- `<credentials>/mcp/<server>.json` for OAuth tokens,
@@ -2592,7 +2768,8 @@ second owner, and that distinction is what keeps it off its parent's tab.
 ### Execution & Evaluation
 
 **SandBox** (`sandbox/`):
-Isolated command execution (microVM / boxlite); owns the debug server and VM lifecycle.
+Isolated command execution: one OpenShell sandbox per executor on a local gateway, or direct host
+execution when disabled; owns sandbox lifecycle, mounts, and the egress policy.
 
 **EvalEngine** (`eval_engine/`):
 The L3 evaluation engine: task judging and cognitive coordination, implemented as three
@@ -3187,7 +3364,7 @@ are diagnostics, not the span clock.
 The caller's own name for why a model call is made — `main` for the agent
 loop's action call and for its wrap-up when the iterations run out (the turn's
 own conversation plus one instruction), `watch_work`, `title`,
-`permission_judge`, `memory_extract`, `skill_gate`, `dag_verdict`, `playbook` —
+`permission_judge`, `memory_extract`, `dag_verdict`, `playbook` —
 set with `with purpose(name):` around a provider call that records an
 `llm.call` span (`chat_with_retry` or the loop's streaming call; a bare
 `chat()` records none, so a label there would never land) and read by that
@@ -3391,9 +3568,11 @@ does its content get -- are answered independently and neither leans on the othe
 
 **Handoff Block** (`raven/agent/subagent/direct_chat.py`):
 The pointer block the runtime prepends to the user's next turn to the main agent after
-direct-chat activity: per instance, a UTC time span and the paths of each turn's
-`prompt.md` and `out.md`, inside `subagents/direct/<agent>/<handle>/<call_id>/` beside the
-Subagent history. Activity, not only chats - a User-Created Instance is reported in its own
+direct-chat activity: per instance, a UTC time span and the record files present in each
+turn's directory - `prompt.md`, `out.md`, `error.md` - inside
+`subagents/direct/<agent>/<handle>/<call_id>/` beside the Subagent history. A still-running
+turn names `prompt.md` only, and an ended turn whose directory holds none of the three is
+marked unavailable. Activity, not only chats - a User-Created Instance is reported in its own
 right, and one with no turns yet names no path, because the record directories are made per
 turn. An instance answering a direct turn at take time is reported as running, with the
 time it began answering (the handle lock held, not the moment the turn queued), read from
@@ -3490,9 +3669,11 @@ The same trust boundary the cli transport already ran under (`codex -a never`,
 The one request it refuses is one naming a shell command (`toolCall.rawInput.command`,
 codex's `commandActions`) that the host's own deny rules refuse - the builtin list with
 `tools.exec.extraDenyPatterns`, or a `deny` entry in `permissions.tools`: refusing needs no
-operator, so it is answered with the agent's reject option. Raven's own products carry the
-same refusals in their rendered config (`product_render.inherit_host_denials`), because a call
-their own gate allows never reaches this handler.
+operator, so it is answered with the agent's reject option, and so is a request a raven
+agent marks `raven.needsPerson` in `_meta` (an address or internal name its own gate leaves
+to a person). Raven's own products run under the host's permission set, these refusals
+included, in their rendered config (`product_render.inherit_host_permissions`), because a
+call their own gate allows never reaches this handler.
 Distinct from what raven still refuses: `fs/read_text_file` and its siblings are declared
 unsupported in `CLIENT_CAPABILITIES`, and a handler returning `UNHANDLED` is how they stay
 that way.
@@ -3516,6 +3697,14 @@ record keeps as a user row marked `steer`, in the position they were said.
 _Avoid_: "inject" for the whole feature - `injected` is one status of a steer, and the spine's
 `BusyPolicy.INJECT` is a different thing (a turn queued behind the running one);
 "interrupt" - a steer does not stop the turn.
+
+**Early reply** (`cancel_subagent` with `mode: "report_now"`):
+The host asks one active delegation to finish from its current work. Raven accepts
+this intent on `_raven/session/steer` when the live handshake declares
+`raven.reportNow` and the prompt id matches. The active turn stops dispatching tools
+at its next boundary, reaps its own background commands, and synthesizes a final
+reply. An ACP hold remains part of that prompt. The final reply reaches the host
+through the delegation's original result path and retains the early-reply marker.
 
 **Unprompted Turn** (`raven/acp_client/unprompted.py`):
 A turn an ACP Subagent ran with nobody having asked - an on-call agent waking on its own
@@ -4196,15 +4385,14 @@ raven-minted pointer block in the main agent's next turn after Direct Chat activ
 carries no transcript text.
 
 **outbox** (`raven/agent/subagent/dag_adjudication.py`) -- a foreground DAG run's tray of
-events: its nodes' exception reports and its final result, waiting for the tool call
+exception reports, long-run notices, and the final result, waiting for the tool call
 that is awaiting the run. One per foreground run, in memory beside the run's
 adjudication desk. The desk carries decisions from the main agent to the run; the
 outbox carries reports from the run to the main agent. While the run is bound the
-outbox hands or buffers a question and drops a notification -- the blocking call is
-still there and the run's summary is what it will be handed, so announcing the same
-news again would put an unanswerable question beside it -- and never announces; once
-released it re-sends what is unanswered and announces later events as turns, both
-kinds.
+outbox hands or buffers a question. A long-run notice gives the blocked host a chance
+to act while execution continues. Other informational reports use the normal
+progress path. On release the outbox re-sends unanswered reports. Later events use
+the background delegation announcement route.
 _Avoid_: "mailbox" -- the lane's inject mailbox is a different object with a different
 reader.
 

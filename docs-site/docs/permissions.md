@@ -116,6 +116,116 @@ call. Session grants live in memory; they are not the persisted global prefix
 rules. Neither grant overrides a deny. Expired or denied actions are not asked
 again unchanged in the same turn.
 
+## Network
+
+What a sandboxed command may reach belongs to the same permission set, under
+`permissions.network`. Every sandbox Raven starts reads it: the main agent's,
+a sub-agent's, a DAG node's, and a sandboxed MCP server's. A change to it
+reaches a running sandbox before that sandbox's next command, and before the
+next tool call to an MCP server running in it.
+
+```json
+{
+  "permissions": {
+    "network": {
+      "default": "open",
+      "rules": [
+        { "host": "git.internal.example.com", "ports": [443] },
+        { "host": "pastebin.com", "tier": "deny" }
+      ]
+    }
+  }
+}
+```
+
+| Key | Meaning |
+| --- | --- |
+| `default` | `open` (the default): every host name of three or more labels on every port, plus common package, code-hosting and model-provider names on common ports. `closed`: only what a rule allows. |
+| `rules[].host` | A host name. `*.example.com` matches one label, `**.example.com` any number. A wildcard stands for whole labels. |
+| `rules[].ports` | Ports. Left empty, an allow rule takes 22, 80, 443, 8080, 8443 and 9418, and a deny rule refuses every port. |
+| `rules[].binary` | The program, by its absolute path in the sandbox, such as `/usr/bin/curl`. Left empty, any program. |
+| `rules[].tier` | `allow` (the default) or `deny`. |
+
+A config that still sets `tools.sandbox.allowNet` has it moved here on its
+first load, with a notice: `true` is the open default, `false` is closed, a
+host list allows those hosts on ports 80 and 443 with the default closed, and
+a list with `"*"` keeps the open default and adds the other hosts. An entry
+written as `host:port` becomes a rule for that port. An entry no rule can
+hold, such as an address range, is left out, and the notice names it.
+
+### When a connection is blocked
+
+A sandbox refuses a connection no rule allows while the command is running.
+Raven reads the refusal from the gateway and settles it the way it settles a
+tool call:
+
+- A target one of your deny rules names is refused without asking.
+- In `ask` mode you are asked, with the program, the address and the command.
+- In `smart` mode the reviewer is asked first. It allows a target the command
+  plainly needs, such as a package index for an install or the repository
+  host for a clone, and hands anything else to you.
+- In `full` mode the target is opened for the session.
+- With nobody to ask, as in a scheduled job or `raven agent -m`, the target
+  stays blocked, the tool result says so, and `-m` exits with status 3.
+
+An address given as an IP, or an internal name such as `localhost` or
+`metadata.google.internal`, is never opened by the mode or by the reviewer:
+only you can allow it. When one Raven runs another as a sub-agent, the
+sub-agent's request for such a target is refused, since nobody is there to
+answer it. After an approval Raven does not run the command again
+by itself; the agent is told it may. When several agents of one conversation
+hit the same address at once, you are asked once.
+
+| Choice | Where it opens the address |
+| --- | --- |
+| Allow once | The sandbox that was refused, until it stops |
+| Allow for this session | Every sandbox of the conversation, until Raven restarts |
+
+A deny rule wins over an allow rule for the same target, and over a session
+grant in the conversation's other sandboxes; one you add later takes effect
+before each sandbox's next command. What was opened directly in the sandbox
+that was refused, once or for the session, stays open there until that sandbox
+stops, which for the main agent's sandbox is until Raven restarts.
+
+Under the open default, a deny rule for one of the common names takes the
+ports it lists from that name, for every program, and the whole name when it
+lists none. Another program that needs one of those ports is asked about.
+
+The main agent's sandbox is shared by every conversation the gateway serves,
+so what is allowed in it reaches all of them until Raven restarts. The
+approval prompt says so when it applies. A conversation's own sandbox shows
+the same note when a session answer there would also reach that shared
+sandbox. In this sandbox a target opens without asking only at the
+mode in `permissions.mode`, so a conversation switched to a looser mode of
+its own is asked.
+
+A sandboxed MCP server is handled the same way, for the connections refused
+while one of its tools ran. The card names "a process in the sandbox", since
+the gateway does not say which process made a connection.
+
+The gateway logs a refusal for the sandbox, not for the command that made it.
+A connection another process in the same sandbox made while a command ran,
+such as a sandboxed MCP server or a job left running in the background, is
+asked about with that command. The card names the program that made each
+connection.
+
+### Limits
+
+- Under the `open` default a deny rule takes a two-label host such as
+  `pastebin.com` out of the open set, but cannot block a host of three or more
+  labels: OpenShell cannot carve an exception out of the rule that opens them.
+  Such a rule still stops Raven from opening the host, and Raven warns when it
+  loads one. Use `default: closed` when a host must be unreachable.
+- An allow rule that covers a denied target only in part, through a wildcard
+  host or by allowing any program where the deny rule names one, cannot have
+  that target carved out for the same reason. Raven keeps the allow rule and
+  warns when it loads it.
+- The design engine's renderer runs Raven's own rendering job, not a command
+  an agent wrote, and stays offline. It has no network setting of its own.
+- An approved address takes about 10 seconds to reach a running sandbox with
+  the gateway's default delivery. See [Sandbox](sandbox.md#41-network-policy)
+  for the gateway setting that makes it about a second.
+
 ## Delegation is a separate trust boundary
 
 Raven's gate governs its own registry calls, not every command an external agent
@@ -127,12 +237,13 @@ might execute inside its process.
   child's `allow_always` or `allow_once` option. Enabling this agent is not a
   promise of human review for each internal operation. Your refusals do
   travel: a request whose shell command matches your `deny` rules or
-  `tools.exec.extraDenyPatterns` is answered with the child's reject option,
-  and Raven's own agents (Raven-Code and its siblings) carry those rules in
-  their rendered config, so they refuse such a call without asking. A
-  third-party agent is held only for what it asks about, and a rule you add
-  reaches an already running Raven agent when it is next launched. The ask
-  tier and the mode are not carried.
+  `tools.exec.extraDenyPatterns` is answered with the child's reject option.
+  Raven's own agents (Raven-Code and its siblings) run under your whole
+  permission set, the mode and the ask, allow, deny and network rules, and,
+  where your sandbox is OpenShell on Linux or macOS, in the same kind of
+  sandbox. A third-party agent is held only for what it asks about, and a
+  rule you add reaches an already running Raven agent when it is next
+  launched.
 - **CLI and other backends:** inspect their command, environment, working
   directory, and native permission policy. Host permission rules are not
   automatically inherited across every backend.
@@ -150,7 +261,7 @@ partitioned working files when allowing unattended child agents.
 
 ## Sandbox, files, and untrusted content
 
-Sandboxing controls execution placement. A BoxLite VM can mount the real
+Sandboxing controls execution placement. An OpenShell sandbox mounts the real
 workspace read-write; deleting inside that mount deletes real files. The gate
 therefore does not auto-approve a command simply because a sandbox exists.
 Third-party backends may not use Raven's executor. See [Sandbox](sandbox.md).

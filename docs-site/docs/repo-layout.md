@@ -10,6 +10,7 @@ raven/                 # Shared runtime, feature engines, and CLI/RPC/ACP surfac
 agents/                # Specialized agents assembled from installed Raven and plugins
 plugins-dist/          # everos-memory, everos-cloud-memory, design-engine, and ppt-engine distributions
 ui-web/                # Browser UI, also used by the desktop window
+desktop/               # Native desktop windows around the web UI (macOS)
 ui-tui/                # React/Ink terminal UI
 rpc-schema/            # Shared OpenRPC contract for interactive clients
 schemas/               # Generated agent and plugin JSON Schemas
@@ -65,7 +66,7 @@ repository's commit conventions.
 | `resources` | Downloads the dictionary and parser models that are too large to track |
 | `routing` | Task classification and model selection by quality and cost |
 | `rpc` | Shared typed RPC methods, streaming events, and the gateway control interface |
-| `sandbox` | Isolated execution, VM lifecycle, and debugging tools |
+| `sandbox` | Isolated execution in OpenShell sandboxes: lifecycle, mounts, and the egress policy |
 | `security` | Outbound address policy and prompt-injection fences |
 | `session` | Session storage, session resolution, titles, and transcript export |
 | `skill_hub` | SkillHub search, skill retrieval, bundle installation, and install policy |

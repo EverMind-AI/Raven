@@ -1576,7 +1576,10 @@ class RavenConfigTool(Tool):
         if row.get("connected"):
             out["state"] = "connected"
         elif row.get("running"):
-            out["state"] = "running, not connected yet"
+            # `connected` is absent for channels that never report pairing; only a
+            # channel that logs in by scanning, or whose spec requires no
+            # credentials, can honestly be "not connected yet".
+            out["state"] = "running, not connected yet" if scan else "running"
         elif row.get("enabled"):
             out["state"] = "enabled, not running (the gateway starts it within a few seconds, or it failed)"
         else:

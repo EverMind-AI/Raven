@@ -8,8 +8,10 @@ carries (or drops) edits the designer never verified.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -18,6 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from benchmarks.appworld.evolve import sandbox as sandbox_module  # noqa: E402
 from benchmarks.appworld.evolve.sandbox import Sandbox  # noqa: E402
 
 _ENV = {
@@ -71,13 +74,501 @@ class TestWriteRefusal:
 
 
 class TestBashBoundary:
-    def test_command_naming_origin_repo_is_refused(self, sandbox):
+    def test_command_naming_subject_checkout_is_refused(self, sandbox):
         out = sandbox.bash(f"cat {sandbox.repo_root.resolve()}/grader.py")
-        assert "refused" in out and "origin repo" in out
+        assert "refused" in out and "subject checkout" in out
 
     def test_command_runs_inside_worktree(self, sandbox):
         out = sandbox.bash("pwd")
         assert str(sandbox.root) in out and "[exit 0]" in out
+
+    def test_alternately_spelled_subject_path_is_refused(self, sandbox):
+        alt = str(sandbox.repo_root.resolve()).replace("\\", "/").upper()
+        out = sandbox.bash(f"ls {alt}")
+        assert "refused" in out and "subject checkout" in out
+
+    @pytest.mark.slow
+    def test_timeout_after_subject_write_is_detected(self, sandbox):
+        cmd = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && touch timeout-poison && sleep 5"
+        try:
+            with pytest.raises(RuntimeError, match="subject checkout"):
+                sandbox.bash(cmd, timeout=1)
+            # The guard undoes what the command wrote, so nothing is left behind.
+            assert not (sandbox.repo_root / "timeout-poison").exists()
+        finally:
+            (sandbox.repo_root / "timeout-poison").unlink(missing_ok=True)
+
+    @pytest.mark.slow
+    def test_timeout_kills_a_late_origin_writer(self, sandbox):
+        cmd = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && sleep 2 && touch late-poison"
+        poison = sandbox.repo_root / "late-poison"
+        try:
+            out = sandbox.bash(cmd, timeout=0.5)
+            assert "TIMEOUT" in out
+            time.sleep(2.5)
+            assert not poison.exists()
+        finally:
+            poison.unlink(missing_ok=True)
+
+    @pytest.mark.slow
+    def test_background_writer_is_killed_before_snapshot(self, sandbox):
+        if sys.platform == "win32":
+            pytest.skip("process-group cleanup is POSIX-only")
+        cmd = "(sleep 2; cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\"; touch bg-poison) >/dev/null 2>&1 &"
+        poison = sandbox.repo_root / "bg-poison"
+        try:
+            out = sandbox.bash(cmd)
+            assert "[exit 0]" in out
+            time.sleep(2.5)
+            assert not poison.exists()
+        finally:
+            poison.unlink(missing_ok=True)
+
+    def test_assume_unchanged_index_flag_is_detected(self, sandbox):
+        cmd = (
+            "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && "
+            "printf 'score = 999\\n' > grader.py && git update-index --assume-unchanged grader.py"
+        )
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(cmd)
+        # The restore puts the file and the index back the way they were.
+        assert (sandbox.repo_root / "grader.py").read_text() == "score = 1\n"
+        flags = subprocess.run(
+            ["git", "ls-files", "-v", "-z", "grader.py"],
+            cwd=sandbox.repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=_ENV,
+        ).stdout
+        assert flags.startswith("H ")
+
+    def test_a_deleted_assume_unchanged_file_is_restored(self, sandbox):
+        # git skips an assume-unchanged path, so its deletion is invisible to
+        # status; the captured content and mode are what put it back.
+        target = sandbox.repo_root / "grader.py"
+        target.chmod(0o755)
+        subprocess.run(
+            ["git", "update-index", "--assume-unchanged", "grader.py"],
+            cwd=sandbox.repo_root,
+            check=True,
+            env=_ENV,
+        )
+        cmd = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && rm -f grader.py"
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(cmd)
+        assert target.read_text() == "score = 1\n"
+        if sys.platform != "win32":
+            assert target.stat().st_mode & 0o777 == 0o755
+
+    @pytest.mark.parametrize(
+        ("rel", "index_flag"),
+        [
+            ("grader.py", None),
+            ("existing-untracked.py", None),
+            ("grader.py", "--assume-unchanged"),
+            ("grader.py", "--skip-worktree"),
+        ],
+    )
+    def test_existing_file_content_write_is_detected(self, sandbox, rel, index_flag):
+        (sandbox.repo_root / rel).write_text("score = 2\n")
+        if index_flag:
+            subprocess.run(["git", "update-index", index_flag, rel], cwd=sandbox.repo_root, check=True, env=_ENV)
+        command = f"cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && printf 'score = 999\\n' > {rel}"
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        # The write is undone: the file is back to what it was before the command.
+        assert (sandbox.repo_root / rel).read_text() == "score = 2\n"
+
+    def test_failed_status_probe_refuses_command(self, sandbox):
+        index = sandbox.repo_root / ".git/index"
+        original = index.read_bytes()
+        try:
+            index.write_bytes(b"invalid index\n")
+            out = sandbox.bash("touch command-was-run")
+            assert "refused" in out and "state unavailable" in out
+            assert not (sandbox.root / "command-was-run").exists()
+        finally:
+            index.write_bytes(original)
+
+    @pytest.mark.parametrize("probe", ["for-each-ref", "ls-files"])
+    def test_failed_internal_probe_refuses_command(self, sandbox, monkeypatch, probe):
+        run_git = sandbox._git
+
+        def fail_probe(*args):
+            if args[0] == probe:
+                return run_git("rev-parse", "--verify", "refs/heads/nonexistent-probe-ref")
+            return run_git(*args)
+
+        monkeypatch.setattr(sandbox, "_git", fail_probe)
+        out = sandbox.bash("touch command-was-run")
+        assert "refused" in out and "state unavailable" in out
+        assert not (sandbox.root / "command-was-run").exists()
+
+    def test_failed_after_probe_aborts_round(self, sandbox):
+        index = sandbox.repo_root / ".git/index"
+        original = index.read_bytes()
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && printf 'invalid index\\n' > .git/index"
+        try:
+            with pytest.raises(RuntimeError, match="subject checkout unverifiable"):
+                sandbox.bash(command)
+        finally:
+            index.write_bytes(original)
+
+    def test_hook_executable_mode_change_is_detected(self, sandbox):
+        if sys.platform == "win32":
+            pytest.skip("executable hook permissions require POSIX")
+        hook = sandbox.repo_root / ".git/hooks/post-checkout"
+        hook.write_text("#!/bin/sh\nexit 0\n")
+        hook.chmod(0o644)
+        command = "d=$(sed -n 's/^gitdir: //p' .git); chmod +x \"$d/../../hooks/post-checkout\""
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        # The restore puts the hook's mode back: it is not executable again.
+        assert not hook.stat().st_mode & 0o111
+
+    def test_detached_origin_head_allows_commands(self, sandbox):
+        subprocess.run(["git", "checkout", "--detach", "-q"], cwd=sandbox.repo_root, check=True, env=_ENV)
+        assert "[exit 0]" in sandbox.bash("echo healthy")
+
+    def test_missing_tracked_and_unusual_untracked_paths_allow_commands(self, sandbox):
+        (sandbox.repo_root / "grader.py").unlink()
+        name = "untracked file.txt" if sys.platform == "win32" else "untracked file\nname.txt"
+        (sandbox.repo_root / name).write_text("unchanged\n")
+        assert "[exit 0]" in sandbox.bash("echo healthy")
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="non-UTF-8 filenames require POSIX")
+    def test_non_utf8_untracked_file_write_is_detected(self, sandbox):
+        name = "untracked-\udcff.txt"
+        (sandbox.repo_root / name).write_text("original\n")
+        command = f"cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && printf changed > {name}"
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+
+    def test_missing_bash_is_reported_not_raised(self, sandbox, monkeypatch):
+        state = sandbox._subject_state(capture=False)
+        monkeypatch.setattr(sandbox, "_subject_state", lambda capture=False: state)
+
+        def _raise(*_args, **_kwargs):
+            raise FileNotFoundError("bash")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(subprocess, "Popen", _raise)
+            out = sandbox.bash("echo hi")
+        assert "bash error" in out and "FileNotFoundError" in out
+
+    def test_ref_deletion_in_common_dir_is_detected(self, sandbox, subject):
+        repo, _sha = subject
+        subprocess.run(["git", "update-ref", "refs/evolver/probe", "HEAD"], cwd=repo, check=True, env=_ENV)
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash("git update-ref -d refs/evolver/probe")
+        # The restore puts the ref back.
+        assert (
+            subprocess.run(
+                ["git", "rev-parse", "--verify", "refs/evolver/probe"],
+                cwd=repo,
+                capture_output=True,
+                env=_ENV,
+            ).returncode
+            == 0
+        )
+
+    def test_symbolic_head_change_to_another_branch_is_detected(self, sandbox, subject):
+        repo, _sha = subject
+        subprocess.run(["git", "branch", "other"], cwd=repo, check=True, env=_ENV)
+        command = "d=$(sed -n 's/^gitdir: //p' .git); git -C \"$d/../../..\" checkout -q other"
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+
+    def test_relative_gitdir_resolves_against_worktree(self, subject, tmp_path):
+        repo, sha = subject
+        subprocess.run(["git", "config", "worktree.useRelativePaths", "true"], cwd=repo, check=True, env=_ENV)
+        sb = Sandbox(repo, tmp_path / "wt-rel", sha)
+        try:
+            gitdir = sb._subject_gitdir()
+            assert gitdir is not None and gitdir.exists()
+            assert str(repo.resolve()) in str(gitdir)
+        finally:
+            sb.close()
+
+    def test_gitdir_command_substitution_is_detected(self, sandbox):
+        poison = sandbox.repo_root / "sandbox-escape"
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && touch sandbox-escape"
+        try:
+            with pytest.raises(RuntimeError, match="subject checkout"):
+                sandbox.bash(command)
+            # The guard undoes the write, so the escape leaves nothing behind.
+            assert not poison.exists()
+        finally:
+            poison.unlink(missing_ok=True)
+
+    def test_refs_created_in_the_worktree_do_not_abort_the_round(self, sandbox):
+        # A branch, a tag and a stash the driver creates in its own worktree
+        # land in the shared ref namespace; they say nothing about a write to
+        # the subject checkout, so they must not cost the round.
+        assert "[exit 0]" in sandbox.bash("git checkout -b feature")
+        assert "[exit 0]" in sandbox.bash("git tag probe-tag")
+        assert "[exit 0]" in sandbox.bash("git stash")
+        assert "[exit 0]" in sandbox.bash("echo healthy")
+
+    def test_a_ref_created_in_the_subject_checkout_is_not_deleted(self, sandbox, subject):
+        # The sandbox and the subject checkout share one ref namespace, so a
+        # ref created during the command window may be the user's. The guard
+        # does not detect a created ref, so it must not delete one either.
+        repo, _sha = subject
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && git branch user-work && touch ref-poison"
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        assert (
+            subprocess.run(
+                ["git", "rev-parse", "--verify", "refs/heads/user-work"],
+                cwd=repo,
+                capture_output=True,
+                env=_ENV,
+            ).returncode
+            == 0
+        )
+
+    def test_a_stash_in_the_subject_checkout_does_not_cost_the_round(self, sandbox, subject):
+        # The stash stack belongs to the checkout, not to a worktree: the
+        # stash the driver pushes in its own worktree moves the user's stack,
+        # and that must not read as a write to the subject checkout.
+        repo, _sha = subject
+        (repo / "grader.py").write_text("score = 9\n")
+        subprocess.run(
+            ["git", "stash", "push", "-m", "user-stash"],
+            cwd=repo,
+            check=True,
+            env=_ENV,
+        )
+        assert "[exit 0]" in sandbox.bash("echo PROMPT = v2 > benchmarks/appworld/agent_cli.py && git stash")
+        assert "[exit 0]" in sandbox.bash("echo healthy")
+        stash = subprocess.run(
+            ["git", "stash", "list"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            env=_ENV,
+        ).stdout
+        assert "user-stash" in stash
+
+    def test_the_abort_message_names_the_branch(self, sandbox, subject):
+        repo, _sha = subject
+        subprocess.run(["git", "branch", "other"], cwd=repo, check=True, env=_ENV)
+        command = "d=$(sed -n 's/^gitdir: //p' .git); git -C \"$d/../../..\" checkout -q other"
+        with pytest.raises(RuntimeError, match=r"the checked-out branch \(refs/heads/other\)"):
+            sandbox.bash(command)
+
+    def test_the_sandbox_refuses_to_build_on_an_unreadable_checkout(self, subject, tmp_path):
+        repo, sha = subject
+        index = repo / ".git/index"
+        original = index.read_bytes()
+        try:
+            index.write_bytes(b"invalid index\n")
+            with pytest.raises(RuntimeError, match="could not be inspected"):
+                Sandbox(repo, tmp_path / "wt-broken", sha)
+        finally:
+            index.write_bytes(original)
+
+    def test_detected_write_is_undone(self, sandbox):
+        hook = sandbox.repo_root / ".git/hooks/post-checkout"
+        hook.write_text("#!/bin/sh\nexit 0\n")
+        hook.chmod(0o644)
+        command = (
+            "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && "
+            "printf 'score = 999\\n' > grader.py && touch escape-poison && "
+            "chmod +x .git/hooks/post-checkout"
+        )
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        assert (sandbox.repo_root / "grader.py").read_text() == "score = 1\n"
+        assert not (sandbox.repo_root / "escape-poison").exists()
+        assert not hook.stat().st_mode & 0o111
+
+    def test_detected_write_restores_git_config(self, sandbox):
+        config = sandbox.repo_root / ".git/config"
+        original = config.read_bytes()
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && git config core.pager evil-pager"
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        assert config.read_bytes() == original
+
+    def test_same_size_rewrite_of_a_dirty_file_is_detected(self, sandbox):
+        # git diff names the path that changed but not what it changed to, so
+        # a rewrite that keeps the size has to be caught by the content.
+        (sandbox.repo_root / "grader.py").write_text("score = 2\n")
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && printf 'score = 3\\n' > grader.py"
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        assert (sandbox.repo_root / "grader.py").read_text() == "score = 2\n"
+
+    def test_staged_new_file_is_undone(self, sandbox):
+        command = (
+            "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && printf 'x = 1\\n' > staged.py && git add staged.py"
+        )
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        assert not (sandbox.repo_root / "staged.py").exists()
+
+    def test_a_discarded_edit_is_put_back(self, sandbox):
+        # A command that throws the checkout's own edit away must not be able
+        # to lose it: the guard undoes what the command did.
+        (sandbox.repo_root / "grader.py").write_text("score = 2\n")
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && git checkout -- ."
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        assert (sandbox.repo_root / "grader.py").read_text() == "score = 2\n"
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows chmod only toggles the read-only bit")
+    def test_a_chmod_of_a_dirty_file_is_undone(self, sandbox):
+        # The content digest covers the mode, so a chmod is caught; the restore
+        # has to put the captured mode back rather than keep the command's.
+        target = sandbox.repo_root / "grader.py"
+        target.write_text("score = 2\n")
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && chmod 755 grader.py"
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        assert target.read_text() == "score = 2\n"
+        assert target.stat().st_mode & 0o777 == 0o644
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows chmod only toggles the read-only bit")
+    def test_a_chmod_of_an_untracked_file_is_undone(self, sandbox):
+        target = sandbox.repo_root / "existing-untracked.py"
+        target.write_text("value = 1\n")
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && chmod 755 existing-untracked.py"
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        assert target.stat().st_mode & 0o777 == 0o644
+
+    def test_a_retargeted_symlink_is_restored(self, sandbox):
+        if sys.platform == "win32":
+            pytest.skip("symlinks need a privilege on Windows")
+        link = sandbox.repo_root / "grader-link"
+        link.symlink_to("grader.py")
+        subprocess.run(["git", "add", "grader-link"], cwd=sandbox.repo_root, check=True, env=_ENV)
+        subprocess.run(["git", "commit", "-qm", "link"], cwd=sandbox.repo_root, check=True, env=_ENV)
+        # The checkout's own edit retargets the link, so it is dirty before the
+        # command and has to be captured rather than restored from the index.
+        link.unlink()
+        link.symlink_to("raven/agent/loop.py")
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && ln -sfn grader.py grader-link"
+        with pytest.raises(RuntimeError, match="subject checkout"):
+            sandbox.bash(command)
+        assert link.is_symlink()
+        assert os.readlink(link) == "raven/agent/loop.py"
+
+    def test_the_capture_budget_names_the_paths_it_cannot_restore(self, sandbox, monkeypatch):
+        # Over the capture budget the guard has no content to put back, so it
+        # names the path instead of replacing the checkout's own edit with the
+        # index version.
+        monkeypatch.setattr(sandbox_module, "_RESTORE_CAPTURE_FILES", 0)
+        (sandbox.repo_root / "grader.py").write_text("score = 2\n")
+        (sandbox.repo_root / "raven/agent/loop.py").write_text("x = 2\n")
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && printf 'score = 999\\n' > grader.py"
+        with pytest.raises(RuntimeError, match="could not undo") as excinfo:
+            sandbox.bash(command)
+        assert "grader.py" in str(excinfo.value)
+        # The path the command changed is named; the path it did not touch
+        # keeps the checkout's own edit.
+        assert (sandbox.repo_root / "grader.py").read_text() == "score = 999\n"
+        assert (sandbox.repo_root / "raven/agent/loop.py").read_text() == "x = 2\n"
+
+    @pytest.mark.skipif(
+        sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+        reason="file permissions are POSIX-only, and root reads a 0o000 file",
+    )
+    def test_an_unreadable_file_is_not_emptied(self, sandbox):
+        # A file this process may not read must not be recorded as an empty
+        # one: the restore would write that emptiness back over it.
+        target = sandbox.repo_root / "grader.py"
+        target.write_text("score = 2\n")
+        target.chmod(0o000)
+        try:
+            token, content, mode = sandbox._path_state("grader.py")
+            before = sandbox._subject_state(capture=True)
+            after = sandbox._subject_state(capture=True)
+        finally:
+            target.chmod(0o644)
+        assert token == "unreadable"
+        assert content is None
+        assert mode is None
+        if before is not None and after is not None:
+            problems: list[str] = []
+            sandbox._restore_worktree(before, after, problems, [])
+            assert not problems
+        assert target.read_text() == "score = 2\n"
+
+    def test_a_file_created_during_the_command_is_named(self, sandbox):
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && touch appeared.txt"
+        with pytest.raises(RuntimeError, match="removed: appeared.txt"):
+            sandbox.bash(command)
+
+    def test_a_write_below_an_existing_untracked_directory_is_named(self, sandbox):
+        # An untracked directory is one collapsed entry, so the file the
+        # command adds inside it is not captured; the abort has to name the
+        # directory rather than report a clean undo.
+        artifacts = sandbox.repo_root / "artifacts"
+        artifacts.mkdir()
+        (artifacts / "keep.txt").write_text("keep\n")
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && printf 'poison\\n' > artifacts/new.txt"
+        with pytest.raises(RuntimeError, match="could not undo") as excinfo:
+            sandbox.bash(command)
+        assert "artifacts/" in str(excinfo.value)
+
+    def test_a_deleted_untracked_directory_is_named(self, sandbox):
+        artifacts = sandbox.repo_root / "artifacts"
+        artifacts.mkdir()
+        (artifacts / "keep.txt").write_text("keep\n")
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && rm -rf artifacts"
+        with pytest.raises(RuntimeError, match="could not undo") as excinfo:
+            sandbox.bash(command)
+        assert "artifacts/" in str(excinfo.value)
+
+    def test_a_stat_preserving_write_is_undone(self, sandbox):
+        # A copy that keeps the file's size and mtime leaves git's stat cache
+        # agreeing with the index. The restore has to act on the paths the
+        # guard caught, not on the paths git still calls dirty, and it has to
+        # write the index version itself: a checkout does nothing when git
+        # believes the file is unchanged.
+        target = sandbox.repo_root / "grader.py"
+        original = target.read_bytes()
+        payload = original.replace(b"1", b"2")
+        assert len(payload) == len(original)
+        index = sandbox.repo_root / ".git/index"
+        stat = target.stat()
+        # The index looks as old as the file, so git re-reads the content of
+        # the file instead of trusting its cached stat.
+        os.utime(index, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        before = sandbox._subject_state(capture=True)
+        # The command's write: the same size, the same mtime.
+        target.write_bytes(payload)
+        os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        after = sandbox._subject_state(capture=False)
+        assert before is not None and after is not None
+        assert before.differences(after) == ["tracked files"]
+        problems, removed = sandbox._restore_subject(before, after)
+        assert not problems
+        assert target.read_bytes() == original
+
+    def test_git_dir_in_the_environment_does_not_redirect_the_probe(self, sandbox, tmp_path, monkeypatch):
+        # GIT_DIR and its friends override -C: a harness that exports one of
+        # them would make every probe read a different repository than the
+        # subject checkout.
+        other = tmp_path / "other-repo"
+        other.mkdir()
+        (other / "other.py").write_text("value = 1\n")
+        for cmd in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-qm", "init"]):
+            subprocess.run(cmd, cwd=other, check=True, env=_ENV, capture_output=True)
+        # The context ends before the fixtures are torn down, so the teardown
+        # does not run with the variable still exported.
+        with monkeypatch.context() as patch:
+            patch.setenv("GIT_DIR", str(other / ".git"))
+            common = Path(sandbox._git("rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip())
+            assert common.resolve() == (sandbox.repo_root / ".git").resolve()
+            # A write to the subject's own configuration is still caught.
+            command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && git config core.pager evil-pager"
+            with pytest.raises(RuntimeError, match="subject checkout"):
+                sandbox.bash(command)
 
 
 class TestScopeRestore:

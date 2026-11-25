@@ -115,7 +115,7 @@ def test_the_render_boards_the_flow_plugin_and_the_modes(grounded, tmp_path):
     flow = data["plugins"]["config"]["research-flow"]
     assert flow["enabled"] is True and flow["version"].startswith("dr@")
     assert flow["stateRoot"] == str(tmp_path / "state" / "research_flow")
-    assert data["context"]["dropSegments"] == ["identity", "memory", "active_skills", "skills"]
+    assert data["context"]["dropSegments"] == ["identity", "memory", "active_skills"]
     modes = data["acp"]["modes"]
     assert list(modes) == ["medium", "high", "max"] and data["acp"]["defaultMode"] == "medium"
     assert modes["medium"]["overlay"]["drFlow"] == {}

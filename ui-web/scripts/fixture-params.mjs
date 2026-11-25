@@ -57,6 +57,7 @@ export const PARAMS = {
   'plug.retry': { name: 'github' },
   'plug.revoke': { name: 'websearch' },
   'plug.configure': { name: 'github', form: { token: 'x' } },
+  'agent_plugins.set_mcp': { name: 'sql-tools', enabled: true },
   'skills.manage': { action: 'list' },
   'subagents.list': { probe: false },
   'subagents.add': { preset: 'codex', name: 'codex' },

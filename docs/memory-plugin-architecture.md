@@ -610,11 +610,12 @@ default behind the file.
 | `real_llm` e2e (`test_everos_backend_e2e.py`) | 2 passed, 1 xfailed (best-effort skill-cluster check) — store→extract→recall + dual-track isolation |
 | roundtrip script (new import path) | OK; `users/user-raven/user.md` generated |
 
-Known unrelated: the full unit suite cannot run to completion in-process
-because `agent -m` calls an unconditional `os._exit(0)`
-(`agent_commands.py`, commit 33b4b0d9, to dodge a torch teardown
-segfault), which kills the in-process pytest CliRunner. Pre-existing,
-independent of this refactor.
+Known unrelated: at the time of this validation the full unit suite could not
+run to completion in-process because `agent -m` then called an unconditional
+`os._exit(0)` (in `agent_commands.py`, to dodge a torch teardown segfault),
+which killed the in-process pytest CliRunner. That hard exit has since been
+removed, so the limit no longer applies. Pre-existing, independent of this
+refactor.
 
 ---
 

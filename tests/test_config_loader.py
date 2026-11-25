@@ -1632,6 +1632,52 @@ def test_a_config_past_the_first_pin_floor_moves_only_the_pins_the_next_floor_re
     assert loader.drain_migration_notices() == []
 
 
+# The stock commands floor 19 retired: what the Claude Code and Codex shims
+# shipped between floor 15 and floor 19. pi-acp did not move.
+_THIRD_RETIRED = (
+    "npx -y @agentclientprotocol/claude-agent-acp@0.94.0",
+    "npx -y @agentclientprotocol/codex-acp@2.2.2",
+)
+
+
+def test_a_config_past_the_second_pin_floor_moves_only_the_pins_the_third_floor_retired(tmp_path: Path) -> None:
+    """The pins moved again for the reasons the table gives -- codex-acp 2.2.2's
+    bundled codex 0.160.1 sits below 0.166.0, where the catalogue starts offering
+    gpt-6.2 -- and a config already past floor 15 keeps an older stock pin its
+    owner put back. A config at the floor keeps even its stock row.
+
+    The floors are literals, for the reason
+    test_the_retired_deep_research_section_goes_and_its_disabled_entry_stays gives.
+    """
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.config import loader
+
+    claude, codex = (THIRD_PARTY_SUBAGENT_PRESETS[key]["command"] for key in ("claude_code", "codex"))
+    put_back = _codex_row(_SECOND_RETIRED[1], name="Codex-put-back")
+    loader._migration_notices.clear()
+    data = {
+        "subagents": {
+            "agents": [
+                _claude_row(_THIRD_RETIRED[0]),
+                _codex_row(_THIRD_RETIRED[1]),
+                json.loads(json.dumps(put_back)),
+            ]
+        }
+    }
+    loader._migrate_config(data, from_version=18)
+
+    assert data["subagents"]["agents"] == [_claude_row(claude), _codex_row(codex), put_back]
+    assert sorted(n.split("]")[0] for n in loader.drain_migration_notices()) == [
+        "Migrated: subagents.agents[Claude Code",
+        "Migrated: subagents.agents[Codex",
+    ]
+
+    at_floor = {"subagents": {"agents": [_codex_row(_THIRD_RETIRED[1])]}}
+    loader._migrate_config(at_floor, from_version=19)
+    assert at_floor == {"subagents": {"agents": [_codex_row(_THIRD_RETIRED[1])]}}
+    assert loader.drain_migration_notices() == []
+
+
 def test_a_pi_row_stays_on_the_adapter_its_pi_can_answer(tmp_path: Path) -> None:
     """pi-acp 0.0.34 asks pi for its model's thinking levels as a session opens, which a
     pi older than 0.81.0 refuses as an unknown command, so no session opens (measured
@@ -1877,6 +1923,165 @@ def test_a_file_past_the_first_pin_floor_has_its_second_floor_pins_carried_in_th
     assert [a.command for a in cfg.subagents.agents] == [codex]
     assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [_codex_row(codex)]
     assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+
+
+def test_a_file_past_the_second_pin_floor_has_its_third_floor_pins_carried_in_the_file(tmp_path: Path) -> None:
+    """The file pass carries the same rows the in-memory pass does, and stamps the
+    generation it passed.
+
+    The stamp is the literal generation this load must reach (21), not the floor
+    being exercised: a CURRENT left behind while a new floor is added would
+    stamp 19 here, and every later load would re-run the floor. The input side
+    of the same lesson is
+    ``test_a_stamped_seven_config_keeps_its_transition_row``.
+    """
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+
+    p = tmp_path / "config.json"
+    _write(p, {"subagents": {"agents": [_codex_row(_THIRD_RETIRED[1])]}})
+    _stamp_path(p).write_text(json.dumps({"version": 18}), encoding="utf-8")
+
+    drain_migration_notices()
+    cfg = load_config(p)
+
+    codex = THIRD_PARTY_SUBAGENT_PRESETS["codex"]["command"]
+    assert [a.command for a in cfg.subagents.agents] == [codex]
+    assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [_codex_row(codex)]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+
+
+def test_a_stamped_curator_config_still_loads_after_a_rollback(tmp_path: Path) -> None:
+    """A build from before the retirement reads generation 20 as current and keeps
+    writing ``strategy: curator`` and the flat keys back into the file.
+
+    The floor cannot help there -- it has already run -- so the load path strips
+    them again, or the whole config fails validation and the install cannot
+    start. Unlike the floor pass this rewrites nothing: the file keeps the keys
+    a pre-retirement build needs, and only this process's view is corrected.
+    """
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "context": {
+                "history": {"strategy": "curator"},
+                "curatorModel": "m",
+                "protectFirstN": 5,
+                "dropSegments": ["curator", "memory"],
+            }
+        },
+    )
+    _stamp_path(p).write_text(json.dumps({"version": 20}), encoding="utf-8")
+    before = p.read_text(encoding="utf-8")
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.context.history.strategy == "compacting"
+    assert cfg.context.drop_segments == ["compacting", "memory"], "the rename keeps its siblings"
+    assert not hasattr(cfg.context, "curator_model")
+    assert p.read_text(encoding="utf-8") == before, "the file serves a pre-retirement build; only this view moves"
+    assert drain_migration_notices() == [], "the operator was told once, when the floor ran"
+
+
+def test_the_retired_strategy_name_is_matched_without_case_or_padding(tmp_path: Path) -> None:
+    """A hand-edited file writes the name however the person typed it.
+
+    The comparison is normalized, so ``"  CURATOR "`` is the retired strategy
+    and moves to ``compacting``. Comparing the raw value leaves such a file
+    holding a strategy the registry refuses, which is a startup failure rather
+    than a migration.
+    """
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"strategy": "  CURATOR "}}})
+    _stamp_path(p).write_text(json.dumps({"version": 20}), encoding="utf-8")
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.context.history.strategy == "compacting"
+
+
+def test_the_file_pass_rewrites_a_curator_config_and_stamps_the_new_floor(tmp_path: Path) -> None:
+    """The in-memory migration alone leaves the file naming the retired strategy.
+
+    The file pass is what makes the rewrite stick: without it the floor's own
+    generation never lands on disk, every later load re-runs the strip, and a
+    pre-retirement build sharing the home keeps reading keys this build cannot
+    load. So the file itself has to come out clean and the stamp has to move.
+    """
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "context": {
+                "history": {"strategy": "curator"},
+                "curatorModel": "m",
+                "dropSegments": ["curator"],
+            }
+        },
+    )
+    _stamp_path(p).write_text(json.dumps({"version": 19}), encoding="utf-8")
+    drain_migration_notices()
+
+    load_config(p)
+
+    written = json.loads(p.read_text(encoding="utf-8"))
+    assert written["context"]["history"]["strategy"] == "compacting"
+    assert written["context"]["dropSegments"] == ["compacting"]
+    assert "curatorModel" not in written["context"]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    assert [n for n in drain_migration_notices() if "retired" in n], "the rewrite is announced once"
+
+
+def test_every_retired_flat_key_spelling_leaves_the_config(tmp_path: Path) -> None:
+    """Both spellings of all eight knobs, as a pre-retirement build could write them.
+
+    ``ContextConfig`` forbids unknown keys, so a spelling the migration misses
+    fails the whole load -- the file is unreadable rather than merely carrying
+    dead settings. The list is spelled out here rather than read from the
+    migration constant: a key dropped from that tuple has to fail this test,
+    not shrink it.
+    """
+    from raven.config.raven import load_raven_config
+
+    retired = {
+        "fastPathThreshold": 0.4,
+        "fast_path_threshold": 0.4,
+        "curatorModel": "m",
+        "curator_model": "m",
+        "curatorProvider": "p",
+        "curator_provider": "p",
+        "curatorTimeoutSeconds": 12.0,
+        "curator_timeout_seconds": 12.0,
+        "relevanceDecay": 0.9,
+        "relevance_decay": 0.9,
+        "relevanceReferenceBoost": 0.2,
+        "relevance_reference_boost": 0.2,
+        "protectFirstN": 4,
+        "protect_first_n": 4,
+        "archiveDir": "memory/.curator/archive",
+        "archive_dir": "memory/.curator/archive",
+    }
+    assert len(retired) == 16, "eight knobs, two spellings each"
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {**retired, "history": {"strategy": "curator"}}})
+    _stamp_path(p).write_text(json.dumps({"version": 19}), encoding="utf-8")
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.context.history.strategy == "compacting"
+    assert not retired.keys() & set(cfg.context.model_dump(by_alias=True))
+    written = json.loads(p.read_text(encoding="utf-8"))
+    assert not retired.keys() & set(written["context"])
+    notices = drain_migration_notices()
+    assert any(all(f"context.{key}" in n for key in retired) for n in notices), "one notice names every key it removed"
 
 
 def test_an_address_the_settings_dialog_only_showed_leaves_the_file_once(tmp_path: Path) -> None:
@@ -2224,6 +2429,49 @@ def test_the_verdict_switch_goes_under_its_snake_spelling_too() -> None:
     assert len(loader.drain_migration_notices()) == 1
 
 
+@pytest.mark.parametrize("retired", ["auto", "boxlite"])
+def test_a_boxlite_sandbox_block_is_rewritten_for_openshell_on_disk(tmp_path: Path, retired: str) -> None:
+    """The raw config has readers of its own (the raven_config tool, onboarding), so
+    the retired backend and its two keys leave the file, not only the loaded model;
+    the neighbours stay, the user is told once, and a second load changes nothing."""
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "tools": {
+                "sandbox": {"backend": retired, "debug": {"enabled": True}, "diskSizeGb": 20, "cpus": 4},
+                "restrictToWorkspace": True,
+            }
+        },
+    )
+    _stamp_path(p).write_text(json.dumps({"version": 15}), encoding="utf-8")
+
+    drain_migration_notices()
+    cfg = load_config(p)
+
+    assert cfg.tools.sandbox.backend == "openshell"
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["tools"] == {"sandbox": {"backend": "openshell", "cpus": 4}, "restrictToWorkspace": True}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    notices = drain_migration_notices()
+    assert len([n for n in notices if "tools.sandbox" in n]) == 3, notices
+
+    before = p.read_bytes()
+    load_config(p)
+    assert p.read_bytes() == before
+    assert drain_migration_notices() == []
+
+
+def test_a_current_sandbox_block_is_left_byte_for_byte() -> None:
+    from raven.config import loader
+
+    for block in ({"tools": {"sandbox": {"backend": "openshell", "gateway": "dev"}}}, {"tools": {}}, {}):
+        before = json.dumps(block)
+        assert loader._migrate_retired_sandbox_backend(block, notify=True) is False
+        assert json.dumps(block) == before
+    assert loader.drain_migration_notices() == []
+
+
 def test_the_verdict_switch_is_dropped_from_the_extension_blocks_in_memory_too(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2267,3 +2515,503 @@ def test_the_verdict_switch_set_again_after_its_floor_still_loads(tmp_path: Path
 
     assert cfg.subagent_dag.verdict_model == "cheap/tier"
     assert [n for n in drain_migration_notices() if "verdictEnabled" in n] == []
+
+
+def _sandbox_network_floor(
+    tmp_path: Path, sandbox: dict, permissions: dict | None = None
+) -> tuple[dict, list[str], object]:
+    p = tmp_path / "config.json"
+    body: dict = {"tools": {"sandbox": {"backend": "openshell", **sandbox}}}
+    if permissions is not None:
+        body["permissions"] = permissions
+    _write(p, body)
+    _stamp_path(p).write_text(json.dumps({"version": 16}), encoding="utf-8")
+    drain_migration_notices()
+    cfg = load_config(p)
+    return json.loads(p.read_text(encoding="utf-8")), drain_migration_notices(), cfg
+
+
+def test_allow_net_true_becomes_the_open_default(tmp_path: Path) -> None:
+    on_disk, notices, cfg = _sandbox_network_floor(tmp_path, {"allowNet": True})
+    assert "allowNet" not in on_disk["tools"]["sandbox"]
+    assert on_disk["permissions"]["network"] == {"default": "open", "rules": []}
+    assert cfg.permissions.network.default == "open"
+    assert len([n for n in notices if "allowNet" in n]) == 1
+
+
+def test_an_allowlist_keeps_its_hosts_and_its_two_ports(tmp_path: Path) -> None:
+    on_disk, _, cfg = _sandbox_network_floor(tmp_path, {"allowNet": ["pypi.org", "files.pythonhosted.org"]})
+    assert on_disk["permissions"]["network"]["default"] == "closed"
+    assert [(r["host"], r["ports"]) for r in on_disk["permissions"]["network"]["rules"]] == [
+        ("pypi.org", [80, 443]),
+        ("files.pythonhosted.org", [80, 443]),
+    ]
+    assert cfg.permissions.network.default == "closed"
+
+
+def test_old_allowlist_entries_no_rule_can_hold_are_left_out_and_named(tmp_path: Path) -> None:
+    """The old field took any string; a host and port becomes a rule for that port,
+    and what is still no host name is left out, which only narrows a closed list."""
+    entries = ["localhost:8080", "10.0.0.0/8", "*.io", "https://example.com", "pypi.org"]
+    on_disk, notices, cfg = _sandbox_network_floor(tmp_path, {"allowNet": entries})
+    assert [(r["host"], r["ports"]) for r in on_disk["permissions"]["network"]["rules"]] == [
+        ("localhost", [8080]),
+        ("pypi.org", [80, 443]),
+    ]
+    assert cfg.permissions.network.default == "closed"
+    (notice,) = [n for n in notices if "allowNet" in n]
+    for left_out in ("10.0.0.0/8", "*.io", "https://example.com"):
+        assert left_out in notice
+
+
+def test_a_star_list_keeps_the_open_default_and_adds_the_rest(tmp_path: Path) -> None:
+    on_disk, _, _ = _sandbox_network_floor(tmp_path, {"allow_net": ["*", "example.com"]})
+    assert on_disk["permissions"]["network"]["default"] == "open"
+    assert [r["host"] for r in on_disk["permissions"]["network"]["rules"]] == ["example.com"]
+    assert "allow_net" not in on_disk["tools"]["sandbox"]
+
+
+def test_an_existing_permissions_network_wins_over_the_old_key(tmp_path: Path) -> None:
+    on_disk, notices, _ = _sandbox_network_floor(
+        tmp_path, {"allowNet": True}, permissions={"network": {"default": "closed"}}
+    )
+    assert on_disk["permissions"]["network"] == {"default": "closed"}
+    assert "allowNet" not in on_disk["tools"]["sandbox"]
+    assert len([n for n in notices if "allowNet" in n]) == 1
+
+
+def test_the_sandbox_network_floor_runs_once_and_is_silent_the_second_time(tmp_path: Path) -> None:
+    _sandbox_network_floor(tmp_path, {"allowNet": False})
+    p = tmp_path / "config.json"
+    before = p.read_bytes()
+    load_config(p)
+    assert p.read_bytes() == before
+    assert drain_migration_notices() == []
+
+
+@pytest.mark.parametrize(
+    ("value", "default"),
+    [("false", "closed"), (0, "closed"), ("true", "open"), (5, "closed"), ({"hosts": []}, "closed"), (None, "closed")],
+)
+def test_an_allow_net_value_is_read_the_way_the_old_field_read_it(tmp_path: Path, value, default) -> None:
+    on_disk, _, cfg = _sandbox_network_floor(tmp_path, {"allowNet": value})
+    assert on_disk["permissions"]["network"]["default"] == default
+    assert cfg.permissions.network.default == default
+
+
+def test_a_returning_allow_net_is_still_read_into_permissions_in_memory(tmp_path: Path) -> None:
+    p = tmp_path / "config.json"
+    _write(p, {"tools": {"sandbox": {"backend": "openshell", "allowNet": False}}})
+    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
+    assert load_config(p).permissions.network.default == "closed"
+
+
+_PUSH_ERA_SKILL_FORGE = {
+    "discovery": "push",
+    "rewriteEnabled": False,
+    "rewriteMaxTokens": 4096,
+    "injectionMode": "summary",
+    "injectMax": 3,
+    "llmGateEnabled": True,
+    "llmGateMaxSelect": 1,
+    "llmGatePoolSize": 12,
+    "llmGateModel": "cheap/tier",
+    "llmGateProvider": "acme",
+    "llmGateTemperature": 0.2,
+    "llmGateMaxTokens": 2048,
+    "blocklist": ["noisy"],
+    "router": {"topK": 4, "rrfK": 20},
+}
+
+
+def test_the_push_discovery_settings_go_and_a_push_config_is_told(tmp_path: Path) -> None:
+    """Skills reach the model one way now, so the settings of the other way are
+    gone from the strict model. A config still carrying them would not load at
+    all; the floor drops every one of them, tells the user once, and leaves the
+    rest of the block alone."""
+    p = tmp_path / "config.json"
+    _write(p, {"skillForge": dict(_PUSH_ERA_SKILL_FORGE, router={"topK": 4, "rrfK": 20})})
+    _stamp_path(p).write_text(json.dumps({"version": 15}), encoding="utf-8")
+
+    drain_migration_notices()
+    load_config(p)
+
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["skillForge"] == {"blocklist": ["noisy"], "router": {"rrfK": 20}}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    notices = [n for n in drain_migration_notices() if "skillForge" in n]
+    assert len(notices) == 1, notices
+    assert "`skillForge.discovery`" in notices[0]
+    assert "read_skill" in notices[0], "a config that chose push hears how skills arrive now"
+
+    load_config(p)
+    assert drain_migration_notices() == []
+
+
+def test_the_push_discovery_settings_go_under_their_snake_spelling_too() -> None:
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    snake = {
+        "skill_forge": {
+            "discovery": "pull",
+            "rewrite_enabled": True,
+            "rewrite_max_tokens": 100,
+            "injection_mode": "full_body",
+            "inject_max": 2,
+            "llm_gate_enabled": False,
+            "llm_gate_max_select": 1,
+            "llm_gate_pool_size": 12,
+            "llm_gate_model": "cheap/tier",
+            "llm_gate_provider": "acme",
+            "llm_gate_temperature": 0.2,
+            "llm_gate_max_tokens": 10,
+            "always_max": 4,
+            "router": {"top_k": 3, "rrf_k": 20},
+        }
+    }
+    assert loader._migrate_retired_push_discovery(snake, notify=True) is True
+    assert snake == {"skill_forge": {"always_max": 4, "router": {"rrf_k": 20}}}
+    notices = loader.drain_migration_notices()
+    assert len(notices) == 1, notices
+    assert "`skill_forge.llm_gate_model`" in notices[0]
+    assert "read_skill" not in notices[0], "a pull config changes nothing the user chose"
+
+
+def test_a_config_without_push_settings_is_left_alone() -> None:
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    untouched = {"skillForge": {"blocklist": [], "router": {"rrfK": 20}}}
+    mangled = {"skillForge": ["not", "a", "table"], "skill_forge": {"router": "nor this"}}
+    assert loader._migrate_retired_push_discovery(untouched, notify=True) is False
+    assert loader._migrate_retired_push_discovery(mangled, notify=True) is False
+    assert untouched == {"skillForge": {"blocklist": [], "router": {"rrfK": 20}}}
+    assert loader.drain_migration_notices() == []
+
+
+def test_the_push_discovery_settings_are_dropped_from_the_extension_block_in_memory_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`load_raven_config` reads the file again for the extension blocks. Its pass
+    has to drop the retired settings itself: the file may still carry them, and
+    `SkillForgeConfig` forbids unknown keys, so a pass that only persisted would
+    raise instead of loading."""
+    from raven.config import loader
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"skillForge": dict(_PUSH_ERA_SKILL_FORGE, router={"topK": 4, "rrfK": 20})})
+    _stamp_path(p).write_text(json.dumps({"version": 15}), encoding="utf-8")
+    monkeypatch.setattr(loader, "_persist_migrations", lambda *args, **kwargs: None)
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.skill_forge.blocklist == ["noisy"]
+    assert cfg.skill_forge.router.rrf_k == 20
+    assert json.loads(p.read_text(encoding="utf-8"))["skillForge"]["discovery"] == "push", (
+        "the disk rewrite was switched off, so a load that succeeded proves the in-memory strip"
+    )
+    assert len([n for n in drain_migration_notices() if "skillForge" in n]) == 1
+
+
+def test_push_discovery_set_again_after_its_floor_still_loads(tmp_path: Path) -> None:
+    """A build from before this floor reads the stamp as current, keeps the keys
+    and accepts them, so a rollback or a second install sharing the home can
+    write them back. The strict model would then refuse the whole config, so
+    the strip holds on every load, without a second notice."""
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"skillForge": {"discovery": "push", "llmGateModel": "cheap/tier", "blocklist": ["noisy"]}})
+    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.skill_forge.blocklist == ["noisy"]
+    assert [n for n in drain_migration_notices() if "skillForge" in n] == []
+
+
+# ---------------------------------------------------------------------------
+# The compaction shares are configurable; only their defaults moved
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("retain", "tail"), [(0.30, 0.20), (0.40, 0.25), (0.40, 0.30), (0.20, 0.15), (0.10, 0.09)])
+def test_an_explicit_pair_is_honored(tmp_path: Path, retain: float, tail: float) -> None:
+    """A config that names both shares loads them unchanged. Only the defaults
+    moved; the two keys remain the operator's, and a pair that is valid
+    against its own retain -- including a tail at or above the new default --
+    is never second-guessed."""
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"retainRatio": retain, "tailKeepRatio": tail}}}})
+    before = p.read_bytes()
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (retain, tail)
+    assert p.read_bytes() == before, "an explicit pair is never rewritten"
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    assert drain_migration_notices() == []
+
+
+def test_a_retain_only_override_keeps_the_default_tail(tmp_path: Path) -> None:
+    """The retain key is honored and the absent tail inherits the new default."""
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"retainRatio": 0.30}}}})
+    before = p.read_bytes()
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (0.30, 0.04)
+    assert p.read_bytes() == before
+    assert drain_migration_notices() == []
+
+
+def test_a_config_with_no_shares_loads_the_new_defaults(tmp_path: Path) -> None:
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"tailKeepMessages": 4}}}})
+    before = p.read_bytes()
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (0.10, 0.04)
+    assert p.read_bytes() == before
+    assert drain_migration_notices() == []
+
+
+@pytest.mark.parametrize("tail", [0.25, 0.20, 0.10, 0.39, 0.50])
+def test_a_tail_at_or_above_the_new_retain_default_is_lowered(tmp_path: Path, tail: float) -> None:
+    """A tail the file set at or above the new implicit 0.10 is lowered to the
+    shipped share.
+
+    ``ContextCompactionConfig`` requires the tail share to sit strictly below
+    the retain ratio. Before this release retain defaulted to 0.40 and now
+    defaults to 0.10, so a file that customized only the tail -- values in
+    ``[0.10, 0.40)`` were valid before -- would fail startup validation. The
+    file carries no retain choice to preserve, so the tail is lowered to the
+    shipped share instead of resurrecting the old 0.40 target.
+    """
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"tailKeepRatio": tail}}}})
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (0.10, 0.04)
+    written = json.loads(p.read_text(encoding="utf-8"))
+    assert written["context"]["history"]["compacting"] == {"tailKeepRatio": 0.04}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    assert len([n for n in drain_migration_notices() if "tailKeepRatio" in n]) == 1
+
+    before = p.read_bytes()
+    load_raven_config(p)
+    assert drain_migration_notices() == [], "the repair runs once"
+    assert p.read_bytes() == before, "the lowered value is stable"
+
+
+@pytest.mark.parametrize("tail", [0.09, 0.06, 0.04])
+def test_a_tail_below_the_new_retain_default_is_kept(tmp_path: Path, tail: float) -> None:
+    """A tail the file set below the new implicit 0.10 is left alone, and the
+    file gets the new retain default -- not the old implicit 0.40."""
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"tailKeepRatio": tail}}}})
+    before = p.read_bytes()
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (0.10, tail)
+    assert p.read_bytes() == before, "a valid tail is never rewritten"
+    assert drain_migration_notices() == []
+
+
+def test_a_tail_only_config_in_snake_case_is_lowered_in_place(tmp_path: Path) -> None:
+    """The writer resolves either spelling, so the lowered value goes back into
+    the key the file already uses rather than introducing a second one."""
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"tail_keep_ratio": 0.25}}}})
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.context.history.compacting.retain_ratio == 0.10
+    assert cfg.context.history.compacting.tail_keep_ratio == 0.04
+    written = json.loads(p.read_text(encoding="utf-8"))
+    assert written["context"]["history"]["compacting"] == {"tail_keep_ratio": 0.04}
+
+
+def test_a_large_tail_loads_on_the_extension_pass_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A read-only home must not turn the repair into a startup failure.
+
+    ``load_raven_config`` reads the file again for the extension blocks after
+    the base loader's disk rewrite. With that rewrite switched off, the
+    in-memory pass is the only thing that can make the file load.
+    """
+    from raven.config import loader
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"tailKeepRatio": 0.25}}}})
+    monkeypatch.setattr(loader, "_persist_migrations", lambda *args, **kwargs: None)
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (0.10, 0.04)
+    written = json.loads(p.read_text(encoding="utf-8"))
+    assert written["context"]["history"]["compacting"] == {"tailKeepRatio": 0.25}, "the disk pass was off"
+    assert len([n for n in drain_migration_notices() if "tailKeepRatio" in n]) == 1
+
+
+@pytest.mark.parametrize("tail", [0.05, 0.06])
+def test_a_current_stamp_tail_only_config_keeps_the_new_default(tmp_path: Path, tail: float) -> None:
+    """A partial config created after the release inherits the new default.
+
+    Its tail is below the new implicit retain, so nothing needs repairing and
+    the file is left alone.
+    """
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"tailKeepRatio": tail}}}})
+    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
+    before = p.read_bytes()
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (0.10, tail)
+    assert p.read_bytes() == before, "a valid post-migration file is not rewritten"
+    assert drain_migration_notices() == []
+
+
+def test_a_current_stamp_tail_above_the_new_default_is_lowered_too(tmp_path: Path) -> None:
+    """The relation is an invariant, not a one-time migration: a stamped
+    config can come back with a tail hand-edited past the default, and the
+    next load lowers it and rewrites the file."""
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"tailKeepRatio": 0.25}}}})
+    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (0.10, 0.04)
+    written = json.loads(p.read_text(encoding="utf-8"))
+    assert written["context"]["history"]["compacting"] == {"tailKeepRatio": 0.04}
+    assert len([n for n in drain_migration_notices() if "tailKeepRatio" in n]) == 1
+
+
+@pytest.mark.parametrize(
+    "compacting",
+    [{"retainRatio": 0.10, "tailKeepRatio": 0.50}, {"retainRatio": 0.30, "tailKeepRatio": 0.30}],
+)
+def test_an_inverted_pair_in_a_file_is_repaired(tmp_path: Path, compacting: dict) -> None:
+    """A tail that is not below its own retain cannot be compacted into the
+    target, so it is lowered to the shipped share and the pair loads."""
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": compacting}}})
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (compacting["retainRatio"], 0.04)
+
+
+@pytest.mark.parametrize(
+    "compacting",
+    [
+        {"retainRatio": -0.1},
+        # The shipped tail share is not below this retain, so lowering it could
+        # not repair the pair; that stays a startup failure.
+        {"retainRatio": 0.03, "tailKeepRatio": 0.05},
+    ],
+)
+def test_an_invalid_share_in_a_file_is_refused(tmp_path: Path, compacting: dict) -> None:
+    """Out-of-domain values, and a pair the tail repair cannot fix, fail
+    startup rather than being silently rewritten into something else."""
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": compacting}}})
+    drain_migration_notices()
+
+    with pytest.raises(ValueError, match="context.history.compacting"):
+        load_raven_config(p)
+
+
+def test_a_programmatic_inverted_pair_is_still_refused() -> None:
+    """The loader repairs a file; direct construction keeps the model's own
+    check, so a caller passing an impossible pair still sees the mistake."""
+    from raven.config.raven import ContextCompactionConfig
+
+    with pytest.raises(ValueError, match="tailKeepRatio"):
+        ContextCompactionConfig(tail_keep_ratio=0.25)
+
+
+def test_the_lowering_follows_the_shipped_retain_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The threshold is the shipped retain default, not a second literal.
+
+    Moving the default to 0.06 moves the pair the repair refuses with it: a
+    tail of 0.07 is then lowered, where the old 0.10 threshold would have
+    kept it.
+    """
+    from raven.config import raven as raven_config
+    from raven.config.raven import load_raven_config
+
+    monkeypatch.setattr(raven_config, "SHIPPED_COMPACTION_RETAIN_RATIO", 0.06)
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"tailKeepRatio": 0.07}}}})
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (0.10, 0.04)
+
+
+def test_a_config_already_carrying_the_default_pair_is_left_alone(tmp_path: Path) -> None:
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"context": {"history": {"compacting": {"retainRatio": 0.10, "tailKeepRatio": 0.04}}}})
+    before = p.read_bytes()
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    loaded = cfg.context.history.compacting
+    assert (loaded.retain_ratio, loaded.tail_keep_ratio) == (0.10, 0.04)
+    assert p.read_bytes() == before
+    assert drain_migration_notices() == []

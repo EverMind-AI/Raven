@@ -291,6 +291,29 @@ describe('the task board', () => {
       .toEqual([['Which fix?', 1], ['Clear it too?', 1]])
   })
 
+  it('draws a question s Ignore as an icon button, keeping its accessible name', async () => {
+    board.groups = [asking(group('a', NOW - 3e6, 'needs_you'), ['Which fix?'])]
+    await draw()
+
+    const label = 'gui.tasks.board.ignore_question {"n":1}'
+    const ignore = document.querySelector('.tkq .tkqignore') as HTMLButtonElement
+    expect(ignore.textContent).toBe('')
+    expect(ignore.querySelector('svg')).not.toBeNull()
+    expect(ignore.getAttribute('aria-label')).toBe(label)
+    expect(ignore.getAttribute('title')).toBe(label)
+  })
+
+  it('draws the whole-group Ignore as the same icon button', async () => {
+    board.groups = [group('a', NOW - 3e6, 'needs_you')]
+    await draw()
+
+    const ignore = document.querySelector('.tkaskbtn[data-kind="ignore"]') as HTMLButtonElement
+    expect(ignore.textContent).toBe('')
+    expect(ignore.querySelector('svg')).not.toBeNull()
+    expect(ignore.getAttribute('aria-label')).toBe('gui.tasks.board.ignore')
+    expect(ignore.getAttribute('title')).toBe('gui.tasks.board.ignore')
+  })
+
   it('an Ignore sets its one question aside, and the answer draft drops it too', async () => {
     board.groups = [asking(group('a', NOW - 3e6, 'needs_you'), ['Which fix?', 'Clear it too?'])]
     await draw()

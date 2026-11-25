@@ -4,7 +4,7 @@ import { readMessage } from '../../lib/attachments'
 import { formatDuration } from '../../lib/duration'
 import * as hunks from '../../lib/hunks'
 import { readingImported } from '../../lib/imported'
-import { md } from '../../lib/prose'
+import { md, mdBlocks as blocksOf } from '../../lib/prose'
 import { ds, sources } from '../../state/sources'
 import { show as toast } from '../../state/toast'
 import { pane } from '../../state/wsPane'
@@ -53,6 +53,7 @@ export const deliveriesOf = (lane: Lane, turn: number): DeliveryRow[] =>
    the shell bridge and back into it while hiding the
    transcript from anyone auditing md()'s callers. */
 export const mdHtml = (src: string): string => md(src)
+export const mdBlocks = (src: string): string[] => blocksOf(src)
 
 /* The fence lines a dispatch carries around an upstream node's output, set
    apart so the reader sees where the injected text starts and stops. Only the
@@ -556,12 +557,12 @@ const deliveredStatus = (v: unknown): DeliveredData['status'] =>
    then there is nothing to fold open. Absent is a server that never sent it. */
 export function delivered(lane: Lane, p: {
   label: string; isDag: boolean; status?: string; open: () => void; body?: string; output?: string; outputTruncated?: boolean | null
-  at?: number; turnId?: string; runId?: string | null; nodeId?: string | null
+  at?: number; turnId?: string; runId?: string | null; nodeId?: string | null; agent?: string | null
 }): void {
   const said = typeof p.output === 'string'
   push(lane, {
     v: 0, id: nextId(), kind: 'sdlv', at: p.at ?? Date.now(), ...(p.turnId ? { turnId: p.turnId } : {}),
-    label: p.label, isDag: p.isDag, runId: String(p.runId || ''), nodeId: String(p.nodeId || ''),
+    label: p.label, isDag: p.isDag, runId: String(p.runId || ''), nodeId: String(p.nodeId || ''), agent: String(p.agent || ''),
     status: deliveredStatus(p.status), open: p.open,
     body: said ? (p.output as string).trim() : defence(p.body || ''), said, shown: false,
     outputTruncated: said && p.outputTruncated === true,
@@ -1901,6 +1902,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
           isDag,
           runId: d.run_id,
           nodeId: d.node_id,
+          agent: d.agent,
           at: turnAt,
           status: d.status,
           body: m.text || '',

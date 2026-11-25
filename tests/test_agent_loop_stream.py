@@ -17,7 +17,7 @@ import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.recovery import RecoveryLimits
-from raven.providers.base import ChatDelta, ErrorClassification, LLMProvider, LLMResponse
+from raven.providers.base import CallRecord, ChatDelta, ErrorClassification, LLMProvider, LLMResponse
 from raven.providers.rates import DEFAULT_MAX_OUTPUT_TOKENS, resolve_max_output_tokens
 from raven.providers.streaming import STREAM_CUT
 
@@ -42,6 +42,13 @@ class _FakeProvider:
 
     def emits_unparsed_reasoning(self) -> bool:
         return self._emits_unparsed_reasoning
+
+
+#: A response header, so its length is the upstream's to choose -- and the
+#: failure sentence it lands in is bounded. This is past every cap the runtime
+#: applies to it, so a test that keeps the recommendation readable with this
+#: header has proved the ordering, not a lucky length.
+_LONG_MEDIA_TYPE = "application/vnd.some-gateway.envelope+json; charset=utf-8; profile=" + "x" * 230
 
 
 def _bind_helper(provider: _FakeProvider):
@@ -790,6 +797,96 @@ async def test_a_stream_cut_before_its_terminal_chunk_is_a_transport_failure() -
     assert "cut off by the connection" in (response.content or "")
     assert response.tool_calls == []
     assert any("without the upstream's terminal chunk" in line and "20 chars of reasoning" in line for line in logged)
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"llm_provider-content-type": "application/json"},
+        {"Content-Type": "application/json; charset=utf-8"},
+        {"llm_provider-content-type": "application/problem+json"},
+        {
+            "llm_provider-server": "nginx",
+            "llm_provider-x-request-id": "req-1",
+            "llm_provider-content-type": "application/json; charset=utf-8",
+        },
+        {"llm_provider-content-type": _LONG_MEDIA_TYPE},
+    ],
+    ids=[
+        "library-prefixed",
+        "bare-header-with-charset",
+        "structured-json-suffix",
+        "content-type-not-first",
+        "long-media-type",
+    ],
+)
+async def test_a_cut_stream_answered_by_a_json_document_is_a_protocol_mismatch(headers: dict[str, str]) -> None:
+    """A stream request that a JSON document answered was never treated as a
+    stream: the endpoint does not speak the provider's protocol, and the account
+    says so instead of blaming the connection -- the fact the person holding the
+    config can act on.
+
+    The verdict is not retryable and the account says nothing was lost: the
+    endpoint answered before a single event arrived, so asking again spends the
+    ladder's waits to be refused identically. ``should_fallback`` stays, because
+    another model may speak the endpoint.
+
+    The recommendation is asserted on the content that is actually handed back.
+    It opens the sentence because ``canonical_llm_error`` bounds the detail at
+    ``LLM_ERROR_DETAIL_MAX``, and the media type it echoes is a response header
+    -- the long case proves a header cannot push the recommendation past that
+    bound, so the whole sentence is asserted, not just its opening."""
+    provider = _FakeProvider(
+        [
+            ChatDelta(
+                content=None,
+                finish_reason="stop",
+                finish_synthesized=True,
+                call_record=CallRecord(headers=headers),
+            )
+        ]
+    )
+    call = _bind_helper(provider)
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=None)
+
+    content = response.content or ""
+    assert response.finish_reason == "error"
+    assert response.error_classification is not None
+    assert response.error_classification.category == "protocol_mismatch"
+    assert response.error_classification.retryable is False
+    assert response.error_classification.should_fallback is True
+    assert content.startswith("Error calling LLM (protocol_mismatch): check this provider's protocol and base URL")
+    assert content.endswith("not an event stream"), f"the account was cut: {content!r}"
+    assert "reasoning were lost" not in content
+    assert "cut off by the connection" not in content
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [{"llm_provider-content-type": "text/event-stream; charset=utf-8"}, {"llm_provider-server": "nginx"}, {}],
+)
+async def test_a_cut_stream_no_document_answered_stays_a_transport_failure(headers: dict[str, str]) -> None:
+    """The boundary of the mismatch verdict: only a document answer names the
+    protocol. A stream that came back as an event stream and still delivered
+    nothing, or one whose headers were not recorded, was cut by the connection."""
+    provider = _FakeProvider(
+        [
+            ChatDelta(
+                content=None,
+                finish_reason="stop",
+                finish_synthesized=True,
+                call_record=CallRecord(headers=headers),
+            )
+        ]
+    )
+    call = _bind_helper(provider)
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=None)
+
+    assert response.error_classification is not None
+    assert response.error_classification.category == "network"
+    assert "cut off by the connection" in (response.content or "")
 
 
 async def test_a_cut_stream_that_showed_its_reasoning_is_not_asked_again() -> None:

@@ -18,6 +18,13 @@ afterEach(() => {
 const tabs = (): HTMLButtonElement[] => [...document.querySelectorAll<HTMLButtonElement>('.hub-head-tab')]
 
 describe('the hub header', () => {
+  it('starts the page with the title row every module page starts with', () => {
+    render(<HubHead current="agents" />)
+    const bar = document.querySelector('.page-bar')!
+    expect(bar.querySelector('.page-bar-title')!.textContent).toBe('gui.nav.hub')
+    expect(bar.nextElementSibling?.className).toBe('hub-head')
+  })
+
   it('names the three modules and marks the one on screen', () => {
     render(<HubHead current="channels" />)
     expect(tabs().map((b) => b.textContent)).toEqual(['gui.hub.agents', 'gui.hub.channels', 'gui.hub.machines'])

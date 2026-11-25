@@ -606,15 +606,13 @@ def test_the_render_loads_through_trunks_own_loader(grounded):
         "tools": {
             "enabled": True,
             "restrictToWorkspace": False,
-            "exec": {"maxTimeout": 1200, "timeout": 600, "pathAppend": "", "sandboxBackend": "none"},
+            "exec": {"maxTimeout": 600, "timeout": 120, "pathAppend": "", "sandboxBackend": "none"},
         },
         "projectFiles": ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"],
     }
     # No skillForge block in the product config (fleet parity): the trunk
-    # defaults land. Both knobs act only under push discovery, and this
-    # product runs pull, so neither buys a per-turn LLM call here.
-    assert extensions.skill_forge.rewrite_enabled is True
-    assert extensions.skill_forge.llm_gate_enabled is True
+    # defaults land whole.
+    assert extensions.skill_forge.model_dump() == type(extensions.skill_forge)().model_dump()
 
 
 def test_no_llm_key_anywhere_refuses_before_serving(grounded, monkeypatch):
@@ -761,7 +759,7 @@ def test_the_cli_render_enables_the_flow_beside_the_conversation_state(cli_run, 
         "tools": {
             "enabled": True,
             "restrictToWorkspace": False,
-            "exec": {"maxTimeout": 1200, "timeout": 600, "pathAppend": "", "sandboxBackend": "none"},
+            "exec": {"maxTimeout": 600, "timeout": 120, "pathAppend": "", "sandboxBackend": "none"},
         },
         "projectFiles": ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"],
     }
@@ -1148,6 +1146,34 @@ def test_the_acp_render_pins_the_ask_tier(grounded):
 
 
 @pytest.mark.parametrize(
+    ("hosting", "host_permissions", "expected"),
+    [
+        ("acp", {"mode": "full"}, "ask"),
+        ("acp", {"mode": "smart", "tools": {"exec": {"git *": "allow"}}}, "ask"),
+        ("one-shot", {"mode": "ask"}, "full"),
+        ("one-shot", {"tools": {"exec": {"git *": "allow"}}}, "full"),
+    ],
+)
+def test_the_hosting_mode_holds_under_a_host_permission_set(grounded, tmp_path, hosting, host_permissions, expected):
+    """The product runs under the host's tool and network rules, but the mode its
+    hosting pins is the launcher's: the one-shot turn has nobody to ask, and the
+    editor user sees each write before it lands, whatever mode the host runs at."""
+    from raven.config.loader import load_config
+
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(json.dumps({"permissions": host_permissions}), encoding="utf-8")
+    if hosting == "acp":
+        rendered = _render(grounded)
+    else:
+        rendered = grounded.render_config(RUN_PY.parent / "config.json", tmp_path / "cli", unattended=True)
+    permissions = load_config(rendered).permissions
+    assert permissions.mode == expected
+    if "tools" in host_permissions:
+        assert permissions.tools["exec"] == {"git *": "allow"}, "the host's tool rules still reach the product"
+
+
+@pytest.mark.parametrize(
     ("host_rule", "source"),
     [
         ({"permissions": {"tools": {"exec": {"curl *": "deny"}}}}, "user_deny"),
@@ -1491,7 +1517,45 @@ def test_rerendered_exec_settings_follow_the_host_and_preserve_its_sandbox(groun
     assert plugin.make_exec(ctx) is None, "a sandboxed shell must not be replaced with a host executor"
     assert section["tools"]["exec"]["timeout"] == 23
     assert section["tools"]["exec"]["pathAppend"] == "/test/tools"
-    assert section["tools"]["exec"]["maxTimeout"] == 1200
+    assert section["tools"]["exec"]["maxTimeout"] == 600
+
+
+@pytest.mark.parametrize("configured", [0, -5])
+def test_a_non_positive_host_timeout_reaches_the_shell_as_no_setting(grounded, tmp_path, configured):
+    """The live reader takes a timeout that is not a positive whole number as no
+    answer. Forwarded raw, a zero bounded every command at zero seconds, and the
+    shell reported a command it never gave time to run as still running."""
+    first = grounded.render_config(RUN_PY.parent / "config.json", tmp_path / "first")
+    config = json.loads(first.read_text())
+    config["tools"]["exec"]["timeout"] = configured
+    source = tmp_path / "custom.json"
+    source.write_text(json.dumps(config))
+    rendered = json.loads(grounded.render_config(source, tmp_path / "second").read_text())
+    section = rendered["plugins"]["config"]["code-flow"]
+    from code_flow.tools import plugin
+
+    from raven.plugins.context import PluginContext, ServiceLocator
+
+    assert section["tools"]["exec"]["timeout"] == 60, "the same as a host config that names no timeout"
+    tool = plugin.make_exec(PluginContext(config=section, services=ServiceLocator(tmp_path / "second", "u", "a")))
+    assert tool is not None and tool._timeout == 60
+
+
+@pytest.mark.parametrize(("platform", "expected"), [("linux", "openshell"), ("win32", "none")])
+def test_the_shell_slice_names_the_sandbox_the_rendered_config_runs_in(
+    grounded, tmp_path, monkeypatch, platform, expected
+):
+    """The rendered config takes the host's OpenShell sandbox where the platform runs
+    one; the shell slice must say the same, or code-flow serves a host shell beside it."""
+    import sys
+
+    monkeypatch.setattr(sys, "platform", platform)
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(json.dumps({"tools": {"sandbox": {"backend": "auto"}}}))
+    rendered = json.loads(grounded.render_config(RUN_PY.parent / "config.json", tmp_path / "part").read_text())
+    assert rendered["tools"]["sandbox"].get("backend", "none") == expected
+    assert rendered["plugins"]["config"]["code-flow"]["tools"]["exec"]["sandboxBackend"] == expected
 
 
 def test_a_pristine_legacy_tool_guide_is_migrated_in_existing_partitions(grounded, tmp_path):
@@ -1631,3 +1695,107 @@ def test_rendered_guidance_conditions_product_only_tools_on_the_actual_tool_list
     assert "You have access to the todo tool" not in system
     assert "Only use tools and parameters exposed in the current function schemas" in system
     assert "otherwise use find" in system
+
+
+def test_a_task_deadline_reaches_the_code_flow_as_a_turn_clock(grounded, tmp_path):
+    """``--timeout`` becomes the loop's own wall clock, with the wrap-up kept.
+
+    Harbor kills the process at the task budget. Handing the loop that budget
+    minus a wrap-up margin lets it stop on its own terms -- finish the step,
+    synthesize the answer -- instead of being killed mid-call with nothing
+    committed. ``0`` means no deadline and leaves the config alone.
+    """
+    rendered = json.loads(
+        grounded.render_config(
+            RUN_PY.parent / "config.json",
+            tmp_path / "deadline",
+            unattended=True,
+            timeout=900,
+        ).read_text()
+    )
+    slice_ = rendered["plugins"]["config"]["code-flow"]
+    assert slice_["wallClockSeconds"] == 780, "900 seconds minus a 120 second wrap-up margin"
+
+    rendered = json.loads(
+        grounded.render_config(
+            RUN_PY.parent / "config.json",
+            tmp_path / "no-deadline",
+            unattended=True,
+            timeout=0,
+        ).read_text()
+    )
+    assert "wallClockSeconds" not in rendered["plugins"]["config"]["code-flow"]
+
+    short = json.loads(
+        grounded.render_config(
+            RUN_PY.parent / "config.json",
+            tmp_path / "short",
+            unattended=True,
+            timeout=30,
+        ).read_text()
+    )
+    assert short["plugins"]["config"]["code-flow"]["wallClockSeconds"] >= 10, "never a negative clock"
+
+
+def test_the_timeout_flag_defaults_to_no_deadline(grounded, monkeypatch):
+    """``--timeout`` absent is 0, not a hidden clock.
+
+    The shipped config asks for no iteration cap. A nonzero default would
+    silently put every CLI turn back on a wall clock the caller never named.
+    """
+    seen: dict[str, int] = {}
+
+    def _capture(args):
+        seen["timeout"] = args.timeout
+        return 0
+
+    monkeypatch.setattr(grounded, "run_task", _capture)
+    monkeypatch.setattr(sys, "argv", ["run.py", "--task", "do the thing"])
+
+    assert grounded.main() == 0
+    assert seen["timeout"] == 0
+
+
+def test_the_rendered_acp_config_asks_for_no_cap_and_declares_no_clock(grounded):
+    """ACP is the hosting the roster starts, and it passes no deadline.
+
+    So the shipped config must ask for no iteration cap, and the ACP render
+    must cast no wall clock: a turn it serves has neither a clock nor a cap,
+    by design. The rendered pair is what the engine actually reads.
+    """
+    data = json.loads(_render(grounded).read_text())
+    assert data["agents"]["defaults"]["maxToolIterations"] is None, "the shipped config asks for no cap"
+    assert "wallClockSeconds" not in data["plugins"]["config"]["code-flow"], "ACP has no deadline to render"
+
+
+def test_run_task_renders_its_timeout_into_the_turn_clock(grounded, tmp_path, monkeypatch):
+    """The one line that connects ``--timeout`` to the loop's clock.
+
+    ``run_task`` renders the config the child agent process reads; dropping
+    the timeout argument there silently leaves every CLI run clockless while
+    the render-level tests still pass. Exercised through ``run_task`` itself,
+    with only the child process faked.
+    """
+    seen: dict = {}
+
+    def _capture(argv, **_kwargs):
+        config_path = Path(argv[argv.index("--config") + 1])
+        seen["config"] = json.loads(config_path.read_text(encoding="utf-8"))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(grounded.subprocess, "run", _capture)
+    args = SimpleNamespace(
+        prompt_file=None,
+        task="do the thing",
+        session="deadline",
+        job=None,
+        workspace=str(tmp_path / "ws"),
+        config=str(RUN_PY.parent / "config.json"),
+        verbose=False,
+        timeout=900,
+        keep_going=True,
+    )
+
+    grounded.run_task(args)
+
+    assert seen["config"]["plugins"]["config"]["code-flow"]["wallClockSeconds"] == 780

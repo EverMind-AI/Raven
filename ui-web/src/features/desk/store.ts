@@ -143,7 +143,9 @@ const TABS: readonly DeskTab[] = ['deliverables', 'tasks', 'diff']
 /* What each tab is counting, as the identity of every item in it -- read from
    the source that tab draws from, so "what is in it" and "what is new in it"
    can never disagree: the changes this session made, the files it delivered,
-   the background work it started.
+   the background work it started. The badge and the mark both read
+   `seen.tracked` of this list -- the slice the record can speak for -- so the
+   agreement holds at any length.
 
    Each id is the key that source already uses for the item, so a door that
    opens ONE thing can name the same thing this does: a change is its path and
@@ -404,7 +406,9 @@ function addPane(pane: DeskPane, supersedes?: string | null): void {
 export function unseen(tab: DeskTab): number {
   if (showing() && get().tab === tab) return 0
   const known = seen.of_(tab)
-  return idsOf(tab).filter((id) => !known.has(id)).length
+  /* The same slice `seeTab` marks, never the whole tab: a badge that counts
+     what the record cannot hold is a badge that never reaches zero. */
+  return seen.tracked(idsOf(tab)).filter((id) => !known.has(id)).length
 }
 
 /* Everything the desk has to say, for the launcher: while the palette is down
@@ -425,6 +429,11 @@ export const working = (): boolean =>
    being new, so the doors say it here rather than each tab inventing its own
    idea of when to stop counting. */
 export function readItem(tab: DeskTab, id: string): void {
+  const tracked = seen.tracked(idsOf(tab))
+  /* Past that slice an id is not counted, and recording it would only evict one
+     that is -- opening an old item must leave the badge exactly where it was. A
+     tab short of the cap has no overflow, so every id in it is still marked. */
+  if (tracked.length === seen.CAP && !tracked.includes(id)) return
   if (seen.mark(tab, [id])) set({})
 }
 
@@ -435,7 +444,7 @@ export function seeTab(tab: DeskTab): void {
   /* `update`, not `commit`: the seen record keeps its own per-conversation
      store (seen.ts), and `remember()` would republish the whole desk note from
      whatever is on screen at that instant -- during a resume, nothing. */
-  if (seen.mark(tab, idsOf(tab))) set({})
+  if (seen.mark(tab, seen.tracked(idsOf(tab)))) set({})
 }
 
 /* Whether the palette is on screen, which is not the same question as whether

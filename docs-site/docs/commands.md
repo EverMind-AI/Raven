@@ -33,7 +33,6 @@ lists its subcommands and options.
 | `raven cron` | Create, inspect, run, enable, disable, or delete scheduled jobs |
 | `raven sentinel` | Configure proactivity and inspect attention, routines, decisions, and nudges |
 | `raven ops connection` | Register and list machines; `add` probes by default, while `doctor` validates registry entries |
-| `raven sandbox` | List sandbox VMs, run commands, or open a shell; requires `tools.sandbox.debug.enabled=true` |
 | `raven tracing` | Open the local trace dashboard |
 | `raven tracing compact` | Consolidate duplicate trace artifacts to free disk space |
 | `raven tracing compress [--logs]` | Rewrite trace payloads as zstd (with `--logs`, the rotated span and event logs too) to free disk space |
@@ -75,5 +74,5 @@ From the repository root, search the documentation and implementation together:
 rg -n 'ACP|A2A|run_subagent_dag' docs-site/docs raven tests
 ```
 
-`run_subagent_dag`, `dag_status`, `cancel_dag`, and `a2a_send` are model tools,
+`run_subagent_dag`, `dag_status`, `cancel_subagent`, and `a2a_send` are model tools,
 not shell subcommands. Use their guides for arguments and behaviour.

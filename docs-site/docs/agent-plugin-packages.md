@@ -165,16 +165,20 @@ you name the package:
 
 That opt-in is per package because a server entry is a process on your
 machine. The servers a package contributes are named
-`<package>__<server>`, so they never collide with your own
-`tools.mcpServers` entries.
+`<package>__<server>`. If one of those names is already configured in your
+own `tools.mcpServers`, yours wins: the package's server is skipped and
+reported rather than replacing it.
 
-A package's servers run with the package root as the working directory
+A package's stdio servers run with the package root as the working directory
 (unless the entry names another one), and with `PLUGIN_ROOT` and
 `PLUGIN_DATA` in their environment: the first is the package directory,
 the second is a directory Raven keeps for that package across updates
-(`<home>/plugin-data/<package>/`). The format's two placeholders,
-`${PLUGIN_ROOT}` and `${PLUGIN_DATA}`, are expanded in a server's
-arguments, environment and working directory.
+(`<home>/plugin-data/<package>/`). HTTP servers get neither. The format's
+two placeholders, `${PLUGIN_ROOT}` and `${PLUGIN_DATA}`, are expanded in a
+server's arguments and environment values. A working directory is not expanded
+that way: it must be a plugin-relative path (`./...`), or equal to or under
+one of the two placeholders, and it has to stay inside the directory it is
+anchored to.
 
 After expansion, an argument or environment value that carries a `..` path
 component is refused and reported. The check splits on `/` and `\`, so a URL
@@ -185,6 +189,25 @@ and reported, and the rest still run. A package whose `mcp.json` declares
 a different Agent Plugins version than its `plugin.json`, or whose file is
 not a valid MCP configuration, has MCP disabled while its skills keep
 working.
+
+## In the web UI
+
+The settings dialog's **Plugins** page lists the packages Raven can see:
+each package's version, source directory, skills and MCP servers, and
+whether its skills were imported into this workspace. A path under
+`agentPlugins.packages` that holds no usable package is listed with the
+reason.
+
+A package that ships MCP servers has one switch, **Start its MCP
+servers**, which adds the package to `agentPlugins.mcpPackages` or takes
+it out. The running engine keeps the servers it started with, so the
+change applies after Raven restarts, and the row says so until then.
+Importing and removing skills stay with `raven agent-plugins`: both take a
+path on the Raven host, and the browser showing the page may be on another
+machine.
+
+The **MCP** page beside it is a different list: the servers configured in
+`tools.mcpServers`. A package's servers are not listed there.
 
 ## Current limits
 

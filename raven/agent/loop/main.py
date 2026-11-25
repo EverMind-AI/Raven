@@ -6,6 +6,8 @@ Module-level names live in ``_shared``; method groups live in mixins
 
 from __future__ import annotations
 
+import sys
+
 from raven.agent import knowledge_scope
 from raven.agent.harness import bind_harness, default_harness_modules
 from raven.agent.loop._shared import (
@@ -51,6 +53,7 @@ from raven.agent.loop.turn_path import TurnPathMixin
 from raven.agent.loop.wiring import WiringMixin
 from raven.agent.subagent.charter import charter_scope
 from raven.agent.subagent.delegate import delegate_scope
+from raven.session.tool_output import ToolOutputLimits
 
 if TYPE_CHECKING:
     from raven.agent.hook import CompositeHook
@@ -62,7 +65,6 @@ if TYPE_CHECKING:
     from raven.mcp.manager import MCPConnectionManager
     from raven.providers.pool import ProviderPool
     from raven.routing.router import ModelRouter
-    from raven.sandbox.debug_server import SandboxDebugServer
     from raven.spine.runner import Drain, Emit, TurnOutcome
     from raven.spine.turn import TurnRequest
 
@@ -86,9 +88,12 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
     5. Sends responses back
     """
 
-    # The default of ``context.toolResultMaxChars``; an instance reads its own
-    # config over it. 0 writes every tool result whole.
+    # The defaults of the tool-result budgets; an instance reads its own config
+    # over them. 0 disables that budget.
+    _TOOL_RESULT_MAX_LINES = 2_000
+    _TOOL_RESULT_MAX_BYTES = 50 * 1024
     _TOOL_RESULT_MAX_CHARS = 1_000_000
+    _TOOL_OUTPUT_LIMITS = ToolOutputLimits()
 
     # Reconnects allowed for a streamed call that failed before its first delta
     # (after one, the caller has output that a retry would duplicate).
@@ -329,11 +334,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # ``None`` means "use the ``_collect_injected_skill_ids`` path" — see
         # that method for the branch.
         self._last_injected_skill_ids: list[str] | None = None
-        # ``qualified_id -> registry source`` for the ids above. The id's own
-        # prefix is the addressing namespace (``local`` for anything on disk),
-        # so origin reporting needs this side map — see
-        # ``SkillsSegmentBuilder.build``.
-        self._last_injected_skill_sources: dict[str, str] = {}
         # The memory and skill text that answers for a part of the window --
         # the recalled memory, the routed or resident skills, the pull menu --
         # surfaced by the same metadata as the ids above. A reader measures
@@ -372,7 +372,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # backgrounded DAG submission -- including default deploys, where an
         # unset attribute would raise instead of answering "no route".
         self.tool_search_controller = None
-        from raven.config.live import permissions_config
+        from raven.config.live import network_permissions, permissions_config
         from raven.permissions import BuiltinRulings, PermissionGate
 
         # Config is read through a late-bound callable so a mode flipped on a
@@ -401,6 +401,14 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # Asked once per assembled tool array, so an off switch flipped now is
         # honoured by the next request rather than the next restart.
         self.tools.set_withheld_source(self._withheld_tool_names)
+        # The same switch, asked for its reason: the runtime-context notice and
+        # the refusal of a call to an advertised-but-withheld tool say which
+        # setting or credential puts the tool back.
+        self.tools.set_withheld_reason_source(self._withheld_tool_reasons)
+        # The constructor's list is the one off switch that cannot move while
+        # the process runs, so it stays a hard removal from the session array
+        # instead of becoming a notice.
+        self.tools.set_hard_withheld_source(self._hard_withheld_names)
 
         # Context engine — the single ContextAssembler.
         # Constructed here (after self.tools) so the factory can capture
@@ -420,7 +428,18 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # Read again when a live switch changes which backend's skill source
         # carries what weight; the router was built from this at boot.
         self._skill_forge_router_config = skill_forge_router_config
-        self._TOOL_RESULT_MAX_CHARS = max(0, int(context_config.tool_result_max_chars))
+        # The router's master switch, read at boot like the rest of the block:
+        # off means this host mounts no router source, so the project source
+        # the tools would otherwise carry goes with it.
+        self._skill_router_enabled = bool(getattr(skill_forge_router_config, "enabled", True))
+        self._TOOL_RESULT_MAX_LINES = max(0, int(getattr(context_config, "tool_result_max_lines", 2_000)))
+        self._TOOL_RESULT_MAX_BYTES = max(0, int(getattr(context_config, "tool_result_max_bytes", 50 * 1024)))
+        self._TOOL_RESULT_MAX_CHARS = max(0, int(getattr(context_config, "tool_result_max_chars", 1_000_000)))
+        self._TOOL_OUTPUT_LIMITS = ToolOutputLimits(
+            max_lines=self._TOOL_RESULT_MAX_LINES,
+            max_bytes=self._TOOL_RESULT_MAX_BYTES,
+            max_chars=self._TOOL_RESULT_MAX_CHARS,
+        )
 
         # Skill Hub client — built once and shared by the HubSkillSource
         # (catalog discovery) and the read_skill / use_skill tools (body /
@@ -465,7 +484,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 # rebuilt on a hot config apply, so anything captured now would be
                 # either missing or stale by the time a turn asks for it.
                 list_subagents=lambda: self.subagents.list_agents(),
-                get_tool_notices=self._mcp_tool_notices,
+                get_tool_notices=self._tool_notices,
                 # Read at call time: the board is wired further down this constructor.
                 get_session_notices=lambda key: self.task_board.turn_notes(key) if self.task_board else [],
                 now_fn=now_fn,
@@ -476,7 +495,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 skill_forge_router_config=skill_forge_router_config,
                 skill_forge_config=skill_forge_config,
                 skill_hub_client=self._skill_hub_client,
-                provider_pool=provider_pool,
                 # The same reader the catalog gets: the pool drop and the
                 # scent menu screen against the list on disk now, so a skill
                 # switched off -- or back on -- reaches the next turn.
@@ -502,7 +520,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             provider=lambda: self.provider,
             model=lambda: self.model,
             context_window_tokens=lambda: self.context_window_tokens,
-            system_prompt=lambda skills: self.context.build_system_prompt(skills),
+            system_prompt=lambda _skills: self.context.build_system_prompt(),
             # Callables like the rest, but for one reason rather than two: the
             # ceiling follows the model a request goes out under, which moves
             # under a live ``/model`` switch. The compaction settings are fixed
@@ -534,7 +552,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self._pending_recovery: dict[str, dict] = {}
 
         self._sandbox_config = sandbox_config
-        self._owned_ids: set[str] = set()
         # The catalogue's default stands in for a session that never set a tier:
         # `_apply_mode` stamps a policy only on the ACP turn path, so a terminal,
         # gateway or channel turn would otherwise resolve to no tier at all.
@@ -560,7 +577,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
             sandbox_config=sandbox_config,
-            owned_ids=self._owned_ids,
             max_concurrent=max_concurrent_subagents,
             max_spawns_per_hour=max_subagent_spawns_per_hour,
             agents=agents,
@@ -571,6 +587,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             retry_after_output=bool(self._recovery_limits.llm_retry_after_output),
             provider_pool=self._provider_pool,
             task_board=self._task_board_config.enabled,
+            long_run_notice_seconds=subagents.long_run_notice_seconds,
+            control_reachable=self.subagent_control_reachable,
         )
         # Reads the live direct chats through a lambda for the reason the identity
         # segment does: the manager is rebuilt on a hot config apply.
@@ -580,29 +598,26 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # agent table resolved (the table also holds the package built-in rows).
         self._agent_configs = agents or []
         self._dag_progress_sink = None
-        # Late-bound sink that pushes per-turn SkillForge-injected skill ids to
-        # the page's skill panel (the host wires it to the page's emitter,
-        # parallel to _dag_progress_sink). None in non-web contexts (CLI/IM).
-        self._skills_sink = None
 
-        # Executor: synchronous construction only; VM starts in _start_executor()
-        # A sandboxed VM mounts one host root at /workspace, not one per
+        # Executor: synchronous construction only; the sandbox starts in _start_executor()
+        # A sandbox mounts one host root at /workspace, not one per
         # session, so it must be wide enough to cover every working directory
         # the resolver can hand out. Agent home is usually somewhere else
         # entirely -- under PER_CHANNEL the root is ``<agent home>/../tmp``, a
         # sibling, and an explicit ``-w`` cannot be an ancestor of agent home
         # because ``validate_override`` refuses one -- so it is mounted
         # separately at /agent-home to keep memory/skills/session state
-        # reachable from inside the VM.
+        # reachable from inside the sandbox.
         #
         # The check is not dead: under LAUNCH_DIR the root is wherever the user
         # started raven, and launching from ``~`` puts agent home inside it. A
         # second mount of a directory already covered is what this avoids.
-        from raven.config.paths import PACKAGE_DATA_MOUNT, get_package_data_root, get_sandbox_dir
+        from raven.config.paths import PACKAGE_DATA_MOUNT, get_package_data_root
+        from raven.permissions.network_grants import network_source_for
 
         mount_root = self._workdir_resolver.mount_root() if self._workdir_resolver else workspace
         home_volume = () if workdir.is_within(workspace, mount_root) else ((str(workspace), "/agent-home", "rw"),)
-        # A package stdio server gets PLUGIN_DATA as a host path, and the VM
+        # A package stdio server gets PLUGIN_DATA as a host path, and the sandbox
         # reaches it only through a mount. The fixed guest path is what lets
         # the executor translate the variable with the rest of the server's
         # paths; without the volume it would stay a host path that cannot
@@ -623,15 +638,15 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             else build_executor(
                 sandbox_config,
                 mount_root,
-                self._owned_ids,
                 (*home_volume, *data_volume),
-                sandbox_dir=get_sandbox_dir,
+                # Shared by every conversation this loop serves, so it runs
+                # under no single conversation's scope (``None``).
+                network_source=network_source_for(lambda: network_permissions(self._live_config), None),
             )
         )
         self._executor_stack: AsyncExitStack | None = None
         self._executor_started: bool = False
         self._executor_start_lock = asyncio.Lock()
-        self._debug_server: SandboxDebugServer | None = None
 
         self.router = router
         self._playbooks = None
@@ -756,8 +771,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         #   policy. Owns the ``MemoryStore`` it built; reach it via
         #   ``self.memory_consolidator.store`` when needed.
         # - ``self.context.skills`` — :class:`LocalSkillCatalog` for the
-        #   always-skills + ``# Skills`` render path. The SkillForgeRouter stack
-        #   (assembled in ``context_engine.factory``) owns retrieval.
+        #   always-skills render path. The SkillForgeRouter stack (assembled in
+        #   ``context_engine.factory``) owns retrieval.
 
         # AgentHook lifecycle chain: the host hands finished hooks (adapter-
         # wrapped callbacks included -- raven/agent/hook/adapters is where a
@@ -787,6 +802,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         async with self._executor_start_lock:
             if self._executor_started:
                 return
+            from raven.permissions import network_grants
+
             stack = AsyncExitStack()
             try:
                 await stack.__aenter__()
@@ -794,52 +811,37 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             except Exception:
                 await stack.aclose()
                 raise
+            # Every conversation this loop serves runs in this one sandbox, so a
+            # network grant made in any of them is synced to it at once.
+            network_grants.GRANTS.register(self._executor, None)
+            stack.callback(network_grants.GRANTS.unregister, self._executor)
             self._executor_stack = stack
             self._executor_started = True
 
-    async def _start_debug_server(self) -> None:
-        """Start the sandbox debug socket server if debug mode is enabled."""
-        cfg = self._sandbox_config
-        if cfg is None or not cfg.debug.enabled:
-            return
-        if cfg.backend == "none":
-            logger.warning(
-                "sandbox.debug.enabled=true is ignored because backend='none' (no boxlite runtime is active)"
-            )
+    @staticmethod
+    async def _drain_sandbox_deletes(budget_s: float = 20.0) -> None:
+        """Wait, briefly, for sandbox deletions this process started in the background.
+
+        A sandbox stop only starts its deletion; one still pending when the
+        process exits is collected by the next start instead.
+        """
+        module = sys.modules.get("raven.sandbox.openshell_executor")
+        if module is None:
             return
         try:
-            from raven.config.paths import get_data_dir, get_sandbox_dir
-            from raven.sandbox.debug_server import SandboxDebugServer
-
-            socket_path = SandboxDebugServer.resolve_socket_path(cfg.debug.socket, get_data_dir())
-            server = SandboxDebugServer(
-                socket_path=socket_path,
-                owned_ids=self._owned_ids,
-                max_message_bytes=cfg.debug.max_message_bytes,
-                sandbox_home=get_sandbox_dir("boxlite"),
-            )
-            await server.start()
-            self._debug_server = server
-        except Exception as exc:
-            # The user explicitly opted in to debug mode; failing silently here
-            # leaves them puzzled when `raven sandbox` later says "socket not
-            # found". Log loud so the reason is visible.
-            logger.error("Failed to start sandbox debug server: %s", exc)
+            await asyncio.wait_for(module.drain_pending_deletes(), budget_s)
+        except asyncio.TimeoutError:
+            logger.warning("Sandbox deletions still pending after {}s; the next start collects them", budget_s)
 
     async def close_executor(self) -> None:
         """Tear down the sandbox executor."""
-        if self._debug_server is not None:
-            try:
-                await self._debug_server.stop()
-            except Exception as exc:
-                logger.warning("Error stopping sandbox debug server: %s", exc)
-            self._debug_server = None
         if self._executor_stack:
             try:
                 await self._executor_stack.aclose()
             except (RuntimeError, BaseExceptionGroup):
                 pass
             self._executor_stack = None
+        await self._drain_sandbox_deletes()
         self._executor_started = False
         if self._skill_hub_client is not None:
             try:
@@ -970,6 +972,9 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                     if source is not None:
                         router.remove_source(source)
                 elif source is not None:
+                    # Rewritten in place, so nothing on the remove path runs:
+                    # forget the old backend's held hits before the name moves.
+                    router.forget(source)
                     source._backend = backend
                     source._agent_id = agent_id
                     if name:
@@ -1144,14 +1149,13 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         """Bring the agent runtime up and stay alive.
 
         Turns arrive through the spine (``run_turn``); this coroutine no longer
-        drains an inbound bus. It starts the executor / debug server / MCP, then
+        drains an inbound bus. It starts the executor / MCP, then
         idles on ``self._running`` so the gateway can gather it as a long-lived
         task and tear it down via ``stop()`` on shutdown.
         """
         self._running = True
         try:
             await self._start_executor()
-            await self._start_debug_server()
             await self._connect_mcp()
         except SandboxInitError as exc:
             logger.error("Sandbox failed to start: {}", exc)
@@ -1233,9 +1237,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
 
         This is where a session's model becomes the one thing everything under
         the turn reads: the loop's own ``provider``/``model``, the context
-        engine's LLM-backed segments, the skill gate and rewriter, the
-        consolidator, and anything the turn detaches (a subagent inherits the
-        context it was created in).
+        engine's LLM-backed segments, the consolidator, and anything the turn
+        detaches (a subagent inherits the context it was created in).
 
         Resolving once here is also what makes a mid-turn switch harmless
         without any parking. The binding is captured before the first read and

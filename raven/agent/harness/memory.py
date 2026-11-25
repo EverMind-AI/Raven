@@ -1,9 +1,10 @@
 """The default Memory strategy: the window this turn's model calls see.
 
-The context engine stays the thing that assembles -- it holds the Curator's
-working state and each segment builder's provider binding, and the builders
-were sized against this generation's context window, so a generation's window
-*is* its engine and replacing it is a new generation. What this module adds is
+The context engine stays the thing that assembles -- it holds the history
+strategy's per-session state and each segment builder's provider binding, and
+the builders were sized against this generation's context window, so a
+generation's window *is* its engine and replacing it is a new generation.
+What this module adds is
 the seat: the loop asks the Memory role rather than reaching past it, and the
 turn-side decisions that were never the shell's live here with it.
 
@@ -46,6 +47,7 @@ from raven.agent.harness.participants import Intake, compose_addendum, compose_i
 from raven.agent.window import compaction, shrink
 from raven.agent.window.images import ATTACHED_IMAGE_KEY
 from raven.context_engine import headroom
+from raven.context_engine.runtime_context import retell_notices, without_runtime_context
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.harness import MemoryModule, ShrinkResult, WindowPressure, WindowState
 from raven.contracts.participant import AgentParticipant, StepView
@@ -188,7 +190,7 @@ class DefaultMemory:
         self, messages: list[dict[str, Any]], model: str | None, cfg: Any
     ) -> tuple[list[dict[str, Any]], str]:
         chosen = model or self._model()
-        return await shrink.summarize_head(
+        summarized, verdict = await shrink.summarize_head(
             messages,
             provider=self._provider(),
             model=chosen,
@@ -196,6 +198,12 @@ class DefaultMemory:
             ceiling=self._output_ceiling(chosen),
             cfg=cfg,
         )
+        if verdict == "changed":
+            # The replaced head may be the only place a still-standing plugin
+            # note was told, and the brief that replaces it is prose, not a
+            # notice block, so what it took away is said again on the question.
+            summarized = retell_notices(messages, summarized)
+        return summarized, verdict
 
     async def _compact_ahead(
         self, messages: list[dict[str, Any]], state: WindowState, model: str | None
@@ -402,14 +410,16 @@ class DefaultMemory:
         it alone is over the cap the second notch takes it too. The closed window
         then stands for the rest of the turn, so the refusal cannot recur.
 
-        At zero the model sees no picture for the rest of the turn, and the notes
-        say so. Accepted rather than papered over with a per-batch byte budget:
-        reaching zero takes a single batch over the cap on its own, which at the
-        measured render sizes means a build of thirty-odd pages returned in one
-        call, and the four measured refusals were all accumulation (75-80 pictures
-        over 14-19 messages; the window's replay peak on those same runs is 6.87
-        MB against a cap measured at ~26.3 MB decoded). Add the budget when a run
-        actually gets here.
+        At zero every picture goes, the current question's included: the endpoint
+        has refused the request's pictures, and a text answer beats a failed turn.
+        The standing window still keeps the current question's picture; this
+        ladder is the last resort. Accepted rather than papered over with a
+        per-batch byte budget: reaching zero takes a single batch over the cap on
+        its own, which at the measured render sizes means a build of thirty-odd
+        pages returned in one call, and the four measured refusals were all
+        accumulation (75-80 pictures over 14-19 messages; the window's replay
+        peak on those same runs is 6.87 MB against a cap measured at ~26.3 MB
+        decoded). Add the budget when a run actually gets here.
         """
         if state.image_strip_retries >= shrink.MAX_IMAGE_STRIP_RETRIES:
             return ShrinkResult(messages, False)
@@ -421,7 +431,10 @@ class DefaultMemory:
             else:
                 state.image_window = 0
             _, withdrawn = shrink.window_images(
-                messages, state.image_window, reason="refused", any_role=state.image_window == 0
+                messages,
+                state.image_window,
+                reason="refused",
+                last_resort=state.image_window == 0,
             )
         if withdrawn == 0:
             return ShrinkResult(messages, False)
@@ -455,7 +468,9 @@ def _keeps_the_question(sent: list[dict[str, Any]], reclaimed: list[dict[str, An
     """Whether ``reclaimed`` still holds the latest user message ``sent`` held.
 
     A message carrying only pictures a tool showed (``ATTACHED_IMAGE_KEY``) is the
-    loop's, not the user's, and is not the question.
+    loop's, not the user's, and is not the question. The lines each side recorded
+    for itself are left out of the comparison: a reclaim may retell a plugin note
+    into the question's block without touching the words it opened with.
     """
     question = next(
         (m for m in reversed(sent) if m.get("role") == "user" and not m.get(ATTACHED_IMAGE_KEY)),
@@ -463,7 +478,9 @@ def _keeps_the_question(sent: list[dict[str, Any]], reclaimed: list[dict[str, An
     )
     if question is None:
         return True
-    return any(m.get("role") == "user" and m.get("content") == question.get("content") for m in reclaimed)
+    return any(
+        m.get("role") == "user" and without_runtime_context(m) == without_runtime_context(question) for m in reclaimed
+    )
 
 
 def bind(memory: DefaultMemory) -> MemoryModule:

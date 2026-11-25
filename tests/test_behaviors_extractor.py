@@ -17,6 +17,7 @@ from raven.memory_engine.consolidate.behaviors import parse_behaviors
 from raven.memory_engine.consolidate.behaviors_extractor import (
     BehaviorsExtractor,
     BehaviorsOffsets,
+    _load_session_messages,
     _SessionOffset,
 )
 from raven.memory_engine.consolidate.consolidator import MemoryStore
@@ -467,6 +468,21 @@ class TestRunAllBypassesGates:
 
 
 class TestRobustness:
+    def test_session_reader_skips_stamp_records(self, tmp_path: Path) -> None:
+        """A record kind beside the messages has no role to build a turn on."""
+        path = tmp_path / "session.jsonl"
+        path.write_text(
+            json.dumps({"role": "user", "content": "q"})
+            + "\n"
+            + json.dumps({"_type": "turn_meta", "patches": [{"row_id": "abc", "keys": {}}]})
+            + "\n"
+            + json.dumps({"role": "assistant", "content": "a"})
+            + "\n",
+            encoding="utf-8",
+        )
+
+        assert [m["content"] for m in _load_session_messages(path)] == ["q", "a"]
+
     async def test_no_tool_call_returns_empty(
         self,
         store,

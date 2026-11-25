@@ -10,7 +10,7 @@
  * desk's to perform.
  */
 
-import { ArrowRight01Icon, ArrowRight02Icon, ArrowTurnBackwardIcon, Tick02Icon } from '@hugeicons/core-free-icons'
+import { ArrowRight01Icon, ArrowRight02Icon, ArrowTurnBackwardIcon, Cancel01Icon, Tick02Icon } from '@hugeicons/core-free-icons'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { Icon } from '../../components/Icon'
@@ -175,30 +175,42 @@ function Questions({ group, verbs }: { group: TaskGroup; verbs: ThreadVerbs }): 
   if (!step || !questions.length) return null
   return (
     <ol className="tkasklist" aria-label={t('gui.tasks.board.questions')}>
-      {questions.map((q, n) => (
-        <li key={`${n}:${q}`} className="tkq">
-          <span className="tkqtext">{q}</span>
-          <button
-            type="button"
-            className="tkqignore"
-            aria-label={t('gui.tasks.board.ignore_question', { n: n + 1 })}
-            onClick={() => verbs.ignore(group, step, q)}
-          >
-            {t('gui.tasks.board.ignore')}
-          </button>
-        </li>
-      ))}
+      {questions.map((q, n) => {
+        const label = t('gui.tasks.board.ignore_question', { n: n + 1 })
+        return (
+          <li key={`${n}:${q}`} className="tkq">
+            <span className="tkqtext">{q}</span>
+            <button
+              type="button"
+              className="tkqignore"
+              aria-label={label}
+              title={label}
+              onClick={() => verbs.ignore(group, step, q)}
+            >
+              <Icon icon={Cancel01Icon} size={11} stroke={2} />
+            </button>
+          </li>
+        )
+      })}
     </ol>
   )
 }
 
 function AskButtons({ group, verbs }: { group: TaskGroup; verbs: ThreadVerbs }): JSX.Element {
   const named = (group.steps[group.steps.length - 1]?.questions ?? []).length > 0
+  const ignoreLabel = t('gui.tasks.board.ignore')
   return (
     <>
       {named ? null : (
-        <button type="button" className="tkaskbtn" data-kind="ignore" onClick={() => verbs.setStatus(group, 'idle')}>
-          {t('gui.tasks.board.ignore')}
+        <button
+          type="button"
+          className="tkaskbtn"
+          data-kind="ignore"
+          aria-label={ignoreLabel}
+          title={ignoreLabel}
+          onClick={() => verbs.setStatus(group, 'idle')}
+        >
+          <Icon icon={Cancel01Icon} size={11} stroke={2} />
         </button>
       )}
       <button type="button" className="tkaskbtn" data-kind="answer" onClick={() => verbs.answer(group)}>

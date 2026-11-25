@@ -21,20 +21,20 @@ import { statedTags } from '../model/types'
 
 import type { Kind } from '../model/types'
 import type {
-  ArchivedSession, ConnectProbe, KeyCheck, ModelCandidate, SettingsSnapshot, SettingsSource, SkillDetail, UsageRange, UsageStats,
+  AgentPluginList, ArchivedSession, ConnectProbe, KeyCheck, ModelCandidate, SettingsSnapshot, SettingsSource, SkillDetail, UsageRange, UsageStats,
 } from './types'
 
 export type SectionId =
-  | 'general' | 'usage' | 'provider' | 'model' | 'skills' | 'tools' | 'plugins'
+  | 'general' | 'usage' | 'provider' | 'model' | 'skills' | 'tools' | 'mcp' | 'plugins'
   | 'cron' | 'memory' | 'archive' | 'about'
 
 /* The nav's order, which is also the reading: what the dialog is about first
    (the page itself, what it cost), then what it is made of (the accounts, the
-   models each role takes, skills, tools, plugins), then the two surfaces a
+   models each role takes, skills, tools, MCP servers, plugins), then the two surfaces a
    reader sets up once and leaves alone, then the record and the version.
    Channels were a third and are a page on the rail now (state/pages.ts). */
 export const SECTIONS: SectionId[] = [
-  'general', 'usage', 'provider', 'model', 'skills', 'tools', 'plugins',
+  'general', 'usage', 'provider', 'model', 'skills', 'tools', 'mcp', 'plugins',
   'cron', 'memory', 'archive', 'about',
 ]
 
@@ -128,7 +128,11 @@ export interface SettingsState {
   detail: SkillDetail | null
   skq: string
   toolOpen: string | null
-  plugOpen: string | null
+  mcpOpen: string | null
+  /* The Agent Plugin packages, asked for by the plugins page itself: null =
+     not asked yet (drawn as loading). */
+  pkgs: AgentPluginList | null
+  pkgOpen: string | null
   /* The provider whose model list is shown in full rather than folded. Here,
      not in the list's own state: a removal redraws the page from a new
      snapshot, and a fold kept in the component snapped shut on every one. */
@@ -137,7 +141,8 @@ export interface SettingsState {
 }
 
 const emptySnap = (): SettingsSnapshot => ({
-  raw: {}, configPath: '~/.raven/config.json', skillHub: { on: false }, everos: null, everosCloud: null, providers: [],
+  raw: {}, configPath: '~/.raven/config.json', skillHub: { on: false },
+  pictureSearch: { vendor: '', ready: false, fallback: false }, everos: null, everosCloud: null, providers: [],
   curProvider: '', model: '', tools: [], skills: [], mcp: [],
 })
 
@@ -166,7 +171,9 @@ const initial = (): SettingsState => ({
   detail: null,
   skq: '',
   toolOpen: null,
-  plugOpen: null,
+  mcpOpen: null,
+  pkgs: null,
+  pkgOpen: null,
   modelsAll: null,
   archived: null,
 })
@@ -309,12 +316,12 @@ export function redraw(): void {
    reopen shows the values it already has while the reload runs. */
 export async function open(): Promise<void> {
   redraw()
-  /* The two the pages fetch for themselves are not in the snapshot, so the
-     reload below cannot freshen them: a dialog opened once held its archive
+  /* What the pages fetch for themselves is not in the snapshot, so the
+     reload below cannot freshen it: a dialog opened once held its archive
      list and its usage totals for the life of the page, and a session archived
      from the rail in between never showed up. Dropping them here is what makes
-     each page ask again -- their own lazy loads already key off these two. */
-  set({ usage: undefined, archived: null })
+     each page ask again -- their own lazy loads already key off these. */
+  set({ usage: undefined, archived: null, pkgs: null })
   settingsDialog.open()
   await refresh()
 }
@@ -343,7 +350,7 @@ export function setTab(id: string): void {
   settingsTab.id = id
   set({
     tab: curTab(), err: '', provider: null, provQ: '', provFilt: 'all', provAdd: null, sheet: null, hdrAdd: null, ovlAdd: null, adv: null,
-    skill: null, detail: null, toolOpen: null, plugOpen: null, modelsAll: null,
+    skill: null, detail: null, toolOpen: null, mcpOpen: null, pkgOpen: null, modelsAll: null,
   })
   if (moved) settingsDialog.enterSection(id)
 }
@@ -399,6 +406,15 @@ export async function archivedLoad(): Promise<void> {
   } catch (e) {
     toast(t('gui.op.load_failed', { detail: (e as Error).message || String(e) }))
     set({ archived: [] })
+  }
+}
+
+export async function pkgsLoad(): Promise<void> {
+  try {
+    set({ pkgs: await source().agentPlugins() })
+  } catch (e) {
+    toast(t('gui.op.load_failed', { detail: (e as Error).message || String(e) }))
+    set({ pkgs: { packages: [], problems: [] } })
   }
 }
 

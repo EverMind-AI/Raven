@@ -694,6 +694,7 @@ def test_print_llm_error_non_auth_categories_get_apt_hint_not_key_guidance(
         "server": "retry",
         "model_unavailable": "provider use",
         "billing": "account",
+        "protocol_mismatch": "does not speak this provider's protocol",
     }
     try:
         for category, expected in cases.items():
@@ -1024,3 +1025,75 @@ def test_a_one_shot_with_nothing_refused_prints_no_report(
     r, _ = _invoke_agent_capturing_session(monkeypatch, ws, [])
     assert r.exit_code == 0, r.stdout
     assert "were refused" not in r.stdout
+
+
+@pytest.mark.asyncio
+async def test_a_one_shot_run_waits_for_its_background_commands(monkeypatch):
+    """A command adopted past its limit is still the session's work.
+
+    Exiting while it runs would hand the caller a task id for output that never
+    gets written; the launcher waits, the way it already waits for sub-agents.
+    """
+    from raven.agent.tools import background_exec
+    from raven.cli import agent_commands
+
+    calls = iter([[{"task_id": "bg-1"}], [{"task_id": "bg-1"}], []])
+    monkeypatch.setattr(background_exec, "running", lambda session_key=None: next(calls, []))
+    monkeypatch.setattr(agent_commands, "_BACKGROUND_SETTLE_S", 0)
+    monkeypatch.setattr(agent_commands, "_BACKGROUND_POLL_S", 0)
+
+    class Scheduler:
+        def has_inflight(self, lane):
+            return False
+
+    class Loop:
+        subagents = None
+
+    await agent_commands._wait_for_background_work(Loop(), Scheduler(), "cli:c")
+
+
+@pytest.mark.asyncio
+async def test_a_run_with_nothing_to_wait_for_returns_at_once(monkeypatch):
+    """No sub-agents and no background command is the common one-shot case."""
+    from raven.agent.tools import background_exec
+    from raven.cli import agent_commands
+
+    monkeypatch.setattr(background_exec, "running", lambda session_key=None: [])
+
+    class Scheduler:
+        def has_inflight(self, lane):
+            raise AssertionError("nothing to wait for; the scheduler must not be polled")
+
+    class Loop:
+        subagents = None
+
+    await agent_commands._wait_for_background_work(Loop(), Scheduler(), "cli:c")
+
+
+@pytest.mark.asyncio
+async def test_the_wait_polls_while_the_background_command_is_running(monkeypatch):
+    """The elapsed time is the proof: a wait that ignores background work
+    returns after the settle window and never reaches a second poll."""
+    import time as clock
+
+    from raven.agent.tools import background_exec
+    from raven.cli import agent_commands
+
+    task = {"task_id": "bg-7", "command": "make all", "log_path": "/tmp/bg-7.log"}
+    calls = iter([task, task, task, task, []])
+    monkeypatch.setattr(background_exec, "running", lambda session_key=None: next(calls, []))
+    monkeypatch.setattr(agent_commands, "_BACKGROUND_SETTLE_S", 0.05)
+    monkeypatch.setattr(agent_commands, "_BACKGROUND_POLL_S", 0.05)
+
+    class Scheduler:
+        def has_inflight(self, lane):
+            return False
+
+    class Loop:
+        subagents = None
+
+    started = clock.monotonic()
+    await agent_commands._wait_for_background_work(Loop(), Scheduler(), "cli:c")
+    elapsed = clock.monotonic() - started
+
+    assert elapsed >= 0.15, f"the launcher did not keep polling a running command ({elapsed:.3f}s)"

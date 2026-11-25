@@ -148,6 +148,26 @@ class OrganGlueMixin:
         """The candidate message view, asked of the Memory role that owns it."""
         return self.harness.memory.candidate_messages(session)
 
+    def _bind_session_log(self, session_key: str, log_id: str | None, messages: list[dict[str, Any]]) -> None:
+        """Bind the registry to the log this turn replays and to what it was told.
+
+        The notes the model holds are the ones in these messages' runtime-context
+        blocks, read back the way the engine reads them when it decides what to
+        send (``told_notices``). Handing the registry those subjects at every
+        assembly, rather than letting it keep its own record, is what keeps the
+        two from disagreeing after a release, a restart, a ``/clear`` or a log id
+        that moved while the log kept its turns.
+        """
+        from raven.context_engine.runtime_context import told_notices  # deferred -- see module note
+
+        told = told_notices(messages)
+        self.tools.bind_session_revision(
+            session_key,
+            log_id,
+            told_tools=[name for kind, name in told if kind == "tool"],
+            told_servers=[name for kind, name in told if kind == "mcp"],
+        )
+
     def _wire_output_ceiling(self, model: str | None = None, *, pinned: int | None = None) -> int:
         """The output ceiling a request for ``model`` will actually carry, asking for ``pinned`` if given.
 
@@ -178,11 +198,13 @@ class OrganGlueMixin:
     def _uses_default_engine(self) -> bool:
         """Whether the active engine owns skill selection via SkillForgeRouter.
 
-        Always ``True`` now — there is a single
-        :class:`ContextAssembler` whose SkillsSegmentBuilder handles
-        selection and populates ``injected_skill_ids`` in the assembled
-        metadata. Kept as a method (rather than inlined) because several
-        callsites still gate on it; it no longer branches on engine name.
+        Always ``True`` now -- there is a single
+        :class:`ContextAssembler`, whose scent menu offers skills and
+        populates ``injected_skill_ids`` in the assembled metadata whenever
+        ``skillForge.router.enabled`` mounts a router; with the switch off
+        there is no menu, so the metadata carries no injected ids. Kept as a
+        method (rather than inlined) because tests pin it; it no longer
+        branches on engine name.
         """
         return True
 
@@ -193,8 +215,8 @@ class OrganGlueMixin:
     ) -> list[Any] | None:
         """No host-side pre-selection — the engine's SkillForgeRouter owns it.
 
-        The unified engine selects + renders skills internally and
-        surfaces ``injected_skill_ids`` via ``AssembledContext.metadata``,
+        The engine's scent menu offers skills and surfaces their
+        ``injected_skill_ids`` via ``AssembledContext.metadata``,
         which AgentLoop reads out of ``_last_injected_skill_ids`` after
         assemble. No SkillMeta list flows through this path.
         """
@@ -221,16 +243,22 @@ class OrganGlueMixin:
         model answer for a routed one.
         """
         from raven.context_engine import TurnContext  # deferred — see module note
+        from raven.context_engine.history.markers import HISTORY_COMPACTED_META
+
+        # The session log this turn reads. ``/clear`` mints a new log id on the
+        # same key; a frozen array captured under the old one is dropped and
+        # recaptured here, before the engine budgets with it.
+        session_messages = self._context_messages_for_session(session)
+        revision = session.revision if isinstance(session, Session) else None
+        self._bind_session_log(session_key, revision.log_id if revision is not None else None, session_messages)
 
         # Reset the metadata stash BEFORE calling the engine. If
         # ``engine.assemble`` raises partway, the next caller falls back to
         # the ``_collect_injected_skill_ids`` path rather than accidentally consuming a previous turn's
         # injected ids. Only successful assemble repopulates the stash.
         self._last_injected_skill_ids = None
-        self._last_injected_skill_sources = {}
         self._last_window_parts = {}
         self._last_degraded_segments: list[str] = []
-        session_messages = self._context_messages_for_session(session)
         assembled = await self.harness.memory.assemble(
             session_key,
             session_messages,
@@ -247,6 +275,11 @@ class OrganGlueMixin:
                 session_revision=session.revision if isinstance(session, Session) else None,
             ),
         )
+        if assembled.metadata.get(HISTORY_COMPACTED_META):
+            # Mark, not invalidate: this turn's array is the one its notices and
+            # system-prompt derivations were built from. The next assembly
+            # cashes the mark, so the array, notices and text all move together.
+            self.tools.schedule_definitions_refresh(session_key)
         # Stash the engine's injected_skill_ids so the after-turn
         # feedback dispatcher can read the source-qualified ids the
         # unified engine populates via SkillForgeRouter. If the key is absent
@@ -254,8 +287,6 @@ class OrganGlueMixin:
         # to the SkillMeta-based path.
         meta_ids = assembled.metadata.get("injected_skill_ids") if assembled.metadata else None
         self._last_injected_skill_ids = list(meta_ids) if meta_ids else None
-        meta_sources = assembled.metadata.get("injected_skill_sources") if assembled.metadata else None
-        self._last_injected_skill_sources = dict(meta_sources) if meta_sources else {}
         meta_degraded = assembled.metadata.get("degraded_segments") if assembled.metadata else None
         self._last_degraded_segments = list(meta_degraded) if meta_degraded else []
         # The parts of the window that are not the talk, for the same reason
@@ -465,84 +496,6 @@ class OrganGlueMixin:
         for meta in always:
             _add(meta)
         return ids
-
-    def set_skills_sink(self, sink) -> None:
-        """Late-bind the sink that reports SkillForge-injected skills to the web
-        UI (the host wires it to the page's emitter). ``sink`` is an async
-        callable ``(conversation, name, payload)`` matching the DAG sink."""
-        self._skills_sink = sink
-
-    async def _emit_injected_skills(self, session_key: str) -> None:
-        """Push this turn's SkillForge-injected skills to the web UI's skill
-        panel as a ``skills_injected`` custom event.
-
-        The id's prefix is the *addressing* namespace, which is ``local`` for
-        every on-disk skill, so origin comes from
-        ``_last_injected_skill_sources`` (the registry source the engine
-        reported) and falls back to the prefix only when that is absent. No-op
-        when there is no sink (CLI/IM) or nothing was injected this turn."""
-        if self._skills_sink is None:
-            return
-        ids = self._last_injected_skill_ids or []
-        if not ids:
-            return
-        skills = []
-        for qid in ids:
-            prefix, _, name = str(qid).partition("/")
-            skills.append(
-                {
-                    "id": str(qid),
-                    "source": self._last_injected_skill_sources.get(str(qid)) or prefix,
-                    "name": name or str(qid),
-                    "kind": "injected",
-                }
-            )
-        await self._emit_skills(session_key, skills)
-
-    async def _emit_skills(self, session_key: str, skills: list[dict[str, Any]]) -> None:
-        """Send one ``skills_injected`` payload, swallowing any failure."""
-        try:
-            await self._skills_sink(session_key, "skills_injected", {"skills": skills})
-        except Exception:  # never break a turn on a telemetry/UI push
-            logger.exception("skills_injected emit failed")
-
-    async def _report_skill_read(self, session_key: str, tool_name: str, args: dict[str, Any]) -> None:
-        """Report a skill the model loaded itself to the web UI's skill panel.
-
-        ``read_skill`` / ``use_skill`` are how a skill advertised by description
-        alone actually gets loaded -- notably the builtin orchestration guide,
-        whose id the DAG tool names in its own description. Those never pass
-        through SkillForge injection, so without this the panel shows nothing
-        for a turn that demonstrably used a skill.
-
-        The model passes the addressing id (``local/<name>``); the registry is
-        what knows the real source. An unresolvable id is still reported, with
-        the addressed namespace as source, rather than dropped -- the call
-        happened."""
-        if self._skills_sink is None:
-            return
-        qid = str(args.get("skill_id") or "").strip()
-        if not qid:
-            return
-        namespace, native = qid.partition("/")[0], qid.partition("/")[2]
-        registry = getattr(getattr(self.context, "skills", None), "registry", None)
-        try:
-            # The same split and resolver ``read_skill`` itself uses, so the id
-            # grammar -- including "a bare id addresses the Hub" -- and "local
-            # spans every on-disk source" stay defined in exactly one place.
-            from raven.agent.tools.skill_hub import lookup_on_disk, split_qualified_id
-
-            namespace, native = split_qualified_id(qid)
-            meta = lookup_on_disk(registry, namespace, native)
-            source = str(meta.source) if meta is not None and getattr(meta, "source", None) else namespace
-        except Exception:  # noqa: BLE001 - a registry hiccup must not lose the report
-            logger.debug("skill source lookup failed for %s", qid)
-            source = namespace
-        name = native or qid
-        await self._emit_skills(
-            session_key,
-            [{"id": qid, "source": source, "name": name, "kind": tool_name}],
-        )
 
     # The judgement is one flash call -- seconds on every model measured -- and
     # a turn pays it once. A model that runs away on it (2026-09-08: 222k chars

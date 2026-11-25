@@ -77,6 +77,9 @@ listening."""
 # make one side silently disagree with the other.
 STEER_METHOD = "_raven/session/steer"
 STEER_CAPABILITY = "raven.steer"
+REPORT_NOW_CAPABILITY = "raven.reportNow"
+REPORT_NOW_PROMPT_KEY = "raven.reportNowId"
+REPORTED_EARLY_KEY = "raven.reportedEarly"
 
 # And what a raven agent holds that runs with nobody asking -- an armed cron job
 # of its own partition, a running plugin service. The pool asks it before it
@@ -120,6 +123,11 @@ MENU_UNREAD_META = "modelMenuUnread"
 # ``agentCapabilities._meta`` with the seconds as its value; raven's client grants
 # it up to a cap of its own, and an agent that exits sooner ends the wait sooner.
 SHUTDOWN_GRACE_META = "raven.shutdownGraceS"
+
+# Marks a permission request only a person may answer: a raven agent's own gate
+# leaves such an action (an address given as an IP, an internal name) to a person
+# whatever its mode, and a raven client that answers on nobody's behalf refuses it.
+NEEDS_PERSON_META = "raven.needsPerson"
 
 
 class AcpError(Exception):

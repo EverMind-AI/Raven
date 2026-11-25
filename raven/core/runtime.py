@@ -247,6 +247,7 @@ def build_runtime(
     frozen ``RavenRuntime`` this returns is FREEZE.
     """
     from raven.agent.tools.deliverables import DeliverableStore
+    from raven.agent_plugins.mcp import host_mcp_server_names
     from raven.node.client import get_node_pool
     from raven.ops.remote_path import use_nodes
 
@@ -269,7 +270,9 @@ def build_runtime(
     # a list where the typed field is a mapping, and the merge must not turn
     # that into a startup failure.
     initial_mcp_servers = dict(config.tools.mcp_servers or {})
-    package_mcp_servers, package_mcp_notes = _package_mcp_servers(ec_config, reserved_names=initial_mcp_servers.keys())
+    package_mcp_servers, package_mcp_notes = _package_mcp_servers(
+        ec_config, reserved_names=host_mcp_server_names(initial_mcp_servers)
+    )
     for note in package_mcp_notes:
         logger.warning("Agent Plugin package MCP: {}", note)
     # The host's own servers were composed first and keep their names: a
@@ -360,6 +363,7 @@ def build_runtime(
             workdir_resolver=workdir_resolver,
             subagent_dag_config=ec_config.subagent_dag,
             subagent_questions_config=ec_config.subagent_questions,
+            long_run_notice_seconds=config.subagents.long_run_notice_seconds,
         ),
         engine=EngineWiring(
             strategies=strategies,

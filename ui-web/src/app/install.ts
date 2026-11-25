@@ -390,6 +390,17 @@ async function afterReconnect(): Promise<void> {
   await gateway().call('system.hello', { client_version: '0.1.0', surface: surface() }).catch(() => {})
   redrawWorkdir()
   await reconnect()
+  /* A gateway that comes back said nothing about the runs it lost while it
+     was down, and the stores are reset only when the re-open above lands on a
+     different conversation id -- a reconnect reopens the same one. So the
+     three reads the tasks surfaces draw from are asked again here: without
+     them the desk's Tasks tab and the rail's badge keep the last list the
+     previous process sent, until a poll (the tab has none) or until the
+     reader switches away and back. Not awaited: a slow read must not hold the
+     rest of the recovery. */
+  void refreshTasks()
+  void refreshTaskBoard()
+  void refreshBoards()
   /* The sheets a question was waiting in are gone with the old socket; the
      questions are not. */
   await replayPendingApprovals()

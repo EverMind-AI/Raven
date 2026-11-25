@@ -18,7 +18,14 @@ REPO = Path(__file__).resolve().parent.parent
 PLUGIN_DIR = REPO / "agents" / "raven-code" / "plugins" / "code-flow"
 sys.path.insert(0, str(PLUGIN_DIR))
 
-from code_flow.flow import CodeFlowHook, SessionForget, make_flow_hook, make_session_observer  # noqa: E402
+from code_flow.flow import (  # noqa: E402
+    CodeFlowHook,
+    SessionForget,
+    TurnBudgetHook,
+    make_flow_hook,
+    make_session_observer,
+    make_turn_budget_hook,
+)
 
 MANIFEST_PATH = PLUGIN_DIR / "raven-plugin.toml"
 
@@ -33,7 +40,7 @@ def ctx_for(tmp_path: Path, config: dict) -> PluginContext:
 def test_the_manifest_declares_the_hook_and_the_observer():
     mf = PluginManifest.from_toml_path(MANIFEST_PATH)
     assert mf.id == "code-flow"
-    assert [h.name for h in mf.contributes.hooks] == ["code_flow"]
+    assert [h.name for h in mf.contributes.hooks] == ["code_flow", "code_turn_budget"]
     assert [o.name for o in mf.contributes.session_observers] == ["session_forget"]
     assert mf.contributes.tool_gates == [], "the write gate retired with worktree isolation"
     assert [t.name for t in mf.contributes.tools] == [
@@ -55,7 +62,7 @@ def test_the_registry_builds_the_hook_from_the_real_factory_string(tmp_path):
     reg = PluginRegistry()
     mf = PluginManifest.from_toml_path(MANIFEST_PATH)
     reg.activate([DiscoveredPlugin(manifest=mf, source=ManifestOrigin.USER, location=MANIFEST_PATH)])
-    assert reg.hook_names() == ["code_flow"]
+    assert reg.hook_names() == ["code_flow", "code_turn_budget"]
     assert reg.tool_gate_names() == []
     assert reg.session_observer_names() == ["session_forget"]
     services = ServiceLocator(workspace=tmp_path / "home", user_id="u", agent_id="a")
@@ -98,3 +105,43 @@ def test_unknown_slice_keys_are_ignored_not_refused(tmp_path):
 def test_a_malformed_slice_declines_the_hook_and_the_observer(tmp_path):
     assert make_flow_hook(ctx_for(tmp_path, {"enabled": "not-a-bool"})) is None
     assert make_session_observer(ctx_for(tmp_path, {"enabled": "not-a-bool"})) is None
+
+
+def test_the_turn_budget_hook_hands_the_loop_the_configured_clock():
+    """A product's own deadline reaches the loop as turn metadata.
+
+    The loop serves every agent and must not know this one's config key, so
+    the slice's value travels under the shared budget key.
+    """
+    import asyncio
+
+    from raven.agent.loop import TURN_BUDGETS_KEY
+    from raven.contracts.loop_hooks import AgentHookContext, HookDecision
+
+    ctx = ctx_for(Path("/tmp"), {"enabled": True, "wallClockSeconds": 1800})
+    hook = make_turn_budget_hook(ctx)
+    assert isinstance(hook, TurnBudgetHook)
+
+    turn = AgentHookContext(session_key="cli:c")
+    outcome = asyncio.run(hook.before_user_inbound(turn))
+    assert isinstance(outcome, HookDecision)
+    assert turn.metadata[TURN_BUDGETS_KEY] == {"wall_clock_seconds": 1800.0}
+
+
+def test_no_clock_configured_leaves_the_turn_bounded_as_before():
+    from raven.agent.loop import TURN_BUDGETS_KEY
+    from raven.contracts.loop_hooks import AgentHookContext
+
+    hook = make_turn_budget_hook(ctx_for(Path("/tmp"), {"enabled": True}))
+    assert hook is None, "no clock means no seat; an absent slice casts nothing"
+
+    hook = make_turn_budget_hook(ctx_for(Path("/tmp"), {"enabled": True, "wallClockSeconds": 0}))
+    assert hook is None
+
+    turn = AgentHookContext(session_key="cli:c")
+    assert TURN_BUDGETS_KEY not in turn.metadata
+
+
+def test_a_malformed_clock_declines_rather_than_casting_a_wrong_deadline():
+    hook = make_turn_budget_hook(ctx_for(Path("/tmp"), {"enabled": True, "wallClockSeconds": "soon"}))
+    assert hook is None

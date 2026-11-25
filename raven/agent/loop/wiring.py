@@ -5,6 +5,7 @@ workdir and sinks.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import TYPE_CHECKING
 
 from raven.a2a_client.tool import A2aTool
@@ -67,6 +68,35 @@ _PERSONALIZATION_KEY = "agents.defaults.enablePersonalization"
 #: Both web vendors under one key: they come out of one section, and a turn
 #: that searches and fetches must not straddle an edit between the two.
 _WEB_VENDORS_KEY = "tools.web.providers"
+
+
+def _unavailable_tool_notice(name: str, reason: str) -> str:
+    """The one unavailable line both notice lanes use.
+
+    ``_tool_availability_notices`` speaks for a name in the frozen array and
+    ``_tool_withdrawn_again_notices`` for one the session was told about; a
+    model reading either must get the same fact in the same words, so the text
+    lives here rather than in two literals that could drift. A call to such a
+    name is refused separately, by ``ToolRegistry.unavailable_refusal``, which
+    also says whether the tool list still carries it.
+    """
+    from raven.context_engine.runtime_context import tool_notice
+
+    return tool_notice(
+        name,
+        f"currently unavailable -- {reason}; calls to it are refused until it is enabled again.",
+    )
+
+
+_TOOL_UNLOADED_LISTED = (
+    "no longer available -- it is not loaded any more. Its definition stays in this conversation's tool "
+    "list until the next compaction or new conversation, but a call to it is answered as not available; "
+    "a later note here says if it is loaded again."
+)
+_TOOL_UNLOADED_ABSENT = (
+    "no longer available -- it is not loaded any more and is absent from this conversation's tool list, "
+    "so a call to it is answered as not available; a later note here says if it is loaded again."
+)
 
 
 class WiringMixin:
@@ -175,7 +205,7 @@ class WiringMixin:
         withheld: set[str] = set()
         for entry in configured:
             withheld.update(self.tools.resolve_configured(entry))
-        withheld.update(self._unconfigured_tool_names())
+        withheld.update(self._unconfigured_tool_reasons())
         # Nothing to search is not a tool to offer. Read from the turn's own
         # binding rather than from config, so attaching a base takes effect on
         # the next model call and detaching every base takes the tool away
@@ -184,8 +214,179 @@ class WiringMixin:
             withheld.add("knowledge_search")
         return frozenset(withheld - (RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES | META_TOOL_NAMES))
 
-    def _unconfigured_tool_names(self) -> set[str]:
-        """Registered tools whose config asks for nothing right now, read live.
+    def _withheld_tool_reasons(self) -> dict[str, str]:
+        """The same union as :meth:`_withheld_tool_names`, each name with its reason.
+
+        The reason is what the runtime-context notice and the refusal of a call
+        to an advertised-but-withheld tool say, so the model can act on the
+        setting or credential that puts the tool back. Reserved names are
+        removed here rather than at the switch, for the reasons the names
+        method gives.
+        """
+        from raven.agent.tools.tool_search import META_TOOL_NAMES
+        from raven.config.live import disabled_tool_names
+        from raven.mcp.prompts import PROMPT_TOOL_NAMES
+        from raven.mcp.resources import RESOURCE_TOOL_NAMES
+
+        reasons: dict[str, str] = {}
+        configured = set(disabled_tool_names(self._live_config)) | set(self._disabled_tools)
+        for entry in configured:
+            for name in self.tools.resolve_configured(entry):
+                reasons.setdefault(name, "switched off in settings (tools.disabledTools)")
+        for name, reason in self._unconfigured_tool_reasons().items():
+            reasons.setdefault(name, reason)
+        if not knowledge_scope.selected():
+            reasons.setdefault("knowledge_search", "no knowledge base is selected in this conversation")
+        reserved = RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES | META_TOOL_NAMES
+        return {name: reason for name, reason in reasons.items() if name not in reserved}
+
+    def _hard_withheld_names(self) -> frozenset[str]:
+        """Names the constructor's own list takes off for the life of the process.
+
+        The eval harness's strict subset, resolved against the registry when
+        asked. It never enters a session snapshot: it cannot change mid-session,
+        so keeping it out costs no prompt cache, and "the model never sees it"
+        is the harness's contract. Reserved names are ignored for the same
+        reason :meth:`_withheld_tool_names` ignores them.
+        """
+        from raven.agent.tools.tool_search import META_TOOL_NAMES
+        from raven.mcp.prompts import PROMPT_TOOL_NAMES
+        from raven.mcp.resources import RESOURCE_TOOL_NAMES
+
+        names: set[str] = set()
+        for entry in self._disabled_tools:
+            names.update(self.tools.resolve_configured(entry))
+        return frozenset(names - (RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES | META_TOOL_NAMES))
+
+    def _tool_availability_notices(self) -> list[str]:
+        """One line per advertised tool the live switch has off right now.
+
+        The array is the session's frozen snapshot, so a tool in it that is
+        withheld is still visible to the model and can still be called; this is
+        where it learns why the call will be refused, and when the tool comes
+        back. MCP tools are left to :meth:`_mcp_tool_notices`, which speaks per
+        server: a server's whole set goes away together, and one line per tool
+        would repeat the same fact.
+        """
+        names = self.tools.session_definition_names()
+        if not names:
+            return []
+        # The reason map is the loop's own switch axes (settings, credentials,
+        # the selected base). A name withheld by a charter or by the turn
+        # freeze is not in it, and is left to the dispatch's own prompt: it is
+        # a restriction on this turn, not an availability fact, and a sentence
+        # naming a setting would be false.
+        reasons = self._withheld_tool_reasons()
+        lines: list[str] = []
+        for name in sorted(set(reasons) & names):
+            # An unloaded name is :meth:`_tool_unloaded_notices`' to report: a
+            # switch's reason would say turning it back on helps, and it does not.
+            if self.tools.session_definition_origin(name) is not None or self.tools.get(name) is None:
+                continue
+            lines.append(_unavailable_tool_notice(name, reasons[name]))
+        return lines
+
+    def _tool_withdrawn_again_notices(self) -> list[str]:
+        """One line per tool the session spoke for and whose switch is off again.
+
+        The reverse of :meth:`_tool_became_available_notices`, inside the same
+        window. Such a name never entered the array, so the array's own lane
+        cannot explain it; and its switch being back off stops the announcement,
+        so without this line the notice machinery would clear the announcement
+        as "available again" while a call is refused. The sentence is the
+        array lane's own (see ``_unavailable_tool_notice``), reason included.
+
+        The same lane speaks for a name the previous array carried and a
+        refresh dropped while its switch was still off: after that capture the
+        array lacks it too, and the notice the log holds is still true. Which
+        names the log holds a note about is read from the log at every
+        assembly (``ToolRegistry.bind_session_revision``). The line is returned
+        until the array carries the name again or the switch comes back on, so
+        a missing key always means the subject was resolved.
+        """
+        reasons = self._withheld_tool_reasons()
+        return [
+            _unavailable_tool_notice(name, reasons[name])
+            for name in self.tools.notified_withheld_again(frozenset(reasons))
+        ]
+
+    def _tool_unloaded_notices(self) -> list[str]:
+        """One line per tool the log holds a note about that is not loaded any more.
+
+        A plugin removed, or a tool that declined its runtime binding at a
+        restart, leaves the registry entirely, so no switch's reason names it
+        and neither the array lane nor the withdrawn lane can speak for it.
+        The line says what holds -- it is gone, and a call is answered as not
+        available -- without a reason a setting could undo. It holds until a
+        later note replaces it: if the tool is loaded again, the array carries
+        it (the cleared line is then true), a switch reports it unavailable,
+        or :meth:`_tool_became_available_notices` announces it with its schema.
+        """
+        from raven.context_engine.runtime_context import tool_notice
+
+        return [
+            tool_notice(name, _TOOL_UNLOADED_LISTED if listed else _TOOL_UNLOADED_ABSENT)
+            for name, listed in self.tools.notified_unloaded()
+        ]
+
+    def _tool_notices(self) -> list[str]:
+        """The host's tool-surface facts for this turn's runtime context."""
+        return [
+            *self._mcp_tool_notices(),
+            *self._tool_availability_notices(),
+            *self._tool_withdrawn_again_notices(),
+            *self._tool_became_available_notices(),
+            *self._tool_unloaded_notices(),
+        ]
+
+    def _tool_became_available_notices(self) -> list[str]:
+        """One line per tool that left the unavailable set and is not in the array yet.
+
+        A tool off at the refresh point never entered the array, so the model was
+        never shown its schema; when the switch comes back the call runs, but
+        nothing in this turn's definitions says so. The line names the tool, says
+        it is callable now, and carries the definition -- the same JSON the array
+        would have served -- because a model told only "it works" would invent
+        the parameters. It is one line, not a block: the runtime-context reader
+        takes the lines before the first blank line, and a multi-line schema
+        would leave its tail unkeyed and repeat it every turn.
+
+        "now available" and not "available again", which the cleared note uses:
+        the two lines must not read as one fact said twice. The line is returned
+        for the whole window between two refresh points -- dropping it earlier
+        would make the notice machinery emit its cleared line while the note
+        still applies -- and sent only once, because the machinery keeps a line
+        the replayed history already holds. The next capture puts the schema in
+        the array and this line stops (see ``ToolRegistry.newly_available``).
+
+        Each announced name is recorded for the rest of the turn, so a call to
+        it later in the turn is refused with its reason. Across turns the
+        announcement is read back from the log that carries it, which is what
+        lets :meth:`_tool_withdrawn_again_notices` report the reverse flip --
+        the array does not carry the name -- and keep doing so through a
+        refresh that still withholds it.
+        """
+        from raven.context_engine.runtime_context import tool_notice
+
+        lines: list[str] = []
+        for name in self.tools.newly_available(frozenset(self._withheld_tool_reasons())):
+            schema = self.tools.definition_of(name)
+            if schema is None:
+                continue
+            self.tools.note_notified_tool(name)
+            lines.append(
+                tool_notice(
+                    name,
+                    "now available -- it was unavailable when this session's tool list was "
+                    "captured, so this turn's definitions do not list it, and calls to it run "
+                    "normally. Its definition, to call it as if it were there: "
+                    f"{json.dumps(schema, separators=(',', ':'))}",
+                )
+            )
+        return lines
+
+    def _unconfigured_tool_reasons(self) -> dict[str, str]:
+        """Registered tools whose config asks for nothing right now, with why.
 
         The old registration gate, moved to the withheld axis so it works in
         both directions while the process runs. The rules themselves are
@@ -201,9 +402,11 @@ class WiringMixin:
         ``isinstance`` check read a plugin *subclass* as the built-in itself
         and withheld it on the built-in's empty section.
         """
+        from raven.agent.tools.browser import BROWSER_TOOL_NAMES
+
         media = self.media_config
         gated = getattr(self, "_config_gated_tools", {})
-        names: set[str] = set()
+        names: dict[str, str] = {}
         for cls, kind, fallback in (
             (ImageGenerateTool, "image", media.image),
             (SpeechGenerateTool, "speech", media.speech),
@@ -213,7 +416,7 @@ class WiringMixin:
                 continue
             cfg = self._live_media_config(kind, fallback)
             if not (cfg.api_key or cfg.model):
-                names.add(cls.name)
+                names[cls.name] = f"its tools.media.{kind} section names no model and no key"
         search = self.tools.get(WebSearchTool.name)
         # Asked of the tool, not restated here: it resolves the selected
         # vendor's key from the live reader below or from that vendor's own
@@ -221,10 +424,10 @@ class WiringMixin:
         # SERPER_API_KEY whatever the deployment had chosen, which withheld a
         # keyed Tavily search.
         if search is not None and search is gated.get(WebSearchTool.name) and not search.ready:
-            names.add(WebSearchTool.name)
+            names[WebSearchTool.name] = "no search key is configured for the selected search vendor"
         pictures = self.tools.get(ImageSearchTool.name)
         if pictures is not None and pictures is gated.get(ImageSearchTool.name) and not pictures.api_key:
-            names.add(ImageSearchTool.name)
+            names[ImageSearchTool.name] = "no image-search key is configured for the selected vendor"
         # A contributed tool that declared ``configured()`` at the door answers
         # for itself on this same lane (the paper is in
         # raven/contracts/plugin_surface.py): the built-ins above are judged by
@@ -247,7 +450,11 @@ class WiringMixin:
                 logger.warning("tool {} could not say whether it is configured: {}", name, exc)
                 continue
             if not offered:
-                names.add(name)
+                names[name] = (
+                    "the browser driver is not installed (the browser extra is missing)"
+                    if name in BROWSER_TOOL_NAMES
+                    else "the plugin that contributes it reports it is not configured"
+                )
         return names
 
     def _live_exec_extra_deny(self) -> list[str] | None:
@@ -398,11 +605,12 @@ class WiringMixin:
     def _lane_searches_images(self, target: str) -> bool:
         """Whether ``target`` can search for pictures: its vendor's key, its own or the host's.
 
-        The vendor is the target's own where the target holds the host tool out
-        and searches through its own plugin (:func:`product_picture_vendor`), else
-        the one ``image_search`` itself speaks to -- the selected search vendor
-        where that vendor has an image surface, Serper otherwise
-        (:func:`raven.agent.tools.web.image_search_vendor`) -- and the key is
+        The vendor is the one the lane's launcher would render -- its own where
+        it names a choice, the host's where its picture tool follows the host
+        and the launch would carry the host's choice -- derived by the same
+        inheritance function the launcher runs (:func:`picture_search_ready`),
+        or the one ``image_search`` itself speaks to otherwise: the selection
+        where that vendor has an image surface, Serper otherwise. The key is
         resolved the way the lane resolves it: the product folder's own
         ``<PRODUCT>_<VENDOR>_API_KEY`` first, then the host's slot for that vendor
         (which the launcher copies into the lane's config), then the vendor's bare
@@ -412,17 +620,23 @@ class WiringMixin:
         """
         import os
 
-        from raven.agent.subagent.vendored_agents import product_picture_vendor, product_secret
+        from raven.agent.subagent.vendored_agents import picture_search_ready, product_secret
 
         def key_for(vendor: str) -> str:
+            # A vendor this build does not ship has no key to find; the name may
+            # come from a newer raven's manifest.
+            spec = SEARCH_PROVIDERS.get(vendor)
             return (
                 product_secret(target, f"{vendor.upper()}_API_KEY")
                 or self._live_vendor_key(vendor)
-                or os.environ.get(SEARCH_PROVIDERS[vendor].env_var, "")
+                or (os.environ.get(spec.env_var, "") if spec else "")
             )
 
-        vendor = product_picture_vendor(target) or image_search_vendor(self.web_search_provider, key_for)
-        return bool(key_for(vendor))
+        try:
+            return picture_search_ready(target, self.web_search_provider, key_for, host=self._live_config.raw())
+        except Exception:  # noqa: BLE001 - a probe that cannot answer must refuse, not raise
+            logger.warning("Could not answer the picture-search readiness of {!r}; closing the route", target)
+            return False
 
     def _live_vendor_key(self, vendor: str) -> str:
         """One named web vendor's key the file holds now, whatever the host selected.
@@ -603,20 +817,23 @@ class WiringMixin:
         return self.enable_personalization if configured is None else configured
 
     @property
-    def max_iterations(self) -> int:
-        """The ReAct cap a turn runs under when its session pinned none.
+    def max_iterations(self) -> int | None:
+        """The ReAct cap a turn runs under when its session pinned none, or None for no cap.
 
         Read live rather than frozen at build for the reason the permission
         mode is: a cap is a sentence about the next turn, not work to redo.
         A turn holds the value it starts on (``run_turn`` passes it to
         ``hold_for_this_turn``), because the cap is first read after context
-        assembly -- which can spend minutes in the curator -- and an edit made
-        in that window would otherwise change the request already running.
+        assembly -- which can spend minutes in a summarising compaction -- and an
+        edit made in that window would otherwise change the request already
+        running.
         """
         from raven.config.live import held, max_tool_iterations
 
         configured = held(_CAP_KEY, lambda: max_tool_iterations(self._live_config))
-        return configured or self._default_max_iterations
+        if configured is None:
+            return self._default_max_iterations
+        return configured if configured > 0 else None
 
     @property
     def provider_pool(self) -> "ProviderPool | None":
@@ -855,6 +1072,10 @@ class WiringMixin:
         # does: a deleted session has nothing left to run as, and this is the
         # one place that says a session is over.
         self._session_personas.pop(session_key, None)
+        # The frozen tool array and its log id go with it for the same reason:
+        # the key may be reused by a later session, and an active session's
+        # array must never be evicted to make room for another.
+        self.tools.release_session_tools(session_key)
 
     def _forget_transport_verdicts(self) -> None:
         """Drop the capability verdicts a new provider may answer differently.
@@ -1487,10 +1708,10 @@ class WiringMixin:
                 measure_writes(self._command_shadow)
             self.tools.register(tool)
 
-        # Skill retrieval tools (body -> scripts). Both are source-agnostic and
-        # both serve local/everos straight from the registry, so both register
-        # whenever the registry is reachable; a Hub endpoint only adds their
-        # ``hub/`` branch. Gating ``read_skill`` on the client would take the
+        # Skill retrieval tools (body -> scripts). Both are source-agnostic: they
+        # serve local ids straight from the registry and memory-backend ids from
+        # the hits the router returned, so both register whenever the registry is
+        # reachable; a Hub endpoint only adds their ``hub/`` branch. Gating ``read_skill`` on the client would take the
         # body-fetch route away from the skills that ship with Raven, whose
         # ``inject: description`` entry advertises exactly that route.
         skill_registry = getattr(
@@ -1499,9 +1720,27 @@ class WiringMixin:
             None,
         )
         if skill_registry is not None or self._skill_hub_client is not None:
-            from raven.agent.tools.skill_hub import FindSkillTool, ReadSkillTool, UseSkillTool
-            from raven.config.live import skill_hub_enabled
+            from raven.agent.tools.skill_hub import FindSkillTool, ReadSkillTool, UseSkillTool, router_held_hit
+            from raven.config.live import project_skills_enabled, skill_hub_enabled
+            from raven.memory_engine import ProjectSkills
 
+            def skills_router():
+                return getattr(self.context_engine, "skills_router", None)
+
+            # A sub-agent is given no project skills, matching the router source
+            # the leader process alone mounts; the tools answer ``project/`` ids
+            # with "not available to this agent." A host that turned the router
+            # master switch off mounts no source either, so the same answer
+            # covers it.
+            project_skills = (
+                None
+                if is_subagent_process() or not self._skill_router_enabled
+                else ProjectSkills(
+                    agent_home=self.workspace,
+                    workdir_reader=workdir.current,
+                    enabled_reader=lambda: project_skills_enabled(self._live_config),
+                )
+            )
             self.tools.register(
                 ReadSkillTool(
                     client=self._skill_hub_client,
@@ -1510,13 +1749,15 @@ class WiringMixin:
                     blocklist=self._skill_blocklist,
                     blocklist_reader=self._skill_blocklist_reader,
                     enabled_reader=lambda: skill_hub_enabled(self._live_config),
+                    held_hit=router_held_hit(skills_router),
+                    project=project_skills,
                 ),
             )
-            # Pull-mode discovery: search on the model's own terms through the
-            # same router the context engine retrieves with.
+            # Discovery on the model's own terms, through the same router the
+            # scent menu reads.
             self.tools.register(
                 FindSkillTool(
-                    lambda: getattr(self.context_engine, "skills_router", None),
+                    skills_router,
                     hub_wired=self._skill_hub_client is not None,
                     enabled_reader=lambda: skill_hub_enabled(self._live_config),
                     min_safety=self._skill_min_safety,
@@ -1533,6 +1774,8 @@ class WiringMixin:
                     blocklist_reader=self._skill_blocklist_reader,
                     enabled_reader=lambda: skill_hub_enabled(self._live_config),
                     auto_install=self._skill_auto_install,
+                    held_hit=router_held_hit(skills_router),
+                    project=project_skills,
                     install_audit_path=(
                         self.workspace / "skills" / "hub" / "installs.jsonl"
                         if self._skill_hub_client is not None
@@ -1586,7 +1829,14 @@ class WiringMixin:
         refuse, rather than a condition repeated over six registrations that a
         seventh would quietly not get.
         """
-        self.tools.register(SpawnTool(manager=self.subagents))
+        self.tools.register(
+            SpawnTool(
+                manager=self.subagents,
+                control_advert=lambda: (
+                    self.dag_control_advert("cancel_subagent") if self.subagent_control_reachable() else None
+                ),
+            )
+        )
         # Outbound A2A: hands work to an external agent rather than one this
         # process manages, but it is still a hand-off this method's gate must
         # cover -- see raven.agent.subagent.role.WITHHELD_FROM_SUBAGENT.
@@ -1624,10 +1874,12 @@ class WiringMixin:
                 gate=self.subagents.dispatch_gate,
                 announce=self.subagents.announce_dag_result,
                 announce_exception=self.subagents.announce_dag_exception,
+                announce_long_run=self.subagents.announce_long_run,
+                long_run_notice_seconds=self.subagents.long_run_notice_seconds,
                 adopt=self.subagents.adopt_background_run,
                 charge=self.subagents.charge_dag_run,
                 # The manager's own sandbox builder, so a graph node's exec
-                # runs in the VM its tools.sandbox configured rather than on
+                # runs in the sandbox its tools.sandbox configured rather than on
                 # the host -- the silent fallback the sandbox docs disown.
                 sandbox_for=self.subagents.sandbox_executor_for,
                 ask=self._confirm_graph,
@@ -1656,12 +1908,18 @@ class WiringMixin:
         # three get: hidden from the schema so the per-turn tool list carries
         # nothing a conversation that never starts a DAG has any use for, they
         # stay reachable through the registry (and tool_call where it exists).
-        from raven.agent.subagent.dag_control_tools import CancelDagTool, DagStatusTool, ResolveDagNodeTool
+        from raven.agent.subagent.dag_control_tools import (
+            CancelDagTool,
+            CancelSubagentTool,
+            DagStatusTool,
+            ResolveDagNodeTool,
+        )
 
         self.tools.register(CancelDagTool(loop=self))
+        self.tools.register(CancelSubagentTool(loop=self))
         self.tools.register(DagStatusTool(loop=self))
         self.tools.register(ResolveDagNodeTool(loop=self))
-        self.tools.hide_from_schema("cancel_dag", "dag_status", "resolve_dag_node")
+        self.tools.hide_from_schema("cancel_dag", "cancel_subagent", "dag_status", "resolve_dag_node")
 
     def _bind_plugin_runtime(self) -> None:
         """Grant the late-bound handles to every plugin tool that declared.
@@ -1924,6 +2182,8 @@ class WiringMixin:
             gate=self.subagents.dispatch_gate,
             announce=self.subagents.announce_dag_result,
             announce_exception=self.subagents.announce_dag_exception,
+            announce_long_run=self.subagents.announce_long_run,
+            long_run_notice_seconds=self.subagents.long_run_notice_seconds,
             adopt=self.subagents.adopt_background_run,
             charge=self.subagents.charge_dag_run,
             # Same manager hooks as the registered tool: the sandbox builder
@@ -2186,7 +2446,7 @@ class WiringMixin:
     def check_workdir_mounted(self, path: Path, session_key: str | None = None) -> None:
         """Refuse a working directory a sandboxed run could not see.
 
-        A VM's volumes are fixed when the box is created, so a directory
+        A sandbox's volumes are fixed when it is created, so a directory
         outside the mount cannot be served by adding one later.
         """
         if self._workdir_resolver is None or not self._executor.is_sandboxed:
@@ -2225,6 +2485,7 @@ class WiringMixin:
             "deliver_files",
             "dag_status",
             "cancel_dag",
+            "cancel_subagent",
             "resolve_dag_node",
             "context_retrieve",
             "task_board",
@@ -2240,6 +2501,7 @@ class WiringMixin:
                     "deliver_files",
                     "dag_status",
                     "cancel_dag",
+                    "cancel_subagent",
                     "resolve_dag_node",
                     "context_retrieve",
                     "task_board",
@@ -2313,6 +2575,10 @@ class WiringMixin:
             return False
         return self.tool_search_controller.tool_call_available()
 
+    def subagent_control_reachable(self) -> bool:
+        """Whether the current host turn can call the hidden cancellation tool."""
+        return self.dag_control_reachable() and self.tools.offers_by_name("cancel_subagent")
+
     def dag_control_advert(self, name: str) -> str | None:
         """One schema-hidden dag control tool's definition, as advertisement text.
 
@@ -2323,7 +2589,7 @@ class WiringMixin:
         """
         from raven.agent.subagent.dag_control_advert import render
 
-        return render(self.tools.hidden_definition(name))
+        return render(self.tools.hidden_definition(name)) if self.tools.offers_by_name(name) else None
 
     def set_dag_progress_sink(self, sink) -> None:
         """Late-bind the graph tools' progress sink (host wires it to the web

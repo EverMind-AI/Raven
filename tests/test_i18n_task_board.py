@@ -18,6 +18,7 @@ from raven.agent.task_board.board import (
     apply_update,
     word_count,
 )
+from raven.agent.task_board.matters import anchors, candidates
 from raven.agent.task_board.recall import search
 from raven.agent.task_board.runner import asked, build_carry_instruction, build_instruction
 
@@ -201,25 +202,28 @@ def test_the_zh_instruction_keeps_each_question_with_its_own_matter(zh):
     assert "问别的事的问题归那件事：新问的写在那个任务的事件里，只是重复之前问过的就不必写。" in questions_rule
 
 
-def test_the_zh_instruction_names_the_tasks_a_scoped_turn_belongs_to(zh):
-    board = Board([_group("g_x", "整理发布说明", "写好初稿")], [])
+def test_the_zh_instruction_lists_every_candidate_and_marks_the_owners(zh):
+    board = Board([_group("g_x", "整理发布说明", "写好初稿"), _group("g_y", "修复登录", "定位")], [])
 
-    text = build_instruction(board, [], owners=["g_x"])
+    text = build_instruction(board, [], ["g_x", "g_y"], owners=["g_x"])
 
-    scope = text[text.index("[END DISPATCHES]") : text.index("怎么写这次更新：")]
-    assert "这一轮属于下面这些任务" in scope and "g_x" in scope
-    assert (
-        "只给它们写事件，再加上每个待放置句柄所在的任务（可以是新任务），以及回复里问用户的每个问题所属的事；" in scope
-    )
-    assert "另发的每条消息" not in scope
+    para = text[text.index("[END DISPATCHES]") : text.index("怎么写这次更新：")]
+    assert "这一轮由 g_x 开启：" in para
+    assert "这一轮涉及这些任务：g_x, g_y。对其中每一个，都在 `matters` 里各答一条。" in para
+    assert '`{"group": "<id>", "moved": true, "evidence": "<原话>"}`' in para
+    assert "之前几轮已经问过的问题" in para, "a repeated question is not movement"
+    assert para.index("这一轮由") < para.index("这一轮涉及")
     assert text.count("整理发布说明") == 1, "a title stays inside the record"
     plain = build_instruction(board, [])
     assert plain[plain.index("[END DISPATCHES]") : plain.index("怎么写这次更新：")] == "[END DISPATCHES]\n\n"
 
 
-def test_the_zh_scope_of_a_turn_that_took_in_a_mid_turn_message_names_those_messages(zh):
-    text = build_instruction(Board([], []), [], owners=["g_x"], mid_turn=True)
+def test_a_chinese_title_keeps_only_its_identifying_tokens():
+    assert anchors("审核 PR #12 与 e.g 说明") == ["#12"]
 
-    scope = text[text.index("[END DISPATCHES]") : text.index("怎么写这次更新：")]
-    assert "g_x，以及这一轮运行时用户另发的每条消息所说的事。" in scope
-    assert "以及回复里问用户的每个问题所属的事；" in scope
+
+def test_an_anchor_glued_to_chinese_text_still_names_its_group():
+    board = Board([_group("g_b", "审核 PR #1270 发布说明", "起草"), _group("g_c", "发布 2.4.0", "打包")], [])
+
+    assert candidates(board, [], "要合并#1270吗") == ["g_b"]
+    assert candidates(board, [], "已经发了2.4.0。") == ["g_c"]

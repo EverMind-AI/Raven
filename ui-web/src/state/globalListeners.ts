@@ -89,7 +89,7 @@ function copyCodeBlock(event: MouseEvent): void {
   }, 1500)
 }
 
-/* The Escape order (state/escapeOrder.ts) and the three shortcuts that have
+/* The Escape order (state/escapeOrder.ts) and the four shortcuts that have
    always shared its handler. They share it because splitting them would add a
    registration, and the sequence above is what this file is for. */
 function onEscapeOrder(e: KeyboardEvent): void {
@@ -99,8 +99,8 @@ function onEscapeOrder(e: KeyboardEvent): void {
   if (composing(e)) return
   const inField = /INPUT|TEXTAREA/.test(document.activeElement?.tagName ?? '')
   if (e.key === 'Escape' && escapeOrder.dispatch()) return
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
-    e.preventDefault(); setRail(true); toggleFind(true)
+  if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'k' || e.key.toLowerCase() === 'f')) {
+    e.preventDefault(); toggleFind(true, e.target instanceof HTMLElement ? e.target : null)
   }
   if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
     e.preventDefault(); setRail(!railOpen())
@@ -128,6 +128,13 @@ export function installEscapeOrder(): void {
   document.addEventListener('keydown', onEscapeOrder)
 }
 
+/* The code-block copy control alone. A surface that draws prose without the
+   rest of the page -- the file preview window -- boots none of the listeners
+   below, and its listings still carry the button. */
+export function installCodeCopy(): void {
+  document.addEventListener('click', copyCodeBlock)
+}
+
 /** Every document- and window-level listener the page holds. Called once. */
 export function installGlobalListeners(): void {
   /* A link in an answer belongs to the reader's own browser, never to the
@@ -152,8 +159,9 @@ export function installGlobalListeners(): void {
   window.addEventListener('resize', dropBars)
   /* Both panes re-clamp, or a narrowed window leaves the chat no floor. */
   window.addEventListener('resize', reclampPanes)
-  /* The path and artefact chips in an answer, which are replaced wholesale
-     with every answer -- so the click and the key are the document's. */
+  /* The path and artefact chips in an answer, whose nodes are replaced each
+     time the prose around them is redrawn -- so the click and the key are the
+     document's. */
   document.addEventListener('click', chipClick)
   document.addEventListener('keydown', chipKey)
   /* The context menu closes on a pointer outside it; the two popovers below
@@ -172,7 +180,7 @@ export function installGlobalListeners(): void {
   document.addEventListener('mousedown', shellDrag)
   document.addEventListener('dblclick', shellZoom)
   document.addEventListener('selectionchange', clampSelection)
-  document.addEventListener('click', copyCodeBlock)
+  installCodeCopy()
   installEscapeOrder()
   document.addEventListener('keydown', onSettingsKey)
   /* The loaded page. The splash is the boot sequence's to lift, so what is

@@ -9,6 +9,13 @@
  * page.html serves the chip with neither, and a data-* that appears at boot
  * would move what the region goldens record.
  *
+ * The hover pill is dropped while the popover is up: the pill stands just
+ * above the chip, which is where the card ends, and the card says it larger.
+ *
+ * The fill is also said as a number beside the ring: a ring alone reads as a
+ * loading spinner. It is rendered only once a window is known, for the same
+ * golden, and stays out of the accessible name, which already says it.
+ *
  * The click opens the popover (./CtxPopover.tsx), which reads the same store.
  */
 
@@ -25,7 +32,7 @@ export function CtxChip(): JSX.Element {
       className={`chip ctx${s.warm ? ' warm' : ''}${s.hot ? ' hot' : ''}`}
       id="ctxChip"
       hidden={!s.shown}
-      data-tip={s.tip ?? undefined}
+      data-tip={s.open ? undefined : s.tip ?? undefined}
       aria-label={s.tip ?? undefined}
       aria-haspopup="true"
       aria-expanded={s.open ? 'true' : 'false'}
@@ -35,6 +42,7 @@ export function CtxChip(): JSX.Element {
         <circle className="bg" cx="10" cy="10" r="7.6" />
         <circle className="fg" cx="10" cy="10" r="7.6" strokeDashoffset={s.offset ?? undefined} />
       </svg>
+      {s.shown && <span className="chrome-ctx-num" aria-hidden="true">{`${s.pct}%`}</span>}
     </button>
   )
 }

@@ -16,7 +16,7 @@ Two policies the router enforces (not its sources):
   whole-pipeline failure because of one transient.
 
 The router's source list is fixed in its membership, not in its lifetime:
-the sources are internal (Local, EverOS and Hub) and a third-party skill
+the sources are internal (Local, EverOS, Hub and Project) and a third-party skill
 retrieval extension goes through :class:`MemoryBackend` rather than through
 new ForgeSkillSource implementations. The one exception is the memory
 backend's source, which a live switch adds or removes with
@@ -28,12 +28,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import OrderedDict
 from typing import Any
 
 from raven.memory_engine.skill_forge.fusion import rrf_merge_weighted
 from raven.memory_engine.skill_forge.types import ForgeSkillSource, RouterHit
 
 logger = logging.getLogger(__name__)
+
+# A memory-backend hit has no file behind it, so its body is the hit itself:
+# read_skill finds it here by id after the menu or find_skill named it. Bounded
+# because the router outlives every session of its agent.
+_HELD_HITS = 256
 
 
 class SkillForgeRouter:
@@ -56,6 +62,7 @@ class SkillForgeRouter:
         self._over_fetch_factor = max(1, over_fetch_factor)
         self._dedup_by = dedup_by
         self._rrf_k = rrf_k
+        self._held: OrderedDict[str, RouterHit] = OrderedDict()
 
     def add_source(self, source: ForgeSkillSource) -> None:
         """Wire one more source, for a switch that turns memory on.
@@ -76,6 +83,22 @@ class SkillForgeRouter:
         name and weight, and the one this router holds is the one to drop.
         """
         self._sources = [s for s in self._sources if s is not source]
+        self.forget(source)
+
+    def forget(self, source: ForgeSkillSource) -> None:
+        """Drop the held hits a source returned, by its current name.
+
+        A memory switched off must stop serving bodies, and so must one rebound
+        in place to another backend or agent: call this before the source's name
+        changes, or the old prefix's hits stay readable.
+        """
+        prefix = f"{source.name}/"
+        for qualified_id in [q for q in self._held if q.startswith(prefix)]:
+            del self._held[qualified_id]
+
+    def held_hit(self, qualified_id: str) -> RouterHit | None:
+        """A hit one of the latest selections returned, by its qualified id."""
+        return self._held.get(qualified_id)
 
     async def select(
         self,
@@ -91,12 +114,18 @@ class SkillForgeRouter:
         # and weight.
         sources = tuple(self._sources)
         per_source = await asyncio.gather(*[self._safe_search(s, query, history, per_source_k) for s in sources])
-        return rrf_merge_weighted(
+        fused = rrf_merge_weighted(
             [(s.name, s.weight, hits) for s, hits in zip(sources, per_source)],
             k=k,
             dedup_by=self._dedup_by,
             rrf_k=self._rrf_k,
         )
+        for hit in fused:
+            self._held[hit.qualified_id] = hit
+            self._held.move_to_end(hit.qualified_id)
+        while len(self._held) > _HELD_HITS:
+            self._held.popitem(last=False)
+        return fused
 
     async def _safe_search(
         self,

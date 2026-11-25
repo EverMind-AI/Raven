@@ -1,7 +1,9 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
 exports[`connections island > keeps its rendered shape, list 1`] = `
-"div.hub-head
+"div.page-bar
+  h2.page-bar-title
+div.hub-head
   button.hub-head-tab
   button.hub-head-tab
   button.hub-head-tab

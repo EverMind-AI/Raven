@@ -6,11 +6,14 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import hashlib
 from typing import TYPE_CHECKING
 
+from raven.agent import turn_clock
 from raven.agent.context.silence import is_silence, reads_loose_silence, teaches_silence
 from raven.agent.loop._shared import (
     _ABORTED_ACTION_REPLY,
+    _CONTEXT_PARTS_KEY,
     _CONTEXT_USED_KEY,
     _DELEGATED_KEY,
     _HOOK_INJECTED_KEY,
@@ -124,10 +127,11 @@ from raven.agent.loop.recovery import (
 from raven.agent.session_effort import of as session_effort_of
 from raven.agent.tools.registry import call_failed
 from raven.agent.tools.removals import RemovalWatch
+from raven.agent.turn_report import REPORT_INSTRUCTION
 from raven.agent.window import shrink
 from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, filed_image_note, image_sources
 from raven.agent.window.parts import ATTACHMENT_NOTES_KEY, measure_parts
-from raven.agent.window.turn_log import TURN_LOG_KEY, TurnLog
+from raven.agent.window.turn_log import OPENING_KEY, STAND_IN_KEY, TURN_LOG_KEY, TurnLog
 from raven.contracts.harness import (
     ActionRequest,
     CapabilityRequest,
@@ -143,8 +147,9 @@ from raven.providers import usage_record
 from raven.providers.base import bound_llm_detail, canonical_llm_error, llm_error_summary, parse_llm_error
 from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
-from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT
-from raven.session.refs import TOOL_RESULT_TRUNCATION_MARKER, tool_result_view
+from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT, SessionWriterConflictError
+from raven.session.refs import cap_tool_result, tool_result_view
+from raven.session.tool_output import bound_tool_result, direction_for
 from raven.session.turn_shape import REPLIED_VIA_TOOL, TakeBack, TakeBackStep
 from raven.spine.events import bound_failure_text
 from raven.spine.scheduler import describe_failure
@@ -162,7 +167,7 @@ if TYPE_CHECKING:
     from raven.providers.base import ErrorClassification
     from raven.spine.events import NoticeKind
     from raven.spine.runner import Drain, Emit, TurnOutcome
-    from raven.spine.turn import TurnRequest
+    from raven.spine.turn import TurnReport, TurnRequest
 
 
 def _scrubbed_result(arguments: Any, text: str, *, agent_output: bool = False) -> str:
@@ -312,12 +317,14 @@ def _turns_a_person_opened(messages: list[dict[str, Any]]) -> list[dict[str, Any
     So the turn decides. A ``role == "user"`` entry opens one and its mark
     rules until the next opens; anything before the first user entry is the
     tail of a turn this slice does not contain, and is kept, because the slice
-    starts where the last annotation stopped.
+    starts where the last annotation stopped. A row the harness put there is
+    not a person speaking -- a hook's note or re-prompt -- so it opens nothing
+    and leaves the turn in progress with whatever verdict it already had.
     """
     out: list[dict[str, Any]] = []
     keep = True
     for m in messages:
-        if m.get("role") == "user":
+        if m.get("role") == "user" and not m.get(_HOOK_INJECTED_KEY):
             keep = not m.get("origin")
         if keep:
             out.append(m)
@@ -337,14 +344,89 @@ def _without_scratch(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _content_digest(content: Any) -> str:
+    """What a row said when it was filed, so a rewrite can be told from the
+    transforms a save makes on its own (a truncated body, a stripped envelope)."""
+    payload = json.dumps(content, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _is_runtime_context_block(part: Any) -> bool:
+    """Whether a content block is the runtime-context prefix assembly prepended."""
+    return (
+        isinstance(part, dict)
+        and part.get("type") == "text"
+        and isinstance(part.get("text"), str)
+        and part["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG)
+    )
+
+
+def _archive_tool_images(entry: dict[str, Any], content: Any) -> Any:
+    """Archive a multimodal tool result's pictures, leaving placeholders in the display content.
+
+    Returns the content the row stores. The save path calls this before the
+    character cap, which passes a list through unchanged; a cap that ever learns
+    to cut a list must cut this placeholder form, never the data URI a replay
+    depends on.
+    """
+    from raven.utils.image_store import IMAGE_REFS_KEY, capture_images
+
+    if not isinstance(content, list):
+        return content
+    content, image_refs = capture_images(content)
+    entry["content"] = content
+    if image_refs:
+        entry[IMAGE_REFS_KEY] = image_refs
+    return content
+
+
+def _incremental_upto(messages: list[dict[str, Any]], start: int) -> int | None:
+    """Where an incremental write stops, or None when it has nothing to write.
+
+    Every row is fileable now. A picture used to hold the whole tail behind it
+    until the window turned the row into a note, and a picture the window keeps
+    (the newest ones) held it for the rest of the turn. The writer files an
+    inline picture as the ``[image]`` placeholder instead (see ``_save_turn``),
+    so the row lands where it happened and nothing after it waits.
+    """
+    return len(messages) if len(messages) > start else None
+
+
+def _filing_batch(session: Any, messages: list[dict[str, Any]], skip: int) -> tuple[dict[str, dict], list[dict]]:
+    """The rows a write prepares, and the stored row behind each one already filed.
+
+    A row already on disk is never written twice: the incremental writer and the
+    closing one can disagree about where the filed prefix ends when the record
+    was rewritten mid-turn, and the identifier settles it. The stored row rides
+    along, so a row the window rewrote after it was filed can be told from the
+    form that reached the file. The per-row filing state is pruned here to the
+    rows the copy still holds.
+
+    The append boundary can sit behind a row the turn may still rewrite in place:
+    the image window withdraws a picture and puts a note where it was. Every such
+    row is prepared again beside the new ones, so its latest version reaches the
+    file instead of the first one staying. That makes each write cost the rows
+    the turn has filed so far, and a turn's writes together grow with the square
+    of its length -- the price of noticing a rewrite wherever it lands.
+    """
+    already_filed = {str(row.get("_row_id")): row for row in getattr(session, "messages", ()) if row.get("_row_id")}
+    for state in (getattr(session, "_filed_contents", None), getattr(session, "_inbound_filed", None)):
+        for stale in set(state or ()) - set(already_filed):
+            state.pop(stale, None)
+    batch = list(messages[skip:])
+    if skip and already_filed:
+        batch = [m for m in messages[:skip] if str(m.get("_row_id") or "") in already_filed] + batch
+    return already_filed, batch
+
+
 def _stamp_turn_observers(messages: list[dict[str, Any]], metadata: dict[str, Any] | None, turn_base: int) -> None:
     """File the turn's observer record onto its last substantive assistant message.
 
     The loop_hooks paper files ``metadata["observers"]`` on THE TURN'S message
     at persist time, so the search never crosses ``turn_base``: an answerless
     turn has no seat, and the assembled window can share dict objects with the
-    session record (the curator candidate view), so stamping an earlier
-    message would rewrite filed history in place.
+    session record, so stamping an earlier message would rewrite filed history
+    in place.
     """
     if not metadata:
         return
@@ -369,8 +451,31 @@ _SAID_LOG_MAX_CHARS = 2000
 # drop them too, or it answers about a message nobody is going to keep.
 _TURN_TRANSIENT_KEYS = ("_recovery_synthetic", ATTACHED_IMAGE_KEY)
 
+# Tells a wrap-up call that named no cap from one whose turn is explicitly
+# unbounded: both would otherwise arrive as ``None``, and the fallback text has
+# to say which one the reader got.
+_ITERATION_CAP_FROM_LOOP = object()
 
-def _stamp_context_used_on_kept(messages: list[dict[str, Any]], response: Any) -> None:
+#: Keys this loop adds to a row after that row may already be on disk. A
+#: turn_meta restates these and nothing else: a stored row is not always the
+#: row the loop holds (tool bodies are truncated on the way in).
+#: Loop name -> stored name. A row is written under the stored spelling, so a
+#: patch restates the key the file (and every reader) knows.
+_LATE_STAMP_KEYS = {
+    "_replied_via_tool": REPLIED_VIA_TOOL,
+    "observers": "observers",
+    _REASONING_MS_KEY: "reasoning_ms",
+    _TOOL_DURATION_MS_KEY: "duration_ms",
+    _CONTEXT_USED_KEY: "context_used",
+    _CONTEXT_PARTS_KEY: "context_parts",
+}
+
+
+def _stamp_context_used_on_kept(
+    messages: list[dict[str, Any]],
+    response: Any,
+    parts: dict[str, int] | None = None,
+) -> None:
     """Put the reading of a call whose reply is not filed on the newest row that is.
 
     An empty reply never becomes a row of its own in the session: recovery
@@ -381,7 +486,7 @@ def _stamp_context_used_on_kept(messages: list[dict[str, Any]], response: Any) -
     is the turn's question it is already on disk and the stamp never reaches
     it: the turn either files a row of its own later, which takes a newer
     reading, or ends on the marker ``_save_broken_turn`` files, which carries
-    it.
+    it. ``parts`` rides with the reading, for the reason ``_shared`` states.
     """
     used = _call_window(response)
     if used <= 0:
@@ -389,6 +494,8 @@ def _stamp_context_used_on_kept(messages: list[dict[str, Any]], response: Any) -
     for message in reversed(messages):
         if not any(message.get(key) for key in _TURN_TRANSIENT_KEYS):
             message[_CONTEXT_USED_KEY] = used
+            if parts:
+                message[_CONTEXT_PARTS_KEY] = dict(parts)
             return
 
 
@@ -518,6 +625,7 @@ def _taken_back_whole(messages: list[dict], skip: int) -> bool:
     under the live names. ``skip`` is where the turn's new rows start; the row that opened it may be
     older, filed by the opening write.
     """
+    skip = min(skip, len(messages))
     # Every user row sets the rule's state afresh, so reading from the last one before the turn's new
     # rows reads what the whole transcript would, without walking a long session on every save.
     start = next(
@@ -805,6 +913,7 @@ class TurnPathMixin:
         prompt: str = _MAX_ITER_SYNTHESIS_PROMPT,
         fallback: str | None = None,
         synthesis_policy: TurnSynthesisPolicy | None = None,
+        iteration_cap: Any = _ITERATION_CAP_FROM_LOOP,
     ) -> str:
         """Wrap up an interrupted turn with tools withheld from the model.
 
@@ -828,8 +937,10 @@ class TurnPathMixin:
         ``prompt`` and ``fallback`` are the caller's because the reason differs
         and the reason is model-visible: a turn stopped on a repeating call has
         not used up its budget, and told that it had, it summarizes the wrong
-        thing.
+        thing. ``iteration_cap`` is the cap the turn actually hit, so the static
+        fallback names that number; omitted, the loop's own default answers.
         """
+        cap = self.max_iterations if iteration_cap is _ITERATION_CAP_FROM_LOOP else iteration_cap
         if synthesis_policy is not None:
             prompt = f"{prompt}\n\n{synthesis_policy.guidance}"
         # The turn's own conversation plus one instruction: the main line, not a
@@ -876,7 +987,7 @@ class TurnPathMixin:
                     except Exception as exc:
                         logger.warning("Early-exit synthesis repair failed: {}", exc)
             if not text:
-                text = fallback or _MAX_ITER_STATIC_FALLBACK.format(n=self.max_iterations)
+                text = fallback or _MAX_ITER_STATIC_FALLBACK.format(n=cap or "unbounded")
                 if synthesis_policy.format_fallback is not None:
                     try:
                         text = synthesis_policy.format_fallback(text)
@@ -915,7 +1026,7 @@ class TurnPathMixin:
         except Exception as exc:
             logger.warning("Early-exit synthesis call failed: {}", exc)
         if fallback is None:
-            fallback = _MAX_ITER_STATIC_FALLBACK.format(n=self.max_iterations)
+            fallback = _MAX_ITER_STATIC_FALLBACK.format(n=cap or "unbounded")
         # The streamed-success path already delivered its text through
         # ``on_token_delta``; this fallback did not. Push it through the stream
         # too, or the run_turn boundary — which suppresses the closing ``Text``
@@ -966,6 +1077,7 @@ class TurnPathMixin:
                 ],
             )
             self.context.add_tool_result(messages, call_id, autofill_resolver.TOOL_NAME, row.get("summary", ""))
+            messages[-1]["content"] = cap_tool_result(messages[-1]["content"], self._TOOL_RESULT_MAX_CHARS)
 
     def _answered_by_tool(self, turn_rows: list[dict]) -> bool:
         """Whether this turn's tools already handed the reader its answer.
@@ -1004,11 +1116,13 @@ class TurnPathMixin:
         turn_log: TurnLog | None = None,
         rungs_used: set[str] | None = None,
         reply_awaited: bool = False,
-        window_reading: dict[str, int] | None = None,
+        window_reading: dict[str, Any] | None = None,
         silence_taught: bool = False,
         turn_start_idx: int = 0,
         session_effort: str | None = None,
         surface: str | None = None,
+        on_step: Callable[[], None] | None = None,
+        report: "TurnReport | None" = None,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
@@ -1146,6 +1260,102 @@ class TurnPathMixin:
             log.follow(result.messages)
             return result
 
+        # The preview each over-budget tool result is sent as, keyed by the call
+        # and by the body it bounded so every call of the turn sends the same
+        # bytes. The body is part of the key because a step can advertise two
+        # calls under one ``tool_call_id``; keying on the id alone let the later
+        # result evict the earlier one, and every call then re-filed both under
+        # a fresh managed path. The message itself keeps the full body: hooks and
+        # observers read the transcript, not the payload, and several research
+        # gates decide a fetch's success by parsing that body. Only the
+        # projection below, and the persist that closes the turn, carry the
+        # preview.
+        bounded_results: dict[tuple[str, str], str] = {}
+        # What a call actually carried for each of this turn's tool rows, by
+        # the record's stamp: the preview the row was sent as, or the stand-in
+        # a window pass left in its place. A preview in the cache is not proof
+        # a call sent it: proactive shrink can replace a fresh result before
+        # its first projection, and filing that preview would store bytes no
+        # model read, and name a managed file no call used.
+        sent_tool_rows: dict[str, str] = {}
+        elided_tool_rows: dict[str, str] = {}
+        # None of the three is evicted; a turn with no iteration cap grows them
+        # by one entry per over-budget row until it ends. A stamp cannot come
+        # back: ``TurnLog.drop`` only removes the current iteration, and a row
+        # a call carried was appended in an earlier one -- the call that first
+        # projects it runs before anything of its own iteration is added.
+
+        def _model_preview(row: dict[str, Any]) -> str | None:
+            """The content the model reads for one tool row, or ``None`` when no call reads a preview."""
+            content = row.get("content")
+            call_id = row.get("tool_call_id")
+            if not isinstance(content, str) or not isinstance(call_id, str):
+                return None
+            # The stamp is the row's identity: a body already in history is left
+            # as stored, even when a fresh call reuses its ``tool_call_id``.
+            if not log.owns(row) or row.get(STAND_IN_KEY):
+                return None
+            cached = bounded_results.get((call_id, content))
+            if cached is not None:
+                return cached
+            preview = bound_tool_result(
+                content,
+                self.workspace,
+                limits=self._TOOL_OUTPUT_LIMITS,
+                direction=direction_for(row.get("name")),
+                readers=tuple(name for name in ("read_file", "grep") if self.tools.get(name) is not None),
+            )
+            if preview == content:
+                return None
+            bounded_results[(call_id, content)] = preview
+            return preview
+
+        def _model_facing(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            """``rows`` as the model reads them: an over-budget tool result carries its preview."""
+            out: list[dict[str, Any]] | None = None
+            for index, row in enumerate(rows):
+                if not isinstance(row, dict) or row.get("role") != "tool":
+                    continue
+                seq = row.get(TURN_LOG_KEY)
+                content = row.get("content")
+                if row.get(STAND_IN_KEY):
+                    if isinstance(seq, str) and isinstance(content, str):
+                        elided_tool_rows[seq] = content
+                    continue
+                preview = _model_preview(row)
+                if isinstance(seq, str) and isinstance(content, str):
+                    sent_tool_rows[seq] = preview if preview is not None else content
+                if preview is None:
+                    continue
+                if out is None:
+                    out = list(rows)
+                out[index] = {**row, "content": preview}
+            return rows if out is None else out
+
+        def _filed_tool_result(row: dict[str, Any]) -> str | None:
+            """The body the session files for a recorded tool row.
+
+            The call decides, not the projection: a row a call carried is filed
+            as the preview or body that call sent, and a row a window pass
+            replaced before any call projected it is filed as the stand-in the
+            call read. Only a row no call carried -- a blocked or stalled turn
+            -- falls back to bounding it here, so an early exit cannot file an
+            unbounded body.
+            """
+            seq = row.get(TURN_LOG_KEY)
+            if isinstance(seq, str):
+                sent = sent_tool_rows.get(seq)
+                if sent is not None:
+                    return sent
+                elided = elided_tool_rows.get(seq)
+                if elided is not None:
+                    return elided
+            return _model_preview(row)
+
+        # A row the window elided is kept by the log as it was, so the persist
+        # has to reach it through the record rather than through the last list.
+        log.bind_projection(_filed_tool_result)
+
         # Retryable model errors that outlasted the provider's own ladder: how many
         # of the loop's longer waits this turn has spent.
         error_waits = 0
@@ -1232,7 +1442,12 @@ class TurnPathMixin:
 
         # Read once, here: a mode switched mid-turn lands on the next turn.
         policy = self.session_policy(session_key or "")
-        iteration_cap = policy.max_iterations or self.max_iterations
+        pinned = policy.max_iterations if policy.max_iterations is not None else self.max_iterations
+        if pinned is not None and pinned < 0:
+            # A negative pin is a bad value, not a request for no cap: fall back
+            # to the loop's own cap rather than lifting every bound.
+            pinned = self.max_iterations
+        iteration_cap = pinned if pinned is None or pinned > 0 else None
         # The effort this turn's own calls run at, short of a hook's rollback
         # override: the session's own pick over its mode's word over the
         # configured default as the file has it now -- ``session_effort.in_force``,
@@ -1250,6 +1465,11 @@ class TurnPathMixin:
         # same start to every attempt, so one budget covers the turn instead of
         # each attempt receiving a fresh copy of it.
         turn_t0 = turn_started_at if turn_started_at is not None else monotonic()
+        # Every turn sets it, including the unbounded one: a value left by an
+        # earlier turn in this task must not shorten this turn's commands.
+        turn_clock.set_deadline(None if budgets.wall_clock_seconds is None else turn_t0 + budgets.wall_clock_seconds)
+        turn_clock.set_session(session_key or "")
+        turn_clock.set_execution_id(report.execution_id if report else None)
         stopped_by: str | None = None
         # The session's effort rides every model call of the turn as an explicit
         # argument. Omitted, not None, when the policy names none: an explicit
@@ -1319,8 +1539,10 @@ class TurnPathMixin:
 
         def _land_hook_note(decision) -> None:
             """Honor a hook's ``append_note``: the note joins the last message
-            the model is about to read. A body shape the loop does not know
-            drops the note with a warning rather than guessing it into place."""
+            the model is about to read, except after a tool round, where the
+            last message is a fenced tool result and the note becomes a message
+            of its own. A body shape the loop does not know drops the note with
+            a warning rather than guessing it into place."""
             if decision.append_note and not append_hook_note(messages, decision.append_note):
                 logger.warning("Hook note dropped: no transcript message to land it on")
 
@@ -1356,6 +1578,7 @@ class TurnPathMixin:
                 # A hook may hand back a copy of a message this turn already
                 # wrote; it is a new message, not a rewrite of that one.
                 entry.pop(TURN_LOG_KEY, None)
+                entry.pop(OPENING_KEY, None)
                 entry.setdefault("timestamp", self._now_fn().isoformat())
                 entry[_HOOK_INJECTED_KEY] = True
                 messages.append(entry)
@@ -1413,10 +1636,18 @@ class TurnPathMixin:
             messages = self.context.add_assistant_message(messages, final)
             if silent:
                 messages[-1][_SILENT_KEY] = True
-            _stamp_context_used(messages, last)
+            _stamp_context_used(messages, last, measured_parts)
             return final
 
-        while iteration < iteration_cap:
+        # The breakdown measured for the response in hand, carried to every
+        # stamp of it. Declared before the loop because the partial-reply path
+        # closes over it: a continuation that raises ends the turn on the cut
+        # answer from the iteration before, whose measurement this still holds.
+        measured_parts: dict[str, int] | None = None
+        while iteration_cap is None or iteration < iteration_cap:
+            if report and report.requested.is_set():
+                stopped_by = "report_now"
+                break
             # Checked here and not mid-generation: cancelling a call in flight
             # discards a finished generation and leaves no answer, and a deadline
             # landing between a tool result and the model reading it produces a
@@ -1434,7 +1665,7 @@ class TurnPathMixin:
             logger.info(
                 "Iteration {}/{} model={}",
                 iteration,
-                iteration_cap,
+                iteration_cap if iteration_cap is not None else "unbounded",
                 active_model,
             )
 
@@ -1516,6 +1747,9 @@ class TurnPathMixin:
                 # Flush before publishing, so a sub-agent asking a second time
                 # this turn sees what raven already answered for the first.
                 self._flush_autofill(messages, auto.pending_rows())
+                # The flush appends after both window passes followed the list;
+                # unstamped rows would reach this iteration's call whole.
+                log.follow(messages)
                 # Every iteration, not once: the overflow and image-demotion
                 # recoveries below rebind ``messages`` to a fresh list, so the
                 # object published last time can stop being the one the turn is
@@ -1559,10 +1793,10 @@ class TurnPathMixin:
             # onto mid-conversation, which is what this block was added for.
             #
             # The switch it used to set lived on the provider *object* and was
-            # never unset, so every later consumer of that object -- the Curator,
-            # a subagent, Sentinel, the session titler -- kept sending with no
-            # breakpoints at all. That was named as known residue when this block
-            # landed; asking the request instead is what retires it.
+            # never unset, so every later consumer of that object -- a subagent,
+            # Sentinel, the session titler -- kept sending with no breakpoints
+            # at all. That was named as known residue when this block landed;
+            # asking the request instead is what retires it.
 
             # TokenWise before-hook: strategies may rewrite messages, tools,
             # or model (e.g. CacheOptimizer marks cache_control blocks).
@@ -1586,20 +1820,33 @@ class TurnPathMixin:
             pending_gen_overrides = None
             call_reasoning_effort = gen_overrides.get("reasoning_effort")
             last_tool_defs, last_model, last_effort = tool_defs, active_model, call_reasoning_effort
+            # Before the strategies, not after: a strategy that re-shapes a
+            # message's content (CacheOptimizer wraps the tail into a
+            # text-block list) would hide the tool row from a projection that
+            # ran later, so the full body would go on the wire while the
+            # session filed the preview. The transcript keeps the full body;
+            # only this payload carries the preview.
+            projected_messages = _model_facing(messages)
+            # The turn's rows reach the file here, not at the top of the
+            # iteration: every tool row this call carries now has the form it is
+            # sent in, so the write files the bytes the model reads, and the
+            # previous round's results are on disk before the call that reads them.
+            if on_step is not None:
+                on_step()
             call_messages, call_tools, call_model = await first_call.stage(
                 "the before_llm_call strategies",
                 self.strategies.before_llm_call(
-                    messages,
+                    projected_messages,
                     tool_defs,
                     active_model,
                 ),
                 iteration=iteration,
-                fallback=(messages, tool_defs, active_model),
+                fallback=(projected_messages, tool_defs, active_model),
             )
-            # Last, and on the payload only: the strategies above decide against
-            # the shape the messages arrived in, and the prompt-cache prefix
-            # stays stable because the same arrivals always fold the same way.
-            call_messages = merge_mid_turn(call_messages)
+            # On the payload only, after the strategies: they decide against the
+            # shape the messages arrived in, and the prompt-cache prefix stays
+            # stable because the same arrivals always fold the same way.
+            call_messages = merge_mid_turn(call_messages, replay=True)
             # Sized to the prompt it goes out beside, which is the room the
             # history strategy's trigger holds back: near that line the model's
             # whole ceiling no longer fits, and a provider that checks
@@ -1766,10 +2013,18 @@ class TurnPathMixin:
                 # the prompt was billed as (see ``_window_reading``), and a
                 # call can give none (see ``_call_window``).
                 context_used = _call_window(response)
+                # The window divided, measured on the request this reading came
+                # from: the stored reply carries it so a resume can draw the
+                # card's parts without a live report.
+                measured_parts = (
+                    measure_parts(call_messages, call_tools, self._last_window_parts) if context_used > 0 else None
+                )
                 if context_used > 0:
                     window.last_context_used = context_used
                     if window_reading is not None:
                         window_reading["context_used"] = context_used
+                        if measured_parts is not None:
+                            window_reading["context_parts"] = measured_parts
             if usage_sink is not None and response.usage and context_used <= 0 and usage_sink.get("context_used"):
                 # No reading -- a block of zeros, or an account ``_call_window``
                 # does not take as one -- so the gauge stays on the call before
@@ -1813,7 +2068,11 @@ class TurnPathMixin:
                 # The window divided, so a reader can be told what is filling it
                 # and not only how full it is. Measured on the request that was
                 # sent, which is the one the count above belongs to.
-                usage_sink["context_parts"] = measure_parts(call_messages, call_tools, self._last_window_parts)
+                usage_sink["context_parts"] = (
+                    measured_parts
+                    if measured_parts is not None
+                    else measure_parts(call_messages, call_tools, self._last_window_parts)
+                )
 
             # Recoveries that retry this iteration. The classifier on the response
             # says what kind of refusal this was; the Memory role says whether it
@@ -1874,7 +2133,7 @@ class TurnPathMixin:
                         # leaves dangling calls that strict providers reject.
                         final_content = str(decision.short_circuit_result)
                         messages = self.context.add_assistant_message(messages, final_content)
-                        _stamp_context_used(messages, response)
+                        _stamp_context_used(messages, response, measured_parts)
                         break
                 # Blocking a call is handled where the call is: the
                 # branch below refuses it and cancels the siblings the
@@ -1915,9 +2174,20 @@ class TurnPathMixin:
                     thinking_blocks=response.thinking_blocks,
                 )
                 _stamp_reasoning_ms(messages, response)
-                _stamp_context_used(messages, response)
+                _stamp_context_used(messages, response, measured_parts)
+                # The call is on disk before it runs: a kill during the tool
+                # leaves a call readers can repair, not a step nobody can see.
+                if on_step is not None:
+                    on_step()
 
                 for tool_call_index, tool_call in enumerate(response.tool_calls):
+                    if report and report.requested.is_set():
+                        for skipped in response.tool_calls[tool_call_index:]:
+                            messages = self.context.add_tool_result(
+                                messages, skipped.id, skipped.name, "Skipped because the host requested a final reply."
+                            )
+                        stopped_by = "report_now"
+                        break
                     tools_used.append(tool_call.name)
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
@@ -2115,20 +2385,13 @@ class TurnPathMixin:
                             },
                         )
                     # The result belongs to the tool that produced it: through
-                    # tool_call the model names a target, and both the window
-                    # and the skill panel read this name to tell a skill's bytes
-                    # from the talk that read them.
+                    # tool_call the model names a target, and the window reads
+                    # this name to tell a skill's bytes from the talk that read
+                    # them.
                     arguments = tool_call.arguments if isinstance(tool_call.arguments, dict) else {}
                     producing = self.tools.get(tool_call.name)
                     owner = producing.metadata_owner(arguments) if producing is not None else None
                     result_name = owner.name if owner is not None else tool_call.name
-                    forward = getattr(producing, "forwarded_params", None)
-                    forwarded_args = forward(arguments) if forward is not None else arguments
-                    # A skill the model loaded itself never passes through
-                    # SkillForge injection, so report it here or the skill panel
-                    # misses the whole class (builtin guides in particular).
-                    if result_name in ("read_skill", "use_skill") and not model_text.startswith("Error"):
-                        await self._report_skill_read(session_key or "", result_name, forwarded_args)
                     result_blocks = _scrubbed_blocks(
                         tool_call.arguments, getattr(result, "blocks", None), agent_output=agent_output
                     )
@@ -2212,6 +2475,9 @@ class TurnPathMixin:
                                 skipped_call.name,
                                 SKIPPED_AFTER_BLOCKED_CALL,
                             )
+                            messages[-1]["content"] = cap_tool_result(
+                                messages[-1]["content"], self._TOOL_RESULT_MAX_CHARS
+                            )
                         break
                     # Track consecutive same-tool deterministic failures
                     # (transient errors excluded — a retry would clear those).
@@ -2232,6 +2498,8 @@ class TurnPathMixin:
                     if stalled_verdict is NoProgressAction.RUN:
                         no_progress.record(tool_call.name, tool_call.arguments, model_text, blocks or attach_blocks)
 
+                if stopped_by == "report_now":
+                    break
                 if continuation is Continuation.ABORT_TURN:
                     # A normal tool result starts another model iteration. That
                     # is specifically unsafe here: the next plan can translate
@@ -2405,7 +2673,7 @@ class TurnPathMixin:
                     status = "error"
                     error_detail = _llm_failure_detail(clean, verdict)
                     error_full = response_failure_text(clean, response.call_record)
-                    _stamp_context_used_on_kept(messages, response)
+                    _stamp_context_used_on_kept(messages, response, measured_parts)
                     break
 
                 if recovery.parts:
@@ -2422,7 +2690,7 @@ class TurnPathMixin:
                         carried_gate = None
 
                 if not (clean or "").strip():
-                    _stamp_context_used_on_kept(messages, response)
+                    _stamp_context_used_on_kept(messages, response, measured_parts)
 
                 # Empty-response recovery. A reply with no tool call is read for
                 # what it is (``reply_kind``) and ``decide`` names the move; an
@@ -2752,7 +3020,7 @@ class TurnPathMixin:
                     if decision.short_circuit_result is not None:
                         final_content = str(decision.short_circuit_result)
                         messages = self.context.add_assistant_message(messages, final_content)
-                        _stamp_context_used(messages, response)
+                        _stamp_context_used(messages, response, measured_parts)
                         break
                 else:
                     await _settle_silence(silence_gate, silent=ends_silent, dropped_marker=dropped_marker)
@@ -2776,7 +3044,7 @@ class TurnPathMixin:
                     thinking_blocks=response.thinking_blocks,
                 )
                 _stamp_reasoning_ms(messages, response)
-                _stamp_context_used(messages, response)
+                _stamp_context_used(messages, response, measured_parts)
                 # Kept in the history, as the row it is, and filed as a marker so a
                 # reload does not read it as an answer.
                 silent = ends_silent
@@ -2798,15 +3066,22 @@ class TurnPathMixin:
         if leftover is not None and (lost := leftover.pending_rows()):
             logger.info("question autofill: {} row(s) ended the turn unwritten", len(lost))
 
+        if final_content is None and not ended_answered and report and report.requested.is_set():
+            stopped_by = "report_now"
+        reporting = stopped_by == "report_now"
         exhausted = (
             final_content is None
             and not ended_answered
-            and (stalled_tool is not None or iteration >= iteration_cap or stopped_by == "wall_clock")
+            and (
+                stalled_tool is not None
+                or (iteration_cap is not None and iteration >= iteration_cap)
+                or stopped_by in ("wall_clock", "report_now")
+            )
         )
         # Assigned, not latched, as ``output_limited`` is: a rerun's own run decides.
         if hook_metadata is not None:
-            hook_metadata["budget_stopped"] = exhausted
-        if exhausted and recovery.parts:
+            hook_metadata["budget_stopped"] = exhausted and not reporting
+        if exhausted and recovery.parts and not reporting:
             # The turn ran out -- of iterations or of time -- with a cut answer waiting on its
             # continuation, which there is no room left to ask for. A wrap-up would stream onto
             # the partial the reader already holds, so the partial is the answer.
@@ -2819,7 +3094,9 @@ class TurnPathMixin:
             # as a wrap-up that is one is.
             status = "interrupted"
         elif exhausted:
-            if stalled_tool is not None:
+            if reporting:
+                logger.info("The host requested a final reply; synthesizing from completed work")
+            elif stalled_tool is not None:
                 stopped_by = "stalled_tool"
                 logger.warning("Turn stopped on a repeating `{}`; synthesizing final answer", stalled_tool)
             elif stopped_by == "wall_clock":
@@ -2836,7 +3113,7 @@ class TurnPathMixin:
             #      (and one format repair if requested) instead of a
             #      canned apology. Synthesis falls back to a static message
             #      internally if the call fails, so the turn never ends empty.
-            status = "interrupted"
+            status = "completed" if reporting else "interrupted"
             # The wrap-up is the turn's last reply, so it may be a Silence Marker as an
             # answer may: its stream is held back as the answering call's is, and a
             # marker ends the turn silent.
@@ -2847,24 +3124,42 @@ class TurnPathMixin:
                 if on_token_delta is not None and not reply_awaited
                 else None
             )
+            # Rows appended by the last tool batch may not have met a window
+            # pass yet; the wrap-up call still has to carry their previews.
+            log.follow(messages)
+            synthesis_prompt = _MAX_ITER_SYNTHESIS_PROMPT if stalled_tool is None else _STALLED_SYNTHESIS_PROMPT
+            if reporting:
+                from raven.agent.tools.background_exec import reap_execution
+                from raven.security.trust import wrap_untrusted
+
+                synthesis_prompt = REPORT_INSTRUCTION
+                if report and (tails := await reap_execution(session_key or "", report.execution_id)):
+                    synthesis_prompt += "\n\nOutput from stopped background commands:\n" + wrap_untrusted(
+                        tails, source="tool"
+                    )
             final_content = await self._synthesize_final_on_exhaustion(
-                messages,
+                _model_facing(messages),
                 active_model,
                 list(fallbacks_left),
                 on_token_delta=wrap_up_gate or on_token_delta,
                 on_reasoning_delta=on_reasoning_delta,
                 reasoning_effort=turn_effort,
-                prompt=_MAX_ITER_SYNTHESIS_PROMPT if stalled_tool is None else _STALLED_SYNTHESIS_PROMPT,
+                prompt=synthesis_prompt,
                 fallback=(
-                    _STALLED_STATIC_FALLBACK.format(tool=stalled_tool)
+                    "The host requested an early reply, but the summary could not be generated."
+                    if reporting
+                    else _STALLED_STATIC_FALLBACK.format(tool=stalled_tool)
                     if stalled_tool is not None
                     else _WALL_CLOCK_STATIC_FALLBACK
                     if stopped_by == "wall_clock"
-                    else _MAX_ITER_STATIC_FALLBACK.format(n=self.max_iterations)
+                    else _MAX_ITER_STATIC_FALLBACK.format(n=iteration_cap if iteration_cap is not None else "unbounded")
                 ),
                 synthesis_policy=turn_synthesis(turn_meta),
+                iteration_cap=iteration_cap,
             )
-            silent = not reply_awaited and is_silence(final_content, origin, taught=silence_taught)
+            if reporting and report is not None:
+                report.applied = True
+            silent = not reporting and not reply_awaited and is_silence(final_content, origin, taught=silence_taught)
             await _settle_silence(wrap_up_gate, silent=silent)
             # Persist the wrap-up into history like any normal final reply.
             # Persistence downstream reads only the returned ``messages`` list,
@@ -2973,6 +3268,20 @@ class TurnPathMixin:
             outcome.checkpoint_id = cid
             if status == "interrupted":
                 outcome.edited_files = changed
+
+        # The turn files the bytes its calls sent: the previews replace the full
+        # bodies the hooks read, so the session and the next replay carry what
+        # the model saw. The record is projected first, because a body a window
+        # pass elided is no longer in ``messages`` and only the record still
+        # holds it; what remains here is for a list the record never saw. A
+        # result no call ever read -- a blocked or stalled turn -- is bounded
+        # here too, so an early exit cannot file an unbounded body.
+        log.project_tool_results()
+        for row in messages:
+            if isinstance(row, dict) and row.get("role") == "tool":
+                preview = _model_preview(row)
+                if preview is not None:
+                    row["content"] = preview
 
         return final_content, tools_used, messages, outcome
 
@@ -3270,10 +3579,8 @@ class TurnPathMixin:
                 pb_tool.set_turn_message(content)
 
         context_messages = self._context_messages_for_session(session)
-        # SkillForge: Selector picks top-K. See note in the system-message
-        # branch above — empty return falls back to the full directory.
-        # Routed via ``_select_skills_for_turn`` so the engine can
-        # short-circuit selection here.
+        # No host-side selection: the engine's scent menu offers skills, so
+        # ``_select_skills_for_turn`` answers None (see its docstring).
         selected_skills = await self._select_skills_for_turn(
             content,
             context_messages,
@@ -3327,9 +3634,6 @@ class TurnPathMixin:
             PlanningRequest(task=content, session_key=key, messages=initial_messages)
         )
         initial_messages = planning.messages
-        # Surface the skills SkillForge injected this turn to the web UI's skill
-        # panel (populated into _last_injected_skill_ids by the assemble above).
-        await self._emit_injected_skills(key)
         degraded = getattr(self, "_last_degraded_segments", [])
         if degraded and on_notice is not None:
             # The answer was produced without an optional organ; saying so is
@@ -3352,9 +3656,8 @@ class TurnPathMixin:
         # all, so it was absent from every listing, and a reader who left the
         # page could not find their way back to the turn still running in it.
         # Everything below that slices "what this turn added" off the session
-        # counts from this turn's own first entry. Counted after the save, not
-        # before it: a save can merge another writer's messages in ahead of the
-        # question, which it leaves last.
+        # counts from this turn's own first entry. The save appends it last, so
+        # the rows past this index are the question.
         question_at = len(session.messages)
         self._save_turn(
             session,
@@ -3369,7 +3672,7 @@ class TurnPathMixin:
         prev_len = len(session.messages) - len(question)
 
         def _turn_start() -> int:
-            """Where this turn's entries start now; a later save may have merged more in ahead of them."""
+            """Where this turn's entries start now; a later save can replace the question in place."""
             if question:
                 for index in range(len(session.messages) - 1, -1, -1):
                     if session.messages[index] is question[0]:
@@ -3428,7 +3731,7 @@ class TurnPathMixin:
         # A turn that fails or is stopped after calls that each came back empty
         # or as an error has filed no row of its own, and the question it would
         # otherwise end on is already on disk, so its marker carries the reading.
-        reading: dict[str, int] = {}
+        reading: dict[str, Any] = {}
 
         async def _attempt(seed: list[dict], attempt: int):
             pending.update(rerun=False, reasons=[])
@@ -3439,9 +3742,12 @@ class TurnPathMixin:
             # what the cancel filed. A record rather than the list the attempt
             # appends to, because the window passes replace that list mid-turn.
             live["log"] = TurnLog(seed, persist_from)
+            live["persisted"] = persist_from
+            live["filed_ids"] = set()
             return await self._run_agent_loop(
                 seed,
                 on_progress=on_progress,
+                on_step=_persist_progress,
                 session_key=key,
                 model=routed_model,
                 fallback_models=fallback_models,
@@ -3470,6 +3776,7 @@ class TurnPathMixin:
                 # session is: the loop below is handed a key, not a record.
                 session_effort=session_effort_of(session.metadata),
                 surface=req.source.surface,
+                report=req.report,
             )
 
         # Taken BEFORE the first attempt, because the loop appends to the list it is
@@ -3482,7 +3789,65 @@ class TurnPathMixin:
         retry_seed = [dict(m) for m in initial_messages] if retries_left else None
         turn_t0 = monotonic()
         pending: dict[str, Any] = {"rerun": False, "reasons": []}
-        live: dict[str, TurnLog] = {"log": TurnLog(initial_messages, persist_from)}
+        live: dict[str, Any] = {
+            "log": TurnLog(initial_messages, persist_from),
+            "persisted": persist_from,
+            "filed_ids": set(),
+        }
+
+        def _persist_progress() -> None:
+            """Append what this turn has produced so far, so a kill loses one step, not all of it.
+
+            A copy goes to the writer: the end-of-turn filing appends a notice to
+            the list it is given, and a mid-turn notice in the live list would
+            change what the model reads next.
+            """
+            log = live["log"]
+            skip = live["persisted"]
+            # As the calls carried it: the record keeps a tool row's full body
+            # for the hooks, and the file takes the preview a call sent.
+            messages_now = log.filed_messages()
+            upto = _incremental_upto(messages_now, skip)
+            if upto is None:
+                return
+            try:
+                live["filed_ids"].update(self._save_turn(session, list(messages_now[:upto]), skip, final=False))
+                live["persisted"] = upto
+                self.sessions.save(session)
+            except SessionWriterConflictError:
+                # Another process took the transcript. Retrying every step
+                # would file a turn nobody can read; the turn stops here with
+                # the conflict the save raised.
+                raise
+            except Exception:
+                logger.exception("incremental session write failed; the turn keeps running")
+
+        def _attempt_record() -> list[dict]:
+            """The attempt's record as the model read it.
+
+            A rescue files this instead of the last window, so it has to project
+            the record the same way the end of a completed attempt does: a tool
+            body the window pass elided is kept by the log as it was, and a
+            cancelled turn that filed that body whole would write bytes no model
+            call read.
+            """
+            live["log"].project_tool_results()
+            return live["log"].messages()
+
+        def _drop_attempt_rows() -> bool:
+            """Take the attempt's rows off the transcript before the rerun writes its own.
+
+            The failed attempt was filed as it ran, so a rerun that only reset
+            the in-memory log left its research in the transcript and appended
+            the rerun's answer behind the wreckage. The rows are matched by the
+            identifier the attempt filed them under rather than by position: the
+            window can drop a row from the turn record, and a cut by position
+            would take a neighbour with it.
+
+            False when the cut could not be written; the caller does not rerun
+            then, because the rerun's answer would land on the attempt again.
+            """
+            return self.sessions.drop_filed_rows(session, live["filed_ids"])
 
         def _seed_for_the_rerun(msgs: list[dict]) -> list[dict]:
             """The question again, plus whatever the reader said while the attempt ran.
@@ -3554,6 +3919,8 @@ class TurnPathMixin:
                 # run, the seam asks whether the attempt it is ending has one after it,
                 # which is what decides that attempt's salvage.
                 while retries_left > 0 and pending["rerun"]:
+                    if not _drop_attempt_rows():
+                        break
                     retries_left -= 1
                     attempt_no += 1
                     logger.info("Dead end ({}); re-running the turn", ", ".join(pending["reasons"]))
@@ -3589,7 +3956,7 @@ class TurnPathMixin:
                 if turn_hook_meta.get("output_limited"):
                     session.metadata[OUTPUT_LIMIT_TURN_AT] = _turn_start()
                 else:
-                    # None rather than dropping the key: a save merges its
+                    # None rather than dropping the key: a save folds its
                     # metadata over the record on disk, so a key left unsaid is
                     # kept rather than cleared (SessionManager._metadata_to_write).
                     # The reader asks whether this is an int, which None is not.
@@ -3626,12 +3993,13 @@ class TurnPathMixin:
             # note saying a person ended the turn. Then the cancel proceeds.
             self._save_broken_turn(
                 session,
-                live["log"].messages(),
+                _attempt_record(),
                 persist_from,
                 None,
                 streamed,
                 status="cancelled",
                 context_used=reading.get("context_used"),
+                context_parts=reading.get("context_parts"),
             )
             self._park_task_board(key, live["log"].added(), turn_received_at, req.turn_id)
             raise
@@ -3641,7 +4009,7 @@ class TurnPathMixin:
             # than straight after the question.
             self._save_broken_turn(
                 session,
-                live["log"].messages(),
+                _attempt_record(),
                 persist_from,
                 None,
                 streamed,
@@ -3649,13 +4017,14 @@ class TurnPathMixin:
                 reason=str(exc),
                 full_detail=attach_full_detail(exc),
                 context_used=reading.get("context_used"),
+                context_parts=reading.get("context_parts"),
             )
             self._park_task_board(key, live["log"].added(), turn_received_at, req.turn_id)
             raise
         except Exception as exc:
             self._save_broken_turn(
                 session,
-                live["log"].messages(),
+                _attempt_record(),
                 persist_from,
                 None,
                 streamed,
@@ -3666,6 +4035,7 @@ class TurnPathMixin:
                 reason=describe_failure(exc),
                 full_detail=attach_full_detail(exc),
                 context_used=reading.get("context_used"),
+                context_parts=reading.get("context_parts"),
             )
             self._park_task_board(key, live["log"].added(), turn_received_at, req.turn_id)
             raise
@@ -3719,6 +4089,20 @@ class TurnPathMixin:
         # body or a dropped stretch of the turn is the window's business, and
         # filing it would replay it to every later turn as what happened.
         turn_msgs = live["log"].messages(_TURN_TRANSIENT_KEYS)
+        # The log hands back what it kept of the turn, which can be shorter than
+        # the run of rows already filed: the count is clamped to this list so the
+        # stamps below read and restate only rows that are here.
+        # Where the filed prefix ends in the record as it stands now. A count
+        # would be wrong: the record can be shorter than when it was written (a
+        # continuation merges its row into the step it continues), so the
+        # boundary is read from the ids that actually reached disk.
+        filed_ids: set[str] = live["filed_ids"]
+        # The question was filed before the attempt started; a turn with no
+        # incremental write still begins after it, never at the head.
+        filed_upto = min(persist_from, len(turn_msgs))
+        for index, row in enumerate(turn_msgs):
+            if str(row.get("_row_id") or "") in filed_ids:
+                filed_upto = index + 1
         message_tool = self.tools.get("message")
         sent_by_tool = isinstance(message_tool, MessageTool) and message_tool.sent_in_turn
         if outcome.silent and not silent and not sent_by_tool:
@@ -3733,11 +4117,58 @@ class TurnPathMixin:
             silence["delivered_files"] = True
         if len(self.hooks) > 0:
             _stamp_turn_observers(turn_msgs, turn_hook_meta, turn_start_idx)
+        # Two stamps land after a turn's rows are already on disk, and only
+        # these two: the reply's provenance (``replied_via_tool``) and the hook
+        # observers. Comparing whole rows would also restate what the writer
+        # deliberately rewrote -- a truncated tool body, a cut field -- so the
+        # comparison is limited to the keys that are stamps.
+        # Rows already on disk for this turn, matched by their identifier rather
+        # than by position: the record the log hands back can be shorter than the
+        # list that was written (synthetic scaffolding is left out of it). Only
+        # the stamp keys are compared -- a stored row is not always the row the
+        # loop holds, because tool bodies are truncated on the way in.
+        stored_by_id = {
+            str(row.get("_row_id")): row
+            for row in getattr(session, "messages", ())
+            if str(row.get("_row_id") or "") in filed_ids
+        }
+        patches = []
+        for row in turn_msgs[turn_start_idx:]:
+            row_id = str(row.get("_row_id") or "")
+            stored = stored_by_id.get(row_id)
+            if stored is None:
+                continue
+            changed = {
+                _LATE_STAMP_KEYS[key]: row[key]
+                for key in _LATE_STAMP_KEYS
+                if key in row and stored.get(_LATE_STAMP_KEYS[key]) != row[key]
+            }
+            if changed:
+                patches.append({"row_id": row_id, "keys": changed})
+        if patches:
+            from raven.session.manager import append_turn_meta
 
-        self._save_turn(session, turn_msgs, persist_from)
-        # Taken before the save, which may merge another writer's messages in.
+            try:
+                append_turn_meta(self.sessions.session_path(session.key), patches, session=session)
+            except Exception:
+                # The turn already has an answer; a late stamp that could not
+                # be filed is not worth failing it for. The rows keep what the
+                # writer gave them, and a reader just sees no late stamp.
+                logger.exception("could not file the turn's late stamps; the turn keeps its answer")
+            else:
+                for patch in patches:
+                    stored = stored_by_id.get(patch["row_id"])
+                    if stored is not None:
+                        stored.update(patch["keys"])
+
+        live["filed_ids"].update(self._save_turn(session, turn_msgs, filed_upto))
         turn_entries = session.messages[_turn_start() :]
         self.sessions.save(session)
+        # Filing detail only, and popped after the closing save so the answer
+        # is written under the identifier it was filed by: the rest of the
+        # turn reads rows without the key the file uses.
+        for row in getattr(session, "messages", ()):
+            row.pop("_row_id", None)
         await self.harness.memory.after_turn(
             key,
             {
@@ -3780,7 +4211,7 @@ class TurnPathMixin:
             shown = await self.task_board.ack_turn_notes(key)
             self._schedule_task_board(
                 key,
-                turn_window,
+                live["log"].cut_to_turn(turn_window),
                 outcome,
                 live["log"].added(),
                 turn_received_at,
@@ -3791,6 +4222,7 @@ class TurnPathMixin:
                 # The turn's own verdict rather than the marker: a turn a tool answered is not a
                 # Silent Turn whatever it ended on, and a hook's reply has cleared ``silent``.
                 silent=silent and not answered_by_tool,
+                opening=req.text,
             )
 
         if origin is Origin.USER:
@@ -3873,19 +4305,23 @@ class TurnPathMixin:
         delegated: dict[str, Any] | None,
         moved_on: list[str],
         silent: bool,
+        opening: str,
     ) -> None:
         """Start the host's post-turn task board call for the turn that just ended.
 
         It sends the tools array, model, effort and tool choice the turn's last call
         carried, through the same strategies, so it runs at the main model's settings
-        and shares that call's cached prefix up to the reply; only the instruction
-        after it is new. Nothing forces the tool: a forced choice voids Anthropic's
-        cached messages and several providers refuse one outright. The dispatches
-        come from what the turn added -- a spawn still in the history belongs to the
-        turn that made it. ``delegated`` (the request's mark of the result that
-        opened the turn) and ``moved_on`` (the groups the notes it was shown named)
-        say what the turn is about, when anything does; a message the user sent while
-        it ran, among what it added, says it is about more than they name.
+        and reads the tools and the system message from that call's cached prefix.
+        ``window`` is the turn's own (``TurnLog.cut_to_turn``): with the whole
+        conversation in it, the model took earlier turns' events for this one's.
+        Nothing forces the tool: a forced choice voids Anthropic's cached messages
+        and several providers refuse one outright. The dispatches come from what the
+        turn added -- a spawn still in the history belongs to the turn that made it.
+        ``delegated`` (the request's mark of the result that opened the turn) and
+        ``moved_on`` (the groups the notes it was shown named) say what the turn is
+        about, when anything does; ``opening`` (the user's words, or the result's) and
+        the messages the user sent while it ran are searched, with its reply, for
+        the other groups it may have moved.
         """
         from raven.agent.task_board.dispatches import delegated_handle, turn_dispatches
         from raven.agent.task_board.runner import run_post_turn, should_run
@@ -3917,7 +4353,7 @@ class TurnPathMixin:
             with _llm_purpose("task_board"), usage_context.bind(key):
                 call_messages, call_tools, call_model = await self.strategies.before_llm_call(rows, tools, model)
                 return await self.provider.chat_with_retry(
-                    messages=merge_mid_turn(call_messages),
+                    messages=merge_mid_turn(call_messages, replay=True),
                     tools=call_tools,
                     model=call_model,
                     fallback_models=fallback_models,
@@ -3941,7 +4377,8 @@ class TurnPathMixin:
                 reply_rows=turn_added,
                 delegated=[handle] if (handle := delegated_handle(delegated)) else [],
                 moved_on=moved_on,
-                mid_turn=any(m.get(_MID_TURN_USER_KEY) for m in turn_added),
+                opening=opening,
+                mid_turn_messages=[m for m in turn_added if m.get(_MID_TURN_USER_KEY)],
                 answered_message_calls=answered,
             )
         )
@@ -3961,9 +4398,13 @@ class TurnPathMixin:
         full_detail: str | None = None,
         inbound_original: str | None = None,
         context_used: int | None = None,
+        context_parts: dict[str, int] | None = None,
     ) -> None:
         """Persist what a cancelled or failed turn got as far as producing.
 
+        The rows arrive as the model read them: the caller projects the
+        attempt's record before handing it over, so a tool body the window
+        elided is filed as the preview its calls sent, never the full body.
         The tail of the turn plus two kinds of repair, then one closing marker:
 
         - an assistant message whose tool calls never got results gains a
@@ -3984,6 +4425,8 @@ class TurnPathMixin:
           ``context_used`` is the newest window the turn measured, filed on the
           marker because it is the newest row: a resume reads the window from
           there, and a turn whose calls left no row of their own has no other.
+          ``context_parts`` rides beside it, measured on the same request, so
+          the card's breakdown survives the same resume.
 
         ``received_at`` and ``inbound_original`` describe the turn's question,
         which ``_process_message`` files before the attempt starts and hands
@@ -4000,27 +4443,9 @@ class TurnPathMixin:
         """
         try:
             tail: list[dict] = [dict(m) for m in messages[skip:]]
-            open_calls: dict[str, str] = {}
-            for m in tail:
-                if m.get("role") == "assistant":
-                    for tc in m.get("tool_calls") or []:
-                        cid = str(getattr(tc, "id", None) or (tc.get("id") if isinstance(tc, dict) else "") or "")
-                        if cid:
-                            name = getattr(getattr(tc, "function", None), "name", None) or (
-                                (tc.get("function") or {}).get("name") if isinstance(tc, dict) else None
-                            )
-                            open_calls[cid] = str(name or "tool")
-                elif m.get("role") == "tool":
-                    open_calls.pop(str(m.get("tool_call_id") or ""), None)
-            for cid, name in open_calls.items():
-                tail.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": cid,
-                        "name": name,
-                        "content": "[interrupted] this call never returned",
-                    }
-                )
+            from raven.session.manager import repair_dangling_tool_calls
+
+            tail = repair_dangling_tool_calls(tail)
             text = (streamed.get("text") or "").strip()
             # A recovery row does not count as committed: it is scaffolding that is
             # dropped below, and the partial of a cut answer is one -- a continuation
@@ -4050,6 +4475,8 @@ class TurnPathMixin:
             }
             if context_used:
                 marker[_CONTEXT_USED_KEY] = context_used
+                if context_parts:
+                    marker[_CONTEXT_PARTS_KEY] = dict(context_parts)
             tail.append(marker)
             self._save_turn(session, tail, 0, received_at=received_at, inbound_original=inbound_original)
             self.sessions.save(session)
@@ -4201,8 +4628,22 @@ class TurnPathMixin:
         inbound_original: str | None = None,
         received_at: str | None = None,
         trace_id: str | None = None,
-    ) -> None:
-        """Save new-turn messages into session, truncating large tool results.
+        final: bool = True,
+    ) -> list[str]:
+        """Save new-turn messages into session, cutting any tool result still over the char cap.
+
+        The loop hands this method the persisted view of the turn: an over-budget
+        tool result already carries the bounded preview the model was sent, and
+        the managed file that holds its full body. The character cap below is the
+        fallback for a result that never passed through the loop -- a turn whose
+        attempt died before its last iteration, or an entry a caller files
+        directly -- so the model and the replay still read the same bytes on the
+        paths the loop completed.
+
+        Returns the ``_row_id`` of every row it appended, so the turn can tell
+        which of its rows are already on disk. A row already there that this
+        write replaces in place is not one of them: the turn did not write it,
+        and the rerun cut takes back exactly what the turn wrote.
 
         ``received_at`` is the wall clock at which the turn's inbound message
         arrived, and it is the opening write that passes one: the turn's other
@@ -4219,14 +4660,19 @@ class TurnPathMixin:
             carries_runtime_context,
         )
         from raven.context_engine.scratch import TURN_SCRATCH_KEY, cut_turn_scratch
+        from raven.utils.image_store import IMAGE_REFS_KEY, capture_images
 
         # Both exits that persist a turn come through here, so a question noted
         # on the turn is filed once whichever exit runs. The early inbound write
         # also comes through, before any question, and files nothing. A turn the
         # session list and the ACP replay take back whole files none: a notice
         # after its marker would outlive the take-back as an orphan.
-        if not _taken_back_whole(messages, skip):
+        if final and not _taken_back_whole(messages, skip):
             _file_unanswered(messages)
+        written_ids: list[str] = []
+        already_filed, batch = _filing_batch(session, messages, skip)
+        filed_contents = getattr(session, "_filed_contents", None)
+        inbound_filed = getattr(session, "_inbound_filed", None)
         first_user_pending = received_at is not None
         # The turn's first user entry is the inbound message; hooks may have
         # rewritten what the model saw (a memo prepended, a reminder appended),
@@ -4234,15 +4680,38 @@ class TurnPathMixin:
         # Same rule as the runtime-context strip below: history keeps the words
         # the user sent. Block-shaped inbounds pass through as built.
         inbound_rewrite_pending = inbound_original is not None
-        for m in messages[skip:]:
+        for m in batch:
+            # The identifier a later turn_meta names this row by. Kept on the
+            # live dict too: the turn's stamps land on these objects, and the
+            # file already holds a copy.
+            if not m.get("_row_id"):
+                m["_row_id"] = uuid4().hex[:16]
+            row_id = str(m["_row_id"])
+            stored = already_filed.get(row_id)
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
+            restored = inbound_filed.get(row_id) if stored is not None and inbound_filed else None
+            if restored is not None:
+                # This row was filed in the user's words before a hook's view
+                # was stripped. Preparing it again must strip the same view,
+                # not file the memo or the reminder over what the user sent.
+                content = entry["content"] = restored
+                entry.pop(ATTACHMENT_NOTES_KEY, None)
+            if role not in ("tool", "user") and isinstance(content, list):
+                # The two paths below archive a picture's bytes; a row of any
+                # other role keeps no refs, so it gets the placeholder-only
+                # projection. Inline images must never reach the display
+                # content: a single one adds megabytes that are then replayed
+                # on every resume and re-fed to the model, and unlike a code
+                # bug that is not revertible once written.
+                content = entry["content"] = _strip_inline_images(content)
             if first_user_pending and role == "user":
                 entry.setdefault("timestamp", received_at)
                 if trace_id:
                     entry["trace_id"] = trace_id
                 first_user_pending = False
             entry.pop(TURN_LOG_KEY, None)
+            entry.pop(OPENING_KEY, None)
             runtime_lines = entry.pop(RUNTIME_CONTEXT_KEY, None)
             if (scratch := entry.pop(TURN_SCRATCH_KEY, None)) and role == "user":
                 # The turn scratch (recalled memory, routed skills) is rebuilt
@@ -4309,7 +4778,7 @@ class TurnPathMixin:
                 entry["file_written"] = tool_written
             if tool_metadata := entry.pop(_TOOL_METADATA_KEY, None):
                 entry["metadata"] = tool_metadata
-            # Provenance of pictures that lived for this turn only; nothing to file.
+            # Provenance of pictures is turn-only; the pictures are filed below.
             entry.pop(IMAGE_SOURCES_KEY, None)
             # A withdrawn picture's note is filed without this turn's reasons: on
             # the tool-result transport the message outlives the turn, and a
@@ -4326,6 +4795,7 @@ class TurnPathMixin:
                 (_REASONING_MS_KEY, "reasoning_ms"),
                 (_TOOL_DURATION_MS_KEY, "duration_ms"),
                 (_CONTEXT_USED_KEY, "context_used"),
+                (_CONTEXT_PARTS_KEY, "context_parts"),
             ):
                 # Renamed for the same reason as the diff above. A duration or a
                 # window reading is a property of the part it measures, so it is
@@ -4333,19 +4803,13 @@ class TurnPathMixin:
                 # count of the stored log, can only ever guess.
                 if (took := entry.pop(private_key, None)) is not None:
                     entry[stored_key] = took
-            if role == "tool" and isinstance(content, list):
-                # A multimodal tool result. Images must never reach the JSONL:
-                # a single one adds megabytes that are then replayed on every
-                # resume and re-fed to the model, and unlike a code bug that is
-                # not revertible once written. The char cap below cannot catch
-                # it either — it guards `str` content only.
-                content = _strip_inline_images(content)
-                entry["content"] = content
-            cap = self._TOOL_RESULT_MAX_CHARS
-            if role == "tool" and isinstance(content, str) and cap and len(content) > cap:
-                # The marker is what retrieval reads to say a span was cut on the
-                # way to disk rather than pass a prefix off as the whole.
-                entry["content"] = content[:cap] + TOOL_RESULT_TRUNCATION_MARKER
+            if role == "tool":
+                # A multimodal result is archived before the cap, which passes
+                # a list through unchanged; the loop already bounded what the
+                # model read, and the cap is the fallback for a body that never
+                # passed through it.
+                content = _archive_tool_images(entry, content)
+                entry["content"] = cap_tool_result(content, self._TOOL_RESULT_MAX_CHARS)
             elif role == "user":
                 if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
                     # Strip the runtime-context prefix, keep only the user text.
@@ -4354,7 +4818,8 @@ class TurnPathMixin:
                         entry["content"] = parts[1]
                     else:
                         continue
-                if inbound_rewrite_pending:
+                files_the_inbound = inbound_rewrite_pending
+                if files_the_inbound:
                     inbound_rewrite_pending = False
                     if isinstance(entry.get("content"), str) and entry["content"] != inbound_original:
                         # The user's own words, without what assembly put
@@ -4365,28 +4830,60 @@ class TurnPathMixin:
                         entry["content"] = inbound_original
                         entry.pop(ATTACHMENT_NOTES_KEY, None)
                 if isinstance(content, list):
-                    filtered = [
-                        c
-                        for c in _strip_inline_images(content)
-                        if not (
-                            isinstance(c, dict)
-                            and c.get("type") == "text"
-                            and isinstance(c.get("text"), str)
-                            and c["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG)
-                        )
-                    ]
+                    filtered, image_refs = capture_images(content, drop=_is_runtime_context_block)
                     if not filtered:
                         continue
                     entry["content"] = filtered
+                    if image_refs:
+                        entry[IMAGE_REFS_KEY] = image_refs
+                if files_the_inbound and inbound_filed is not None:
+                    # The form this write files, not the words the user typed:
+                    # a question carrying a picture is filed as blocks and a
+                    # placeholder, and the closing write prepares the row again
+                    # from the live one. Handed back the string, it would
+                    # rewrite a multimodal question as text and lose the
+                    # placeholder.
+                    inbound_filed[row_id] = entry.get("content")
             if role == "user" and runtime_lines and not carries_runtime_context(entry.get("content"), runtime_lines):
                 # Filed beside the user's words, which ``content`` keeps alone, so
                 # the history projection replays the block this turn sent. Lines
                 # the strip above left in place are not filed, or they would be
                 # sent twice.
                 entry[RUNTIME_CONTEXT_FIELD] = runtime_lines
+            if stored is not None:
+                self._refile_stored_row(session, row_id, entry, stored)
+                continue
             entry.setdefault("timestamp", self._now_fn().isoformat())
             session.record(entry)
+            if filed_contents is not None:
+                filed_contents[row_id] = _content_digest(entry.get("content"))
+            if entry.get("_row_id"):
+                written_ids.append(str(entry["_row_id"]))
         session.updated_at = self._now_fn()
+        return written_ids
+
+    def _refile_stored_row(self, session: Session, row_id: str, entry: dict, stored: dict) -> bool:
+        """Replace a filed row whose turn-side content has changed.
+
+        The image window rewrites a row in place after it reached disk -- a
+        withdrawn picture becomes a note -- so an append boundary past it would
+        keep the first version in the transcript. The stored row is replaced by
+        its new form under the same identifier, and the file is rewritten on the
+        next save. False when the content is unchanged or the stored copy is no
+        longer in this session.
+        """
+        digest = _content_digest(entry.get("content"))
+        filed = getattr(session, "_filed_contents", None)
+        if filed is None or filed.get(row_id) == digest:
+            return False
+        at = next((index for index, row in enumerate(session.messages) if row is stored), None)
+        if at is None:
+            return False
+        entry.setdefault("timestamp", stored.get("timestamp") or self._now_fn().isoformat())
+        session.messages[at] = entry
+        filed[row_id] = digest
+        session._refile_rows = True
+        return True
 
     async def _run_turn(
         self,
@@ -4526,8 +5023,8 @@ class TurnPathMixin:
         # failure never leaves the user a delivered message no turn recorded.
         # The after-turn work a normal turn does in _process_message is reduced
         # to what a no-model delivery needs: backend.store indexes the message;
-        # after_turn is a no-op without a turn_id; consolidation is the curator's
-        # job on its next assemble.
+        # after_turn is a no-op without a turn_id; the history strategy reclaims
+        # space on its next assemble.
         if req.deliver_text is not None:
             session = self.sessions.get_or_create(cid)
             msg = {"role": "assistant", "content": req.deliver_text}

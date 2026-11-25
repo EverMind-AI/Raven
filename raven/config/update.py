@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from pydantic import ValidationError
 from pydantic.alias_generators import to_camel
 
 from raven.config.keys import key_as_written
@@ -80,6 +81,42 @@ def allow_exec_pattern(pattern: str, *, config_path: Path | None = None) -> bool
     added = atomic_update(path, _apply)
     if added:
         logger.info("config/update: permissions.tools.exec[{!r}] = allow", pattern)
+    return added
+
+
+def allow_network_rule(host: str, port: int, binary: str, *, config_path: Path | None = None) -> bool:
+    """Add one ``permissions.network`` allow rule on disk: ``binary`` may reach ``host:port``.
+
+    Returns False when the same rule was already there. Raises ``ValueError``
+    when the rule is not one ``permissions.network`` can hold (an IPv6
+    address), or when ``network`` or its ``rules`` are not the shape the
+    schema reads: that is the user's own setting, and nothing is written.
+    """
+    from raven.config.schema import NetworkRule
+
+    try:
+        rule = NetworkRule(host=host, ports=[port], binary=binary)
+    except ValidationError as exc:
+        raise ValueError(f"{binary} -> {host}:{port} cannot be a permissions.network rule: {exc}") from exc
+    entry = {"host": rule.host, "ports": rule.ports, "binary": rule.binary}
+    path = config_path or get_config_path()
+
+    def _apply(_text: str | None) -> tuple[str, bool]:
+        data = read_raw_or_raise(path)
+        network = data.setdefault("permissions", {}).setdefault("network", {})
+        if not isinstance(network, dict):
+            raise ValueError(f"permissions.network is {network!r}, not a table")
+        rules = network.setdefault("rules", [])
+        if not isinstance(rules, list):
+            raise ValueError(f"permissions.network.rules is {rules!r}, not a list")
+        added = entry not in rules
+        if added:
+            rules.append(entry)
+        return json.dumps(data, indent=2, ensure_ascii=False), added
+
+    added = atomic_update(path, _apply)
+    if added:
+        logger.info("config/update: permissions.network allows {} -> {}:{}", rule.binary, rule.host, port)
     return added
 
 
@@ -225,9 +262,9 @@ def set_skill_blocked(
     list. Matching is case-insensitive; adding an already-listed name or
     removing an absent one is a no-op (the file is still not rewritten).
 
-    The blocklist is read at process start (AgentLoop / context engine
-    construction), so a change takes effect on the next agent/gateway
-    start, not on a running process.
+    A consumer wired to a live reader (the agent loop's catalog) sees the
+    change on its next read; one that snapshotted the list at construction
+    keeps that snapshot until it is rebuilt.
 
     Respects whichever key casing (camelCase / snake_case) the file already
     uses for the block itself: the loader accepts both spellings, but writing
@@ -428,7 +465,7 @@ def set_sandbox_backend(
     """Patch ``sandbox.backend`` on the on-disk config. Returns previous value.
 
     Used by the onboarding wizard's run-location step. ``backend`` must be one
-    of ``SandboxConfig``'s literal values (``none`` / ``auto`` / ``boxlite``);
+    of ``SandboxConfig``'s literal values (``none`` / ``openshell``);
     the loader validates on next read.
     """
     path = config_path or get_config_path()
@@ -516,6 +553,46 @@ def set_playbook_disabled(
     wrote = atomic_update(path, _apply)
     if wrote:
         logger.info("config/update: playbooks.disabled {} {!r}", "added" if disabled else "removed", name)
+    return wrote
+
+
+def set_agent_plugin_mcp(
+    name: str,
+    allowed: bool,
+    *,
+    config_path: Path | None = None,
+) -> bool:
+    """Add/remove one package name on ``agentPlugins.mcpPackages``.
+
+    Returns True when the file changed (False = already in the desired
+    state). The list decides which packages' ``mcp.json`` servers start, and
+    it is read when the runtime is assembled, so a change applies to the next
+    start rather than to the running process.
+
+    Respects whichever key casing the file already uses for the block and the
+    list: the loader accepts both spellings, but writing the second one beside
+    the first leaves the config unloadable.
+    """
+    path = config_path or get_config_path()
+
+    def _apply(_text: str | None) -> tuple[str | None, bool]:
+        data = read_raw_or_raise(path)
+        block_key = key_as_written(data, "agentPlugins", top_level=True)
+        block = data.get(block_key)
+        if block is None:
+            block = data[block_key] = {}
+        elif not isinstance(block, dict):
+            raise ValueError(f"{block_key} must be an object or null")
+        list_key = key_as_written(block, "mcpPackages")
+        current = [str(x) for x in (block.get(list_key) or [])]
+        if allowed == (name in current):
+            return None, False
+        block[list_key] = [*current, name] if allowed else [x for x in current if x != name]
+        return json.dumps(data, indent=2, ensure_ascii=False), True
+
+    wrote = atomic_update(path, _apply)
+    if wrote:
+        logger.info("config/update: agentPlugins.mcpPackages {} {!r}", "added" if allowed else "removed", name)
     return wrote
 
 

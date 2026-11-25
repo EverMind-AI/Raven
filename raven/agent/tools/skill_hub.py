@@ -1,28 +1,34 @@
 """``read_skill`` / ``use_skill`` — Skill Hub retrieval tools.
 
 Two tools that complete the Skill Hub integration's progressive disclosure
-(catalog -> body -> scripts). The discovery half (``HubSkillSource`` injecting
-the ``# Skills`` catalog) already lands the candidate list each turn; these
-tools are the on-demand fetch the LLM drives after seeing it.
+(catalog -> body -> scripts). The discovery half (the scent menu, and
+``find_skill`` below) names the candidates; these tools are the on-demand
+fetch the LLM drives after seeing them.
 
 ``read_skill`` is the **body** route, for every source. A Hub candidate's
 catalog entry is metadata-only; a local skill declaring ``inject: description``
 is advertised by its digest entry alone and is excluded from BM25 routing, so
 for both the body exists nowhere in context until this tool fetches it. Local
-and Everos ids resolve straight from the registry, which is why this tool
-registers wherever the registry does and needs no Hub endpoint.
+ids resolve straight from the registry, which is why this tool registers
+wherever the registry does and needs no Hub endpoint. A memory-backend id
+(``<memory-backend>/<id>``, an evolved skill or a case) has no file: its body is
+the hit the router returned, held there by id once the menu or ``find_skill``
+named it. A ``project/<name>`` id resolves against the turn's own
+``.agents/skills`` index at read time, never from those held hits (the router is
+shared, so a held body may belong to another session's project).
 
 ``use_skill`` is **source-agnostic**. The LLM sees one fused, source-tagged
 catalog, so it should not reason about provenance — it calls ``use_skill`` with
 the qualified id and the tool dispatches on the ``<source>/`` prefix:
 
-- ``local/<name>`` / ``<memory-backend>/<id>`` — already materialized on disk
-  (the configured memory backend writes its extracted skills into
-  ``<workspace>/skills/<memory-backend>/<id>/``); resolve the skill dir via
-  the registry and return its ``scripts/`` path. No download — for these
-  sources ``use_skill`` is effectively a no-op resolver.
+- ``local/<name>`` — already on disk; resolve the skill dir via the registry
+  and return its ``scripts/`` path. No download — for this source ``use_skill``
+  is effectively a no-op resolver.
+- ``<memory-backend>/<id>`` — the held hit's body, which carries no scripts.
 - ``hub/<slug>`` — download + safely extract the zip into the workspace skill
   tree (so it becomes registry-discoverable), then return the ``scripts/`` path.
+- ``project/<name>`` — the turn's own project directory; resolve the skill
+  there and return its ``scripts/`` path. Nothing is downloaded or copied.
 
 Both return a text blob (the ``Tool`` contract is ``-> str``): a markdown header
 plus the ``scripts_dir`` line and the SKILL.md body when present.
@@ -39,13 +45,13 @@ from raven.contracts.tool import Tool
 from raven.skill_hub.audit import record_install, write_install_meta
 from raven.skill_hub.policy import SkillPolicy, is_blocked, lint_external_paths, refuses_low_safety
 
-__all__ = ["FindSkillTool", "ReadSkillTool", "UseSkillTool"]
+__all__ = ["FindSkillTool", "ReadSkillTool", "UseSkillTool", "registry_source", "router_held_hit"]
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
     from pathlib import Path
 
-    from raven.memory_engine import SkillRegistry
+    from raven.memory_engine import ProjectSkills, SkillRegistry
     from raven.skill_hub import SkillHubClient
 
 logger = logging.getLogger(__name__)
@@ -67,15 +73,71 @@ def lookup_on_disk(registry: "SkillRegistry | None", source: str, native: str):
     through: ``local`` is a router namespace spanning every on-disk layer
     (``workspace`` / ``builtin`` / ``external`` / ``mirror/*``) and is never
     itself a layer, so it resolves to the layer-priority winner. Any other
-    source (the configured memory backend, which writes its extracted skills
-    into a layer of the same name) is both a namespace and a layer, and keeps
-    its exact compound-key lookup.
+    source keeps its exact compound-key lookup, which finds a skill only when a
+    registry layer carries that name; the memory backend writes no files, so
+    its ids resolve from the router's held hits instead.
     """
     if registry is None:
         return None
     if source == "local":
         return registry.get(native)
     return registry.get(native, source=source)
+
+
+def registry_source(registry: "SkillRegistry | None", skill_id: str) -> str | None:
+    """The layer an addressed skill lives in (``builtin``, ``workspace``, ``hub``, ...).
+
+    ``local`` is an addressing namespace spanning every on-disk layer, so the id
+    alone cannot say whether a skill shipped with Raven or the user wrote it.
+    ``None`` when the registry holds no such skill.
+    """
+    source, native = split_qualified_id(skill_id)
+    meta = lookup_on_disk(registry, source, native)
+    found = getattr(meta, "source", None) if meta is not None else None
+    return str(found) if found else None
+
+
+def router_held_hit(get_router: Callable[[], Any]) -> Callable[[str], Any]:
+    """Look a qualified id up among the hits the live router last returned.
+
+    The router is read per call: a live engine swap replaces it, and the menu
+    and ``find_skill`` search whichever one the engine holds now. The returned
+    callable also answers ``router_available``, so a miss hint can tell whether
+    ``find_skill`` could answer at all.
+    """
+
+    def lookup(qualified_id: str) -> Any:
+        held = getattr(get_router(), "held_hit", None)
+        return held(qualified_id) if held is not None else None
+
+    lookup.router_available = lambda: get_router() is not None
+    return lookup
+
+
+def _held_miss(held_hit: "Callable[[str], Any] | None", source: str, native: str) -> str:
+    """What follows a memory-backend miss.
+
+    Nothing is held after a restart, and a search puts every id it returns back,
+    so naming ``find_skill`` stays true only while a router is there to answer.
+    A tool built without a router (a sub-agent's, or one whose master switch is
+    off) has no search to suggest, so it names none.
+    """
+    miss = f"Error: no {source} skill {native!r} found."
+    if held_hit is None:
+        return miss
+    available = getattr(held_hit, "router_available", lambda: True)
+    if not available():
+        return miss
+    return f"{miss} Search again with find_skill; an id it returns can be read right after."
+
+
+def _external_paths_note(flagged: list[str]) -> str:
+    """The note a body earns when it points at another product's home directory."""
+    return (
+        "note: these instructions reference paths outside Raven "
+        f"({', '.join(flagged)}) — another product's data. Treat those "
+        "paths as unavailable instead of following them."
+    )
 
 
 _CLOSEST_IDS = 3
@@ -87,7 +149,7 @@ _NEAR_ID_SEARCH_LIMIT = 1000
 def _local_miss_hint(registry: "SkillRegistry | None", native: str, blocked: frozenset[str]) -> str:
     """What follows a ``local/<native>`` miss.
 
-    ``# Skills`` and ``# Active Skills`` render from this same registry, so a
+    The scent menu and ``# Active Skills`` read this same registry, so a
     local id it lacks has no body in context to point at. What helps is a near
     id, for a typo, and the directories local ids come from, for a skill file
     the model saw outside them. A near id is never one the calling tool's
@@ -113,8 +175,8 @@ class ReadSkillTool(Tool):
 
     Policy runs here too: for an instruction-only skill the body *is* the
     payload, so a blocklisted or low-safety skill must be refused at the
-    read, not just at install time (``use_skill``). Under pull discovery
-    this tool is the first place a Hub skill's detail metadata — the only
+    read, not just at install time (``use_skill``). This tool is the first
+    place a Hub skill's detail metadata — the only
     payload carrying ``score_safety`` — is fetched, which makes it the
     authoritative enforcement point for the remote sources.
     """
@@ -128,22 +190,35 @@ class ReadSkillTool(Tool):
         blocklist: "Iterable[str] | None" = None,
         blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
         enabled_reader: "Callable[[], bool] | None" = None,
+        allow: "Iterable[str] | None" = None,
+        held_hit: "Callable[[str], Any] | None" = None,
+        project: "ProjectSkills | None" = None,
     ) -> None:
         self._client = client
         self._registry = registry
         self._enabled_reader = enabled_reader
+        self._held_hit = held_hit
+        self._project = project
         self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist, blocklist_reader=blocklist_reader)
+        # A sub-agent's effective skill list: None reads every skill, an empty
+        # list none, a list only the names on it -- the same narrowing its menu
+        # applies, so the tool cannot read what the menu withholds.
+        self._allow = None if allow is None else frozenset(allow)
 
     @property
     def name(self) -> str:
         return "read_skill"
+
+    def source_of(self, skill_id: str) -> str | None:
+        """Where an addressed skill lives, for the trace of a read."""
+        return registry_source(self._registry, skill_id)
 
     @property
     def description(self) -> str:
         return (
             "Read a skill's full SKILL.md body — its actual instructions. Pass "
             "the qualified id exactly as shown in the skill menu, a find_skill "
-            "result, or the '# Skills' / '# Active Skills' context (e.g. "
+            "result, or the '# Active Skills' context (e.g. "
             "'local/my-skill', 'hub/my-skill'). This does "
             "NOT download or run anything. Call it for any skill listed by "
             "description alone, whether to judge if it fits or because you have "
@@ -173,10 +248,15 @@ class ReadSkillTool(Tool):
             return "Error: 'skill_id' is required — a skill's qualified id like 'local/<name>' or 'hub/<slug>'."
         source, native = split_qualified_id(skill_id)
 
+        if self._allow is not None and native not in self._allow:
+            return f"Error: skill {native!r} is not in this agent's skill allow-list and cannot be read."
         if source == "hub" and self._enabled_reader is not None and not self._enabled_reader():
             return "Error: Skill Hub retrieval is turned off in Settings."
         if is_blocked(self._policy.blocked_now(), native):
             return f"Error: skill {native!r} is on the operator blocklist (skillForge.blocklist) and cannot be read."
+
+        if source == "project":
+            return await self._read_project(native)
 
         if source != "hub":
             meta = lookup_on_disk(self._registry, source, native)
@@ -184,10 +264,7 @@ class ReadSkillTool(Tool):
                 if source == "local":
                     hint = _local_miss_hint(self._registry, native, self._policy.blocked_now())
                     return f"Error: no local skill {native!r} found. {hint}"
-                return (
-                    f"Error: no {source} skill {native!r} found. Its body may "
-                    f"already be present in the '# Skills' context."
-                )
+                return self._read_held(skill_id, source, native)
             if is_blocked(self._policy.blocked_now(), meta.name):
                 return f"Error: skill {meta.name!r} is on the operator blocklist (skillForge.blocklist) and cannot be read."
             # The renderer context injection uses, so a body fetched here names its
@@ -228,12 +305,46 @@ class ReadSkillTool(Tool):
             head += f"\ntags: {', '.join(str(t) for t in tags)}"
         flagged = lint_external_paths(body)
         if flagged:
-            head += (
-                "\nnote: these instructions reference paths outside Raven "
-                f"({', '.join(flagged)}) — another product's data. Treat those "
-                "paths as unavailable instead of following them."
-            )
+            head += "\n" + _external_paths_note(flagged)
         return f"{head}\n\n{body}" if body else f"{head}\n[no body returned]"
+
+    async def _read_project(self, native: str) -> str:
+        """Resolve a ``project/<name>`` id against the turn's project index.
+
+        The router is shared by every session of a gateway, so a held project
+        body may belong to another session's project; a project miss answers
+        from the index alone and never falls back to ``held_hit``.
+        """
+        if self._project is None:
+            return "Error: project skills are not available to this agent."
+        if not self._project.enabled():
+            return "Error: project skills are turned off (skillForge.projectSkills.enabled is false)."
+        roots, meta = await self._project.lookup(native)
+        if roots is None:
+            return (
+                f"Error: no project skill {native!r}: this turn's working directory has no "
+                ".agents/skills directory up to its git root."
+            )
+        if meta is None:
+            searched = ", ".join(str(directory) for directory in roots.dirs)
+            return f"Error: no project skill {native!r} found. Project ids cover only the skills under {searched}."
+        if is_blocked(self._policy.blocked_now(), meta.name):
+            return f"Error: skill {meta.name!r} is on the operator blocklist (skillForge.blocklist) and cannot be read."
+        from raven.memory_engine import render_skill_body
+
+        rendered = render_skill_body(meta)
+        flagged = lint_external_paths(meta.content)
+        if not flagged:
+            return rendered
+        return f"{_external_paths_note(flagged)}\n\n{rendered}"
+
+    def _read_held(self, skill_id: str, source: str, native: str) -> str:
+        hit = self._held_hit(skill_id) if self._held_hit is not None else None
+        if hit is None or not hit.content:
+            return _held_miss(self._held_hit, source, native)
+        if is_blocked(self._policy.blocked_now(), hit.name):
+            return f"Error: skill {hit.name!r} is on the operator blocklist (skillForge.blocklist) and cannot be read."
+        return f"## {hit.name}\n\n{hit.content}"
 
 
 class UseSkillTool(Tool):
@@ -250,10 +361,14 @@ class UseSkillTool(Tool):
         enabled_reader: "Callable[[], bool] | None" = None,
         auto_install: str = "auto",
         install_audit_path: "Path | None" = None,
+        held_hit: "Callable[[str], Any] | None" = None,
+        project: "ProjectSkills | None" = None,
     ) -> None:
         self._client = client
         self._registry = registry
         self._enabled_reader = enabled_reader
+        self._held_hit = held_hit
+        self._project = project
         self._policy = SkillPolicy.create(
             min_safety=min_safety,
             blocklist=blocklist,
@@ -266,12 +381,16 @@ class UseSkillTool(Tool):
     def name(self) -> str:
         return "use_skill"
 
+    def source_of(self, skill_id: str) -> str | None:
+        """Where an addressed skill lives, for the trace of a read."""
+        return registry_source(self._registry, skill_id)
+
     @property
     def description(self) -> str:
         return (
             "Make a skill's bundled scripts/assets available on local disk so "
             "you can run them via the exec tool. Pass the skill's qualified id "
-            "from the '# Skills' catalog (e.g. 'local/x', '<memory-backend>/x', "
+            "from the skill menu or a find_skill result (e.g. 'local/x', '<memory-backend>/x', "
             "'hub/x'). Returns the SKILL.md body plus a 'scripts_dir' path when "
             "the skill ships runnable files. Pure-instruction skills need no "
             "scripts — just follow the body; you only need this for skills "
@@ -286,8 +405,8 @@ class UseSkillTool(Tool):
                 "skill_id": {
                     "type": "string",
                     "description": (
-                        "The skill's qualified id, exactly as shown in the "
-                        "'# Skills' catalog brackets (e.g. 'hub/my-skill')."
+                        "The skill's qualified id, exactly as the skill menu "
+                        "or find_skill shows it (e.g. 'hub/my-skill')."
                     ),
                 },
             },
@@ -304,21 +423,54 @@ class UseSkillTool(Tool):
         if is_blocked(self._policy.blocked_now(), native):
             return f"Error: skill {native!r} is on the operator blocklist (skillForge.blocklist) and cannot be used."
 
+        if source == "project":
+            return await self._use_project(native)
         if source == "hub":
             return await self._use_hub(native)
-        return self._use_on_disk(source, native)
+        return self._use_on_disk(skill_id, source, native)
 
-    def _use_on_disk(self, source: str, native: str) -> str:
-        """Resolve an already-materialized on-disk skill dir."""
+    async def _use_project(self, native: str) -> str:
+        """Resolve a ``project/<name>`` id against the turn's project index.
+
+        The router is shared by every session of a gateway, so a held project
+        body may belong to another session's project; a project miss answers
+        from the index alone and never falls back to ``held_hit``.
+        """
+        if self._project is None:
+            return "Error: project skills are not available to this agent."
+        if not self._project.enabled():
+            return "Error: project skills are turned off (skillForge.projectSkills.enabled is false)."
+        roots, meta = await self._project.lookup(native)
+        if roots is None:
+            return (
+                f"Error: no project skill {native!r}: this turn's working directory has no "
+                ".agents/skills directory up to its git root."
+            )
+        if meta is None:
+            searched = ", ".join(str(directory) for directory in roots.dirs)
+            return f"Error: no project skill {native!r} found. Project ids cover only the skills under {searched}."
+        if is_blocked(self._policy.blocked_now(), meta.name):
+            return f"Error: skill {meta.name!r} is on the operator blocklist (skillForge.blocklist) and cannot be used."
+        scripts = meta.path.parent / "scripts"
+        if scripts.is_dir():
+            return f"## {meta.name}\nscripts_dir: {scripts}\ncached: true\n\n{meta.content}"
+        return f"## {meta.name}\n(no bundled scripts — pure-instruction skill; follow the body)\n\n{meta.content}"
+
+    def _use_on_disk(self, skill_id: str, source: str, native: str) -> str:
+        """Resolve an already-materialized on-disk skill dir, or a held memory hit."""
         meta = lookup_on_disk(self._registry, source, native)
         if meta is None:
             if source == "local":
                 hint = _local_miss_hint(self._registry, native, self._policy.blocked_now())
                 return f"Error: no local skill {native!r} found on disk. {hint}"
-            return (
-                f"Error: no {source} skill {native!r} found on disk. If it is a "
-                f"pure-instruction skill its body is already in your context."
-            )
+            hit = self._held_hit(skill_id) if self._held_hit is not None else None
+            if hit is None or not hit.content:
+                return _held_miss(self._held_hit, source, native)
+            if is_blocked(self._policy.blocked_now(), hit.name):
+                return (
+                    f"Error: skill {hit.name!r} is on the operator blocklist (skillForge.blocklist) and cannot be used."
+                )
+            return f"## {hit.name}\n(no bundled scripts — pure-instruction skill; follow the body)\n\n{hit.content}"
         scripts = meta.path.parent / "scripts"
         if scripts.is_dir():
             return f"## {meta.name}\nscripts_dir: {scripts}\ncached: true\n\n{meta.content}"
@@ -441,10 +593,17 @@ class FindSkillTool(Tool):
 
     @property
     def description(self) -> str:
-        # The blurb must describe what is actually searched: without a Hub
-        # endpoint, or with the switch off, the search covers only the locally
-        # installed pool, and promising a 110k-skill library would send the
+        # The blurb must describe what is actually searched. With the router
+        # master switch off nothing is searched at all, and without a Hub
+        # endpoint or with the Hub switch off the search covers only the
+        # locally installed pool; promising a 110k-skill library would send the
         # model chasing results that cannot exist on this deployment.
+        if self._get_router() is None:
+            return (
+                "Search the skill library for reusable methodology. Skill "
+                "retrieval is disabled in this deployment, so this tool returns "
+                "no results; read a skill you already hold with read_skill(id)."
+            )
         searched = self._hub_wired and (self._enabled_reader is None or self._enabled_reader())
         scope = f"{_LIBRARY_BLURB} " if searched else "It searches the locally installed skill pool. "
         return (

@@ -13,6 +13,7 @@ from raven.memory_engine.skill_forge import (
     SkillForgeRouter,
     rrf_merge_weighted,
 )
+from raven.memory_engine.skill_forge.router import _HELD_HITS
 
 
 def _hit(qid: str, name: str, score: float = 0.5) -> RouterHit:
@@ -123,6 +124,68 @@ class TestRrfMergeAcrossSources:
         # local rank-3 (1/(RRF_K+3)) > mass rank-1 (0.01/(RRF_K+1)),
         # so 'gamma' must outrank 'delta'.
         assert names.index("gamma") < names.index("delta")
+
+
+class TestRrfProjectCollisionRule:
+    """A repository's skill never displaces the user's own skill of that name.
+
+    Scores from two BM25 pools are not comparable, so the higher-score rule
+    decides this pairing arbitrarily; the local representative keeps the slot
+    and the project hit stays readable by its explicit ``project/<name>`` id.
+    """
+
+    def test_a_local_hit_represents_a_name_shared_with_a_project_hit(self) -> None:
+        project_hits = [_hit("project/x", "x", score=9.0)]
+        local_hits = [_hit("local/x", "x", score=0.1)]
+        for source_results in (
+            [("local", 1.0, local_hits), ("project", 0.96, project_hits)],
+            [("project", 0.96, project_hits), ("local", 1.0, local_hits)],
+        ):
+            out = rrf_merge_weighted(source_results, k=5)
+            assert len(out) == 1
+            assert out[0].qualified_id == "local/x"
+            assert set(out[0].meta["contributing_sources"]) == {"local", "project"}
+
+    def test_a_hub_hit_in_between_does_not_hand_the_name_to_project(self) -> None:
+        """Local-over-Project is a property of the name, not of arrival order.
+
+        A same-named Hub hit can legitimately outrank the local one on score, and
+        the higher-scoring project hit that follows must still not take the slot.
+        The rule reads every source that contributed, not just the holder.
+        """
+        out = rrf_merge_weighted(
+            [
+                ("local", 1.0, [_hit("local/x", "x", score=5.0)]),
+                ("hub", 0.85, [_hit("hub/x", "x", score=10.0)]),
+                ("project", 0.96, [_hit("project/x", "x", score=20.0)]),
+            ],
+            k=5,
+        )
+
+        assert len(out) == 1
+        assert out[0].qualified_id != "project/x"
+        assert "project" in out[0].meta["contributing_sources"]
+
+    def test_without_the_hub_hit_the_local_one_represents_the_name(self) -> None:
+        out = rrf_merge_weighted(
+            [
+                ("local", 1.0, [_hit("local/x", "x", score=5.0)]),
+                ("project", 0.96, [_hit("project/x", "x", score=20.0)]),
+            ],
+            k=5,
+        )
+
+        assert len(out) == 1
+        assert out[0].qualified_id == "local/x"
+
+    def test_other_collisions_still_keep_the_higher_score(self) -> None:
+        local_hits = [_hit("local/x", "x", score=0.1)]
+        hub_hits = [_hit("hub/x", "x", score=9.0)]
+        out = rrf_merge_weighted(
+            [("local", 1.0, local_hits), ("hub", 0.85, hub_hits)],
+            k=5,
+        )
+        assert out[0].qualified_id == "hub/x"
 
 
 class TestRrfMergeDedupBy:
@@ -318,3 +381,65 @@ class TestSkillForgeRouterSelect:
         by_name = {h.name: h.meta["contributing_sources"] for h in out}
         assert by_name["x"] == ["local"]
         assert by_name["y"] == ["everos"]
+
+
+class TestHeldHits:
+    """The router keeps the hits it returned, so a hit with no file behind it
+    can still be read by id once the menu or find_skill has named it."""
+
+    async def test_a_returned_hit_is_held_by_its_id(self) -> None:
+        router = SkillForgeRouter([_StubSource("everos", 0.9, [_hit("everos/1", "one")])])
+        assert router.held_hit("everos/1") is None
+
+        await router.select("q", history=[], k=5)
+
+        held = router.held_hit("everos/1")
+        assert held is not None
+        assert held.content == "one"
+
+    async def test_only_the_latest_hits_are_held(self) -> None:
+        source = _StubSource("everos", 0.9, [])
+        router = SkillForgeRouter([source])
+        for n in range(_HELD_HITS + 1):
+            source._hits = [_hit(f"everos/{n}", f"s{n}")]
+            await router.select("q", history=[], k=1)
+
+        assert router.held_hit("everos/0") is None
+        assert router.held_hit(f"everos/{_HELD_HITS}") is not None
+
+    async def test_a_hit_returned_again_is_held_as_new(self) -> None:
+        source = _StubSource("everos", 0.9, [])
+        router = SkillForgeRouter([source])
+        for n in range(_HELD_HITS):
+            source._hits = [_hit(f"everos/{n}", f"s{n}")]
+            await router.select("q", history=[], k=1)
+        source._hits = [_hit("everos/0", "s0")]
+        await router.select("q", history=[], k=1)
+        source._hits = [_hit("everos/new", "fresh")]
+        await router.select("q", history=[], k=1)
+
+        assert router.held_hit("everos/0") is not None
+        assert router.held_hit("everos/1") is None
+
+    async def test_removing_a_source_drops_its_held_hits(self) -> None:
+        everos = _StubSource("everos", 0.9, [_hit("everos/1", "one")])
+        local = _StubSource("local", 1.0, [_hit("local/x", "x")])
+        router = SkillForgeRouter([local, everos])
+        await router.select("q", history=[], k=5)
+
+        router.remove_source(everos)
+
+        assert router.held_hit("everos/1") is None
+        assert router.held_hit("local/x") is not None
+
+    async def test_forgetting_a_source_drops_only_its_held_hits(self) -> None:
+        everos = _StubSource("everos", 0.9, [_hit("everos/1", "one")])
+        local = _StubSource("local", 1.0, [_hit("local/x", "x")])
+        router = SkillForgeRouter([local, everos])
+        await router.select("q", history=[], k=5)
+
+        router.forget(everos)
+
+        assert router.held_hit("everos/1") is None
+        assert router.held_hit("local/x") is not None
+        assert everos in router._sources

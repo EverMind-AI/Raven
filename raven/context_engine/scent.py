@@ -1,10 +1,9 @@
-"""The scent menu — pull-mode skill discovery's per-turn hint.
+"""The scent menu — skill discovery's per-turn hint.
 
-Replaces the push pipeline's per-turn LLM work (rewriter + gate) with rules
-and a cheap lookup: on a *fat* turn, one ``router.select`` over the same
-three sources renders a few name+description lines into the turn's user
-envelope. No bodies, no system-prefix bytes, no LLM calls. The model pulls
-what it wants through ``find_skill`` / ``read_skill``.
+Rules and a cheap lookup, no model: on a *fat* turn, one ``router.select``
+over Local, the memory backend, Hub and Project renders a few name+description
+lines into the turn's user envelope. No bodies, no system-prefix bytes, no LLM
+calls. The model pulls what it wants through ``find_skill`` / ``read_skill``.
 
 Judgement errors are engineered to be near-free in both directions: a turn
 wrongly judged fat costs one sub-millisecond local lookup (plus one light

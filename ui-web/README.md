@@ -3,7 +3,8 @@
 The page `raven serve` hosts: one HTML file with the stylesheet and the whole
 script inlined, plus a directory of icons beside it. `dist/index.html` is what
 the wheel ships and what nginx serves in a container; nothing on the page
-fetches a second script.
+fetches a second script. Beside it `build.py` leaves `dist/index.html.gz`, the
+same page packed, which `raven serve` sends to a browser that accepts gzip.
 
 The conventions a change here follows -- the layering, the shape of a domain,
 the store, the naming, the gates -- are `CONTRIBUTING.md`. The vocabulary is
@@ -49,7 +50,7 @@ Two steps, in this order:
 ```sh
 npm ci
 npm run build          # Vite -> .modern/modern.iife.js and .modern/domains.css
-python3 build.py       # splice into src/page.html -> dist/index.html, copy assets
+python3 build.py       # splice into src/page.html -> dist/index.html (+ .gz), copy assets
 ```
 
 They are separate because `build.py` must run where npm may not be on PATH:
@@ -57,7 +58,8 @@ the installer adds npm inside a subshell, and the python step is what the
 release wheel and `make build-ui` call. `build.py` is three substitutions and a
 copy -- every line of JavaScript the page runs comes from the one bundle, and
 the one `<style>` block is `styles/page.css` followed by the domains' own
-sheets, which Vite collects into `.modern/domains.css` -- and it ends by booting
+sheets, which Vite collects into `.modern/domains.css` -- plus the page's gzip
+copy, and it ends by booting
 the artifact in happy-dom twice: once on its fixtures (`?stub=1`), once in live
 mode with no gateway answering, comparing each DOM shape against its golden
 under `scripts/__golden__/`, so a structural regression fails the build rather
@@ -125,7 +127,7 @@ runs the same three and then `npm test`.
 
 ## Gates
 
-`npm test` is one run over both trees, so the 39 gate suites under `scripts/gates/`
+`npm test` is one run over both trees, so the gate suites under `scripts/gates/`
 go with the unit suites. Each one's header says what it pins and why; the
 conventions they are written to are `CONTRIBUTING.md` section 8.
 
@@ -138,6 +140,7 @@ conventions they are written to are `CONTRIBUTING.md` section 8.
 | `state-dom-touch` | how often each module in `state/` and `app/` may reach for an element -- counted per match, the page's own `$` included -- how often the page frame -- `chrome/`, `App.tsx`, `main.tsx` -- may, zero for `lib/` and `components/`, and how many text, class and markup writes each of those files still holds |
 | `seam-assignment` | only `app/install.ts` puts a source on the data seam -- under any name a file bound to it, and through a destructuring target or `defineProperty` too -- plus the first frame's one pinned exception, held to exactly one assignment; `setSources` stays the test seam, named nowhere else |
 | `island-lang` | every island's root subscribes to the language store |
+| `quiet-text-contrast` | the quiet greys, the composer placeholder, a file card's size line and the count badges' digits hold 4.5:1 on the grounds they are set on, in all four theme blocks |
 | `i18n-keys` | every literal key exists in the catalogue, sits under a namespace, and the namespace belongs to one domain |
 | `first-frame-literals` | the words the page shows without a `t(key)` behind them -- the served first frame and today's literals -- counted per file as unbroken CJK runs, escaped or not, and shrink-only |
 | `file-names` | what a file may be called: PascalCase components, camelCase modules, `<module>.test.ts`, kebab-case gates |
@@ -166,3 +169,4 @@ conventions they are written to are `CONTRIBUTING.md` section 8.
 | `instance-composer-css` | a sub-agent's composer is the page's composer, one size down |
 | `agents-roster-live` | what the desk's agent list is a list of, on the shipped wiring |
 | `direct-chat-media-live` | the instance composer's send carries its attachments |
+| `splash-motion-css` | the boot splash animates only `transform` and `opacity`, so it keeps moving while the bundle's long task holds the main thread |

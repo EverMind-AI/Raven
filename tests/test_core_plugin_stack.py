@@ -465,6 +465,21 @@ class TestHostToolsGrants:
         assert services.web_config().proxy == "socks5://127.0.0.1:1080"
         assert callable(services.media_config)
 
+    def test_the_hosts_sandbox_gateway_reaches_tools(self, tmp_path: Path) -> None:
+        """A plugin that runs work in a sandbox of its own (the design renderer) lands
+        on the gateway the host's sandbox runs on."""
+        from raven.sandbox.config import SandboxConfig
+
+        seen: list = []
+        config = _config(tools=ToolsConfig(sandbox=SandboxConfig(backend="openshell", gateway="lab")))
+        build_plugin_tools(tmp_path, config, registry=_GrantWatch(seen))
+        # Every factory of a plugin may be the first to build what its tools share.
+        build_plugin_hooks(tmp_path, config, registry=_GrantWatch(seen))
+        assert [(kind, services.sandbox_gateway) for kind, services in seen] == [("tool", "lab"), ("hook", "lab")]
+        seen.clear()
+        build_plugin_tools(tmp_path, _config(), registry=_GrantWatch(seen))
+        assert seen[0][1].sandbox_gateway is None
+
     def test_a_host_without_a_proxy_lends_none_and_its_web_section(self, tmp_path: Path) -> None:
         seen: list = []
         config = _config()
