@@ -1690,6 +1690,65 @@ async def test_a_channel_whose_field_read_fails_is_not_drawn_as_configured(
     assert tg.get("error"), "the row has to say the read failed, not only that it is unconfigured"
 
 
+async def test_a_failed_field_read_replaces_the_row_rather_than_adding_one(
+    isolated_config: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The marked row has to be the channel's only row.
+
+    Falling through after the failure emits the all-clear row for the same
+    name as well; the browser keys rows by name and keeps the last one, which
+    is exactly the row this fix exists to replace.
+    """
+    from raven.config import update_channels
+
+    existed = update_channels.channel_field_specs
+
+    def refuse(name: str):
+        if name == "telegram":
+            raise RuntimeError("this channel's schema cannot be flattened")
+        return existed(name)
+
+    monkeypatch.setattr(update_channels, "channel_field_specs", refuse)
+
+    r = await console_module.channels_status({})
+
+    names = [c["name"] for c in r["channels"]]
+    assert len(names) == len(set(names)), f"one row per channel, got {names}"
+    tg = [c for c in r["channels"] if c["name"] == "telegram"]
+    assert len(tg) == 1
+    assert tg[0]["configured"] is False
+    assert tg[0]["error"] == "this channel's schema cannot be flattened"
+
+
+async def test_a_failed_field_read_with_an_empty_message_still_marks_the_row(
+    isolated_config: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``str(RuntimeError())`` is ""; the marker is the key, not its text.
+
+    The row stays distinguishable from an all-clear one -- the key is there
+    and ``configured`` is false -- and a reader that tests the text instead
+    turns the failure back into an all-clear row.
+    """
+    from raven.config import update_channels
+
+    existed = update_channels.channel_field_specs
+
+    def refuse(name: str):
+        if name == "telegram":
+            raise RuntimeError()
+        return existed(name)
+
+    monkeypatch.setattr(update_channels, "channel_field_specs", refuse)
+
+    r = await console_module.channels_status({})
+
+    tg = [c for c in r["channels"] if c["name"] == "telegram"]
+    assert len(tg) == 1
+    assert tg[0]["error"] == "", "an empty message is still a failed read"
+    assert tg[0]["configured"] is False
+    assert tg[0]["fields"] == []
+
+
 async def test_channels_configure_stores_the_field_and_status_says_so(isolated_config: None) -> None:
     import json as _json
 
