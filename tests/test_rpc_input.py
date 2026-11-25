@@ -14,10 +14,12 @@ and registration are pinned.
 from __future__ import annotations
 
 import asyncio
+import nturl2path
 import struct
 import time
 import zlib
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 
@@ -96,6 +98,50 @@ async def test_a_file_uri_matches(tmp_path: Path) -> None:
     result = await input_detect_drop({"text": uri})
     assert result["matched"] is True
     assert result["text"] == str(target.resolve())
+
+
+async def test_a_file_uri_with_a_mixed_case_localhost_matches(tmp_path: Path) -> None:
+    """Host names are case-insensitive, so ``LOCALHOST`` is this machine."""
+    target = tmp_path / "dropped file.txt"
+    target.write_text("x")
+    uri = "file://LOCALHOST" + str(target).replace(" ", "%20")
+    result = await input_detect_drop({"text": uri})
+    assert result["matched"] is True
+    assert result["text"] == str(target.resolve())
+
+
+async def test_a_file_uri_from_another_machine_is_not_a_drop(tmp_path: Path) -> None:
+    assert await input_detect_drop({"text": "file://fileserver/share/dropped.txt"}) == {"matched": False}
+
+
+def test_a_windows_file_uri_keeps_its_drive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``unquote`` alone leaves ``/C:/...``, a path Windows cannot open. The
+    platform and the converter are substituted, as Windows' own converter is
+    the same pure string conversion."""
+    monkeypatch.setattr(input_methods, "_WINDOWS", True)
+    monkeypatch.setattr(input_methods, "url2pathname", nturl2path.url2pathname)
+    assert input_methods._file_uri_path("file:///C:/work/a.md") == "C:\\work\\a.md"
+
+
+def test_a_windows_localhost_authority_keeps_the_unc_share(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A localhost authority names this machine, but a share stays a UNC share."""
+    monkeypatch.setattr(input_methods, "_WINDOWS", True)
+    monkeypatch.setattr(input_methods, "url2pathname", nturl2path.url2pathname)
+    assert input_methods._file_uri_path("file://localhost/share/a.md") == "\\\\localhost\\share\\a.md"
+
+
+def test_an_unconvertible_windows_file_uri_names_no_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``nturl2path.url2pathname`` raises ``OSError`` for a doubled drive colon."""
+    monkeypatch.setattr(input_methods, "_WINDOWS", True)
+    monkeypatch.setattr(input_methods, "url2pathname", nturl2path.url2pathname)
+    assert input_methods._file_uri_path("file:///C::/a.md") is None
+
+
+def test_a_file_uri_with_an_invalid_bracketed_host_names_no_path() -> None:
+    """urlparse raises on a bracketed host that is not a valid IPv6 literal."""
+    with pytest.raises(ValueError):
+        urlparse("file://[bad/a.md")
+    assert input_methods._file_uri_path("file://[bad/a.md") is None
 
 
 async def test_a_directory_is_not_a_file_drop(tmp_path: Path) -> None:
