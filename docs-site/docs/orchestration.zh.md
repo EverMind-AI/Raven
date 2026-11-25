@@ -48,8 +48,8 @@
 各有自己的日志行——提供者失败是 `agent playbook: task generation failed (...)`，修复
 轮次用尽后是 `agent playbook: task Harness still invalid after one repair`。因此，
 worker 少了一个你预期的字段，可能是目录在拒绝——前提是那个字段被声明过，模型没
-写进 Harness 的字段本来就不存在；而轮次边界上整张表从未出现，是上述某一种失败，
-每种失败各记自己那行日志。
+写进 Harness 的字段本来就不存在；而生成实际跑过之后整张表仍未出现，是上述某一种失败，
+每种失败各记自己那行日志；空请求或空 roster 会跳过生成，不记任何日志。
 
 | 层次 | 生命周期 | 含义 |
 | --- | --- | --- |
