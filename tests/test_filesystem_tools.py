@@ -203,6 +203,24 @@ async def test_a_file_url_whose_spelling_resolves_is_still_refused_by_scheme(tmp
 
 
 @pytest.mark.asyncio
+async def test_a_file_url_that_raises_in_the_platform_conversion_stays_a_refusal(tmp_path: Path):
+    """A malformed Windows spelling is refused, not raised.
+
+    ``nturl2path.url2pathname`` raises ``OSError`` for a doubled drive colon
+    (``file:///C::/notes.md``); the entry guard runs before ``_missing``, so
+    the conversion failure would leave the call as an unhandled exception
+    rather than a refusal. A URL that cannot be converted names no path.
+    """
+    read = ReadFileTool(workspace=tmp_path)
+
+    answer = await read.execute(path="file:///C::/notes.md")
+
+    assert isinstance(answer, str)
+    assert "file:// URL" in answer
+    assert "plain path" in answer
+
+
+@pytest.mark.asyncio
 async def test_a_path_that_is_merely_missing_still_says_so(tmp_path: Path):
     """The URL wording is an extra branch, not a replacement.
 

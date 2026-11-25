@@ -469,7 +469,13 @@ class ReadFileTool(_FsTool):
         # path under Windows), leaving the refusal to the missing-file branch
         # would read it as a file instead of telling the caller to try a path.
         if (m := _URL_SCHEME_RE.match(path.strip())) and m.group("scheme").lower() == "file":
-            local = _file_url_path(path.strip())
+            try:
+                local = _file_url_path(path.strip())
+            except OSError:
+                # A malformed Windows spelling (``file:///C::/...``) raises
+                # inside ``url2pathname``; a URL that cannot be converted names
+                # no path the caller can try.
+                local = None
             hint = f" -- try {local}" if local else ""
             return f"Error: {path} is a file:// URL; read_file takes a plain path{hint}"
         # A file on a registered machine is read there, by its Raven node.
