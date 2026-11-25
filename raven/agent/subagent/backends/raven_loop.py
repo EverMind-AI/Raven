@@ -602,8 +602,10 @@ class RavenLoopBackend:
         # preamble is already on ``task`` by the time it arrives, so reading
         # ``task`` would answer on the brief twice over. An older caller that
         # carries no authored task leaves ``task`` in place, and so does one
-        # that carries an empty or blank one -- which is no task at all.
-        original_task = (authored_task or "").strip() or task
+        # that carries an empty or blank one -- which is no task at all. A
+        # task that carries text keeps that text exactly: the indentation of
+        # code, YAML and diffs is part of it.
+        original_task = authored_task if (authored_task or "").strip() else task
 
         async def participant_answer(verb: str, *args: Any) -> Any:
             if not participants:

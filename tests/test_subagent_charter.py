@@ -932,6 +932,30 @@ async def test_a_blank_authored_task_leaves_the_question_the_task_the_worker_was
     assert answer == prefixed
 
 
+async def test_an_authored_task_keeps_the_whitespace_around_it(tmp_path) -> None:
+    """A task that carries text is that text exactly: the indentation of code
+    and diffs is part of it, and trimming it would answer on another task."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.subagent.delegate import dispatch_charter
+
+    provider = _stub_provider()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+    prefixed = "Summarise in three bullets.\n\n    def total(rows):\n        return sum(rows)\n"
+    authored = "    def total(rows):\n        return sum(rows)\n\n"
+
+    with dispatch_charter({"brief": "Summarise in three bullets.", "functions": {"intake": ECHO_THE_QUESTION}}):
+        answer = await backend.run(
+            prefixed,
+            task_id="t1",
+            workspace=tmp_path,
+            executor=None,
+            history=[],
+            authored_task=authored,
+        )
+
+    assert answer == authored
+
+
 async def test_an_advise_function_reads_the_task_the_model_wrote(tmp_path) -> None:
     """``advise`` is asked at every phase, not only on the way in, so the
     question it reads is the authored task there too."""
