@@ -101,6 +101,16 @@ def _root() -> dict[str, Any]:
     return root
 
 
+def validate() -> None:
+    """Load the catalogue and run its checks, raising what the loader raises.
+
+    For the caller that wants to know once, up front, whether generation can
+    run at all: a broken file surfaces as the ``RuntimeError`` the loader
+    names rather than inside whichever query a turn happens to make first.
+    """
+    _root()
+
+
 def parameter_enabled(module: ModuleName, name: str) -> bool:
     """Whether the generator may emit one module parameter."""
     root = _root()
@@ -121,4 +131,4 @@ def function_enabled(module: ModuleName, kind: FunctionKind, name: str) -> bool:
     return _entry_enabled(entry, f"{module}.functions.{kind}.{name}")
 
 
-__all__ = ["function_enabled", "parameter_enabled"]
+__all__ = ["function_enabled", "parameter_enabled", "validate"]

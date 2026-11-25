@@ -1207,7 +1207,12 @@ class WiringMixin:
         from raven.playbook.agent_generator import HarnessResolution
 
         cfg = self._playbook_config
-        if cfg is None or not cfg.enabled or getattr(cfg, "agent_harness", "default") != "generate":
+        if (
+            cfg is None
+            or not cfg.enabled
+            or getattr(cfg, "agent_harness", "default") != "generate"
+            or self._harness_generation_broken
+        ):
             return HarnessResolution()
         asked = getattr(req, "playbook_mode", None)
         mode = asked or getattr(cfg, "default_generation_mode", "task")
@@ -2166,6 +2171,20 @@ class WiringMixin:
         # the path both tools already unregister themselves down.
         if cfg is None or not cfg.enabled or is_subagent_process():
             return
+        if getattr(cfg, "agent_harness", "default") == "generate":
+            # The catalogue gates only what generation may emit, so the check
+            # belongs to that mode alone -- and it runs once, here, not inside
+            # every turn's resolution try. A broken file is a setup fault: say
+            # so as such, and the turn's own try never has to re-pay it.
+            try:
+                from raven.agent import harness_capabilities
+
+                harness_capabilities.validate()
+            except RuntimeError as exc:
+                self._harness_generation_broken = True
+                logger.opt(exception=True).error(
+                    "agent playbook: harness capability catalogue is unusable; generation disabled ({})", exc
+                )
         try:
             self._playbooks = self._build_playbook_runtime(cfg)
         except Exception:

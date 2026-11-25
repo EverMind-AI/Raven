@@ -379,6 +379,17 @@ def test_capability_loader_refuses_broken_and_undeclared_catalog_entries(tmp_pat
         harness_capabilities.parameter_enabled("memory", "systemPrompt")
 
 
+def test_validate_loads_the_document_and_its_checks(tmp_path, monkeypatch) -> None:
+    """The up-front check is the same load the queries do, failures included."""
+    harness_capabilities.validate()
+
+    bad = tmp_path / "harness_generation.json"
+    bad.write_text("{", encoding="utf-8")
+    monkeypatch.setattr(harness_capabilities, "_PATH", bad)
+    with pytest.raises(RuntimeError, match="invalid harness generation capability file"):
+        harness_capabilities.validate()
+
+
 def test_enabling_an_unwired_catalog_item_fails_loudly(tmp_path, monkeypatch) -> None:
     document = json.loads(harness_capabilities._PATH.read_text(encoding="utf-8"))
     document["harnessGeneration"]["action"]["functions"]["participant"]["items"]["review"]["enabled"] = True
