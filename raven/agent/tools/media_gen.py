@@ -940,11 +940,8 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         # The batch is named by the model a picture's answer carries when one
         # does -- and when none does (every picture failed), by the model the
         # batch's own call named, which is what its requests were built with.
-        batch_model = (
-            next((item["model"] for item in results if item.get("model")), None)
-            or getattr(snapshot, "model", "")
-            or model
-            or self.default_model
+        batch_model = next((item["model"] for item in results if item.get("model")), None) or self._attempted_model(
+            snapshot, model
         )
         answer_body: dict[str, Any] = {
             "success": bool(paths),
@@ -1029,6 +1026,32 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         body["selection"] = selection
         return json.dumps(body, ensure_ascii=False)
 
+    def _attempted_model(self, config: "MediaToolConfig | None", model: str | None) -> str:
+        """The model a request under this section goes out with.
+
+        A section naming no model on a provider that has one of its own sends
+        that one -- a MiniMax section sends ``image-01`` -- so the answer of a
+        call whose every picture failed is named by the model its attempts were
+        made with rather than by this tool's default.
+
+        A section on a named provider spells its model under that provider's own
+        prefix, which its Images API does not take.
+        """
+        from raven.config.schema import media_provider
+
+        runs_on = media_provider(config)
+        model_id = (
+            getattr(config, "model", "")
+            or model
+            or (_MINIMAX_IMAGE_MODEL if runs_on in _MINIMAX_PROVIDERS else self.default_model)
+        )
+        base = str(getattr(config, "api_base", "") or "") or _DEFAULT_BASE
+        if httpx.URL(base).host == "openrouter.ai":
+            return wire_model(model_id, client_provider="openrouter")
+        if runs_on:
+            return wire_model(model_id, client_provider=runs_on)
+        return model_id
+
     async def _generate_one_answer(
         self,
         spec: dict[str, Any],
@@ -1044,14 +1067,8 @@ class ImageGenerateTool(_OpenRouterMediaTool):
 
         runs_on = media_provider(config)
         minimax = runs_on in _MINIMAX_PROVIDERS
-        model_id = getattr(config, "model", "") or model or (_MINIMAX_IMAGE_MODEL if minimax else self.default_model)
         openrouter = httpx.URL(self.api_base).host == "openrouter.ai"
-        if openrouter:
-            model_id = wire_model(model_id, client_provider="openrouter")
-        elif runs_on:
-            # A section on a named provider: its model list spells the model under
-            # the provider's own prefix, which its Images API does not take.
-            model_id = wire_model(model_id, client_provider=runs_on)
+        model_id = self._attempted_model(config, model)
         if minimax:
             return await self._via_minimax(model_id, prompt, images, aspect_ratio, output_dir, stem)
         quality = self.effective_quality(spec.get("quality"), model_id, config)

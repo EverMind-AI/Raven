@@ -1839,6 +1839,25 @@ async def test_a_batch_where_every_picture_failed_to_write_is_named_by_its_attem
     assert out["model"] == "openai/gpt-image-2"
 
 
+async def test_a_batch_that_lost_every_picture_is_named_by_the_model_its_attempts_used(monkeypatch, tmp_path):
+    """A section naming no model on a provider that has a model of its own sends
+    that one -- a MiniMax section sends ``image-01`` -- so a batch that lost
+    every picture is named by it and not by the default this tool answers with."""
+
+    def handler(request):
+        pytest.fail("no request should be sent")
+
+    async def refuse_output_dir(self, spec, stem, model, output_dir, config):
+        raise PermissionError("output_dir is refused")
+
+    monkeypatch.setattr(ImageGenerateTool, "_generate_one_answer", refuse_output_dir)
+
+    tool = _minimax_image_tool(monkeypatch, handler, tmp_path, model="")
+    out = json.loads(await tool.execute(prompts=[{"prompt": "a cat"}, {"prompt": "a dog"}]))
+
+    assert out["model"] == "image-01"
+
+
 async def test_the_request_is_built_from_the_snapshot_the_answer_names(monkeypatch, tmp_path):
     """The in-flight test asserts the answer; this pins the request beside it:
     the model the answer attributes to Settings is the one the outgoing body
