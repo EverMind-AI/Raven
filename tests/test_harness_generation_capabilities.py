@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 import pytest
+from loguru import logger
 from pydantic import ValidationError
 
 from raven.agent import harness_capabilities
@@ -21,6 +24,19 @@ from raven.playbook.agent_generator import (
     task_tool,
 )
 from raven.playbook.agent_spec import AgentPlaybookSpec
+
+
+@contextmanager
+def _warnings() -> Iterator[list[str]]:
+    """loguru's own sink, read back as text: the skew a dropped field causes is
+    a log line rather than a raised error, so holding the sink is the only way
+    a test can see it."""
+    said: list[str] = []
+    sink = logger.add(lambda message: said.append(message.record["message"]), level="WARNING")
+    try:
+        yield said
+    finally:
+        logger.remove(sink)
 
 
 def _disabled_document(tmp_path, monkeypatch):
@@ -238,6 +254,82 @@ def test_disabling_fields_drops_them_at_the_worker_boundary(tmp_path, monkeypatc
     assert charter.tools is None
     assert charter.checks == ()
     assert charter.code == ""
+
+
+def test_a_worker_whose_catalogue_disables_tools_names_the_skew_it_drops(tmp_path, monkeypatch) -> None:
+    _disabled_document(tmp_path, monkeypatch)
+
+    with _warnings() as said:
+        charter = parse({"brief": "the dispatch brief", "tools": ["read_file", "write_file"]})
+
+    assert charter is not None
+    assert charter.tools is None
+    assert [line for line in said if "capability.tools" in line] == [
+        "charter: 2 tool name(s) accepted from the host, but this install's catalogue "
+        "disables capability.tools; the dispatch keeps the worker's own toolset"
+    ]
+
+
+def test_a_worker_whose_catalogue_enables_tools_names_no_skew() -> None:
+    with _warnings() as said:
+        charter = parse({"brief": "the dispatch brief", "tools": ["read_file"]})
+
+    assert charter is not None
+    assert charter.tools == ("read_file",)
+    assert said == []
+
+
+def test_a_dispatch_with_an_empty_restriction_names_the_skew_it_drops(tmp_path, monkeypatch) -> None:
+    _disabled_document(tmp_path, monkeypatch)
+
+    with _warnings() as said:
+        charter = parse({"brief": "the dispatch brief", "tools": []})
+
+    assert charter is not None
+    assert charter.tools is None
+    assert [line for line in said if "capability.tools" in line] == [
+        "charter: 0 tool name(s) accepted from the host, but this install's catalogue "
+        "disables capability.tools; the dispatch keeps the worker's own toolset"
+    ]
+
+
+def test_a_dispatch_that_carries_no_tools_names_no_skew(tmp_path, monkeypatch) -> None:
+    _disabled_document(tmp_path, monkeypatch)
+
+    with _warnings() as said:
+        absent = parse({"brief": "the dispatch brief"})
+
+    assert absent is not None
+    assert absent.tools is None
+    assert said == []
+
+
+def test_an_undeclared_tools_switch_fails_the_parse_even_without_a_tools_key(tmp_path, monkeypatch) -> None:
+    """The catalogue is consulted for every payload, so a build whose document
+    never declared the switch refuses the dispatch rather than answering it
+    without the field the document is supposed to describe."""
+    document = json.loads(harness_capabilities._PATH.read_text(encoding="utf-8"))
+    del document["harnessGeneration"]["capability"]["parameters"]["items"]["tools"]
+    path = tmp_path / "harness_generation.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    monkeypatch.setattr(harness_capabilities, "_PATH", path)
+
+    with pytest.raises(RuntimeError, match="not declared: capability.parameters.tools"):
+        parse({"brief": "the dispatch brief"})
+
+
+def test_the_skew_count_names_the_accepted_tools_not_the_entries_sent(tmp_path, monkeypatch) -> None:
+    _disabled_document(tmp_path, monkeypatch)
+
+    with _warnings() as said:
+        charter = parse({"brief": "the dispatch brief", "tools": ["read_file", 7, "", "write_file"]})
+
+    assert charter is not None
+    assert charter.tools is None
+    assert [line for line in said if "capability.tools" in line] == [
+        "charter: 2 tool name(s) accepted from the host, but this install's catalogue "
+        "disables capability.tools; the dispatch keeps the worker's own toolset"
+    ]
 
 
 def test_a_non_boolean_switch_is_refused(tmp_path, monkeypatch) -> None:

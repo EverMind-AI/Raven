@@ -377,7 +377,7 @@ class PlaybookExecutor:
         dag_tool: Any = None,
         provider: "LLMProvider | None" = None,
         compose_model: str | None = None,
-        background: bool = True,
+        wait_for_result: bool = False,
         compose_prompt_mode: bool = False,
         workspace: Path | None = None,
         workspace_for: Callable[[str | None], Path] | None = None,
@@ -385,10 +385,10 @@ class PlaybookExecutor:
         self._dag_tool = dag_tool
         self._provider = provider
         self._compose_model = compose_model
-        #: False = wait for the graph and reply with its result instead of a
+        #: True = wait for the graph and reply with its result instead of a
         #: dispatch receipt. The CLI's explicit run; in-conversation entries
-        #: stay backgrounded so the turn is not held open by a long graph.
-        self._background = background
+        #: do not wait, so the turn is not held open by a long graph.
+        self._wait_for_result = wait_for_result
         #: Whether *this* executor composes a prompt-mode graph itself. True on
         #: the CLI, which has no model in the room and would otherwise have no way
         #: to run a prompt-mode playbook. False in a conversation, where the
@@ -668,10 +668,10 @@ class PlaybookExecutor:
                     **({"when": run_node.when} if run_node.when else {}),
                 }
             )
-        receipt = await self._dag_tool.execute(
+        dispatch = self._dag_tool.execute_to_completion if self._wait_for_result else self._dag_tool.execute
+        receipt = await dispatch(
             tool_nodes,
             task_summary=spec.task_summary,
-            background=self._background,
             # A callable, re-read on every dispatch: a secret stored after the run
             # started reaches a node that is continued, not only the next run. The
             # stored values are read fresh each time and outrank the ones folded
@@ -705,7 +705,7 @@ class PlaybookExecutor:
         if text.startswith("Error"):
             return ExecutionPlan(kind="questions", reply=f"Failed to start the run: {text}")
         logger.info("playbook {} dispatched as a DAG run ({} nodes)", spec.name, len(tool_nodes))
-        if self._background:
+        if not self._wait_for_result:
             # Leads with the run id in the graph tool's own shape. A client
             # restoring this card from history has no events to replay and
             # recovers the run from the result line, so a receipt that names only

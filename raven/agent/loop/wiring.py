@@ -1218,6 +1218,12 @@ class WiringMixin:
         mode = asked or getattr(cfg, "default_generation_mode", "task")
         if mode == "off":
             return HarnessResolution()
+        # An announced result is a value to read, not a request to create a
+        # playbook; generating here would mint a Task from the graph's summary.
+        from raven.spine.turn import Origin
+
+        if getattr(req, "origin", None) == Origin.SUBAGENT:
+            return HarnessResolution()
         if is_subagent_process() or getattr(req, "direct_target", None) is not None:
             return HarnessResolution()
         # A Persona is minted only for a turn that asked for one. The config's
@@ -1404,9 +1410,31 @@ class WiringMixin:
         return (await self._resolve_playbook_turn(req, session_key, binding)).table
 
     async def _finish_playbook_turn(self, resolution: Any, capture: Any, binding: Any) -> None:
-        """Update a Task artifact with proven Workflow evidence and save the run."""
-        if self._playbooks is None:
+        """Finalize a capture now, or leave it for its run's completion.
+
+        A turn that dispatched a captured graph may end before the graph does;
+        the run-finished callback then finalizes it instead.
+        """
+        if self._playbooks is None or capture.finalized:
             return
+        if capture.active_run_id is not None:
+            capture.deferred = True
+            return
+        await self._finalize_capture(resolution, capture, binding)
+
+    async def _capture_run_finished(self, resolution: Any, capture: Any, binding: Any, run_id: str) -> None:
+        if capture.finalized or capture.active_run_id != run_id:
+            return
+        capture.active_run_id = None
+        if capture.deferred:
+            await self._finalize_capture(resolution, capture, binding)
+
+    async def _finalize_capture(self, resolution: Any, capture: Any, binding: Any) -> None:
+        """Update a Task artifact with proven Workflow evidence and save the run."""
+        if self._playbooks is None or capture.finalized:
+            return
+        capture.finalized = True
+        capture.active_run_id = None
         from raven.playbook.run_record import RunRecordStore
 
         try:
@@ -2010,7 +2038,7 @@ class WiringMixin:
         transport is bound, exactly as the graph-confirm flow experiences it,
         and also when the conversation is still busy with another question at
         the deadline: a plugin gate asks from inside a tool call, and a
-        foreground graph runs several of those at once, so two gates (or a
+        graph runs several of those at once, so two gates (or a
         gate and a relayed sub-agent) would otherwise evict each other from
         the broker's single pending slot. None sends the gate down its
         no-channel path, which is fail-closed. One deadline covers the wait

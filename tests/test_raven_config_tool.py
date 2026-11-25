@@ -1437,6 +1437,90 @@ async def test_a_scan_channel_that_reported_pairing_reads_as_connected(config_fi
 
 
 @pytest.mark.asyncio
+async def test_a_channel_with_no_fields_at_all_is_not_called_a_scan_channel(config_file):
+    """An absent field list is not a QR-login declaration.
+
+    The scan advice keys on the explicit ``qr_login`` flag alone. A row with
+    an absent field list has no required fields, and reading the list as the
+    declaration told a credentials channel to ask for a code it does not
+    have.
+    """
+    status = {
+        "gateway_running": True,
+        # Feishu is a credentials channel: it declares required fields, and the
+        # only row with an empty field list is one whose read failed.
+        "channels": [{"name": "feishu", "enabled": True, "running": True, "fields": []}],
+    }
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"channels.status": status}))
+
+    described = json.loads(await _run(tool, action="describe", path="channels.feishu"))
+
+    assert "QR" not in json.dumps(described), f"an empty field list must not draw a scan instruction: {described}"
+
+
+@pytest.mark.asyncio
+async def test_a_channel_whose_field_read_failed_names_the_failure(config_file):
+    """A row that could not describe itself says so, and claims nothing else.
+
+    The field list is empty because the read raised, not because the channel
+    takes no credentials, so the row must not claim the channel is waiting for
+    a scan -- and the agent has to learn why the channel is unreadable.
+    """
+    status = {
+        "gateway_running": True,
+        "channels": [
+            {
+                "name": "feishu",
+                "enabled": True,
+                "running": True,
+                "fields": [],
+                "error": "this channel's schema cannot be flattened",
+            }
+        ],
+    }
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"channels.status": status}))
+
+    described = json.loads(await _run(tool, action="describe", path="channels.feishu"))
+
+    assert described["error"] == "this channel's schema cannot be flattened"
+    assert "QR" not in json.dumps(described), f"a failed row must not draw a scan instruction: {described}"
+    assert described["state"] == "running", "a row that could not be read cannot claim to be waiting for a scan"
+
+
+@pytest.mark.asyncio
+async def test_a_channel_whose_field_read_failed_with_no_message_still_names_the_failure(config_file):
+    """``str(RuntimeError())`` is "", and the key is the fact, not the text.
+
+    Reading ``error`` for truth dropped the marker, so the row fell back to
+    "running, not connected yet" -- the scan-unpaired claim a failed read must
+    never make. The empty message is still a failure, and it is still passed
+    through.
+    """
+    status = {
+        "gateway_running": True,
+        "channels": [
+            {
+                "name": "feishu",
+                "enabled": True,
+                "running": True,
+                "fields": [],
+                "error": "",
+            }
+        ],
+    }
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"channels.status": status}))
+
+    described = json.loads(await _run(tool, action="describe", path="channels.feishu"))
+
+    assert described["error"] == ""
+    assert "QR" not in json.dumps(described), f"a failed row must not draw a scan instruction: {described}"
+    assert described["state"] == "running", "a row that could not be read cannot claim to be waiting for a scan"
+
+
+@pytest.mark.asyncio
 async def test_a_channel_read_carries_its_values_and_how_it_logs_in(config_file):
     """A silent Telegram was read with describe and then get for the same channel, and
     a WeChat setup asked the user for a token that the QR scan fills in."""

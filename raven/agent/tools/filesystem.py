@@ -8,6 +8,8 @@ import re
 import unicodedata
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from raven.agent import workdir
 from raven.agent.tools import remote_files, tree_walk
@@ -242,15 +244,22 @@ def _url_argument(path: str) -> bool:
 _WINDOWS = os.name == "nt"
 
 
+def _has_control_character(text: str) -> bool:
+    """Whether ``text`` carries a Cc, Zl, or Zp character.
+
+    The tools echo a path into their result lines, and readers take a file back
+    out of those lines; a line break in a path would let it forge another one.
+    """
+    return any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in text)
+
+
 def resolve_path(
     path: str,
     workspace: Path | None = None,
     allowed_dirs: tuple[Path, ...] = (),
 ) -> Path:
     """Resolve path against workspace (if relative) and enforce the allowed roots."""
-    # The tools echo the path into their result lines, and readers take a file back
-    # out of those lines; a line break in a path would let it forge another one.
-    if any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in str(path)):
+    if _has_control_character(str(path)):
         raise PermissionError(f"Path {path!r} contains a line break or control character")
     p = Path(path).expanduser()
     # A URL argument is not a path on this machine, so its scheme colon is not
@@ -304,6 +313,52 @@ def _elsewhere(path: str) -> str:
     return missing_here_note([path.strip()])
 
 
+def _file_url_path(url: str) -> str | None:
+    """The local path a ``file://`` URL names, or ``None`` when it names another machine.
+
+    ``url2pathname`` is the platform-aware inverse of ``Path.as_uri()``: it
+    percent-decodes the path, and on Windows it turns ``file:///C:/work/a.md``
+    into ``C:\\work\\a.md``, where a bare strip of the scheme leaves
+    ``/C:/work/a.md`` -- a path Windows cannot open.
+
+    A ``localhost`` authority names this machine, as
+    ``raven.channels.media.file_uri_to_path`` and
+    ``raven.acp.methods._file_uri_to_path`` also read it; any other host names
+    somebody else's machine, so it is not a path on this one. On Windows the
+    authority still survives: ``url2pathname`` folds it away into a
+    root-relative path, so a single leading backslash keeps the host as the
+    UNC share it named (``file://localhost/share/x`` reads
+    ``\\\\localhost\\share\\x``), the way
+    ``raven.acp.mirasim.server._local_file`` reads it. A drive path
+    (``file://localhost/C:/work/a.md``) keeps its drive, because there the
+    authority names this machine rather than a share.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        # urlparse raises on a bracketed host that is not a valid IPv6 literal.
+        return None
+    if parsed.netloc and parsed.netloc.casefold() != "localhost":
+        return None
+    if not parsed.path:
+        return None
+    try:
+        local = url2pathname(parsed.path)
+    except OSError:
+        # A malformed Windows spelling (``file:///C::/...``) raises inside
+        # ``url2pathname``; a URL that cannot be converted names no path.
+        return None
+    if _WINDOWS and parsed.netloc and local.startswith("\\") and not local.startswith("\\\\"):
+        # url2pathname folds the localhost authority away; a root-relative
+        # result is the share it named, so the authority stays as the UNC host.
+        local = f"\\\\{parsed.netloc}{local}"
+    if _has_control_character(local):
+        # A percent-encoded control character decodes into a caller-read line,
+        # and the resolver refuses such a path on the next call anyway.
+        return None
+    return local
+
+
 def _missing(path: str) -> str:
     """The refusal for a path that is not there, naming the tool that can reach it.
 
@@ -317,9 +372,10 @@ def _missing(path: str) -> str:
     nothing on disk, so a path that does resolve never reaches it.
     """
     raw = path.strip()
-    if match := _URL_SCHEME_RE.match(raw):
-        if match.group("scheme").lower() == "file":
-            return f"Error: {path} is a file:// URL; read_file takes a plain path -- try {raw[7:] or '/'}"
+    if _URL_SCHEME_RE.match(raw):
+        # A file URL is answered at the read's entry, before this branch is
+        # reached, so a URL that lands here is one the tool refuses for any
+        # other reason.
         return (
             f"Error: {path} is a URL, not a path on this machine. read_file only reads the "
             "filesystem; fetch it with web_fetch, which returns the page as text."
@@ -437,6 +493,20 @@ class ReadFileTool(_FsTool):
         return line
 
     async def execute(self, path: str, offset: int = 1, limit: int | None = None, **kwargs: Any) -> str | ToolResult:
+        # A file:// URL is refused by scheme, before it is resolved: on a host
+        # where the URL's own spelling resolves to a real file (a drive-relative
+        # path under Windows), leaving the refusal to the missing-file branch
+        # would read it as a file instead of telling the caller to try a path.
+        # A path carrying a control character is left to the resolver, whose
+        # refusal escapes it; this branch would echo it into the result.
+        if (
+            (m := _URL_SCHEME_RE.match(path.strip()))
+            and m.group("scheme").lower() == "file"
+            and not _has_control_character(path)
+        ):
+            local = _file_url_path(path.strip())
+            hint = f" -- try {local}" if local else ""
+            return f"Error: {path} is a file:// URL; read_file takes a plain path{hint}"
         # A file on a registered machine is read there, by its Raven node.
         if (
             not _is_a_device_spelling(path)

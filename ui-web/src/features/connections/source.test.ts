@@ -57,6 +57,7 @@ beforeEach(() => {
     delete c.who
     delete c.fields
     delete c.missing
+    delete c.error
     delete c.running
     delete c.connected
     delete c.refusal
@@ -86,6 +87,31 @@ describe('merging one status answer', () => {
     answering([{ name: 'slack', enabled: true, fields: [{ key: 'bot_token' }], missing: ['bot_token'] }])
     await loadChannels()
     expect(row('slack')).toMatchObject({ on: true, fields: [{ key: 'bot_token' }], missing: ['bot_token'] })
+  })
+
+  /* The failed row's empty list is the failure's shape, not a declaration that
+     the channel needs nothing; the error is what tells the page so. */
+  it('carries a failed field read and drops it once the read works again', async () => {
+    answering([{ name: 'slack', enabled: true, fields: [], missing: [], error: 'the schema cannot be flattened' }])
+    await loadChannels()
+    expect(row('slack')).toMatchObject({ error: 'the schema cannot be flattened', fields: [], missing: [] })
+
+    /* An empty message is still a failure: the key marks it, not the text. */
+    answering([{ name: 'slack', enabled: true, fields: [], missing: [], error: '' }])
+    await loadChannels()
+    expect(row('slack')).toHaveProperty('error', '')
+
+    answering([{ name: 'slack', enabled: true, fields: [{ key: 'bot_token', required: true }], missing: [] }])
+    await loadChannels()
+    expect(row('slack')).not.toHaveProperty('error')
+  })
+
+  /* A null error is no error: the page reads the key's presence as the
+     failure, so a key that says nothing must not become one. */
+  it('drops a null error rather than carry it as a failure', async () => {
+    answering([{ name: 'slack', enabled: true, fields: [], missing: [], error: null }])
+    await loadChannels()
+    expect(row('slack')).not.toHaveProperty('error')
   })
 
   /* Three separate facts, kept separate: what the config asks for, whether the

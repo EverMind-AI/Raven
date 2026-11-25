@@ -1953,8 +1953,14 @@ async def channels_status(params: dict, *, agent_loop_factory=None) -> dict:
                         "set": bool(is_set),
                     }
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            # A field read that fails is not a channel with no fields: shipping
+            # the all-clear drew a broken row as configured and sent the agent
+            # to a QR code that does not exist. Mark it instead.
+            items.append(
+                {"name": name, "enabled": enabled, "configured": False, "missing": [], "fields": [], "error": str(exc)}
+            )
+            continue
         items.append(
             {
                 "name": name,

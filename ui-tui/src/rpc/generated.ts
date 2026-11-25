@@ -713,6 +713,10 @@ export interface ChannelStatusRow {
    * Whether this channel signs in by scanning a code.
    */
   qr_login?: boolean;
+  /**
+   * Why the channel's field list could not be read, when it could not.
+   */
+  error?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

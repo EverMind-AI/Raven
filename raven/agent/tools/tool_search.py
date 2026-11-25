@@ -347,11 +347,10 @@ class ToolSearchController:
         controller.
 
         ``arguments`` travel with the question because a target's verdict may turn
-        on them: `resolve_dag_node` blocks only for a bound foreground run, which
-        it can tell only from ``run_id``. Asked without them it answered "not
-        blocking" for every call, and the registry put its default ceiling on a
-        wait that has none. A JSON string is tolerated the way :meth:`call`
-        tolerates it; anything that is not an object counts as no arguments.
+        on them -- a tool can decide from a value in the call. Asked without them,
+        the registry put its default ceiling on calls the target meant to leave
+        unbounded. A JSON string is tolerated the way :meth:`call` tolerates it;
+        anything that is not an object counts as no arguments.
         """
         if not isinstance(name, str) or name in META_TOOL_NAMES:
             return False

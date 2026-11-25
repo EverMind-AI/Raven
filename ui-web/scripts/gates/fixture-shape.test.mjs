@@ -241,6 +241,8 @@ const UNSENT = new Set([
   'model.set_protocol.provider.accepts_api_key', 'model.set_protocol.provider.api_base', 'model.set_protocol.provider.default_api_base', 'model.set_protocol.provider.docs', 'model.set_protocol.provider.key_env', 'model.set_protocol.provider.platforms', 'model.set_protocol.provider.protocol_overrides', 'model.set_protocol.provider.protocols',
   // channels.configure: 1 -- the sentence that comes with a refusal, and this world refuses nothing
   'channels.configure.detail',
+  // channels.status: 1 -- a row's read error, and no row in this world fails its field read
+  'channels.status.channels[].error',
   // plug.auth: 1
   'plug.auth.mcp',
   // plug.install: 2

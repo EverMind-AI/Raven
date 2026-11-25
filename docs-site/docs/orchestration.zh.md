@@ -35,6 +35,25 @@
 按未生成 Worker Table 的配置继续本轮。它不会自行决定任务图，也不移除主 Agent 工具；
 模型仍自行决定委派什么。
 
+生成的 worker 可以携带哪些字段和函数，由随安装检入的能力目录
+`raven/playbook/harness_generation.json` 决定。目录里关着的开关不会下发；目录开着、
+但当前版本并不支持的开关，在读取目录时会被拒绝，而不是被静默丢掉。例外有一个：加载
+器不认识的顶层模块会被跳过。已经存下来的 Harness 读回时同样要过目录这一关：目录后来
+关掉的能力，会让这个文件读不回来，于是它带着一条
+`Skipping unloadable playbook '...'` 的警告从库中消失。目录缺失或格式错误
+属于安装损坏，并不会把每个开关都打开：文件缺失时，加载器抛出点名该文件的
+`RuntimeError`；JSON 格式错误时，抛出的 `RuntimeError` 不带路径；字节不是 UTF-8 时，
+抛出 `UnicodeDecodeError`。无论哪种，需要它的那一轮都会记录
+`agent playbook: resolution failed; running unconfigured`，按未配置继续；其他生成失败
+各有自己的日志行——提供者失败是
+`agent playbook: task generation failed (...); running unconfigured`，修复轮次用尽后是
+`agent playbook: task Harness still invalid after one repair; running unconfigured`。因此，
+worker 少了一个你预期的字段，可能是目录在拒绝——前提是那个字段被声明过，模型没
+写进 Harness 的字段本来就不存在；而生成实际跑过之后整张表仍未出现，是上述某一种失败，
+每种失败各记自己那行日志；目录可加载时，空请求或空 roster 会跳过生成，不记任何日志。
+目录加载不了时，工具 schema 会先构建，于是空请求仍会记下解析失败那行警告；空 roster
+在生成之前就返回，同样不记日志。
+
 | 层次 | 生命周期 | 含义 |
 | --- | --- | --- |
 | Roster Agent | 注册配置 | 哪个后端能执行工作 |

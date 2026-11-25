@@ -834,3 +834,74 @@ def test_make_provider_hands_the_sections_tls_verify_to_the_azure_client(
 
     assert isinstance(provider, AzureOpenAIProvider)
     assert provider.tls_verify is not opted_out
+
+
+# ---------------------------------------------------------------------------
+# make_provider -- a flat apiKeyEnv is resolved into the built client
+# ---------------------------------------------------------------------------
+
+_ENV_BUILD_CASES = [
+    pytest.param(
+        "chat",
+        {"apiBase": "https://gateway.example/v1", "protocol": "chat"},
+        "LiteLLMProvider",
+        id="chat",
+    ),
+    pytest.param(
+        "responses",
+        {"apiBase": "https://gateway.example/v1", "protocol": "responses"},
+        "OpenAIResponsesProvider",
+        id="responses",
+    ),
+    pytest.param(
+        "anthropic",
+        {"apiBase": "https://gateway.example/v1", "protocol": "anthropic"},
+        "AnthropicMessagesProvider",
+        id="anthropic",
+    ),
+]
+
+
+@pytest.mark.parametrize(("protocol_name", "section", "expected"), _ENV_BUILD_CASES)
+def test_make_provider_resolves_a_flat_api_key_env_into_the_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, protocol_name: str, section: dict, expected: str
+) -> None:
+    """The credential a section names by variable reaches the built client.
+
+    The gate counts the declared reference and the build is what resolves it;
+    asserting ``effective_api_key`` alone would pass with the factory still
+    reading the empty flat field.
+    """
+    from raven.config.loader import load_config
+
+    env_name = f"RAVEN_TEST_{protocol_name.upper()}_KEY"
+    monkeypatch.setenv(env_name, f"sk-from-env-{protocol_name}")
+    cfg = _config_for(tmp_path, "custom", "my-model", {**section, "apiKeyEnv": env_name})
+
+    provider = _helpers.make_provider(load_config(cfg))
+
+    assert type(provider).__name__ == expected
+    assert provider.api_key == f"sk-from-env-{protocol_name}"
+
+
+@pytest.mark.parametrize(("protocol_name", "section", "expected"), _ENV_BUILD_CASES)
+def test_make_provider_names_an_unset_api_key_env_with_its_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, protocol_name: str, section: dict, expected: str
+) -> None:
+    """An unset variable fails the build, naming both the variable and the provider.
+
+    Sending an empty key would fail at the API as an auth error; naming the
+    exact variable is the whole point of the field.
+    """
+    from raven.config.loader import load_config
+    from raven.providers.auth import MissingCredentialsError
+
+    env_name = f"RAVEN_TEST_{protocol_name.upper()}_UNSET_KEY"
+    monkeypatch.delenv(env_name, raising=False)
+    cfg = _config_for(tmp_path, "custom", "my-model", {**section, "apiKeyEnv": env_name})
+
+    with pytest.raises(MissingCredentialsError) as excinfo:
+        _helpers.make_provider(load_config(cfg))
+
+    assert env_name in excinfo.value.summary
+    assert excinfo.value.provider == "custom"

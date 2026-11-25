@@ -540,7 +540,7 @@ def playbook_run(
         # person is standing in -- not the agent home above, which is where runs
         # and plan files are kept and is nobody's project.
         workspace=Path.cwd(),
-        background=False,
+        wait_for_result=True,
         # This path composes a prompt-mode graph itself. In a conversation the
         # caller is a model and gets the guidance to compose from; here there is
         # nobody to hand it to, so without this the CLI would lose the ability to

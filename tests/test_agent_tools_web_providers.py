@@ -159,6 +159,23 @@ def test_a_web_vendor_borrows_the_key_of_the_llm_provider_it_shares_an_account_w
     assert config.effective_web_vendor_keys() == {"deepseek": "sk-web"}
 
 
+async def test_a_web_vendor_borrows_a_key_that_lives_in_the_environment(monkeypatch) -> None:
+    """The borrow lends the value a request would carry, never the variable's name."""
+    monkeypatch.setenv("RAVEN_TEST_DEEPSEEK_WEB_KEY", "sk-from-env")
+    config = Config.model_validate(
+        {
+            "providers": {
+                "deepseek": {
+                    "apiKeyEnv": "RAVEN_TEST_DEEPSEEK_WEB_KEY",
+                    "apiBase": "https://api.deepseek.com",
+                }
+            }
+        }
+    )
+
+    assert config.effective_web_vendor_key("deepseek") == "sk-from-env"
+
+
 def test_the_borrow_follows_the_section_address_and_its_endpoints() -> None:
     """The web endpoints are literals, so a key may only be lent by a section
     that resolves to DeepSeek's own host: a gateway key would travel to a party

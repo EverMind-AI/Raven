@@ -21,9 +21,15 @@ import './styles.css'
  */
 
 /* Configured means the schema's required fields are all set. Entries whose
-   schema declares no required fields count as configured out of the box. */
+   schema declares no required fields count as configured out of the box --
+   unless the field list could not be read at all: that leaves the same empty
+   list behind, and it declares nothing. */
 const isConfigured = (c: ConnChannel): boolean =>
-  (c.fields || []).length ? (c.missing || []).length === 0 : true
+  c.error === undefined && ((c.fields || []).length ? (c.missing || []).length === 0 : true)
+
+/* Whether the field list could not be read. The error's presence says so, not
+   its text: a read that failed with nothing to say is still a failed read. */
+const readFailed = (c: ConnChannel): boolean => c.error !== undefined
 
 /* What this row may honestly claim. The config flag alone used to drive the
    dot, so a channel whose adapter never came up still read as connected -- the
@@ -62,6 +68,15 @@ function shownOf(c: ConnChannel): Shown {
    is the gateway's word from this page's last write (the source keeps it on
    the row); a status read has none to give. */
 function stateOf(c: ConnChannel): { cls: string; text: string } {
+  /* A field read that failed answers first: the sheet draws the form from
+     those fields, so an empty form beside "Credentials saved" would be a claim
+     about a channel nobody read, and a failed read beside "Receiving" would
+     hide the reason the sheet is empty. */
+  if (readFailed(c)) {
+    return c.error
+      ? { cls: 'bad', text: t('gui.conn.st_read_failed_why', { why: c.error }) }
+      : { cls: 'bad', text: t('gui.conn.st_read_failed') }
+  }
   const shown = shownOf(c)
   if (shown === 'live') return { cls: 'ok', text: c.who ? t('gui.conn.as_you', { who: c.who }) : t('gui.conn.st_live') }
   if (shown === 'broken') {
@@ -79,9 +94,13 @@ function stateOf(c: ConnChannel): { cls: string; text: string } {
  * the addable group, whose whole job is to say what it costs to get in before
  * anything is running. So the schema answers instead: an entry with no required
  * field has no form to fill, and the only way into it is signing in. That is
- * derivable, always available, and true of exactly the scan channels.
+ * derivable, always available, and true of exactly the scan channels -- as
+ * long as there was a field list to derive it from. A read that failed leaves
+ * the same empty list, and sending the reader to a code is the bug this row
+ * exists to stop.
  */
-const scanLogin = (c: ConnChannel): boolean => !!c.qrLogin || (c.fields || []).filter((f) => f.required).length === 0
+const scanLogin = (c: ConnChannel): boolean =>
+  c.error === undefined && (!!c.qrLogin || (c.fields || []).filter((f) => f.required).length === 0)
 
 /* What it costs to get in, which is what the addable group is sorted by. */
 const costOf = (c: ConnChannel): number =>
@@ -106,6 +125,9 @@ const APPLY: Record<string, string> = {
 /* What a card says under its name: what to do about a failure, how far this
    entrance is from receiving, or, once it receives, who it receives as. */
 function lineOf(c: ConnChannel): string {
+  /* The same reason the sheet leads with: a row whose fields could not be read
+     has nothing to claim about credentials, so it says that instead. */
+  if (readFailed(c)) return t('gui.conn.line_read_failed')
   const shown = shownOf(c)
   if (shown === 'live') return c.who ? t('gui.conn.as_you', { who: c.who }) : t('gui.conn.line_live')
   if (shown === 'broken') return t(scanLogin(c) ? 'gui.conn.line_bad_scan' : 'gui.conn.line_bad_creds')

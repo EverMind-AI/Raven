@@ -208,6 +208,21 @@ async def test_channels_status(workspace: Path) -> None:
     _check("channels.status", await channels_status({}))
 
 
+async def test_channels_status_row_of_a_failed_field_read(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The models are ``extra="forbid"``, so the row a failed read produces is the
+    one that catches a contract nobody opened. An empty fixture never reaches the
+    failure branch, so the declaration is pinned against the real row instead."""
+    from raven.config import update_channels
+    from raven.rpc.methods.console import channels_status
+
+    def refuse(name: str):
+        raise RuntimeError("this channel's schema cannot be flattened")
+
+    monkeypatch.setattr(update_channels, "channel_field_specs", refuse)
+
+    _check("channels.status", await channels_status({}))
+
+
 async def test_fs_round_trip(workspace: Path) -> None:
     import base64
 

@@ -180,8 +180,7 @@ class StintRef:
 
     Passed down the dispatch path as an argument, never looked up. That is the
     whole trick that keeps the stint out of the hot path: an ordinary graph run
-    has ``None`` here, exactly as it has ``None`` for the outbox, and neither
-    costs it a disk read on the way out.
+    has ``None`` here, and no disk read is spent finding out on the way out.
     """
 
     stint_id: str

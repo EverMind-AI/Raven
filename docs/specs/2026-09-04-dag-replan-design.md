@@ -183,6 +183,10 @@ passes `resolve=lambda node: dispatch_backends.get(node.id)` -- a closure over a
 `_run` owns. The tool has no legitimate route into it, and having the tool mutate it
 would be action at a distance.
 
+> **Superseded 2026-11-21.** The foreground run this paragraph describes no
+> longer exists: every call dispatches a background run. See
+> `docs/specs/2026-11-21-dag-single-lane-design.md`.
+
 `blocking_for` keeps its shape: a replan on a bound foreground run goes on blocking,
 because the call said it was waiting on this graph and the graph is still what is being
 waited on.
@@ -357,6 +361,10 @@ suspended node's own report, which a replan requires. The `Final` the old order 
 into that tray was collected by `_retire` unread.
 
 ## Foreground runs
+
+> **Superseded 2026-11-21.** This section describes a lane that is gone: every
+> call dispatches a background run. See
+> `docs/specs/2026-11-21-dag-single-lane-design.md`.
 
 On a bound foreground run the binding transfers to the new run. The resolve call waits for
 the old run's **task** to end -- that, not any outbox event, is the signal that it has
