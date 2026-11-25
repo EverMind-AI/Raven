@@ -102,7 +102,8 @@
         "reportPage": {
           "enabled": true,
           "highlights": true,
-          "removeMarkdown": true
+          "removeMarkdown": true,
+          "showLimits": false
         },
         "draftRevisions": {
           "enabled": true

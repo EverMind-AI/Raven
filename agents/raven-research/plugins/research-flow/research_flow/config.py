@@ -290,6 +290,9 @@ class ReportPageConfig(_Base):
     # The page then is the one report file the turn leaves: the markdown report file it
     # was written from is removed, and the reply names the page where it named that file.
     remove_markdown: bool = False
+    # The limits section (``## Limitations`` / its Chinese heading) on the page. Off, the
+    # page leaves it out and the report file and the reply still hold it.
+    show_limits: bool = True
 
 
 class ConversationConfig(_Base):

@@ -179,6 +179,30 @@ def test_a_reference_list_after_the_limits_does_not_take_their_place():
     assert '<section class="section" id="section-3"><h2>References</h2><div class="panel"><ol class="sources">' in page
 
 
+def test_without_the_limits_the_page_leaves_that_section_out():
+    page = render_page(_REPORT, show_limits=False)
+    assert "<h2>Limitations</h2>" not in page and "No shared benchmark" not in page
+    assert "<h2>What the sources show</h2>" in page and "<h2>Timeline</h2>" in page
+    assert 'href="#section-3"' not in page
+    # The Chinese fixed heading goes too, before a list of sources.
+    zh_limits = "\u672a\u6838\u9a8c\u9879"
+    report = f"> a\n\n## One\nb https://a.example/x\n\n## {zh_limits}\nc\n\n## Sources\n- https://a.example/x\n"
+    page = render_page(report, language="zh", show_limits=False)
+    assert zh_limits not in page and "<h2>One</h2>" in page and 'class="sources"' in page
+
+
+def test_a_last_section_under_another_heading_stays_on_the_page():
+    report = "> a\n\n## One\nb\n\n## Outlook\nc\n"
+    assert "<h2>Outlook</h2>" in render_page(report, show_limits=False)
+
+
+def test_the_page_shows_the_limits_unless_the_config_turns_them_off():
+    from research_flow.config import ReportPageConfig
+
+    assert ReportPageConfig().show_limits is True
+    assert ReportPageConfig.model_validate({"showLimits": False}).show_limits is False
+
+
 def test_a_numbered_list_of_steps_is_not_a_reference_list():
     report = "> a\n\n## Steps\n1. install [1]\n2. build\n3. see https://a.example/x\n\n## Limitations\nc\n"
     page = render_page(report)

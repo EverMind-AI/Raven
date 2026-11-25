@@ -90,6 +90,8 @@ _RUN_OPEN_RE = re.compile(r"\[|<?https?://", re.IGNORECASE)
 _RUN_LABEL_CHARS = 40
 #: The heading the flow gives a list of sources it writes itself, in each language it has.
 _SOURCE_LABELS = frozenset(t_in(language, "Sources") for language in ("en", "zh"))
+#: The fixed heading of the limits, as the report clause names it (gates/report_shape.py).
+_LIMITS_LABEL_RE = re.compile(r"^limitations?(?![a-z])|\u672a\u6838\u9a8c\u9879", re.I)
 #: A heading that carries its own number: ``3.``, ``3)``, ``(3)``, a Chinese numeral and its comma.
 _NUMBERED_HEADING_RE = re.compile(
     r"\(?\d{1,2}[.)\u3001]|[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341]{1,3}\u3001"
@@ -1245,10 +1247,13 @@ def render_page(
     day: str = "",
     language: str = "en",
     highlights: Highlights | None = None,
+    show_limits: bool = True,
 ) -> str:
     """The reading page of ``report``, markdown in the reader layout.
 
-    ``title`` is used when the report has no ``#`` title of its own.
+    ``title`` is used when the report has no ``#`` title of its own. Without
+    ``show_limits`` the section that closes the body under the fixed limits heading is
+    left off the page; the report file keeps it.
     ``day`` is the date the cover shows. ``language`` selects the fixed labels. ``highlights`` come from
     :mod:`~research_flow.support.report_highlights`, already checked.
     """
@@ -1268,6 +1273,8 @@ def render_page(
     listings, limits_at = _layout(parts)
     notes = _placed(parts, highlights.notes) if highlights is not None and highlights.notes else {}
     for index, section in enumerate(parts.sections):
+        if not show_limits and index == limits_at and _LIMITS_LABEL_RE.search(_label(section)):
+            continue
         anchor = f"section-{index + 1}"
         limits = " is-limits" if index == limits_at else ""
         entries.append((anchor, span_text(parse_inline(section.heading))))

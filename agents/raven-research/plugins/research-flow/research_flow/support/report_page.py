@@ -250,6 +250,7 @@ class ReportPage:
                 day=day if day is not None else _today(),
                 language=scaffold_language(report),
                 highlights=highlights,
+                show_limits=self._cfg.show_limits,
             )
             write_text(target, page)
         except OSError as exc:

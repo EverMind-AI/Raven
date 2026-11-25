@@ -151,6 +151,12 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
+- The Raven-Research reading page leaves out the limits section. With
+  `reportPage.showLimits` off, which the product config sets, the page does not
+  render the section under the fixed limits heading (`## Limitations`, or
+  `## 未核验项` in Chinese). The markdown report file and the reply still
+  hold it. The switch is on by default.
+
 - The `curator` history strategy is retired; `compacting` is the only one.
   A config that still sets `context.history.strategy: "curator"` is rewritten
   to `"compacting"` on its next load and told once, and a `dropSegments`
