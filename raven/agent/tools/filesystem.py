@@ -341,9 +341,9 @@ def _missing(path: str) -> str:
     raw = path.strip()
     if match := _URL_SCHEME_RE.match(raw):
         if match.group("scheme").lower() == "file":
-            # The path the URL names, spelled the way this platform spells a
-            # path -- the caller is about to pass it back to the tool, and a
-            # URL's own spelling is not one it can open.
+            # Reached only through the tools that share this refusal: Read
+            # answers a file URL at its own entry, before resolution, so a
+            # spelling that resolves to a real file never reads as one.
             local = _file_url_path(raw)
             hint = f" -- try {local}" if local else ""
             return f"Error: {path} is a file:// URL; read_file takes a plain path{hint}"
@@ -464,6 +464,14 @@ class ReadFileTool(_FsTool):
         return line
 
     async def execute(self, path: str, offset: int = 1, limit: int | None = None, **kwargs: Any) -> str | ToolResult:
+        # A file:// URL is refused by scheme, before it is resolved: on a host
+        # where the URL's own spelling resolves to a real file (a drive-relative
+        # path under Windows), leaving the refusal to the missing-file branch
+        # would read it as a file instead of telling the caller to try a path.
+        if (m := _URL_SCHEME_RE.match(path.strip())) and m.group("scheme").lower() == "file":
+            local = _file_url_path(path.strip())
+            hint = f" -- try {local}" if local else ""
+            return f"Error: {path} is a file:// URL; read_file takes a plain path{hint}"
         # A file on a registered machine is read there, by its Raven node.
         if (
             not _is_a_device_spelling(path)

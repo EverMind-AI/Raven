@@ -187,6 +187,22 @@ async def test_a_file_url_that_cannot_be_parsed_names_no_local_path(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_a_file_url_whose_spelling_resolves_is_still_refused_by_scheme(tmp_path: Path):
+    """On a host where the URL's own spelling resolves to a real file -- a
+    drive-relative path under Windows -- the answer must still name the URL a
+    URL, not read the file it happened to point at."""
+    target = tmp_path / "notes.md"
+    target.write_text("facts", encoding="utf-8")
+
+    answer = await ReadFileTool(workspace=tmp_path).execute(path=target.as_uri())
+
+    assert isinstance(answer, str)
+    assert "file:// URL" in answer
+    assert "facts" not in answer
+    assert str(target) in answer, f"the named path is still the one to try: {answer}"
+
+
+@pytest.mark.asyncio
 async def test_a_path_that_is_merely_missing_still_says_so(tmp_path: Path):
     """The URL wording is an extra branch, not a replacement.
 
