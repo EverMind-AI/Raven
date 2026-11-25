@@ -104,7 +104,7 @@ async def test_a_file_uri_with_a_mixed_case_localhost_matches(tmp_path: Path) ->
     """Host names are case-insensitive, so ``LOCALHOST`` is this machine."""
     target = tmp_path / "dropped file.txt"
     target.write_text("x")
-    uri = "file://LOCALHOST" + str(target).replace(" ", "%20")
+    uri = target.as_uri().replace("://", "://LOCALHOST", 1)
     result = await input_detect_drop({"text": uri})
     assert result["matched"] is True
     assert result["text"] == str(target.resolve())
