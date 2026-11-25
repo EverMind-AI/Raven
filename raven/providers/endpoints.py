@@ -35,12 +35,24 @@ The gate and the reader must answer the same question the same way:
 at all, calls into this module rather than re-deriving the precedence -- a
 section with a healthy flat key and a keyless endpoint must fail the gate
 exactly as this function hands the empty key to every actual request.
+
+``provider_endpoints`` itself never reads the environment: the gate runs on
+the routing hot path and decides from declarations alone, and a display
+surface must not fail on a variable either. A caller that is about to send a
+request, probe a credential or lend one asks
+:func:`provider_endpoints_for_request`, which resolves a flat ``apiKeyEnv``
+into the key such a request would carry.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, replace
 from typing import Any
+
+from pydantic.alias_generators import to_camel
+
+from raven.providers.errors import MissingCredentialsError
 
 
 @dataclass(frozen=True)
@@ -55,8 +67,16 @@ class ResolvedEndpoint:
 
 def _field(section: Any, name: str) -> Any:
     """Read one field off a section, whether it is a schema object or a raw
-    mapping -- see ``raven.providers.auth._present`` for why both reach here."""
-    return section.get(name) if isinstance(section, dict) else getattr(section, name, None)
+    mapping -- see ``raven.providers.auth._present`` for why both reach here.
+
+    A raw config mapping spells the field camelCase; the schema spelling is
+    read too, so a mapping that already carries it keeps working.
+    """
+    if not isinstance(section, dict):
+        return getattr(section, name, None)
+    if name in section:
+        return section[name]
+    return section.get(to_camel(name))
 
 
 def provider_endpoints(section: Any) -> list[ResolvedEndpoint]:
@@ -100,3 +120,67 @@ def provider_endpoints(section: Any) -> list[ResolvedEndpoint]:
             extra_headers=_field(section, "extra_headers"),
         )
     ]
+
+
+def _api_key_env_name(section: Any) -> str:
+    """The variable ``apiKeyEnv`` names, off a schema object or a raw mapping.
+
+    Raw config mappings spell the field camelCase; a mapping already carrying
+    the schema spelling is accepted too, as ``provider_endpoints`` does for
+    every other field.
+    """
+    if isinstance(section, dict):
+        value = section.get("api_key_env") or section.get("apiKeyEnv")
+    else:
+        value = getattr(section, "api_key_env", None)
+    return str(value or "")
+
+
+def uses_flat_key(section: Any) -> bool:
+    """Whether the flat fields are this section's key source.
+
+    ``endpoints`` or ``api_key_list`` set means the flat key is ignored
+    outright, and ``apiKeyEnv`` names only the flat one -- it is not a second
+    source for the list shapes.
+    """
+    return not (_field(section, "endpoints") or _field(section, "api_key_list"))
+
+
+def resolve_api_key_env(section: Any, *, provider: str = "") -> str:
+    """The value ``apiKeyEnv`` names, or ``""`` when it names none.
+
+    Raises ``MissingCredentialsError`` when the variable is named but unset or
+    empty, so the failure names the variable rather than reaching the API as
+    an auth error. ``provider`` travels into the error for the structured
+    diagnostics ``rpc.bootstrap`` emits; the section itself does not know the
+    name it is stored under.
+    """
+    name = _api_key_env_name(section)
+    if not name:
+        return ""
+    value = os.environ.get(name, "")
+    if not value:
+        raise MissingCredentialsError(
+            f"the environment variable {name!r} that apiKeyEnv names is not set",
+            provider=provider,
+            remedy=f"Export {name}, or clear apiKeyEnv and set apiKey instead.",
+        )
+    return value
+
+
+def provider_endpoints_for_request(section: Any, *, provider: str = "") -> list[ResolvedEndpoint]:
+    """``provider_endpoints`` with a flat ``apiKeyEnv`` resolved to its value.
+
+    The boundary for a caller about to make a request, probe a credential or
+    lend one. Explicit ``endpoints``/``api_key_list`` keep their own keys and
+    come back untouched; a flat section with no ``apiKeyEnv`` is unchanged.
+    Raises ``MissingCredentialsError`` for a named-but-unset variable -- the
+    build is where that refusal belongs, naming the variable.
+    """
+    endpoints = provider_endpoints(section)
+    if not uses_flat_key(section):
+        return endpoints
+    value = resolve_api_key_env(section, provider=provider)
+    if not value:
+        return endpoints
+    return [replace(endpoint, api_key=value) for endpoint in endpoints]

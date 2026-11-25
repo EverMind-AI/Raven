@@ -854,8 +854,7 @@ def test_the_progress_event_maps_to_the_wire_event() -> None:
 
 def test_the_stall_notice_progress_event_maps_to_the_wire_event() -> None:
     """The watcher's `dag_node_stalled` used to be absent from the map, and the
-    sink drops unknown names -- so a bound foreground run, whose injected notice
-    is dropped too, had no way to show a stalled node at all."""
+    sink drops unknown names -- so the panel had no way to show a stalled node."""
     from raven.rpc.spine import _DAG_WIRE_EVENT, _dag_payload
 
     assert _DAG_WIRE_EVENT["dag_node_stalled"] == "dag.node_stalled"

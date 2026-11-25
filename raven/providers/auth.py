@@ -27,6 +27,10 @@ from typing import TYPE_CHECKING, Any
 
 from raven.providers.endpoints import provider_endpoints
 
+# The error lives in a leaf module so this file and ``endpoints`` stop being a
+# cycle; it is re-exported here because that is where callers import it from.
+from raven.providers.errors import MissingCredentialsError  # noqa: F401 -- re-export
+
 if TYPE_CHECKING:
     from raven.providers.registry import ProviderSpec
 
@@ -96,22 +100,6 @@ class AuthMethod:
                 return []
             return [] if _token_present(provider) else [_SIGN_IN(provider)]
         return [req for req in self.requires if not req.satisfied_by(section, spec)]
-
-
-class MissingCredentialsError(Exception):
-    """A provider cannot be used because its credentials are absent.
-
-    Raised where the gate is decided, not where it is reported: the check runs
-    behind three entry points (the CLI, the gateway and the TUI) and each renders
-    the refusal its own way.
-    """
-
-    def __init__(self, summary: str, *, provider: str = "", remedy: str = ""):
-        super().__init__(summary)
-        self.summary = summary
-        self.provider = provider
-        #: The command that fixes it, when there is one to name.
-        self.remedy = remedy
 
 
 @dataclass(frozen=True)
@@ -210,9 +198,11 @@ def _SIGN_IN(provider: str) -> Requirement:  # noqa: N802 - a constructor, named
     return Requirement((), "a sign-in", f"a sign-in -- run `raven provider login {public}`")
 
 
-_KEY = Requirement(("api_key",), "an API key", "an API key -- run `raven provider set {public} --api-key <key>`")
+_KEY = Requirement(
+    ("api_key", "api_key_env"), "an API key", "an API key -- run `raven provider set {public} --api-key <key>`"
+)
 _KEY_OR_LIST = Requirement(
-    ("api_key", "api_key_list"),
+    ("api_key", "api_key_env", "api_key_list"),
     "an API key",
     "an API key -- run `raven provider set {public} --api-key <key>` (or --api-key-list k1,k2)",
 )

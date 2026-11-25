@@ -12,6 +12,7 @@ back as a field rather than as a preamble to parse out of the text.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -110,7 +111,9 @@ async def fetch_page(url: str, *, api_key: str = "") -> FetchedPage:
     an error telling it to go and sign up.
     """
     target = url.strip()
-    ok, why = validate_url_target(target)
+    # Off the loop: the judge resolves, and a slow resolver holds the whole
+    # process -- this is the same judge the fetch tools run.
+    ok, why = await asyncio.to_thread(validate_url_target, target)
     if not ok:
         raise SourceFetchError(why or f"refused to fetch {target}")
 

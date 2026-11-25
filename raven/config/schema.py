@@ -413,6 +413,19 @@ class ProviderConfig(Base):
     """LLM provider configuration."""
 
     api_key: str = ""
+    # A variable that holds the key instead of this field, for a deployment
+    # whose keys live in a secret manager: config.json then carries a name,
+    # not the credential. Mutually exclusive with api_key, so a section
+    # states exactly one source (see _one_key_source).
+    api_key_env: str | None = Field(
+        default=None,
+        description=(
+            "Name of an environment variable holding the key, resolved in memory when the "
+            "provider is built. Stands in for apiKey only: a section with endpoints or "
+            "apiKeyList takes its keys there. Set via config.json or `provider set "
+            "--api-key-env`; the settings page does not offer it."
+        ),
+    )
     api_base: str | None = None
     # Optional wire default. When omitted, GPT models use Responses and Claude
     # models use Anthropic Messages; model_protocols can override either rule.
@@ -478,6 +491,28 @@ class ProviderConfig(Base):
 
         return {str(model): normalize_protocol(protocol) for model, protocol in value.items()}
 
+    @model_validator(mode="after")
+    def _one_key_source(self) -> "ProviderConfig":
+        """A section states exactly one key source, so neither can mask the other."""
+        if self.api_key and self.api_key_env:
+            raise ValueError("set apiKey or apiKeyEnv, not both")
+        return self
+
+    def _key_from_env(self) -> str:
+        """The value ``api_key_env`` names, which must be set and non-empty.
+
+        Raised here rather than letting an empty key reach the wire: LiteLLM
+        is handed ``api_key or "no-key"``, so a missing variable would fail
+        at the API as an auth error instead of naming the variable.
+        MissingCredentialsError, not ValueError, so the CLI, gateway and TUI
+        render it the way every other credential refusal is rendered. The
+        read itself lives beside ``provider_endpoints`` so the build and every
+        request-boundary consumer resolve the value one way.
+        """
+        from raven.providers.endpoints import resolve_api_key_env
+
+        return resolve_api_key_env(self)
+
     @property
     def effective_api_key(self) -> str:
         """The key to send, which is not always the ``api_key`` field.
@@ -486,8 +521,12 @@ class ProviderConfig(Base):
         providers keep their key somewhere else. Gemini accepts a list, and a
         section holding only that list handed LiteLLM an empty string: the
         request left with no credential and failed at the API, having passed
-        every check that only asked whether credentials existed.
+        every check that only asked whether credentials existed. A set
+        ``api_key_env`` wins over both, resolved here in memory at the build
+        the factory does -- the credential never has to sit in config.json.
         """
+        if self.api_key_env:
+            return self._key_from_env()
         return self.api_key
 
 
@@ -525,8 +564,13 @@ class GeminiProviderConfig(ProviderConfig):
 
     @property
     def effective_api_key(self) -> str:
+        # The list is this section's key source, the same way ``endpoints``
+        # replaces the flat pair: ``apiKeyEnv`` stands in for the flat key, so
+        # it applies only when no list is declared.
         if self.api_key_list:
             return self.api_key_list[0]
+        if self.api_key_env:
+            return self._key_from_env()
         return self.api_key
 
 
@@ -2735,6 +2779,9 @@ class SubagentRuntimeConfig(Base):
     way. Has no effect on other systems."""
 
 
+DEFAULT_LONG_RUN_NOTICE_SECONDS = 3600
+
+
 class SubagentsConfig(Base):
     """The one table of agents raven can dispatch to.
 
@@ -2753,6 +2800,8 @@ class SubagentsConfig(Base):
         validation_alias=AliasChoices("agents", "thirdParty", "third_party"),
     )
     runtime: SubagentRuntimeConfig = Field(default_factory=SubagentRuntimeConfig)
+    long_run_notice_seconds: float = Field(default=DEFAULT_LONG_RUN_NOTICE_SECONDS, ge=0, allow_inf_nan=False)
+    """Elapsed seconds before notifying the delegating host. Zero disables notices."""
 
     @model_validator(mode="after")
     def _dedupe_names(self) -> "SubagentsConfig":
@@ -3161,9 +3210,19 @@ def borrow_media_credentials(tool: MediaToolConfig, providers: Any) -> None:
         tool.extra_headers = headers if api_base else {}
         return
     if runs_on and not tool.api_key:
-        openrouter = providers.get(_OPENROUTER)
-        if openrouter and openrouter.api_key:
-            tool.api_key = openrouter.api_key
+        from raven.config.update_providers import provider_connection
+
+        try:
+            openrouter = providers.get(_OPENROUTER)
+        except Exception:  # noqa: BLE001 - an undeclared section is validated only when read
+            openrouter = None
+        # Read through the same reader the named-provider branch above uses, so a
+        # section whose flat key is an environment variable lends the variable's
+        # value rather than nothing. A variable named but unset reads as no key,
+        # and the tool keeps its own fallback.
+        _, api_key, _ = provider_connection(_OPENROUTER, openrouter)
+        if api_key:
+            tool.api_key = api_key
 
 
 def media_section_class(kind: str) -> type[MediaToolConfig]:

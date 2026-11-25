@@ -42,14 +42,13 @@ def owning_tool(loop: Any, run_id: str) -> Any:
     """Whichever graph tool instance currently holds ``run_id`` live.
 
     A replan control step calls several tool methods in sequence
-    (``prepare_replan``, ``is_foreground``, ``propose_replan``,
-    ``retire_reports``, ``await_run``), and each one only answers correctly from
-    the instance whose ``_dispatch`` actually created this run's task, desk and
-    outbox -- the registered tool has none of that bookkeeping for a run the
-    playbook engine's private instance is running. Falling back to
-    ``_registered_tool`` when no instance claims the run any more matches every
-    other helper here: the run has already ended in both, or ``loop`` is a test
-    double with no ``dag_tools``.
+    (``prepare_replan``, ``propose_replan``, ``running_nodes``), and each one
+    only answers correctly from the instance whose ``_dispatch`` actually
+    created this run's task and desk -- the registered tool has none of that
+    bookkeeping for a run the playbook engine's private instance is running.
+    Falling back to ``_registered_tool`` when no instance claims the run any
+    more matches every other helper here: the run has already ended in both, or
+    ``loop`` is a test double with no ``dag_tools``.
     """
     getter = getattr(loop, "dag_tools", None)
     tools = getter() if getter is not None else []

@@ -41,6 +41,33 @@ work before dispatch; a generation failure logs a warning and falls back to
 the unconfigured turn. It neither selects a task graph by itself nor removes
 the main agent's own tools. The model still decides what to delegate.
 
+Which fields and functions a generated worker may carry is decided by the
+capability catalogue checked in at `raven/playbook/harness_generation.json`.
+A switch the catalogue leaves off is not emitted, and a switch it turns on but
+this build does not serve is a refusal rather than a silent drop when the
+catalogue is read -- except under a top-level module this loader does not
+know, which is skipped. A Harness already stored is checked against the
+catalogue when it is loaded, so a capability the catalogue has since turned
+off makes that stored file unloadable, and the library drops it with a
+`Skipping unloadable playbook '...'` warning. A missing or malformed catalogue
+is a corrupt installation and does not enable every switch: the loader raises
+a `RuntimeError` naming the file when it is absent, a `RuntimeError` without
+the path when the JSON is malformed, and `UnicodeDecodeError` when the bytes
+are not UTF-8, and the turn that needed it logs
+`agent playbook: resolution failed; running unconfigured` and runs
+unconfigured. The other generation failures log their own lines -- a provider
+failure is `agent playbook: task generation failed (...); running unconfigured`
+and repair exhaustion is
+`agent playbook: task Harness still invalid after one repair; running unconfigured`.
+So a worker missing a field you expected may be the catalogue saying no --
+provided the field was declared at all, since a Harness a model omitted one
+from carries none -- and a table that never appeared after generation ran is
+one of those failures, each of which logs a line of its own; once the
+catalogue has loaded, an empty request or an empty roster skips generation
+altogether and logs nothing. Without a loadable catalogue the tool schema is
+built first, so an empty request still logs the resolution warning, while an
+empty roster returns before generation and stays silent.
+
 | Layer | Lifetime | Meaning |
 | --- | --- | --- |
 | Roster agent | Registered configuration | Which backend can execute work |
@@ -349,7 +376,11 @@ The hourly dispatch budget is charged once, at commit.
 
 ## Inspect and recover
 
-Ask Raven to use `dag_status` to inspect a run and `cancel_dag` to stop one.
+Use `dag_status` to inspect a run and `cancel_subagent` with its `run_id` to stop it.
+The same cancellation tool accepts `agent` and `instance` to interrupt one active
+delegation. On supported backends, `mode: "report_now"` requests a final reply from
+the work already done. The host receives an advisory notice after one hour of
+execution by default. Set `subagents.longRunNoticeSeconds` to `0` to disable it.
 These are model tools, not `raven dag` shell commands. The TUI and WebUI consume
 live progress and can read the saved graph; RPC exposes `dag.get` and `dag.node`.
 

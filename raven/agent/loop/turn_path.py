@@ -127,6 +127,7 @@ from raven.agent.loop.recovery import (
 from raven.agent.session_effort import of as session_effort_of
 from raven.agent.tools.registry import call_failed
 from raven.agent.tools.removals import RemovalWatch
+from raven.agent.turn_report import REPORT_INSTRUCTION
 from raven.agent.window import shrink
 from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, filed_image_note, image_sources
 from raven.agent.window.parts import ATTACHMENT_NOTES_KEY, measure_parts
@@ -166,7 +167,7 @@ if TYPE_CHECKING:
     from raven.providers.base import ErrorClassification
     from raven.spine.events import NoticeKind
     from raven.spine.runner import Drain, Emit, TurnOutcome
-    from raven.spine.turn import TurnRequest
+    from raven.spine.turn import TurnReport, TurnRequest
 
 
 def _scrubbed_result(arguments: Any, text: str, *, agent_output: bool = False) -> str:
@@ -1121,6 +1122,7 @@ class TurnPathMixin:
         session_effort: str | None = None,
         surface: str | None = None,
         on_step: Callable[[], None] | None = None,
+        report: "TurnReport | None" = None,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
@@ -1467,6 +1469,7 @@ class TurnPathMixin:
         # earlier turn in this task must not shorten this turn's commands.
         turn_clock.set_deadline(None if budgets.wall_clock_seconds is None else turn_t0 + budgets.wall_clock_seconds)
         turn_clock.set_session(session_key or "")
+        turn_clock.set_execution_id(report.execution_id if report else None)
         stopped_by: str | None = None
         # The session's effort rides every model call of the turn as an explicit
         # argument. Omitted, not None, when the policy names none: an explicit
@@ -1642,6 +1645,9 @@ class TurnPathMixin:
         # answer from the iteration before, whose measurement this still holds.
         measured_parts: dict[str, int] | None = None
         while iteration_cap is None or iteration < iteration_cap:
+            if report and report.requested.is_set():
+                stopped_by = "report_now"
+                break
             # Checked here and not mid-generation: cancelling a call in flight
             # discards a finished generation and leaves no answer, and a deadline
             # landing between a tool result and the model reading it produces a
@@ -2175,6 +2181,13 @@ class TurnPathMixin:
                     on_step()
 
                 for tool_call_index, tool_call in enumerate(response.tool_calls):
+                    if report and report.requested.is_set():
+                        for skipped in response.tool_calls[tool_call_index:]:
+                            messages = self.context.add_tool_result(
+                                messages, skipped.id, skipped.name, "Skipped because the host requested a final reply."
+                            )
+                        stopped_by = "report_now"
+                        break
                     tools_used.append(tool_call.name)
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
@@ -2485,6 +2498,8 @@ class TurnPathMixin:
                     if stalled_verdict is NoProgressAction.RUN:
                         no_progress.record(tool_call.name, tool_call.arguments, model_text, blocks or attach_blocks)
 
+                if stopped_by == "report_now":
+                    break
                 if continuation is Continuation.ABORT_TURN:
                     # A normal tool result starts another model iteration. That
                     # is specifically unsafe here: the next plan can translate
@@ -3051,19 +3066,22 @@ class TurnPathMixin:
         if leftover is not None and (lost := leftover.pending_rows()):
             logger.info("question autofill: {} row(s) ended the turn unwritten", len(lost))
 
+        if final_content is None and not ended_answered and report and report.requested.is_set():
+            stopped_by = "report_now"
+        reporting = stopped_by == "report_now"
         exhausted = (
             final_content is None
             and not ended_answered
             and (
                 stalled_tool is not None
                 or (iteration_cap is not None and iteration >= iteration_cap)
-                or stopped_by == "wall_clock"
+                or stopped_by in ("wall_clock", "report_now")
             )
         )
         # Assigned, not latched, as ``output_limited`` is: a rerun's own run decides.
         if hook_metadata is not None:
-            hook_metadata["budget_stopped"] = exhausted
-        if exhausted and recovery.parts:
+            hook_metadata["budget_stopped"] = exhausted and not reporting
+        if exhausted and recovery.parts and not reporting:
             # The turn ran out -- of iterations or of time -- with a cut answer waiting on its
             # continuation, which there is no room left to ask for. A wrap-up would stream onto
             # the partial the reader already holds, so the partial is the answer.
@@ -3076,7 +3094,9 @@ class TurnPathMixin:
             # as a wrap-up that is one is.
             status = "interrupted"
         elif exhausted:
-            if stalled_tool is not None:
+            if reporting:
+                logger.info("The host requested a final reply; synthesizing from completed work")
+            elif stalled_tool is not None:
                 stopped_by = "stalled_tool"
                 logger.warning("Turn stopped on a repeating `{}`; synthesizing final answer", stalled_tool)
             elif stopped_by == "wall_clock":
@@ -3093,7 +3113,7 @@ class TurnPathMixin:
             #      (and one format repair if requested) instead of a
             #      canned apology. Synthesis falls back to a static message
             #      internally if the call fails, so the turn never ends empty.
-            status = "interrupted"
+            status = "completed" if reporting else "interrupted"
             # The wrap-up is the turn's last reply, so it may be a Silence Marker as an
             # answer may: its stream is held back as the answering call's is, and a
             # marker ends the turn silent.
@@ -3107,6 +3127,16 @@ class TurnPathMixin:
             # Rows appended by the last tool batch may not have met a window
             # pass yet; the wrap-up call still has to carry their previews.
             log.follow(messages)
+            synthesis_prompt = _MAX_ITER_SYNTHESIS_PROMPT if stalled_tool is None else _STALLED_SYNTHESIS_PROMPT
+            if reporting:
+                from raven.agent.tools.background_exec import reap_execution
+                from raven.security.trust import wrap_untrusted
+
+                synthesis_prompt = REPORT_INSTRUCTION
+                if report and (tails := await reap_execution(session_key or "", report.execution_id)):
+                    synthesis_prompt += "\n\nOutput from stopped background commands:\n" + wrap_untrusted(
+                        tails, source="tool"
+                    )
             final_content = await self._synthesize_final_on_exhaustion(
                 _model_facing(messages),
                 active_model,
@@ -3114,9 +3144,11 @@ class TurnPathMixin:
                 on_token_delta=wrap_up_gate or on_token_delta,
                 on_reasoning_delta=on_reasoning_delta,
                 reasoning_effort=turn_effort,
-                prompt=_MAX_ITER_SYNTHESIS_PROMPT if stalled_tool is None else _STALLED_SYNTHESIS_PROMPT,
+                prompt=synthesis_prompt,
                 fallback=(
-                    _STALLED_STATIC_FALLBACK.format(tool=stalled_tool)
+                    "The host requested an early reply, but the summary could not be generated."
+                    if reporting
+                    else _STALLED_STATIC_FALLBACK.format(tool=stalled_tool)
                     if stalled_tool is not None
                     else _WALL_CLOCK_STATIC_FALLBACK
                     if stopped_by == "wall_clock"
@@ -3125,7 +3157,9 @@ class TurnPathMixin:
                 synthesis_policy=turn_synthesis(turn_meta),
                 iteration_cap=iteration_cap,
             )
-            silent = not reply_awaited and is_silence(final_content, origin, taught=silence_taught)
+            if reporting and report is not None:
+                report.applied = True
+            silent = not reporting and not reply_awaited and is_silence(final_content, origin, taught=silence_taught)
             await _settle_silence(wrap_up_gate, silent=silent)
             # Persist the wrap-up into history like any normal final reply.
             # Persistence downstream reads only the returned ``messages`` list,
@@ -3742,6 +3776,7 @@ class TurnPathMixin:
                 # session is: the loop below is handed a key, not a record.
                 session_effort=session_effort_of(session.metadata),
                 surface=req.source.surface,
+                report=req.report,
             )
 
         # Taken BEFORE the first attempt, because the loop appends to the list it is

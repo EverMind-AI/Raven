@@ -1480,6 +1480,62 @@ class TestSubagentSandboxLifecycle:
         # re-injection as a question the user asked, fence markers and all.
         assert req.delegated == {"kind": "spawn", "label": "label", "status": "ok"}
 
+    async def test_announce_result_marks_a_report_the_host_asked_for_early(self, mock_provider, tmp_path):
+        """The mark says the result answered a host's request for an early reply,
+        so a reader can label it instead of taking it as the run's own finish."""
+        from raven.agent.subagent import SubagentManager
+
+        captured = {}
+
+        class _Handle:
+            async def result(self):
+                return None
+
+        manager = SubagentManager(provider=mock_provider, workspace=tmp_path)
+        manager.set_submit(lambda req: (captured.__setitem__("req", req), _Handle())[1])
+
+        await manager._announce_result(
+            "t1",
+            "label",
+            "task",
+            "partial",
+            {"channel": "cli", "chat_id": "direct", "session_key": "cli:direct"},
+            "ok",
+            reported_early=True,
+        )
+
+        req = captured["req"]
+        assert req.delegated["reported_early"] is True
+        assert req.text.startswith("The host requested an early reply.\n\n")
+        assert "partial" in req.text
+
+    async def test_announce_long_run_awaits_the_turn_it_submitted(self, mock_provider, tmp_path):
+        """A running notice has to be accepted by the host before the caller goes
+        on: a notice still queued when the run that sent it finishes tells the
+        reader about work that is already over."""
+        from raven.agent.subagent import SubagentManager
+
+        awaited: list[bool] = []
+
+        class _Handle:
+            def result(self):
+                async def _wait():
+                    awaited.append(True)
+
+                return _wait()
+
+        manager = SubagentManager(provider=mock_provider, workspace=tmp_path)
+        origin = {"channel": "cli", "chat_id": "direct", "session_key": "cli:direct"}
+        await manager.announce_long_run("still running", origin, call_id="call-1")
+        assert awaited == [], "without a wired submit there is no turn to await"
+
+        sent = []
+        manager.set_submit(lambda req: (sent.append(req), _Handle())[1])
+        await manager.announce_long_run("still running", origin, call_id="call-1", run_id="run-1", node_id="a")
+        assert awaited == [True]
+        assert sent[-1].delegated["run_id"] == "run-1"
+        assert sent[-1].delegated["node_id"] == "a"
+
     async def test_announce_dag_result_marks_the_turn_and_the_event_alike(self, mock_provider, tmp_path):
         """A graph's announce is the other injection shape -- the summary inside the
         fence with none of a spawn's framing, only the reply-rules note after it --

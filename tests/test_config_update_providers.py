@@ -66,6 +66,57 @@ def test_set_api_key_for_simple_provider(cfg_path: Path) -> None:
     assert section["apiKey"] == "sk-or-v1-abc"
 
 
+def test_setting_a_literal_key_supersedes_an_env_reference(cfg_path: Path) -> None:
+    """``apiKey`` and ``apiKeyEnv`` are mutually exclusive; the write just made wins.
+
+    Without this, `provider set --api-key` on an ``apiKeyEnv`` section would
+    hit the both-set validator and fail -- or write a section the next load
+    rejects, taking the whole config file down with it.
+    """
+    from raven.config.schema import Config
+
+    set_provider_fields("openrouter", {"api_key_env": "OPENROUTER_KEY"}, config_path=cfg_path)
+    assert _read(cfg_path)["providers"]["openrouter"]["apiKeyEnv"] == "OPENROUTER_KEY"
+
+    set_provider_fields("openrouter", {"api_key": "sk-literal"}, config_path=cfg_path)
+    section = _read(cfg_path)["providers"]["openrouter"]
+    assert section["apiKey"] == "sk-literal"
+    assert not section.get("apiKeyEnv")
+    Config.model_validate(_read(cfg_path))
+
+
+def test_setting_an_env_reference_supersedes_a_literal_key(cfg_path: Path) -> None:
+    set_provider_fields("openrouter", {"api_key": "sk-literal"}, config_path=cfg_path)
+    set_provider_fields("openrouter", {"api_key_env": "OPENROUTER_KEY"}, config_path=cfg_path)
+
+    section = _read(cfg_path)["providers"]["openrouter"]
+    assert section["apiKeyEnv"] == "OPENROUTER_KEY"
+    assert not section.get("apiKey")
+
+
+def test_setting_both_key_sources_at_once_is_refused_and_erases_neither(cfg_path: Path) -> None:
+    """One call naming both sources is a mistake, not a precedence to guess at.
+
+    Clearing one and then the other -- the two supersede rules applied in turn
+    -- deleted the credential the section already held and reported success.
+    """
+    set_provider_fields("openrouter", {"api_key": "sk-kept"}, config_path=cfg_path)
+
+    with pytest.raises(ValueError, match="not both"):
+        set_provider_fields("openrouter", {"api_key": "sk-new", "api_key_env": "NEW_ENV"}, config_path=cfg_path)
+
+    section = _read(cfg_path)["providers"]["openrouter"]
+    assert section["apiKey"] == "sk-kept"
+    assert not section.get("apiKeyEnv")
+
+
+def test_a_section_that_does_not_use_the_env_field_does_not_write_it(cfg_path: Path) -> None:
+    """A null ``apiKeyEnv`` on every section is noise in a file users read."""
+    set_provider_fields("openrouter", {"api_key": "sk-literal"}, config_path=cfg_path)
+
+    assert "apiKeyEnv" not in _read(cfg_path)["providers"]["openrouter"]
+
+
 def test_set_api_base_for_local_provider(cfg_path: Path) -> None:
     set_provider_fields(
         "ollama_chat",
@@ -616,6 +667,45 @@ def test_test_provider_200_returns_ok_with_models_count(cfg_path: Path) -> None:
     assert result["status"] == "valid"
     assert result["models_count"] == 3
     assert result["http_status"] == 200
+
+
+def test_test_provider_sends_the_key_a_flat_api_key_env_names(cfg_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The probe tests the credential a request would carry, not the empty field.
+
+    ``raven provider set`` points the user at this command right after an
+    ``apiKeyEnv`` write, so reading the flat field reported ``not_configured``
+    on the very setup the command had just accepted.
+    """
+    monkeypatch.setenv("RAVEN_TEST_PROBE_KEY", "sk-from-env")
+    set_provider_fields("openrouter", {"api_key_env": "RAVEN_TEST_PROBE_KEY"}, config_path=cfg_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers.get("Authorization") == "Bearer sk-from-env"
+        return httpx.Response(200, json={"data": [{"id": "m1"}]})
+
+    result = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
+
+    assert result["ok"] is True
+    assert result["status"] == "valid"
+
+
+def test_test_provider_names_an_unset_api_key_env(cfg_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unset variable is its own verdict, not ``not_configured``.
+
+    The section is configured -- it names the source -- and the remedy is to
+    export the variable, which ``not_configured`` ("api_key is empty") does not
+    say.
+    """
+    monkeypatch.delenv("RAVEN_TEST_PROBE_UNSET_KEY", raising=False)
+    set_provider_fields("openrouter", {"api_key_env": "RAVEN_TEST_PROBE_UNSET_KEY"}, config_path=cfg_path)
+
+    result = probe_provider(
+        "openrouter", config_path=cfg_path, transport=_mock_transport(lambda _r: httpx.Response(200))
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "missing_env"
+    assert "RAVEN_TEST_PROBE_UNSET_KEY" in result["error"]
 
 
 def test_test_provider_names_an_environment_proxy_that_is_not_listening(
@@ -2428,6 +2518,29 @@ class TestResolveProviderCredentials:
         # gateways answer 404 to a doubled slash.
         assert resolved == ("https://proxy.test/v1", "sk-live")
 
+    def test_an_environment_variable_resolves_as_the_key(self, cfg_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A caller about to make the request reads the value, not the name."""
+        from raven.config.update_providers import resolve_provider_credentials, set_provider_fields
+
+        monkeypatch.setenv("RAVEN_TEST_RESOLVE_KEY", "sk-from-env")
+        set_provider_fields("openai", {"api_key_env": "RAVEN_TEST_RESOLVE_KEY"}, config_path=cfg_path)
+
+        assert resolve_provider_credentials("openai", config_path=cfg_path) == (
+            "https://api.openai.com/v1",
+            "sk-from-env",
+        )
+
+    def test_an_unset_environment_variable_answers_nothing(
+        self, cfg_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same answer as no key at all: "not set up", not an anonymous request."""
+        from raven.config.update_providers import resolve_provider_credentials, set_provider_fields
+
+        monkeypatch.delenv("RAVEN_TEST_RESOLVE_UNSET_KEY", raising=False)
+        set_provider_fields("openai", {"api_key_env": "RAVEN_TEST_RESOLVE_UNSET_KEY"}, config_path=cfg_path)
+
+        assert resolve_provider_credentials("openai", config_path=cfg_path) is None
+
     def test_no_key_is_not_a_credential(self, cfg_path: Path) -> None:
         """Reads as "not set up" rather than as an anonymous request to
         somebody's paid endpoint."""
@@ -2459,6 +2572,29 @@ class TestResolveProviderCredentials:
         cfg_path.write_text(json.dumps({"providers": {"openai": {"apiKey": 17}}}), encoding="utf-8")
 
         assert resolve_provider_credentials("openai", config_path=cfg_path) is None
+
+
+def test_provider_connection_resolves_a_flat_api_key_env(cfg_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The one read point for request material resolves the variable it names.
+
+    ``provider_connection`` feeds the connectivity probe, the media tools and
+    the web-vendor borrow; each of them needs the value a request would carry.
+    """
+    from raven.config.schema import Config
+    from raven.config.update_providers import provider_connection, set_provider_fields
+
+    monkeypatch.setenv("RAVEN_TEST_CONNECTION_KEY", "sk-or-from-env")
+    set_provider_fields(
+        "openrouter",
+        {"api_key_env": "RAVEN_TEST_CONNECTION_KEY", "api_base": "https://openrouter.ai/api/v1"},
+        config_path=cfg_path,
+    )
+    section = Config.model_validate(_read(cfg_path)).providers.get("openrouter")
+
+    api_base, api_key, _headers = provider_connection("openrouter", section)
+
+    assert api_base == "https://openrouter.ai/api/v1"
+    assert api_key == "sk-or-from-env"
 
 
 class TestResolveProviderTlsVerify:
@@ -2535,6 +2671,42 @@ def test_borrow_copies_the_key_and_the_address(monkeypatch: pytest.MonkeyPatch) 
     borrowed = lend_provider_credentials("openai")
     assert borrowed["api_key"] == "sk-lend"
     assert borrowed["base_url"] == "https://api.example.test/v1"
+
+
+def test_borrow_lends_the_key_an_environment_variable_holds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A section whose flat key is an environment variable lends its value.
+
+    Reading the section's own flat key answered "" for such a section, so a
+    provider that is connected was offered as a lender and then had nothing to
+    lend.
+    """
+    import raven.config
+    from raven.config.schema import Config
+
+    monkeypatch.setenv("RAVEN_LEND_KEY", "sk-from-env")
+    cfg = Config()
+    section = cfg.providers.get("openai")
+    section.api_key = ""
+    section.api_key_env = "RAVEN_LEND_KEY"
+    monkeypatch.setattr(raven.config, "load_config", lambda: cfg)
+
+    assert lend_provider_credentials("openai")["api_key"] == "sk-from-env"
+
+
+def test_borrow_refuses_a_variable_that_is_not_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A variable named but unset is nothing to lend, and the refusal names it."""
+    import raven.config
+    from raven.config.schema import Config
+
+    monkeypatch.delenv("RAVEN_LEND_KEY", raising=False)
+    cfg = Config()
+    section = cfg.providers.get("openai")
+    section.api_key = ""
+    section.api_key_env = "RAVEN_LEND_KEY"
+    monkeypatch.setattr(raven.config, "load_config", lambda: cfg)
+
+    with pytest.raises(ValueError, match="RAVEN_LEND_KEY"):
+        lend_provider_credentials("openai")
 
 
 def test_borrow_answers_with_the_address_raven_knows_for_the_lender(monkeypatch: pytest.MonkeyPatch) -> None:

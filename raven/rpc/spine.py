@@ -142,8 +142,8 @@ def _dag_payload(name: str, payload: dict) -> dict:
         }
     if name == "dag_node_stalled":
         # Information, not a node status: the node stays `running` and no
-        # `dag.node_updated` accompanies this. A bound foreground run drops the
-        # injected notice, so this frame is the only place the panel hears it.
+        # `dag.node_updated` accompanies this. The notice also announces, but
+        # this frame is what the panel hears while the run is still going.
         return {**common, "node": payload.get("node"), "quiet_ms": int(payload.get("quiet_ms") or 0)}
     # dag_run_completed. ``terminal_outputs`` is deliberately dropped: every sink
     # node's full text is already in the tool result, and repeating it here would

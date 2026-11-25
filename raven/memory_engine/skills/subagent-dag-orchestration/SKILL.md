@@ -64,7 +64,7 @@ both finish, and as the terminal node its output comes back to you inline.
 ## Input format
 
 The call's top level holds `task_summary` (the graph's title, under ten words: name the
-goal), `nodes`, and optionally `background` (see `After you submit`) and `confirm`
+goal), `nodes`, and optionally `confirm`
 (default `false`; `true` has the user approve the graph before any node runs -- for
 effects outside this machine, such as publishing, sending or spending). Every other field
 belongs to a node:
@@ -307,9 +307,6 @@ on after your turn ends, and its result arrives as a new message.
   promising an outcome you have not seen.
 - Do not call `run_subagent_dag` again to check on it, and do not re-submit it: the result
   comes to you, and a second call runs the whole graph again.
-- Pass `background: false` only when your very next step is reading the outputs. It blocks
-  your turn until the run finishes or a node reports a problem, and the run finishes
-  either way.
 
 A run has no timeout: it ends when its nodes do, or by a manual stop, and a stopped run
 reports nothing back.
@@ -321,8 +318,7 @@ that could not do the work -- a missing credential, a missing piece of the reque
 that kept failing -- has its output withheld, and you get a report mid-run naming what is
 missing and which nodes wait behind it, while the rest of the graph keeps going. Answer it
 with `resolve_dag_node` through `tool_call`; the report carries the exact invocation and
-that tool's schema, so take the spelling from there. In a `background: false` call the
-report is the call's return value. What the four decisions mean:
+that tool's schema, so take the spelling from there. What the four decisions mean:
 
 - `continue` when you can supply what is missing. If only the user can -- a credential, a
   decision, a fact about what they want -- ask them, then continue with their answer: that
@@ -368,12 +364,16 @@ carry what the new agent needs.
  "agent": "<roster name>", "message": "<what the new subagent should do>"}
 ```
 
-To stop the whole run instead, call `cancel_dag` through `tool_call`: it discards the run
-and starts nothing in its place.
+To stop the whole run, call `cancel_subagent` through `tool_call` with its `run_id`.
+To interrupt one live delegation, pass its `agent` and `instance` instead of a run id,
+plus the `call_id` if a notice supplied one. The default mode interrupts the execution
+and skips pending nodes that depend on its output. For an instance that supports early
+replies, `mode: "report_now"` asks it to finish with the work it already has. Wait for
+the result through the original delegation.
 
 ## Reading the result
 
-The summary -- a background run's announcement or a blocking call's return value -- lists
+The summary -- the announcement that follows a run -- lists
 every node with its status and output path, plus any `error:` line, a `reason:` line for a
 node a branch left out, and a decision node's `selected_routes:` (`(none)` is a real
 selection under `select: "many"`). Only terminal outputs are inlined, and a completed node

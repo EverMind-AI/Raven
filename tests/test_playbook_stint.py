@@ -1821,6 +1821,25 @@ class TestBoundaries:
         assert entry.heads.get("dev")
         assert not any("committed its own work" in note for note in entry.violations), entry.violations
 
+    async def test_an_early_reply_flag_from_the_runner_does_not_break_the_round_s_judge(self, tmp_path: Path) -> None:
+        """The runner hands `reported_early` to every judge when the host asked
+        for an early reply. This judge measures the tree, so the flag changes
+        nothing -- but a signature that refused it would reach the node as
+        "the DAG judge could not be called"."""
+        spec = _spec(
+            roles=[{"as": "dev", "name": "echo", "promptTemplate": "work", "owns": ["src/**"], "maxHandbacks": 0}]
+        )
+        context = self._context(tmp_path, spec)
+        node = self._node("game-dev-r01-dev")
+        await context.node_started(node.id)
+        (context.workdir / "src" / "main.py").write_text("print('mine')\n", encoding="utf-8")
+
+        verdict = await context.judge(node=node, reported_early=True)
+
+        assert verdict.accomplished
+        entry = context.store.read(context.record.stint_id).round(1)
+        assert entry.heads.get("dev")
+
     async def test_a_failing_check_is_handed_back_to_the_role_not_to_a_person(self, tmp_path: Path) -> None:
         """There is nobody to ask on an unattended run, and the judge already
         holds the output that says what went wrong."""
@@ -3513,7 +3532,7 @@ class TestWhatAPersonApproves:
 
         from raven.agent.subagent.prompt_errors import RoundNotApprovedError
 
-        await tool.execute(nodes, task_summary="ordinary", confirm=True, background=False)
+        await tool.execute(nodes, task_summary="ordinary", confirm=True)
         # A refused round is an exception for the driver, which has a record
         # to close; the ordinary run above got the sentence a model reads.
         with pytest.raises(RoundNotApprovedError):
@@ -3544,7 +3563,6 @@ class TestWhatAPersonApproves:
             [{"id": "a", "subagent": "echo", "node_summary": "s", "prompt_template": "p"}],
             task_summary="innocent",
             confirm=True,
-            background=False,
             confirm_question="Run this harmless 1 step graph?",
         )
 

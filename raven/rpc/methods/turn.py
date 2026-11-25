@@ -544,6 +544,8 @@ async def turn_send(
             f"session {parsed.session_key!r} already has an active turn",
         )
 
+    from raven.agent.turn_report import submitting
+
     req = TurnRequest(
         origin=Origin.USER,
         source=Source(
@@ -572,6 +574,7 @@ async def turn_send(
         # THIS value on the turn's lifecycle events and the client's correlation
         # key survives end to end.
         turn_id=turn_id,
+        report=submitting(),
     )
     await _note_move_on(parsed, agent_loop_factory)
     try:

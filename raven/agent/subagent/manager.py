@@ -37,6 +37,7 @@ from raven.agent.subagent.direct_chat import (
 from raven.agent.subagent.history import SpawnRecord, session_history_root, spawn_live_key
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
 from raven.agent.subagent.instances import get_registry, hold_handle, mint_handle
+from raven.agent.subagent.live_control import LiveDelegation, controlling
 from raven.agent.subagent.mode_tiers import resolve_tier, turn_tier_in_force
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.registry import AgentRegistry, AgentRow
@@ -50,7 +51,7 @@ from raven.agent.subagent_memory import (
     trace_session_id,
 )
 from raven.config.agent_names import canonical_agent_name
-from raven.config.schema import TIER_LADDER, ExecToolConfig
+from raven.config.schema import DEFAULT_LONG_RUN_NOTICE_SECONDS, TIER_LADDER, ExecToolConfig
 from raven.context_engine.segments.render import (
     RESULT_REPORT_RULE,
     board_on_page,
@@ -269,12 +270,16 @@ class SubagentManager:
         retry_after_output: bool = False,
         provider_pool: ProviderPool | None = None,
         task_board: bool = False,
+        long_run_notice_seconds: float = DEFAULT_LONG_RUN_NOTICE_SECONDS,
+        control_reachable: Callable[[], bool] | None = None,
     ):
         from raven.config.schema import LLM_ERROR_RETRY_DELAYS_DEFAULT, ExecToolConfig
 
         # Agent home. Also the working-directory fallback for a spawn that
         # captured none, which is the pre-split behaviour.
         self.workspace = workspace
+        self.long_run_notice_seconds = long_run_notice_seconds
+        self._control_reachable = control_reachable
         # Whether the host keeps a Task Board: a graph's notice into a conversation
         # the page draws then leaves the questions still open to that board.
         self._task_board = task_board
@@ -1950,7 +1955,28 @@ class SubagentManager:
                     state_kwargs: dict[str, Any] = (
                         {"history": state.load(), "on_messages": state.save} if state is not None else {}
                     )
-                    with activity.watching_instance(did, (session_key or "", agent or "", handle)):
+
+                    def interrupt() -> None:
+                        self._cancel_reasons[task_id] = "the host interrupted this instance"
+                        run_task.cancel()
+
+                    run_task = asyncio.current_task()
+                    assert run_task is not None
+                    control = LiveDelegation(call_id, agent, handle, interrupt)
+
+                    async def notify_long_run(elapsed: int) -> None:
+                        await self.announce_long_run(
+                            control.notice(
+                                elapsed, controls=self._control_reachable is not None and self._control_reachable()
+                            ),
+                            origin,
+                            call_id=call_id,
+                        )
+
+                    with (
+                        activity.watching_instance(did, (session_key or "", agent or "", handle)),
+                        controlling(did, control, interval=self.long_run_notice_seconds, announce=notify_long_run),
+                    ):
                         final_result = await backend.run(
                             task,
                             task_id=task_id,
@@ -2000,6 +2026,7 @@ class SubagentManager:
                     "ok",
                     record_path=str(record.file("out.md")),
                     dispatch_link=link,
+                    **({"reported_early": True} if did.reported_early else {}),
                 )
                 announced = taken is not False
             except asyncio.CancelledError:
@@ -2235,6 +2262,7 @@ class SubagentManager:
         status: str,
         record_path: str | None = None,
         dispatch_link: tuple[str, str] | None = None,
+        reported_early: bool = False,
     ) -> bool:
         """Announce the subagent result to the main agent via the spine; whether a turn took it.
 
@@ -2315,6 +2343,9 @@ Result:
 
         assert self._submit is not None
         mark: dict[str, Any] = {"kind": "spawn", "label": task_summary, "status": status}
+        if reported_early:
+            announce_content = "The host requested an early reply.\n\n" + announce_content
+            mark["reported_early"] = True
         # Only when present -- the dag mark's `run_id` is unconditional because a
         # dag run always has one, but an origin built outside `spawn()` may carry
         # none, and the field is a bare optional string on the wire (no null).
@@ -2422,9 +2453,9 @@ Result:
         wired here, once per entry point -- routing the announce through the
         tool instead would mean a second late-bound hookup at every one of them.
 
-        The summary is delivered verbatim: it is the same text a foreground run
-        returns as its tool result, and a graph's deliverable is its terminal
-        node outputs. Framing it or asking for a two-sentence retelling would put
+        The summary is delivered verbatim: it is the same text the tool renders
+        for a host waiter, and a graph's deliverable is its terminal node
+        outputs. Framing it or asking for a two-sentence retelling would put
         a lossy instruction between the agent and the work product.
         The untrusted fence is not part of that text and stays: node output is
         attacker-influenceable, and unlike a tool result (which the agent knows
@@ -2485,12 +2516,12 @@ Result:
         output and transcript, which is exactly the text an attacker who reached
         the sub-agent would have written.
 
-        ``awaiting_decision`` does not gate the announce here: unlike the foreground
-        lane's route back, an injected message can carry a notification as easily as a
-        question, so the background lane announces both kinds. It picks the ask and the
-        mark's status instead -- ``exception`` for a node waiting on a decision, ``error``
-        for one that has already failed -- and it is still required: a default on a fact
-        two announcers route on is a defect waiting for the next caller.
+        ``awaiting_decision`` does not gate the announce: an injected message can
+        carry a notification as easily as a question, so both kinds announce. It
+        picks the ask and the mark's status instead -- ``exception`` for a node
+        waiting on a decision, ``error`` for one that has already failed -- and it
+        is still required: a default on a fact two announcers route on is a defect
+        waiting for the next caller.
 
         ``output`` is what the node returned on the attempt reported (``ExceptionAnnouncer``).
         It goes on the mark, not into the injected text: the model decides from the
@@ -2668,6 +2699,27 @@ Read it against the plan this instance serves. If it reports finished work, resu
         self._emit_delivered(origin, {**mark, "content": content})
         logger.info("unprompted turn on {}/{} announced to {}", agent, handle, session_key)
 
+    async def announce_long_run(
+        self,
+        text: str,
+        origin: dict[str, str],
+        *,
+        call_id: str,
+        run_id: str | None = None,
+        node_id: str | None = None,
+    ) -> None:
+        """Deliver a running notice and coalesce reminders while its host turn is pending."""
+        if self._submit is None:
+            return
+        handles = []
+        mark = {"kind": "dag" if run_id else "spawn", "label": "Long-running subagent", "status": "notice"}
+        mark.update(call_id=call_id)
+        if run_id is not None:
+            mark.update(run_id=run_id, node_id=node_id or "")
+        self._inject(text, origin, mark, dispatch_link=trace.dispatch_link_of(origin), on_submit=handles.append)
+        if handles and (result := getattr(handles[0], "result", None)) is not None:
+            await result()
+
     def _inject(
         self,
         content: str,
@@ -2675,6 +2727,7 @@ Read it against the plan this instance serves. If it reports finished work, resu
         delegated: dict[str, Any] | None = None,
         *,
         dispatch_link: tuple[str, str] | None,
+        on_submit: Callable[[Any], None] | None = None,
     ) -> bool:
         """Re-inject ``content`` to trigger a main-agent turn in the originating session.
 
@@ -2715,7 +2768,7 @@ Read it against the plan this instance serves. If it reports finished work, resu
             dispatch_link=dispatch_link,
         )
         try:
-            self._submit(request)
+            handle = self._submit(request)
         except SchedulerDrainingError:
             logger.bind(agent_output=True).error(
                 "sub-agent announce to {} dropped: the scheduler is draining and no turn can carry it; "
@@ -2724,6 +2777,8 @@ Read it against the plan this instance serves. If it reports finished work, resu
                 content,
             )
             return False
+        if on_submit is not None:
+            on_submit(handle)
         return True
 
     async def _cancel(self, live: dict[str, asyncio.Task], reason: str) -> list[asyncio.Task]:

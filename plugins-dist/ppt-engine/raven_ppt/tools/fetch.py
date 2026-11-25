@@ -271,7 +271,9 @@ class PptFetchTool(Tool):
         # `(ok, why)` and raises nothing, so catching an exception here let every
         # refused address through -- loopback and the cloud metadata endpoint
         # among them -- for as long as the call has been written this way.
-        allowed, refusal = validate_url_target(url)
+        # Off the loop: the callers gather one of these per URL, so a slow
+        # resolver would serialize the gather and hold the process with it.
+        allowed, refusal = await asyncio.to_thread(validate_url_target, url)
         if not allowed:
             return _return.failed(f"that URL cannot be fetched: {refusal}")
 

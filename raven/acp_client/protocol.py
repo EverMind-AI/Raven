@@ -77,6 +77,9 @@ listening."""
 # make one side silently disagree with the other.
 STEER_METHOD = "_raven/session/steer"
 STEER_CAPABILITY = "raven.steer"
+REPORT_NOW_CAPABILITY = "raven.reportNow"
+REPORT_NOW_PROMPT_KEY = "raven.reportNowId"
+REPORTED_EARLY_KEY = "raven.reportedEarly"
 
 # And what a raven agent holds that runs with nobody asking -- an armed cron job
 # of its own partition, a running plugin service. The pool asks it before it

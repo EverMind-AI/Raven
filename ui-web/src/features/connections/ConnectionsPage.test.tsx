@@ -266,6 +266,48 @@ describe('connections island', () => {
       await mount()
       expect(subOf('Slack')).toBe('gui.conn.line_creds {"n":"1"}')
     })
+
+    /* The failed read's empty list is the read's shape, not the channel's
+       needs: reading it by shape alone drew the scan wizard for a credentials
+       channel and called the row configured -- the Settings-page failure the
+       rpc half was fixed for. */
+    it('does not read a failed field read as configured or as a scan login', async () => {
+      install([chan({ fields: [], missing: [], error: 'the schema cannot be flattened' })])
+      await mount()
+      expect(lineOf('Slack')).not.toBe('gui.conn.line_scan')
+      await act(async () => { openRow('Slack') })
+      expect(main().querySelector('.suwiz')).toBeNull()
+      expect(main().querySelector('#connDlgBody')).toBeTruthy()
+      /* `st_off` is the sentence a configured, switched-off row gets; this row
+         must not claim it. */
+      expect(paneHead().querySelector('.su-by')!.textContent).not.toBe('gui.conn.st_off')
+    })
+
+    /* The failure has to be shown, not just kept out of the configured
+       wording: a row that says "Credentials saved" beside an empty form, or
+       says nothing at all, leaves the operator with a channel nobody read and
+       nothing to act on. */
+    it('says the field read failed, on the row and in the sheet', async () => {
+      install([chan({ fields: [], missing: [], error: 'the schema cannot be flattened' })])
+      await mount()
+      expect(lineOf('Slack')).toBe('gui.conn.line_read_failed')
+      expect(lineOf('Slack')).not.toBe('gui.conn.line_saved')
+      await act(async () => { openRow('Slack') })
+      expect(paneHead().querySelector('.su-by')!.textContent).toBe(
+        'gui.conn.st_read_failed_why {"why":"the schema cannot be flattened"}',
+      )
+    })
+
+    /* An empty message is still a failure: the key marks it, not the text. */
+    it('says the field read failed when the failure carries no message', async () => {
+      install([chan({ fields: [], missing: [], error: '' })])
+      await mount()
+      expect(lineOf('Slack')).toBe('gui.conn.line_read_failed')
+      await act(async () => { openRow('Slack') })
+      const said = paneHead().querySelector('.su-by')!.textContent
+      expect(said).toBe('gui.conn.st_read_failed')
+      expect(said).not.toBe('')
+    })
   })
 
   /* The heart of it: pressing the button is a decision, not an arrival. An

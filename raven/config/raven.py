@@ -276,6 +276,10 @@ class ContextSummaryConfig(_Base):
     """
 
 
+SHIPPED_COMPACTION_RETAIN_RATIO = 0.10
+SHIPPED_COMPACTION_TAIL_KEEP_RATIO = 0.04
+
+
 class ContextCompactionConfig(_Base):
     """Tuning for the compacting history strategy, read only when it is the selected one.
 
@@ -309,9 +313,31 @@ class ContextCompactionConfig(_Base):
     this is its complement over the range that matters.
     """
 
-    retain_ratio: float = Field(default=0.40, gt=0.0, lt=1.0)
+    retain_ratio: float = Field(default=SHIPPED_COMPACTION_RETAIN_RATIO, gt=0.0, lt=1.0)
     """Share of the window a compaction aims to come back down to. Lower means
-    fewer compactions, each discarding more."""
+    fewer compactions, each discarding more. The target never falls below
+    ``minRetainTokens``.
+
+    An explicit value is honored at load; the 0.10 default applies only when
+    the file does not name the key.
+    """
+
+    min_retain_tokens: int = Field(default=32_768, ge=0)
+    """Floor on the target, in estimated tokens.
+
+    A pure share stops describing a reachable target once the fixed part of a
+    prompt -- system, tools and the checkpoint that replaces removed messages
+    -- is a large fraction of it: at 128K a 10% target is 12,800 tokens, under
+    the roughly 20K measured fixed cost, so no removal can reach it and every
+    compaction reports itself exhausted. The floor keeps the target above that
+    incompressible mass; the ``minReclaimTokens`` clamp still lowers it on a
+    window too small to fund the floor. ``0`` restores a pure share.
+
+    It is only a floor: a ``retainRatio`` whose share computes above it is
+    never lowered, while one that computes below it is raised to this value.
+    At a 32K window an explicit 0.40 computes 13,107 tokens and is raised to
+    32,768.
+    """
 
     min_reclaim_tokens: int = Field(default=16_384, ge=0)
     """Least a compaction may reclaim to be worth running.
@@ -336,13 +362,25 @@ class ContextCompactionConfig(_Base):
     tail_keep_messages: int = Field(default=8, ge=0)
     """Recent messages never compacted, as a count."""
 
-    tail_keep_ratio: float = Field(default=0.25, ge=0.0, lt=1.0)
+    tail_keep_ratio: float = Field(default=SHIPPED_COMPACTION_TAIL_KEEP_RATIO, ge=0.0, lt=1.0)
     """Recent messages never compacted, as a share of the window.
 
     Held together with the count as a union, not an alternative: each is a
     floor, one semantic and one budgetary, and taking the larger of the two
     satisfies both. A count alone leaves nothing behind when recent messages
     are huge; a share alone can leave half a message when they are huger.
+
+    The default 0.04 is the largest two-decimal share that still clears the
+    target at every tabulated window once ``minRetainTokens`` floors it. The
+    fixed prompt and the checkpoint are roughly constant, so a larger share
+    pushes the protected tail past the target on the smaller windows and no
+    compaction can reach it: 0.05 fails at 262K, 0.09 at 512K and 1M.
+
+    An explicit value is honored at load when it sits below the retain ratio.
+    One at or above the retain it would get is lowered to the shipped default
+    rather than failing startup, since nothing can be compacted into a target
+    that does not clear the protected tail. The default applies only when the
+    file does not name the key.
     """
 
     boundary: Literal["tool_pair", "turn"] = "tool_pair"
@@ -370,6 +408,11 @@ class ContextCompactionConfig(_Base):
     def _check_ratios(self) -> "ContextCompactionConfig":
         """Relations between the ratios, checked at load rather than at the
         first turn that trips over them.
+
+        A config file whose tail is not below its retain is lowered by the
+        loader before this runs; what lands here is direct construction and a
+        pair the repair cannot fix (a retain at or below the shipped tail
+        share), and those are refused rather than rewritten.
 
         Not checked here: whether the static reply-headroom floor leaves room
         for ``triggerRatioMax`` to bind at all. It does not on any window at or

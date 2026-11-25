@@ -1,6 +1,7 @@
 """The intent and ownership of a single request: the one input to submit()."""
 
-from dataclasses import dataclass
+from asyncio import Event
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
@@ -72,6 +73,16 @@ class SentinelExtras:
     action_origin: bool = False
 
 
+@dataclass
+class TurnReport:
+    """A finish request scoped to one delegated prompt, including its held turns."""
+
+    execution_id: str
+    requested: Event = field(default_factory=Event)
+    applied: bool = False
+    stopping: bool = False
+
+
 @dataclass(frozen=True)
 class TurnRequest:
     """One request to process."""
@@ -130,6 +141,7 @@ class TurnRequest:
     # no longer inherits its submitter's context, so where it came from has to
     # be stated here; the kernel carries the pair to the runner uninterpreted.
     dispatch_link: tuple[str, str] | None = None
+    report: TurnReport | None = None
 
 
 # A lane is a serial domain, so an instance that is to answer while the main

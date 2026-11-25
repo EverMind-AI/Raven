@@ -777,50 +777,63 @@ async def test_a_tools_own_metadata_cannot_claim_provenance_either(tmp_path, ful
     assert "token=[redacted]" in replayed["content"][0]["content"]["text"]
 
 
-async def test_a_dag_result_keeps_its_provenance_through_a_downgrade_notice(tmp_path, monkeypatch) -> None:
+async def test_a_host_waited_dag_result_keeps_its_provenance_through_a_downgrade_notice(tmp_path, monkeypatch) -> None:
     """A notice the preflight adds is this system's line, put in front of the
     model text; the node output under it is still the agent's own. Rebuilt from
-    its text alone, the result would lose its claim, and the registry would
-    scrub a value Raven holds out of what the node returned."""
+    its text alone, the result would lose its claim, so the notice is added to
+    the model text while the result keeps claiming what it carries.
+
+    This is the private ``execute_to_completion`` path a host waits on. The
+    model-facing call returns a receipt this process wrote, and the registry
+    never sees this result.
+    """
     import sys
 
     from raven.agent.subagent.dag_tool import SubAgentDagTool
-    from raven.agent.tools.registry import ToolRegistry
     from raven.config.schema import ThirdPartyCliSubagentConfig
 
     class HostConfiguredDag(SubAgentDagTool):
-        async def execute(self, nodes, **kwargs):
+        async def execute_to_completion(self, nodes, **kwargs):
             # Playbooks supply these fields after the model-facing schema boundary.
-            return await super().execute(nodes=[{**node, "mcps": ["any"]} for node in nodes], **kwargs)
+            return await super().execute_to_completion(nodes=[{**node, "mcps": ["any"]} for node in nodes], **kwargs)
 
     monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
-    registry = ToolRegistry()
     # The CLI answers with its prompt, and a row with no `{mcp_file}` cannot take
     # injected servers, so the node's `mcps` list becomes a downgrade notice.
     command = f'"{sys.executable}" -c "import sys; sys.stdout.write(sys.stdin.read())"'
-    registry.register(
-        HostConfiguredDag(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="echo", command=command)])
-    )
+    tool = HostConfiguredDag(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="echo", command=command)])
 
-    out = await registry.execute(
-        "run_subagent_dag",
-        {
-            "task_summary": "relay one reply",
-            "nodes": [
-                {
-                    "id": "a",
-                    "subagent": "echo",
-                    "node_summary": "repeat the reply",
-                    "prompt_template": f"the agent answered {_HELD}",
-                }
-            ],
-            "background": False,
-        },
+    out = await tool.execute_to_completion(
+        task_summary="relay one reply",
+        nodes=[
+            {
+                "id": "a",
+                "subagent": "echo",
+                "node_summary": "repeat the reply",
+                "prompt_template": f"the agent answered {_HELD}",
+            }
+        ],
     )
 
     assert "cannot take injected mcp servers" in str(out), str(out)
     assert getattr(out, "agent_output", False) is True
     assert f"the agent answered {_HELD}" in str(out), str(out)
+
+
+def test_the_model_facing_dag_call_declares_no_agent_output() -> None:
+    """The registry preserves a result only when the tool declares
+    ``agent_output`` and the result claims it. The model-facing call returns the
+    receipt this process wrote, which claims nothing; the run's terminal output,
+    another agent's words, travels through the private ``execute_to_completion``
+    that no registry call can reach. A declaration here could only unscrub a
+    receipt this tool does not own.
+    """
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    assert "agent_output" not in vars(SubAgentDagTool), (
+        "the model-facing call returns only this process's receipt; the claimed result "
+        "travels through execute_to_completion, which no registry call reaches"
+    )
 
 
 async def test_a_search_result_keeps_the_provenance_the_registry_settled(monkeypatch) -> None:

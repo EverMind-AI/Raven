@@ -1218,6 +1218,12 @@ class WiringMixin:
         mode = asked or getattr(cfg, "default_generation_mode", "task")
         if mode == "off":
             return HarnessResolution()
+        # An announced result is a value to read, not a request to create a
+        # playbook; generating here would mint a Task from the graph's summary.
+        from raven.spine.turn import Origin
+
+        if getattr(req, "origin", None) == Origin.SUBAGENT:
+            return HarnessResolution()
         if is_subagent_process() or getattr(req, "direct_target", None) is not None:
             return HarnessResolution()
         # A Persona is minted only for a turn that asked for one. The config's
@@ -1404,9 +1410,31 @@ class WiringMixin:
         return (await self._resolve_playbook_turn(req, session_key, binding)).table
 
     async def _finish_playbook_turn(self, resolution: Any, capture: Any, binding: Any) -> None:
-        """Update a Task artifact with proven Workflow evidence and save the run."""
-        if self._playbooks is None:
+        """Finalize a capture now, or leave it for its run's completion.
+
+        A turn that dispatched a captured graph may end before the graph does;
+        the run-finished callback then finalizes it instead.
+        """
+        if self._playbooks is None or capture.finalized:
             return
+        if capture.active_run_id is not None:
+            capture.deferred = True
+            return
+        await self._finalize_capture(resolution, capture, binding)
+
+    async def _capture_run_finished(self, resolution: Any, capture: Any, binding: Any, run_id: str) -> None:
+        if capture.finalized or capture.active_run_id != run_id:
+            return
+        capture.active_run_id = None
+        if capture.deferred:
+            await self._finalize_capture(resolution, capture, binding)
+
+    async def _finalize_capture(self, resolution: Any, capture: Any, binding: Any) -> None:
+        """Update a Task artifact with proven Workflow evidence and save the run."""
+        if self._playbooks is None or capture.finalized:
+            return
+        capture.finalized = True
+        capture.active_run_id = None
         from raven.playbook.run_record import RunRecordStore
 
         try:
@@ -1829,7 +1857,14 @@ class WiringMixin:
         refuse, rather than a condition repeated over six registrations that a
         seventh would quietly not get.
         """
-        self.tools.register(SpawnTool(manager=self.subagents))
+        self.tools.register(
+            SpawnTool(
+                manager=self.subagents,
+                control_advert=lambda: (
+                    self.dag_control_advert("cancel_subagent") if self.subagent_control_reachable() else None
+                ),
+            )
+        )
         # Outbound A2A: hands work to an external agent rather than one this
         # process manages, but it is still a hand-off this method's gate must
         # cover -- see raven.agent.subagent.role.WITHHELD_FROM_SUBAGENT.
@@ -1867,6 +1902,8 @@ class WiringMixin:
                 gate=self.subagents.dispatch_gate,
                 announce=self.subagents.announce_dag_result,
                 announce_exception=self.subagents.announce_dag_exception,
+                announce_long_run=self.subagents.announce_long_run,
+                long_run_notice_seconds=self.subagents.long_run_notice_seconds,
                 adopt=self.subagents.adopt_background_run,
                 charge=self.subagents.charge_dag_run,
                 # The manager's own sandbox builder, so a graph node's exec
@@ -1899,12 +1936,18 @@ class WiringMixin:
         # three get: hidden from the schema so the per-turn tool list carries
         # nothing a conversation that never starts a DAG has any use for, they
         # stay reachable through the registry (and tool_call where it exists).
-        from raven.agent.subagent.dag_control_tools import CancelDagTool, DagStatusTool, ResolveDagNodeTool
+        from raven.agent.subagent.dag_control_tools import (
+            CancelDagTool,
+            CancelSubagentTool,
+            DagStatusTool,
+            ResolveDagNodeTool,
+        )
 
         self.tools.register(CancelDagTool(loop=self))
+        self.tools.register(CancelSubagentTool(loop=self))
         self.tools.register(DagStatusTool(loop=self))
         self.tools.register(ResolveDagNodeTool(loop=self))
-        self.tools.hide_from_schema("cancel_dag", "dag_status", "resolve_dag_node")
+        self.tools.hide_from_schema("cancel_dag", "cancel_subagent", "dag_status", "resolve_dag_node")
 
     def _bind_plugin_runtime(self) -> None:
         """Grant the late-bound handles to every plugin tool that declared.
@@ -1995,7 +2038,7 @@ class WiringMixin:
         transport is bound, exactly as the graph-confirm flow experiences it,
         and also when the conversation is still busy with another question at
         the deadline: a plugin gate asks from inside a tool call, and a
-        foreground graph runs several of those at once, so two gates (or a
+        graph runs several of those at once, so two gates (or a
         gate and a relayed sub-agent) would otherwise evict each other from
         the broker's single pending slot. None sends the gate down its
         no-channel path, which is fail-closed. One deadline covers the wait
@@ -2167,6 +2210,8 @@ class WiringMixin:
             gate=self.subagents.dispatch_gate,
             announce=self.subagents.announce_dag_result,
             announce_exception=self.subagents.announce_dag_exception,
+            announce_long_run=self.subagents.announce_long_run,
+            long_run_notice_seconds=self.subagents.long_run_notice_seconds,
             adopt=self.subagents.adopt_background_run,
             charge=self.subagents.charge_dag_run,
             # Same manager hooks as the registered tool: the sandbox builder
@@ -2468,6 +2513,7 @@ class WiringMixin:
             "deliver_files",
             "dag_status",
             "cancel_dag",
+            "cancel_subagent",
             "resolve_dag_node",
             "context_retrieve",
             "task_board",
@@ -2483,6 +2529,7 @@ class WiringMixin:
                     "deliver_files",
                     "dag_status",
                     "cancel_dag",
+                    "cancel_subagent",
                     "resolve_dag_node",
                     "context_retrieve",
                     "task_board",
@@ -2556,6 +2603,10 @@ class WiringMixin:
             return False
         return self.tool_search_controller.tool_call_available()
 
+    def subagent_control_reachable(self) -> bool:
+        """Whether the current host turn can call the hidden cancellation tool."""
+        return self.dag_control_reachable() and self.tools.offers_by_name("cancel_subagent")
+
     def dag_control_advert(self, name: str) -> str | None:
         """One schema-hidden dag control tool's definition, as advertisement text.
 
@@ -2566,7 +2617,7 @@ class WiringMixin:
         """
         from raven.agent.subagent.dag_control_advert import render
 
-        return render(self.tools.hidden_definition(name))
+        return render(self.tools.hidden_definition(name)) if self.tools.offers_by_name(name) else None
 
     def set_dag_progress_sink(self, sink) -> None:
         """Late-bind the graph tools' progress sink (host wires it to the web

@@ -587,6 +587,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             retry_after_output=bool(self._recovery_limits.llm_retry_after_output),
             provider_pool=self._provider_pool,
             task_board=self._task_board_config.enabled,
+            long_run_notice_seconds=subagents.long_run_notice_seconds,
+            control_reachable=self.subagent_control_reachable,
         )
         # Reads the live direct chats through a lambda for the reason the identity
         # segment does: the manager is rebuilt on a hot config apply.
@@ -1287,6 +1289,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                     artifact_name=resolution.artifact_name,
                     capture_workflow=resolution.capture_workflow,
                 )
+                capture.on_finished = lambda run_id: self._capture_run_finished(resolution, capture, binding, run_id)
             from raven.playbook.run_record import capture_scope
 
             # The charter a dispatch staged for this session, taken for this turn
@@ -1394,42 +1397,32 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             raise
         finally:
             try:
-                if capture is not None and capture.status == "running" and self._playbooks is not None:
-                    from raven.playbook.run_record import RunRecordStore
-
-                    capture.finish(
-                        status="cancelled" if not flush else "failed",
-                        error=None if failure is None else f"{type(failure).__name__}: {failure}",
-                    )
-                    try:
-                        RunRecordStore(self._playbooks.store.root).save(capture)
-                    except Exception:  # noqa: BLE001 - cleanup cannot replace the turn's error
-                        logger.opt(exception=True).warning("playbook: failed turn record could not be saved")
-                # Every way a turn ends passes here, which is what makes this
-                # the place a foreground DAG run learns its turn is over. A
-                # direct chat runs on an instance's own lane, concurrently with
-                # the main agent's turn, and can own no graph, so its end must
-                # not release the main turn's runs.
-                if req.direct_target is None:
-                    await self._release_dag_runs(session_key, flush=flush)
+                if capture is not None:
+                    self._finalize_failed_capture(capture, flush=flush, failure=failure)
             finally:
                 # Its own finally so a bookkeeping raise cannot leave the turn
                 # counted forever and wedge every later backend switch.
                 self._exit_turn()
 
-    async def _release_dag_runs(self, session_key: str, *, flush: bool) -> None:
-        """Release the foreground DAG runs the turn on ``session_key`` still binds.
+    def _finalize_failed_capture(self, capture: Any, *, flush: bool, failure: BaseException | None) -> None:
+        """Finalize a capture the turn did not hand to a run.
 
-        ``flush=False`` performs no awaits inside the tool, so this is safe to
-        run while a CancelledError is propagating. A failure here is logged
-        rather than raised: the turn has already ended, and its outcome must not
-        be replaced by bookkeeping on its graphs.
+        A capture whose graph is still in flight is finalized by the run's
+        completion, unless the turn itself failed or was cancelled.
         """
-        tool = self.tools.get("run_subagent_dag")
-        release = getattr(tool, "release_turn", None)
-        if release is None:
+        if capture.status != "running" or self._playbooks is None:
             return
+        if capture.deferred and failure is None and flush:
+            return
+        capture.active_run_id = None
+        capture.finalized = True
+        from raven.playbook.run_record import RunRecordStore
+
+        capture.finish(
+            status="cancelled" if not flush else "failed",
+            error=None if failure is None else f"{type(failure).__name__}: {failure}",
+        )
         try:
-            await release(session_key, flush=flush)
-        except Exception:  # noqa: BLE001 - see docstring
-            logger.opt(exception=True).warning("DAG runs of {} could not be released", session_key)
+            RunRecordStore(self._playbooks.store.root).save(capture)
+        except Exception:  # noqa: BLE001 - cleanup cannot replace the turn's error
+            logger.opt(exception=True).warning("playbook: failed turn record could not be saved")

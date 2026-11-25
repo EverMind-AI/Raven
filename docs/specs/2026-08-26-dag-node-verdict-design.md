@@ -212,9 +212,10 @@ other two exist (`tool.py:806`). Parameters: `run_id`, `node_id`, `decision`
 
 > **Superseded 2026-09-02.** The five paragraphs that follow, up to "A host with no ask
 > broker gets the plain failure path", describe a foreground lane that asked the person
-> watching the call. That lane is gone: a foreground call now returns the report to the
-> main agent and `resolve_dag_node` resumes the wait. See
-> `docs/specs/2026-09-02-dag-foreground-report-handoff-design.md`.
+> watching the call. That lane was replaced by one that returns the report to the main
+> agent and resumes the wait in `resolve_dag_node`, and that replacement is gone too
+> (2026-11-21): every call dispatches a background run. See
+> `docs/specs/2026-11-21-dag-single-lane-design.md`.
 
 **A foreground graph is adjudicated inside its own turn.** All of the above
 describes `background: true`, the default, and it works because the turn that

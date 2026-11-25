@@ -17,6 +17,9 @@ export interface ConnChannel {
   who?: string
   fields?: ConnField[]
   missing?: string[]
+  /* Why the field list could not be read, when it could not. An empty list
+     with this set is a failure, not a declaration that nothing is required. */
+  error?: string
   /* Three separate facts, kept separate. `on` is what the config asks for;
      `running` is whether the adapter came up; `connected` is whether the
      account is paired, which only the QR channels report. Absent means the

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Iterator
 from uuid import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Awaitable, Callable, Mapping
 
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec
 from raven.agent.subagent.delegate import Worker
@@ -74,6 +74,10 @@ class PlaybookRunCapture:
     dags: list[DagEvidence] = field(default_factory=list)
     saved_playbook: str | None = None
     error: str | None = None
+    active_run_id: str | None = None
+    deferred: bool = False
+    finalized: bool = False
+    on_finished: "Callable[[str], Awaitable[None]] | None" = field(default=None, repr=False, compare=False)
 
     def finish(self, *, status: str = "completed", error: str | None = None) -> None:
         self.completed_at = _now()
