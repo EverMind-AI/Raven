@@ -6,6 +6,107 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- Raven-Research writes each report as an HTML reading page. When a turn's reply
+  is a report in the reader layout, the flow renders the report into one HTML
+  file: a cover with the answer, a table of contents, one panel for each
+  section, and numbered citations with a source list. When the report closes
+  with a list or a table of its sources, that list is the page's source list:
+  the page numbers its entries, links the citations to them and adds no second
+  list. The report can write that list as one table, as one or more lists, or
+  as paragraphs in which each source opens with its link. Another list of the
+  same addresses, such as a link-check table, stays as the report wrote it.
+  The page and the markdown report file hold the same text. When the turn has a
+  report file, the page shows the text of that file at the end of the turn. If
+  the flow keeps the file because the reply is shorter than the file, the page
+  shows the file, not the reply, also when the file has no answer blockquote.
+  In the file and on the page, a paragraph that
+  runs three or more numbered steps together ("Step 1: ... Step 2: ...") is
+  written as a list, one step for each item. A numbered list that stands
+  directly under a label line and does not start at 1 gets a blank line above
+  it (`lists_parted` in the record). Without that line, markdown reads the
+  label and the entries as one paragraph, and a source list in groups loses
+  each group after the first. The page leaves out the
+  research trail and the warnings of the trail, as the report file does.
+  The page has a light palette and a dark palette. The cover carries the answer
+  also when the reply puts a line before it. The file and the page leave that
+  line out when the turn's draft of the report file does not hold it. The reply
+  and the conversation stay markdown. The page stands beside the markdown report file
+  when the turn wrote one, else in the turn's working directory. With
+  `reportPage.removeMarkdown` on, the flow removes the markdown report file
+  after it writes the page from that file (`removed` in the record of the
+  report file). The page is then the one report file of the turn. The flow
+  does not change the text of the reply, which can name the markdown file.
+  The last line of the reply, which names the page, says that the page
+  replaces the removed file. If the flow cannot remove the file, the file
+  stays. `reportPage.removeMarkdown` is off as a class default; the product's
+  base slice turns it on. The report
+  file now leaves out the line of the answer that names it also when the reply
+  puts a line before the answer.
+  The last line of the reply names the page, and a sub-agent's result now tells
+  the agent that reads it to deliver such a file to the user. The page loads
+  nothing and runs no script. With `reportPage.highlights` on, a model selects
+  key figures, key findings and a timeline, and the flow keeps only text that
+  the report holds. `reportPage.enabled` and `reportPage.highlights` are off as
+  class defaults; the product's base slice turns both on. With the page on, the
+  report clause tells the model three things: the flow writes the page when the
+  reply is the report, the model must not write an HTML file of the report, and
+  the model must not write a link-check table when the task does not ask for
+  one. A research turn that ends without a report records
+  `report_page: {written: false, reason: reply_not_a_report}`. The shipped
+  prompt changed, so the
+  product label is now
+  `dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page`.
+  With the page on, each report closes with two sections: the limits, then the
+  list of sources. The report clause and the per-message reminder name the two
+  headings: `## Limitations` and `## Sources` in English, `## 未核验项` and
+  `## 来源` in Chinese. The shape check finds the limits of such a report by
+  the fixed heading. If no heading is the fixed one, the limits are the last
+  `##` section before the sources, and the record lists `Limitations` in
+  `annotated_headings`. The check does not read a body heading that contains
+  a word for limits as the limits. A task that sets a length does not count
+  the list of sources. At the end of the turn the flow makes the report file and the page
+  close this way and changes no word of the report. If the report has no source
+  list, the flow adds one under the "Sources" label: each address that the
+  report links, one time, in the order of the first link
+  (`sources_listed` in the record). If the report puts its source list in the
+  section before the last section, the flow exchanges the two sections
+  (`sources_moved`). The flow does not move a section when one of the two
+  headings has a number. The reply in the conversation stays as the model wrote
+  it. The report shape gate reads the list of sources after the limits as the
+  close of the report, not as a section out of order. When a report has no
+  limits section, the gate no longer reads that list as the limits.
+  The report clause also sets the length of a paragraph: one point, three to
+  five sentences (150 to 300 Chinese characters, or 60 to 120 English words),
+  and not more than 500 characters or 200 words.
+  Inside a section the page sets four shapes of markdown as blocks of their
+  own. A list whose items each open with a
+  name in bold is a list of terms. The same list with numbers is a list of
+  numbered points. A run of two or more paragraphs that each open with a name
+  is a list of terms too, when no such paragraph of the section stands alone.
+  A name is a bold label before a colon or a dash, or a whole lead sentence
+  in bold. A blockquote is a note, or a quotation when its last line opens
+  with a dash and names the source. Two to four short `###` parts that are
+  all the subsections of a section are cards. The page does not print the
+  colon or dash between a name and its text. All other lists, quotes and
+  subsections stay as they were.
+  Three or more `###` parts in a row whose headings each name a step
+  ("Step 1: ...", numbered from 0 or 1 with no gap) are stages on one line.
+  Each stage keeps its heading and all the text below the heading.
+  With `reportPage.highlights` on, the model that selects the highlights also
+  selects a maximum of three sentences that the reader must know before the
+  reader acts: a condition, an exception, a step that the reader must not skip.
+  The page sets the paragraph that holds such a sentence as a note, in its
+  place and with all its words. A note has the label "Note" ("注意" in
+  Chinese), or the bold name that opens the paragraph. A section gets one
+  note at most. The limits, the lists, the tables and a paragraph of more
+  than 320 Chinese characters or 640 Latin characters get none
+  (`notes_offered` and `notes_kept` in the record). The report clause does
+  not name these blocks: when it named them, two reports used none that the
+  reports before them did not use.
+  The page uses the EverMe palette and type: a warm neutral canvas, one yellow
+  accent, links in the text colour, and each section heading above its panel.
+  The page still loads no font.
+
 - A connection a sandbox blocks while a command runs is now settled like a
   tool call. A target your `permissions.network` deny rules name is refused;
   otherwise `ask` mode asks you on a card of its own (the program, the

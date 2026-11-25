@@ -274,6 +274,12 @@ TWIN_DRFLOW_PRODUCT_ONLY = {
         "false plain answer and on 35 settled ones with 29 accepted; the fork has no such "
         "gate and its schema would refuse the key"
     ),
+    "reportPage": (
+        "the delivered report is also written as one HTML reading page, with highlights "
+        "a model selects and the flow keeps only when the report holds their text. The "
+        "reply the fork's arm measured is unchanged but for the line that names the file; "
+        "the fork has no such page and its schema would refuse the key"
+    ),
 }
 
 TWIN_DRFLOW_DIVERGED = {
@@ -439,11 +445,12 @@ def test_the_shipped_label_moves_when_the_shipped_prompt_does():
         report_format_override=shape["reportFormatOverride"],
         report_depth=shape["reportDepth"],
         report_layout=shape["reportLayout"],
+        report_page=shipped["reportPage"]["enabled"],
     )[1]
     digest = hashlib.sha256(" ".join(segment.split()).encode("utf-8")).hexdigest()[:16]
 
-    assert shipped["version"] == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader"
-    assert digest == "86337de7a030f8aa", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
+    assert shipped["version"] == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page"
+    assert digest == "b8cfd658b9fa2ca4", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
 
 
 def test_every_retirement_this_product_declares_names_a_label_it_can_load():

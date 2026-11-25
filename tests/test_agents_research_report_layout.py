@@ -771,6 +771,21 @@ def test_the_file_leaves_out_the_quote_line_that_names_it():
     assert file_text(_DELIVERED.replace("/w/r.md", "r.md"), "/w/r.md")[1] == 2
 
 
+def test_the_answer_is_found_under_a_line_the_reply_puts_before_it():
+    """A model still opens with a line of its own now and then; the receipt under it is a receipt all the same."""
+    spoken = "Both files are saved. Here is the report.\n\n" + _DELIVERED
+    text, dropped = file_text(spoken, "/w/r.md")
+    assert dropped == 2 and "delivered:" not in text
+    assert text.startswith("Both files are saved. Here is the report.\n\n> yes, because.")
+
+
+def test_a_quote_under_the_first_section_is_not_the_answer():
+    reply = "the answer, as prose\n\n## A\n> a page said: see /w/r.md\n> and more\n\n## Limitations\nz"
+    assert file_text(reply, "/w/r.md") == (reply, 0)
+    fenced = "```\n> not a quote, /w/r.md\n> x\n```\n\n## A\nb\n\n## Limitations\nz"
+    assert file_text(fenced, "/w/r.md") == (fenced, 0)
+
+
 def test_a_quote_that_only_names_the_file_is_kept_whole():
     reply = "> report at /w/r.md\n\n## A\nb\n\n## Limitations\nz"
     assert file_text(reply, "/w/r.md") == (reply, 0)

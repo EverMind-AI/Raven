@@ -93,7 +93,14 @@ from research_flow.support.fetch_gate_core import FetchGate
 from research_flow.support.harness_text import harness_ask_kind
 from research_flow.support.ledger import close_product_ledger, ledger_path, open_product_ledger
 from research_flow.support.process_appendix import build_appendix, read_ledger
-from research_flow.support.report_file import file_digest, still_held, sync_report_file, written_markdown
+from research_flow.support.report_file import (
+    file_digest,
+    remove_file,
+    still_held,
+    sync_report_file,
+    written_markdown,
+)
+from research_flow.support.report_page import ReportPage, page_line, tidy, written_pages
 from research_flow.support.search_saturation import SearchSaturation
 from research_flow.support.turn_observers import turn_observers
 from research_flow.tools.web import set_current_session
@@ -107,7 +114,7 @@ if TYPE_CHECKING:
 _TURN_SEQ = itertools.count()
 
 
-def _turn_cargo(cfg: FlowConfig, text: str) -> dict[str, Any]:
+def _turn_cargo(cfg: FlowConfig, text: str, *, sources: bool = False) -> dict[str, Any]:
     cargo: dict[str, Any] = {
         TURN_BUDGETS_KEY: {
             "wall_clock_seconds": cfg.wall_clock_seconds,
@@ -122,7 +129,7 @@ def _turn_cargo(cfg: FlowConfig, text: str) -> dict[str, Any]:
         if layout == READER_LAYOUT:
             repair, fallback = partial(repair, layout=layout), partial(fallback, layout=layout)
         cargo[TURN_SYNTHESIS_KEY] = TurnSynthesisPolicy(
-            guidance=interrupted_report_guidance(text, layout),
+            guidance=interrupted_report_guidance(text, layout, sources),
             repair_prompt=repair if cfg.final_shape.report_bounce else None,
             format_fallback=fallback,
         )
@@ -158,6 +165,14 @@ _REPORT_FILES_KEY = "dr_report_files"
 # The report files an earlier turn left that still hold what it left, read at turn start
 # before any tool runs; only these, and files the turn writes whole, are the session's.
 _HELD_FILES_KEY = "dr_held_report_files"
+
+# The HTML files the turn's ``write_file`` calls wrote whole, read off the transcript beside
+# the markdown ones: an HTML twin of the report the turn wrote by hand gives way to its page.
+_REPORT_PAGES_KEY = "dr_report_pages"
+
+# The name the turn's dispatcher gave its task, kept from the inbound request to turn
+# end: the page of a report that has no title of its own is titled by it.
+_TASK_NAME_KEY = "dr_task_name"
 
 
 @dataclass
@@ -222,8 +237,9 @@ class TurnFrame(Gate):
     ``before_iteration`` decides, once per turn, whether this is a research turn
     - the decision needs prior history, which ``before_user_inbound`` does not
     carry. ``after_send`` folds the turn's ledger rows into the memo, appends
-    the process appendix to the outbound, persists a clarify round the gate
-    opened, and saves the session record.
+    the process appendix to the outbound, writes the report's reading page and
+    names it on the outbound, persists a clarify round the gate opened, and
+    saves the session record.
 
     First in the chain, never wrapped in ``GatedHook``: it is the hook that
     SETS the research flag every wrapped observer's predicate reads.
@@ -235,6 +251,7 @@ class TurnFrame(Gate):
         store: SessionStore,
         gate: ConversationGate | None,
         mode: str = "",
+        page: ReportPage | None = None,
     ) -> None:
         self._cfg = cfg
         self._store = store
@@ -249,6 +266,10 @@ class TurnFrame(Gate):
         self._ask_user_brief = cfg.ask_user_on and cfg.ask_user.brief
         self._layout = cfg.final_shape.effective_layout
         self._report_file = cfg.final_shape.report_structure and self._layout == READER_LAYOUT
+        # The reading page is a second form of the reader layout's report, and of nothing else.
+        self._page = page if self._report_file else None
+        # With the page, the report closes with its list of sources (the page clause of the contract).
+        self._sources = self._page is not None
 
     @property
     def name(self) -> str:
@@ -281,10 +302,12 @@ class TurnFrame(Gate):
         ctx.metadata.pop(_TURN_MODE_KEY, None)
         text = ctx.inbound_content or ""
         ctx.metadata[_USER_TEXT_KEY] = text
-        ctx.metadata.update(_turn_cargo(self._cfg, text))
+        ctx.metadata.update(_turn_cargo(self._cfg, text, sources=self._sources))
         record = self._store.load(ctx.session_key)
         if self._report_file:
             ctx.metadata[_HELD_FILES_KEY] = still_held(record.report_files)
+        if self._page is not None and (name := getattr(ctx.turn_request, "task_summary", None)):
+            ctx.metadata[_TASK_NAME_KEY] = name
         if self._conversation:
             self._consume_pending_clarify(ctx.session_key, record, text)
         content = text
@@ -305,7 +328,7 @@ class TurnFrame(Gate):
         if self._report_reminder:
             # The turn's own text, not the assembled content: the checklist reads the
             # request, and the memo and brief prefixed above are ours, not the user's.
-            content = f"{content}\n\n{render_reminder(text, self._layout)}"
+            content = f"{content}\n\n{render_reminder(text, self._layout, self._sources)}"
         if content != text:
             return HookDecision(modified_content=content)
         return HookDecision()
@@ -398,6 +421,10 @@ class TurnFrame(Gate):
             paths = written_markdown(ctx.messages or [], since=ctx.turn_base or 0, held=held)
             if paths:
                 ctx.metadata[_REPORT_FILES_KEY] = paths
+        if self._page is not None:
+            pages = written_pages(ctx.messages or [], since=ctx.turn_base or 0)
+            if pages:
+                ctx.metadata[_REPORT_PAGES_KEY] = pages
         return HookDecision()
 
     # -- turn exit --------------------------------------------------------
@@ -410,6 +437,8 @@ class TurnFrame(Gate):
         ctx.metadata.pop(_USER_TEXT_KEY, None)
         report_paths = ctx.metadata.pop(_REPORT_FILES_KEY, None)
         held = ctx.metadata.pop(_HELD_FILES_KEY, None) or {}
+        own_pages = ctx.metadata.pop(_REPORT_PAGES_KEY, None) or []
+        task_name = str(ctx.metadata.pop(_TASK_NAME_KEY, None) or "")
         # The gates' own counters first, the turn-level ones over them - the
         # order the fork stamped them in, and the one that lets a turn-level key
         # win a name collision.
@@ -430,16 +459,25 @@ class TurnFrame(Gate):
             if self._cfg.final_shape.report_structure or self._cfg.final_shape.record:
                 observers["report_shape"] = {
                     "expected": bool(self._cfg.final_shape.report_structure),
-                    **ReportShape(shaped.visible, self._layout).counters(),
+                    **ReportShape(shaped.visible, self._layout, self._sources).counters(),
                 }
 
-        if self._report_file and report_paths:
-            # Before the appendix is appended: the trail rides on the reply only. No
-            # closing-tag bar: whether reasoning came out of band is a per-response fact
-            # this phase never sees, and the reply has gone out whole either way.
+        # The reply as a reader sees it, when it reads as the report; None for a clarify
+        # or any other reply. Read before the appendix is appended: the trail rides on
+        # the reply only. No closing-tag bar: whether reasoning came out of band is a
+        # per-response fact this phase never sees, and the reply has gone out whole
+        # either way.
+        report: str | None = None
+        if self._report_file and (report_paths or self._page is not None):
             visible = visible_answer(final_content)
-            if ReportShape(visible, self._layout).well_formed:
-                observers["report_file"] = sync_report_file(report_paths, visible)
+            if ReportShape(visible, self._layout, self._sources).well_formed:
+                report = visible
+        if self._report_file and report_paths:
+            if report is not None:
+                # With the page on, the file is tidied as the page is: the two hold the same text.
+                observers["report_file"] = sync_report_file(
+                    report_paths, report, tidy=tidy if self._page is not None else None
+                )
             else:
                 # A clarify or a reply that is not the report: the model's own file stands.
                 observers["report_file"] = {"synced": False, "reason": "reply_not_a_report"}
@@ -466,6 +504,7 @@ class TurnFrame(Gate):
         # is a no-op except for the turn counter - but the ledger file still has
         # to be read under the same condition it was opened.
         research = is_research_turn()
+        trail_text = ""
         wants_appendix = research and self._process_appendix
         wants_memo = self._research_memo
         if wants_appendix or wants_memo or self._process_appendix:
@@ -500,6 +539,36 @@ class TurnFrame(Gate):
                     # a measurement payload; a multi-kilobyte string does not
                     # belong beside them.
                     observers["research_trail"] = appendix
+                    trail_text = appendix
+
+        if self._page is not None and report is not None:
+            synced = observers.get("report_file") or {}
+            page_path, observers["report_page"] = await self._page.write(
+                report,
+                beside=synced.get("path") if synced.get("synced") or synced.get("kept") else None,
+                own=own_pages,
+                task=task_name,
+            )
+            removed: str | None = None
+            if page_path and self._page.removes_file and observers["report_page"].get("follows") == "file":
+                # The page holds the file's text now.
+                file = str(synced["path"])
+                synced["removed"] = remove_file(file)
+                if synced["removed"]:
+                    record.report_files.pop(file, None)
+                    removed = file
+            if page_path:
+                # Like the trail, on the outbound reply only. It is the reply's last
+                # line, so whoever dispatched the turn reads which file to deliver. Added
+                # to the end and nothing above it changed: the reply has gone out as
+                # deltas, and only a tail reaches a streaming surface.
+                lead = "\n\n" if trail_text else "\n\n---\n\n"
+                final_content = final_content.rstrip() + lead + page_line(page_path, removed)
+                changed = True
+        elif self._page is not None and research:
+            # The contract promises the page for a reply that is the report. A research
+            # turn that ends on any other reply has none, and the record says so.
+            observers["report_page"] = {"written": False, "reason": "reply_not_a_report"}
 
         # ``take_*`` clears as it reads. Without that a later turn that asked
         # nothing would re-persist the previous turn's pending and answer it twice.
@@ -770,7 +839,11 @@ def build_chain(
     # the non-research turn, and wrapping it would gate it out of the only
     # place it was built for.
     if cfg.final_shape.report_structure and cfg.final_shape.report_bounce:
-        bar: Gate = ReportShapeGate(closing_tag_required=cfg.think_closing_tag_required, layout=layout)
+        bar: Gate = ReportShapeGate(
+            closing_tag_required=cfg.think_closing_tag_required,
+            layout=layout,
+            sources=cfg.report_page.enabled and layout == READER_LAYOUT,
+        )
         # Same exemption as the reviewer's: a clarify has no report sections to
         # be missing, and demanding them turns the one turn that must not
         # answer into a rewrite.
@@ -797,7 +870,15 @@ def build_chain(
 
     # First, never wrapped: it sets the research flag every GatedHook predicate
     # reads, and its ``after_send`` must see the outbound before the chain ends.
-    return [TurnFrame(cfg, store, gate, mode), *observers]
+    page = None
+    if cfg.report_page.enabled:
+        if cfg.report_page.highlights and provider is None:
+            logger.warning(
+                "research-flow: reportPage.highlights is on but no provider was lent to the plugin; "
+                "the page is written without highlights"
+            )
+        page = ReportPage(cfg.report_page, provider)
+    return [TurnFrame(cfg, store, gate, mode, page), *observers]
 
 
 @dataclass

@@ -286,6 +286,88 @@ _DR_REPORT_STRUCTURE_CLAUSE_READER = _derive(
     ),
 )
 
+# The reader clause when the flow also writes the report's reading page. Without it a
+# task that asks for "the report as HTML" gets a page the model writes by hand, which
+# the flow's page then replaces: the turns that wrote it are spent for nothing. The
+# page is promised only for a reply that is the report, because no other reply gets one.
+# The clause also closes the link-check rule: a model given only "when the task asks"
+# wrote the table unasked, and on the page it is a second list of the same sources.
+# The report then closes with its list of sources, after the limits: the page's source
+# list is that list, and the file and the page end the same way on every report. Under
+# "the limits are the last section" a model that listed its sources put them before the
+# limits. The two headings are fixed in English and Chinese, the languages the product
+# is read in, so a reader finds the same two sections at the end of every report.
+# The paragraph rule is here because the page shows the fault: under "let prose carry
+# the argument" alone a report held paragraphs of 900 Chinese characters. The clause
+# does not name the forms the page sets as blocks of their own: with them named, two
+# real reports used none that they did not use before.
+_DR_REPORT_STRUCTURE_CLAUSE_READER_PAGE = _derive(
+    _DR_REPORT_STRUCTURE_CLAUSE_READER,
+    (
+        (
+            """   The limits, as the last `##` section - `## Limitations` in English; in any
+   other language, that language's words for what could not be verified, with
+   no English word in the heading, alone or beside them - whatever you could
+   not establish, named plainly, plus the few concrete signals that would
+   confirm or overturn this report later; when nothing material is missing,
+   say so in one line.""",
+            """   The limits, as the `##` section that closes the body - `## Limitations` in
+   English, `## \u672a\u6838\u9a8c\u9879` in Chinese; in any other language, that language's words
+   for what could not be verified, with no English word in the heading,
+   alone or beside them - whatever you could not establish, named plainly,
+   plus the few concrete signals that would confirm or overturn this report
+   later; when nothing material is missing, say so in one line.
+   After the limits, the list of sources closes the report, under the last
+   `##` heading - `## Sources` in English, `## \u6765\u6e90` in Chinese; in any other
+   language, that language's word for it. It is one list of the pages the
+   report cites, each page once: its title or publisher, then its URL
+   written out. A task that names the report's sections and names neither
+   of these two still gets both, after its own sections.""",
+        ),
+        (
+            """   Do not close with a list of sources: every""",
+            """   Write no other list of sources, and nothing after that one. It adds no
+   page the report does not cite and replaces no link in the text: every""",
+        ),
+        (
+            """   the site blocked it. A
+   finding no fetched page supports""",
+            """   the site blocked it. When the task does not ask for that, write no
+   link-check table and no section about link checks: the record that
+   follows the reply already holds every fetch. A
+   finding no fetched page supports""",
+        ),
+        (
+            """   included. A link-check table has one row for each URL that line counts.""",
+            """   included. A link-check table has one row for each URL that line counts.
+   When this reply is the report in the three parts above, the flow itself
+   writes it as an HTML page for the reader after the reply, and names that
+   file to whoever reads the reply. Do not write an HTML file of the report
+   yourself, also when the task asks for the report as HTML or as a page:
+   the flow's page is that file.""",
+        ),
+        (
+            """   what its length covers, it covers prose and tables alike and leaves out
+   only a link-check table: check the total less that table's section
+   against it, and take any count you state from it, the number of sources
+   included. A link-check table has one row for each URL that line counts.""",
+            """   what its length covers, it covers prose and tables alike and leaves out
+   only a link-check table and the list of sources: check the total less
+   those sections against it, and take any count you state from it, the
+   number of sources included. A link-check table has one row for each URL
+   that line counts.""",
+        ),
+        (
+            """   lists and tables for items the reader compares side by side. Define a term""",
+            """   lists and tables for items the reader compares side by side. Keep each
+   paragraph to one point and to three to five sentences - about 150 to 300
+   characters in Chinese, 60 to 120 words in English - and never past 500
+   characters or 200 words: start a new paragraph where the point changes,
+   because on the page a long paragraph is a block the reader skips. Define a term""",
+        ),
+    ),
+)
+
 _DR_REPORT_FORMAT_OVERRIDE_PASSAGE_READER = _derive(
     _DR_REPORT_FORMAT_OVERRIDE_PASSAGE,
     (
@@ -452,6 +534,7 @@ def render_parts(
     report_format_override: bool = True,
     report_depth: bool = False,
     report_layout: str = "sections",
+    report_page: bool = False,
     ask_user: bool = False,
     ask_user_outline: bool = True,
     ask_user_mode: str = "first_turn",
@@ -475,7 +558,11 @@ def render_parts(
         # The reader layout is a form of the deep clause; the short clause has none.
         reader = report_depth and report_layout == "reader"
         if reader:
-            report_clause, override = _DR_REPORT_STRUCTURE_CLAUSE_READER, _DR_REPORT_FORMAT_OVERRIDE_PASSAGE_READER
+            # The page is a form of the reader layout's report, so only that clause speaks of it.
+            report_clause = (
+                _DR_REPORT_STRUCTURE_CLAUSE_READER_PAGE if report_page else _DR_REPORT_STRUCTURE_CLAUSE_READER
+            )
+            override = _DR_REPORT_FORMAT_OVERRIDE_PASSAGE_READER
         elif report_depth:
             report_clause, override = _DR_REPORT_STRUCTURE_CLAUSE_DEEP, _DR_REPORT_FORMAT_OVERRIDE_PASSAGE
         else:
@@ -549,6 +636,7 @@ def render_identity_and_contract(cfg: "FlowConfig") -> tuple[str, str]:
         report_format_override=cfg.final_shape.report_format_override,
         report_depth=cfg.final_shape.report_depth,
         report_layout=cfg.final_shape.report_layout,
+        report_page=cfg.report_page.enabled,
         ask_user=ask_user_on and cfg.ask_user.prompt_clause,
         ask_user_outline=cfg.ask_user.outline,
         ask_user_mode=cfg.ask_user.mode,

@@ -257,6 +257,28 @@ class FinalShapeConfig(_Base):
         return self.report_layout if self.report_depth else "sections"
 
 
+class ReportPageConfig(_Base):
+    """The report's reading page: the delivered report as one HTML file.
+
+    Written only under the reader layout, for a reply that reads as a report. The reply
+    and the conversation stay markdown; the page is a second form of the same text.
+    """
+
+    enabled: bool = False
+    # Key figures, key findings and a timeline above the body. A model selects them and
+    # the flow keeps only text the report holds, so the page never words a claim itself.
+    highlights: bool = False
+    highlights_model: str | None = None
+    # Room for a reasoning model's thinking before its answer: at 2048 one real call spent
+    # the whole budget thinking and returned nothing, and the page shipped without highlights.
+    highlights_max_tokens: int = 8192
+    highlights_reasoning_effort: str | None = "low"
+    highlights_timeout_seconds: float = 60.0
+    # The page then is the one report file the turn leaves: the markdown report file it
+    # was written from is removed, and the reply names the page where it named that file.
+    remove_markdown: bool = False
+
+
 class ConversationConfig(_Base):
     """Multi-turn behaviour: the per-turn research decision and the memo."""
 
@@ -428,6 +450,13 @@ PRODUCT_SUPERSEDED_PROFILES: dict[str, str] = {
     # identity dropped the measured-guidance block, whose short-run and one-answer
     # numbers came from a short-answer benchmark rather than from reports.
     "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader",
+    # 2026-11-19: the flow writes the report's HTML reading page, and the reader clause
+    # tells the model so: it writes no HTML file of the report itself. The clause is what
+    # every shipped run renders, and each report reply now ends with the line that names
+    # the page, so the label moves. Under the same label the report closes with its list
+    # of sources after the limits, which is the page's source list, and a paragraph has
+    # a length limit.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page",
     # The interim label this branch's 2026-09-07 batches ran under before it rebased onto
     # the cite-rank clause and the dr@3.7 rung; never shipped, retired so those bench
     # configs still load.
@@ -573,6 +602,7 @@ class FlowConfig(_Base):
     evidence_floor: EvidenceFloorConfig = Field(default_factory=EvidenceFloorConfig)
     plain_first: PlainFirstConfig = Field(default_factory=PlainFirstConfig)
     final_shape: FinalShapeConfig = Field(default_factory=FinalShapeConfig)
+    report_page: ReportPageConfig = Field(default_factory=ReportPageConfig)
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     ask_user: AskUserConfig = Field(default_factory=AskUserConfig)
 
@@ -708,6 +738,7 @@ __all__ = [
     "FlowConfig",
     "ForceFinalizeConfig",
     "PlainFirstConfig",
+    "ReportPageConfig",
     "SearchConfig",
     "SearchSaturationConfig",
     "SpinBreakerConfig",

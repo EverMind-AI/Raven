@@ -289,6 +289,11 @@ PRODUCT_ONLY_FIELDS: dict[str, str] = {
         "written over the report file the turn saved. Sections as a class default, so the "
         "fork's layout is what a profile gets unless it opts in; the product ships reader"
     ),
+    "report_page": (
+        "the delivered report written as one HTML reading page beside the reply "
+        "(support/report_page.py), with model-selected highlights the flow checks against "
+        "the report. Off as a class default; the product's base slice turns it on"
+    ),
     "plain_first": (
         "the first-reply gate: web tools withheld for the first model call, a plain "
         "answer judged or escalated to research (gates/plain_first.py). Off as a class "

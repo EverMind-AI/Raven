@@ -541,4 +541,14 @@ MESSAGES: dict[str, str] = {
     "## attention.md excerpt (routines / project rhythm / pending)\n{attention}\n\n": "## attention.md 相关片段（routines / project rhythm / pending）\n{attention}\n\n",
     "(empty)": "(空)",
     "Build today's fire plan from the above. **Emit only topics with concrete evidence in USER.md**; do not invent from prefix templates (such as routine_morning_med). Reuse the exact string of any historically used tag. **Follow the T-N window rules strictly** -- the T values are precomputed in the detected-key-dates block, read them off. Return through the emit_daily_plan tool.": "请基于上述信息为今天生成 fire 计划。**只 emit USER.md 中有具体证据的 topic**；不要凭 prefix 模板（如 routine_morning_med）凭空编造。对历史已用 tag 必须复用原字符串。**严格遵守 T-N 窗规则**——T 值已在 `## 检测到的关键日期` 块中算好，直接对照。调用 emit_daily_plan 工具返回。",
+    # The research report's reading page (research_flow.support.report_html)
+    "Research report": "研究报告",
+    "Contents": "目录",
+    "Sources": "来源",
+    "Key figures": "关键数字",
+    "Key findings": "要点",
+    "Timeline": "时间线",
+    "{minutes} min read": "约 {minutes} 分钟阅读",
+    "Sources: {count}": "来源 {count} 个",
+    "Note": "注意",
 }

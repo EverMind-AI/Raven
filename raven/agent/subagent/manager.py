@@ -102,6 +102,14 @@ _SHUTDOWN_REFUSAL = (
 # The DAG's refusals carry the quota refusal's shape rather than the spawn prefix;
 # said once here for both of its doors, `charge_dag_run` and `adopt_background_run`.
 _DAG_SHUTDOWN_REFUSAL = "Error: the host is shutting down and is starting no more sub-agents. No sub-agent was run."
+
+# A sub-agent cannot hand a file to the person, so its result names the file, and the
+# turn that reads the result is the only one that can deliver it.
+_FILE_ASK = (
+    "If the result says the sub-agent made a file for the user to open or keep -- a report page, a deck, a "
+    "document -- and you can deliver files, send the user that file itself rather than its path or its text. "
+    "The Record path is this run's own record, never such a file."
+)
 # How much of a node's own output a report's delivery mark carries for the reader.
 # The mark is stored with the conversation and sent on every replay; the run dir
 # keeps the whole text, and the row opens the run. The same head ``dag.node``
@@ -2376,7 +2384,7 @@ Task: {asked}
 Result:
 {fenced_result}{record_line}
 
-{RESULT_REPORT_RULE} Do not report the task as done merely because this message arrived: judge what the run delivered from what the sub-agent itself says it did, and if that account does not show the work finished, say what is missing or ask the user how to proceed rather than presenting it as complete. Anything the sub-agent stated it could not do -- a missing input, an unmet precondition, a refusal, a gap it flagged -- is part of the outcome: pass it on in full. Keep technical details like the instance handle and task ids out of what you say to the user -- they stay available for your own later calls.{hoard_note}"""
+{RESULT_REPORT_RULE} Do not report the task as done merely because this message arrived: judge what the run delivered from what the sub-agent itself says it did, and if that account does not show the work finished, say what is missing or ask the user how to proceed rather than presenting it as complete. Anything the sub-agent stated it could not do -- a missing input, an unmet precondition, a refusal, a gap it flagged -- is part of the outcome: pass it on in full. Keep technical details like the instance handle and task ids out of what you say to the user -- they stay available for your own later calls. {_FILE_ASK}{hoard_note}"""
 
         assert self._submit is not None
         mark: dict[str, Any] = {"kind": "spawn", "label": task_summary, "status": status}

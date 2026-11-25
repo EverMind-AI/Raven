@@ -8,7 +8,10 @@ instruction that a conversation can argue with. Under
 ``final_shape.report_layout = "reader"`` the same three parts take the reader's
 form - the answer as the opening blockquote, the body under its own ``##``
 headings, the limits as the last one - and are read back under the same three
-names, so everything below applies to both layouts:
+names, so everything below applies to both layouts. When the flow also writes the
+report's reading page (``sources``), the report closes with its list of sources after
+the limits; that list is none of the three parts, and nothing here asks for it back:
+the flow writes one into the report file when the reply has none.
 
 * **Recency loses to it.** Measured on this repo's own demo sessions (30 turns
   carrying the template, dr@3.4): 8/14 research turns well-formed, but only
@@ -78,6 +81,7 @@ from raven.contracts.loop_hooks import HookDecision
 from research_flow.gates.base import Gate, GateCtx
 from research_flow.support.answer_text import closing_tag_bar, visible_answer
 from research_flow.support.brief_checklist import render_checklist
+from research_flow.support.report_markdown import names_sources
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +98,11 @@ _READER_PART_NAMES = {
     "Findings": "the body under `##` headings",
     "Limitations": "the closing section on what could not be verified",
 }
+#: The same part when the report closes with its list of sources: the limits are no longer the last section.
+_SOURCED_LIMITS_NAME = "the section on what could not be verified"
+#: The headings the contract fixes for the limits of that report. The clause and the
+#: reminder spell them to the model, and the parse finds the limits by them.
+LIMITS_HEADINGS = {"en": "Limitations", "zh": "\u672a\u6838\u9a8c\u9879"}
 
 # Delimiters so ``strip_reminder`` can take the reminder back out before the
 # turn is persisted. Same reasoning as the research memo's: the block is rebuilt
@@ -111,15 +120,29 @@ _REMINDER_BODY = (
     "for another shape - an outline, slides, a table, JSON, one word - that "
     "shape goes inside the sections, not in place of them."
 )
-_REMINDER_BODY_READER = (
+# How the reader layout's last part is named to the model. With ``sources`` the report
+# closes with its list of sources, and the limits are the section before it.
+_READER_LIMITS = (
+    "closing `##` section on what could not be verified (`## Limitations` in English; "
+    "in any other language, that language's words, with no English word in the heading)"
+)
+_READER_LIMITS_SOURCED = (
+    f"`##` section on what could not be verified (`## {LIMITS_HEADINGS['en']}` in English, "
+    f"`## {LIMITS_HEADINGS['zh']}` in Chinese; in any other language, that "
+    "language's words, with no English word in the heading), then the list of the pages "
+    "the report cites under the last `##` heading (`## Sources` in English, "
+    "`## \u6765\u6e90` in Chinese)"
+)
+_REMINDER_READER = (
     "Reply with the report in its three parts: the answer as the opening blockquote "
     "with no label before it (no word and colon, in any language), then the body "
     "under `##` headings, then the "
-    "closing `##` section on what could not be verified (`## Limitations` in English; "
-    "in any other language, that language's words, with no English word in the heading). "
+    "{limits}. "
     "If this message asks for another shape - an outline, slides, a table, JSON, one "
     "word - that shape goes inside the body, not in place of the report."
 )
+_REMINDER_BODY_READER = _REMINDER_READER.format(limits=_READER_LIMITS)
+_REMINDER_BODY_READER_SOURCED = _REMINDER_READER.format(limits=_READER_LIMITS_SOURCED)
 
 # Any heading level, any decoration around the name. Every one of these
 # deviations shows up in real replies and none costs the reader anything, so they
@@ -164,14 +187,25 @@ _SECTION_RE = {
     )
 }
 
+# The limits heading of a report that closes with its sources. The English name opens
+# the heading, so a body heading that only holds the word ("Rate limitations") is not
+# the limits. No list of other words stands beside it: a word list reads a body heading
+# that holds one of its words as the limits, and never names every wording.
+_FIXED_LIMITS_RE = re.compile(rf"^limitations?(?![a-z])|{LIMITS_HEADINGS['zh']}", re.I)
+
 # The reader layout's answer: an optional ``#`` title, then the blockquote that opens
 # the reply.
 _LEAD_RE = re.compile(r"\s*(?:#[ \t][^\n]*\n)?\s*")
 _QUOTE_RE = re.compile(r"(?:[ \t]{0,3}>[^\n]*(?:\n|\Z))+")
 
 
-def _reader_sections(text: str) -> tuple[dict[str, tuple[float, bool, bool]], bool]:
+def _reader_sections(text: str, sources: bool = False) -> tuple[dict[str, tuple[float, bool, bool]], bool]:
     """Sections found under the reader layout, and whether a ``##`` follows the limits.
+
+    With ``sources`` the report closes with its list of sources: a last ``##`` heading
+    that names one is neither the limits nor a section out of place after them. The
+    limits of that report are the section under the fixed heading (``LIMITS_HEADINGS``);
+    without one, the last ``##`` section above the sources, recorded as annotated.
 
     Same direction of tolerance as the sections parse: a reply written in the old
     three-heading form still delivers all three parts, so ``## Answer`` counts as the
@@ -188,40 +222,52 @@ def _reader_sections(text: str) -> tuple[dict[str, tuple[float, bool, bool]], bo
     heads = [(m.start(), m.group(1), m.group(2).strip()) for m in _HEADING_RE.finditer(text) if len(m.group(1)) >= 2]
     labels = [_LABEL_NOISE_RE.sub("", label) for _, _, label in heads]
 
-    limits_at = next((i for i in range(len(heads) - 1, -1, -1) if _SECTION_RE["Limitations"].search(labels[i])), None)
+    level_two = [i for i, (_, hashes, _) in enumerate(heads) if len(hashes) == 2]
+    closing = None
+    limits_re = _FIXED_LIMITS_RE if sources else _SECTION_RE["Limitations"]
+    if sources and level_two:
+        last = labels[level_two[-1]]
+        # A heading that names the limits is the limits, whatever else it names.
+        if names_sources(last) and not limits_re.search(last):
+            closing = level_two.pop()
+    above = range((len(heads) if closing is None else closing) - 1, -1, -1)
+    limits_at = next((i for i in above if limits_re.search(labels[i])), None)
+    named = limits_at is not None
     # The contract puts the limits in the last ``##`` section, in the reply's own
     # language, so no word list names every heading it allows: with a section above
     # it, the last ``##`` heading is the limits. A listed word in the first heading
     # with no body above it is a body heading that names a limit (export limits, a
     # labour shortfall), since the body comes before the limits.
-    level_two = [i for i, (_, hashes, _) in enumerate(heads) if len(hashes) == 2]
     body_above = quote_end is not None and bool(heads) and bool(text[quote_end : heads[0][0]].strip())
-    if (limits_at is None or (limits_at == 0 and not body_above)) and len(level_two) >= 2:
+    if sources:
+        if limits_at is None and level_two and (len(level_two) >= 2 or body_above):
+            limits_at = level_two[-1]
+    elif (limits_at is None or (limits_at == 0 and not body_above)) and len(level_two) >= 2:
         limits_at = level_two[-1]
     answer_at = None
     if "Answer" not in found:
         answer_at = next(
-            (i for i in range(len(heads)) if i != limits_at and _SECTION_RE["Answer"].search(labels[i])), None
+            (i for i in reversed(above) if i != limits_at and _SECTION_RE["Answer"].search(labels[i])), None
         )
         if answer_at is not None:
             found["Answer"] = (answer_at, True, len(heads[answer_at][1]) != 2)
 
-    body = [i for i in range(len(heads)) if i not in (limits_at, answer_at) and (limits_at is None or i < limits_at)]
+    body = [i for i in reversed(above) if i not in (limits_at, answer_at) and (limits_at is None or i < limits_at)]
     if body:
         found["Findings"] = (body[0], False, all(len(heads[i][1]) != 2 for i in body))
     elif quote_end is not None:
-        stop = heads[limits_at][0] if limits_at is not None else len(text)
-        if text[quote_end:stop].strip():
+        ends = [heads[i][0] for i in (limits_at, closing) if i is not None]
+        if text[quote_end : min(ends, default=len(text))].strip():
             found["Findings"] = (-0.5, True, False)
 
     trailing = False
     if limits_at is not None:
-        found["Limitations"] = (limits_at, False, len(heads[limits_at][1]) != 2)
-        trailing = any(len(h) == 2 for _, h, _ in heads[limits_at + 1 :])
+        found["Limitations"] = (limits_at, sources and not named, len(heads[limits_at][1]) != 2)
+        trailing = any(len(heads[i][1]) == 2 for i in range(limits_at + 1, len(heads)) if i != closing)
     return found, trailing
 
 
-def render_reminder(task: str = "", layout: str = "sections") -> str:
+def render_reminder(task: str = "", layout: str = "sections", sources: bool = False) -> str:
     """The per-turn reminder block, delimiters included.
 
     ``task`` is this turn's user message. When it carries constraints a parser can settle -
@@ -234,8 +280,12 @@ def render_reminder(task: str = "", layout: str = "sections") -> str:
     Inside the block rather than beside it, so one delimiter pair still bounds everything
     injected and ``strip_reminder`` needs no second case. Empty task, or a task with no
     machine-readable constraints, renders exactly the bytes this function always rendered.
+
+    ``sources`` is the reader layout whose report closes with its list of sources.
     """
-    if layout == READER_LAYOUT:
+    if layout == READER_LAYOUT and sources:
+        body = _REMINDER_BODY_READER_SOURCED + render_checklist(task, limits=_SOURCED_LIMITS_NAME)
+    elif layout == READER_LAYOUT:
         body = _REMINDER_BODY_READER + render_checklist(task, limits=_READER_PART_NAMES["Limitations"])
     else:
         body = _REMINDER_BODY + render_checklist(task)
@@ -273,9 +323,9 @@ class ReportShape:
 
     __slots__ = ("present", "missing", "annotated", "off_level", "in_order", "empty")
 
-    def __init__(self, text: str, layout: str = "sections") -> None:
+    def __init__(self, text: str, layout: str = "sections", sources: bool = False) -> None:
         if layout == READER_LAYOUT:
-            found, trailing = _reader_sections(text or "")
+            found, trailing = _reader_sections(text or "", sources)
             self._settle(text, found, trailing)
             return
         found: dict[str, tuple[float, bool, bool]] = {}
@@ -344,9 +394,7 @@ _REWRITE_PROMPT_READER = (
     "Your reply above is missing: {missing}. Rewrite it as the report in its three "
     "parts - the answer as the opening blockquote with no label before it (no word "
     "and colon, in any language), "
-    "then the body under `##` headings, then the closing `##` section on what could "
-    "not be verified (`## Limitations` in English; in any other language, that "
-    "language's words, with no English word in the heading) - keeping every finding, every "
+    "then the body under `##` headings, then the {limits} - keeping every finding, every "
     "source URL and every caveat you already wrote, and every section name the task "
     "gave, word for word with its numbering. Do not shorten it, do not drop "
     "evidence, and do not research anything new. If this turn was asked for another "
@@ -357,19 +405,23 @@ _REWRITE_PROMPT_READER = (
 )
 
 
-def rewrite_prompt(missing: tuple[str, ...], layout: str = "sections") -> str:
+def rewrite_prompt(missing: tuple[str, ...], layout: str = "sections", sources: bool = False) -> str:
     if layout == READER_LAYOUT:
-        return _REWRITE_PROMPT_READER.format(missing=", ".join(_READER_PART_NAMES[n] for n in missing))
+        names = {**_READER_PART_NAMES, "Limitations": _SOURCED_LIMITS_NAME} if sources else _READER_PART_NAMES
+        return _REWRITE_PROMPT_READER.format(
+            missing=", ".join(names[n] for n in missing),
+            limits=_READER_LIMITS_SOURCED if sources else _READER_LIMITS,
+        )
     return _REWRITE_PROMPT.format(missing=", ".join(missing))
 
 
-def interrupted_report_guidance(task: str, layout: str = "sections") -> str:
+def interrupted_report_guidance(task: str, layout: str = "sections", sources: bool = False) -> str:
     return (
         "This research turn was interrupted before completion. Give the best-supported "
         "partial answer, preserve source URLs and uncertainty, and state what remains "
         "unfinished. Do not present the partial result as a completed investigation. "
         "Reply in the same language as the user's request.\n\n"
-        f"{render_reminder(task, layout)}"
+        f"{render_reminder(task, layout, sources)}"
     )
 
 
@@ -411,9 +463,10 @@ class ReportShapeGate(Gate):
     already going to be replaced.
     """
 
-    def __init__(self, *, closing_tag_required: bool = False, layout: str = "sections") -> None:
+    def __init__(self, *, closing_tag_required: bool = False, layout: str = "sections", sources: bool = False) -> None:
         self._closing_tag_required = closing_tag_required
         self._layout = layout
+        self._sources = sources
 
     @property
     def name(self) -> str:
@@ -435,7 +488,7 @@ class ReportShapeGate(Gate):
             # three sections.
             return HookDecision()
 
-        shape = ReportShape(draft, self._layout)
+        shape = ReportShape(draft, self._layout, self._sources)
         # ``report_shape_gate``, not ``report_shape``: the loop seam records the
         # shape that SHIPPED under the latter, and these are two different facts.
         # Same split the verify gate draws - the delivered verdict is near
@@ -494,7 +547,7 @@ class ReportShapeGate(Gate):
                 {"role": "assistant", "content": draft, "_recovery_synthetic": True},
                 {
                     "role": "user",
-                    "content": rewrite_prompt(shape.missing, self._layout),
+                    "content": rewrite_prompt(shape.missing, self._layout, self._sources),
                     "_recovery_synthetic": True,
                 },
             ],
@@ -503,6 +556,7 @@ class ReportShapeGate(Gate):
 
 
 __all__ = [
+    "LIMITS_HEADINGS",
     "READER_LAYOUT",
     "REMINDER_CLOSE",
     "REMINDER_OPEN",
