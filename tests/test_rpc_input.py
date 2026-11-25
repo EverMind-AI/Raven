@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import nturl2path
+import os
 import struct
 import time
 import zlib
@@ -24,6 +25,8 @@ from urllib.parse import urlparse
 import pytest
 
 from raven import input_history
+
+posix_only = pytest.mark.skipif(os.name == "nt", reason="a backslash-escaped space is a POSIX drop form")
 from raven.rpc.dispatcher import Dispatcher
 from raven.rpc.methods import input as input_methods
 from raven.rpc.methods.input import (
@@ -82,6 +85,7 @@ async def test_a_quoted_path_matches_and_comes_back_unquoted(tmp_path: Path) -> 
     assert result["text"] == str(target.resolve())
 
 
+@posix_only
 async def test_a_backslash_escaped_path_matches(tmp_path: Path) -> None:
     target = tmp_path / "my report.pdf"
     target.write_bytes(b"%PDF")
