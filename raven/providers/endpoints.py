@@ -50,6 +50,8 @@ import os
 from dataclasses import dataclass, replace
 from typing import Any
 
+from pydantic.alias_generators import to_camel
+
 from raven.providers.errors import MissingCredentialsError
 
 
@@ -65,8 +67,16 @@ class ResolvedEndpoint:
 
 def _field(section: Any, name: str) -> Any:
     """Read one field off a section, whether it is a schema object or a raw
-    mapping -- see ``raven.providers.auth._present`` for why both reach here."""
-    return section.get(name) if isinstance(section, dict) else getattr(section, name, None)
+    mapping -- see ``raven.providers.auth._present`` for why both reach here.
+
+    A raw config mapping spells the field camelCase; the schema spelling is
+    read too, so a mapping that already carries it keeps working.
+    """
+    if not isinstance(section, dict):
+        return getattr(section, name, None)
+    if name in section:
+        return section[name]
+    return section.get(to_camel(name))
 
 
 def provider_endpoints(section: Any) -> list[ResolvedEndpoint]:

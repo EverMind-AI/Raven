@@ -213,3 +213,31 @@ def test_a_raw_config_mapping_names_the_variable_too(monkeypatch) -> None:
     resolved = provider_endpoints_for_request({"apiKeyEnv": "PROVIDER_KEY"})
 
     assert [e.api_key for e in resolved] == ["sk-from-env"]
+
+
+def test_a_raw_config_mapping_keeps_its_api_key_list_when_an_env_reference_is_also_named(monkeypatch) -> None:
+    """``apiKeyEnv`` stands in for the flat key only, a raw mapping included.
+
+    The file spells the list ``apiKeyList``; reading only the schema spelling
+    let the guard miss it and the environment value replace every declared key.
+    """
+    monkeypatch.setenv("PROVIDER_KEY", "sk-from-env")
+
+    resolved = provider_endpoints_for_request({"apiKeyEnv": "PROVIDER_KEY", "apiKeyList": ["k1", "k2"]})
+
+    assert [e.api_key for e in resolved] == ["k1", "k2"]
+
+
+def test_a_raw_config_mapping_reads_an_endpoint_api_key(monkeypatch) -> None:
+    """An endpoint read straight from config.json spells its key ``apiKey``.
+
+    The declared endpoint already keeps the environment value out; its own key
+    is the only key there is, and reading only the schema spelling lost it.
+    """
+    monkeypatch.setenv("PROVIDER_KEY", "sk-from-env")
+
+    resolved = provider_endpoints_for_request(
+        {"apiKeyEnv": "PROVIDER_KEY", "endpoints": [{"label": "only", "apiKey": "sk-explicit"}]}
+    )
+
+    assert [e.api_key for e in resolved] == ["sk-explicit"]
