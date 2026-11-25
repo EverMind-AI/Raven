@@ -3698,6 +3698,14 @@ _Avoid_: "inject" for the whole feature - `injected` is one status of a steer, a
 `BusyPolicy.INJECT` is a different thing (a turn queued behind the running one);
 "interrupt" - a steer does not stop the turn.
 
+**Early reply** (`cancel_subagent` with `mode: "report_now"`):
+The host asks one active delegation to finish from its current work. Raven accepts
+this intent on `_raven/session/steer` when the live handshake declares
+`raven.reportNow` and the prompt id matches. The active turn stops dispatching tools
+at its next boundary, reaps its own background commands, and synthesizes a final
+reply. An ACP hold remains part of that prompt. The final reply reaches the host
+through the delegation's original result path and retains the early-reply marker.
+
 **Unprompted Turn** (`raven/acp_client/unprompted.py`):
 A turn an ACP Subagent ran with nobody having asked - an on-call agent waking on its own
 schedule is the case it exists for. Every other sink on the session router is attached for
@@ -4377,15 +4385,14 @@ raven-minted pointer block in the main agent's next turn after Direct Chat activ
 carries no transcript text.
 
 **outbox** (`raven/agent/subagent/dag_adjudication.py`) -- a foreground DAG run's tray of
-events: its nodes' exception reports and its final result, waiting for the tool call
+exception reports, long-run notices, and the final result, waiting for the tool call
 that is awaiting the run. One per foreground run, in memory beside the run's
 adjudication desk. The desk carries decisions from the main agent to the run; the
 outbox carries reports from the run to the main agent. While the run is bound the
-outbox hands or buffers a question and drops a notification -- the blocking call is
-still there and the run's summary is what it will be handed, so announcing the same
-news again would put an unanswerable question beside it -- and never announces; once
-released it re-sends what is unanswered and announces later events as turns, both
-kinds.
+outbox hands or buffers a question. A long-run notice gives the blocked host a chance
+to act while execution continues. Other informational reports use the normal
+progress path. On release the outbox re-sends unanswered reports. Later events use
+the background delegation announcement route.
 _Avoid_: "mailbox" -- the lane's inject mailbox is a different object with a different
 reader.
 

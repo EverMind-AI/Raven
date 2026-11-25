@@ -368,8 +368,12 @@ carry what the new agent needs.
  "agent": "<roster name>", "message": "<what the new subagent should do>"}
 ```
 
-To stop the whole run instead, call `cancel_dag` through `tool_call`: it discards the run
-and starts nothing in its place.
+To stop the whole run, call `cancel_subagent` through `tool_call` with its `run_id`.
+To interrupt one live delegation, pass its `agent` and `instance` instead of a run id,
+plus the `call_id` if a notice supplied one. The default mode interrupts the execution
+and skips pending nodes that depend on its output. For an instance that supports early
+replies, `mode: "report_now"` asks it to finish with the work it already has. Wait for
+the result through the original delegation.
 
 ## Reading the result
 

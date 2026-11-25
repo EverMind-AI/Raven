@@ -8341,6 +8341,38 @@ async def test_a_backend_without_the_extension_publishes_no_steer_hook(tmp_path:
             await turn
 
 
+async def test_an_early_reply_is_bound_to_the_original_acp_prompt(tmp_path: Path) -> None:
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.live_control import LiveDelegation, controlling
+
+    cfg = stub_config("a", mode="reportable")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+    )
+    started = asyncio.Event()
+
+    async def on_delta(_text):
+        started.set()
+
+    control = LiveDelegation("call-1", "a", "h1", lambda: pytest.fail("early reply interrupted the prompt"))
+    with activity.collecting(instance=("s1", "a", "h1")) as run, controlling(run, control):
+        turn = asyncio.create_task(
+            backend.run("go", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
+        )
+        try:
+            await asyncio.wait_for(started.wait(), 2)
+            assert await control.request("report_now") == "report_requested"
+            assert "Early work summary" in await asyncio.wait_for(turn, 2)
+        finally:
+            if not turn.done():
+                turn.cancel()
+                await asyncio.gather(turn, return_exceptions=True)
+    assert run.reported_early and control.report_now is None
+
+
 async def test_a_user_chunk_that_echoes_the_prompt_is_not_a_steer() -> None:
     """The spec uses ``user_message_chunk`` for replays; an agent that echoes the
     prompt back at the start of a turn must not put a second copy of the

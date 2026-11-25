@@ -178,8 +178,16 @@ class RoundContext:
         error: str = "",
         crashed: bool = False,
         output_limited: bool = False,
+        reported_early: bool = False,
     ) -> Verdict:
-        """Measure what the role wrote, run its checks, and decide what happens next."""
+        """Measure what the role wrote, run its checks, and decide what happens next.
+
+        ``reported_early`` says the host asked for this answer before the node
+        finished. Nothing here reads the reply, so the flag changes nothing;
+        it is accepted because the runner passes it to every judge when it
+        holds, and a signature that refused it would fail the node as "the DAG
+        judge could not be called" instead of judging it.
+        """
         role = self.role_of(node.id)
         if role is None:
             return Verdict(accomplished=True)

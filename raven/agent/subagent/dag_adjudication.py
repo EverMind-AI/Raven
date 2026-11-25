@@ -21,6 +21,7 @@ from loguru import logger
 
 from raven.agent.subagent.dag_carry import CarryPlan
 from raven.agent.subagent.dag_graph import DagNodeSpec
+from raven.agent.subagent.live_control import LiveDelegation
 
 # A failed report delivery is retried: an announcer is a transport, and an injected
 # turn can lose a race with a gateway restart or a busy submit queue, which is no
@@ -342,7 +343,19 @@ class Stopped:
     """The run task was hard-cancelled before it produced a result."""
 
 
-Event = Report | Final | Stopped
+@dataclass(frozen=True)
+class Notice:
+    """A foreground notification about an execution that remains active."""
+
+    control: LiveDelegation
+    text: str
+
+    @property
+    def live(self) -> bool:
+        return self.control.active and not self.control.interrupt_requested
+
+
+Event = Report | Notice | Final | Stopped
 
 
 class AnnounceReport(Protocol):
@@ -405,6 +418,7 @@ class Outbox:
         self._announce_final = announce_final
         self._buffer: deque[Report | Final] = deque()
         self._handed: dict[str, Report] = {}
+        self._notices: dict[str, Notice] = {}
         self._takers: deque[asyncio.Future] = deque()
         self._final: Final | None = None
         self._stopped = False
@@ -428,6 +442,10 @@ class Outbox:
             # taker parking here while a node it was already shown is undecided waits
             # for a report that cannot be produced and a final that cannot arrive.
             return self._record(next(iter(self._handed.values())))
+        while self._notices:
+            notice = self._notices.pop(next(iter(self._notices)))
+            if notice.live:
+                return notice
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._takers.append(fut)
         try:
@@ -453,6 +471,11 @@ class Outbox:
         """
         self._handed.pop(node_id, None)
         self._buffer = deque(e for e in self._buffer if not (isinstance(e, Report) and e.node_id == node_id))
+
+    def put_notice(self, notice: Notice) -> None:
+        """Yield to a waiting host, or keep the latest notice for this execution."""
+        if self.bound and self._final is None and notice.live and not self._hand(notice):
+            self._notices[notice.control.call_id] = notice
 
     def _hand(self, event: Event) -> bool:
         """Give ``event`` to the oldest live taker. False when nobody is waiting."""
@@ -511,6 +534,7 @@ class Outbox:
             return
         event = Final(result, stopped)
         self._final = event
+        self._notices.clear()
         if self.released.is_set():
             # The same step the drain's buffered final takes, for the same reason:
             # this is awaited from the run's detached task with nothing around it,
@@ -533,6 +557,7 @@ class Outbox:
         if self._stopped or self.released.is_set():
             return
         self.released.set()
+        self._notices.clear()
         # No taker is waiting here: a take() lives inside a tool call, and every
         # tool call of the turn that owned this run has returned by the time the
         # turn ends. Nothing is done to the taker queue on purpose -- cancelling a
@@ -561,7 +586,7 @@ class Outbox:
             event = self._buffer.popleft()
             await self._announce_owed(event)
 
-    async def _announce_owed(self, event: Event) -> None:
+    async def _announce_owed(self, event: Report | Final) -> None:
         """One event of the release drain, retried like any other delivery.
 
         This drain is what makes good on the re-send the returned report promised,
@@ -593,6 +618,7 @@ class Outbox:
         if self._stopped:
             return
         self._stopped = True
+        self._notices.clear()
         self._handed.clear()
         self._buffer.clear()
         while self._takers:

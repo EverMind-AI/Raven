@@ -38,6 +38,7 @@
     "spawn",
     "run_subagent_dag",
     "cancel_dag",
+    "cancel_subagent",
     "dag_status",
     "resolve_dag_node",
     "ask_user",

@@ -18,6 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from raven.agent import turn_clock
 from raven.agent.tools import background_exec
 from raven.agent.tools.shell import ExecTool
 
@@ -74,6 +75,53 @@ def test_status_reports_liveness_and_reap_ends_the_group(home):
 def test_an_unknown_task_is_none_not_a_traceback(home):
     assert background_exec.status("bg-nope") is None
     assert background_exec.tail("bg-nope") == ""
+
+
+async def test_reap_execution_only_stops_its_own_tasks(home):
+    with turn_clock.execution_scope("same-session", "earlier"):
+        unrelated = background_exec.start("sleep 30")
+    with turn_clock.execution_scope("same-session", "current"):
+        current = background_exec.start("sleep 30")
+    try:
+        assert current.task_id != unrelated.task_id
+        assert background_exec.status(current.task_id)["session_key"] == "same-session"
+        await background_exec.reap_execution("same-session", "current")
+        assert not background_exec.status(current.task_id)["running"]
+        assert background_exec.status(unrelated.task_id)["running"]
+    finally:
+        background_exec.reap(current.task_id)
+        background_exec.reap(unrelated.task_id)
+
+
+async def test_reap_execution_returns_tails_when_a_command_survives_the_force_kill(home, monkeypatch, tmp_path):
+    """A process that cannot be killed must not fail the turn that asked for
+    its final answer: the log tail is still the best account it can give."""
+    log = tmp_path / "survivor.log"
+    log.write_text("last words\n", encoding="utf-8")
+    task = {"task_id": "bg-survivor", "command": "stuck", "log_path": str(log)}
+    missing = {"task_id": "bg-missing", "command": "gone", "log_path": str(tmp_path / "missing.log")}
+    reaped: list[tuple[str, bool]] = []
+
+    class _ImmediateTimeout:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            raise TimeoutError
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(background_exec, "running", lambda *args, **kwargs: [task, missing])
+    monkeypatch.setattr(
+        background_exec, "reap", lambda task_id, *, force=False: reaped.append((task_id, force)) or True
+    )
+    monkeypatch.setattr(background_exec, "asyncio", SimpleNamespace(timeout=_ImmediateTimeout, sleep=asyncio.sleep))
+
+    tails = await background_exec.reap_execution("s", "e")
+
+    assert "last words" in tails
+    assert ("bg-survivor", False) in reaped and ("bg-survivor", True) in reaped
 
 
 def test_the_start_note_hands_over_the_handle_and_the_log(home):

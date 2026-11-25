@@ -21,6 +21,7 @@ from raven.agent.subagent import instances as instances_mod
 from raven.agent.subagent.backends import format_agent_listing, third_party_agent_meta
 from raven.agent.subagent.backends.base import clamp_output
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
+from raven.agent.subagent.dag_control_tools import CancelSubagentTool
 from raven.agent.subagent.dag_graph import DagNodeSpec, guards_of, may_not_execute, parse_dag_spec
 from raven.agent.subagent.dag_render import MAYBE_MISSING_HEADING, MISSING_OUTPUT_TEXT
 from raven.agent.subagent.dag_runner import (
@@ -772,6 +773,307 @@ async def test_run_dag_failure_cascades_to_skip() -> None:
     assert result.summary["failed"] == 1
     assert result.summary["skipped"] == 1  # b skipped because a failed
     assert result.terminal_outputs == []
+
+
+async def test_interrupting_one_dag_instance_skips_its_dependents() -> None:
+    from raven.agent.subagent.instances import hold_handle
+
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+
+    class Backend:
+        async def run(self, task, *, task_id, session_key, instance, **kwargs):
+            async with hold_handle(session_key, "x", instance or task_id):
+                if task_id == "a":
+                    started.set()
+                    try:
+                        await asyncio.Future()
+                    finally:
+                        stopped.set()
+                return f"Output from {task_id}"
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "Exercise a graph with independent and dependent nodes",
+            "nodes": [
+                {"id": name, "subagent": "x", "node_summary": name, "prompt_template": "hi", **extra}
+                for name, extra in (
+                    ("a", {"instance": "shared"}),
+                    ("b", {"instance": "shared"}),
+                    ("c", {"depends_on": ["a"]}),
+                    ("d", {"depends_on": ["c"]}),
+                    ("e", {}),
+                )
+            ],
+        }
+    )
+    tool = CancelSubagentTool(SimpleNamespace())
+    tool.set_context("web", "chat-1", "s1")
+    run = asyncio.create_task(
+        run_dag(
+            spec,
+            resolve=lambda _node: Backend(),
+            backend=_InMemBackend(),
+            workdir="/w",
+            run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
+            session_key="s1",
+        )
+    )
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        receipt = await tool.execute(agent="x", instance="shared")
+        assert receipt.startswith("interrupt_requested:")
+        result = await asyncio.wait_for(run, 2)
+    finally:
+        if not run.done():
+            run.cancel()
+            await asyncio.gather(run, return_exceptions=True)
+
+    assert stopped.is_set()
+    assert {row["node"]: row["status"] for row in result.files} == {
+        "a": "cancelled",
+        "b": "completed",
+        "c": "skipped",
+        "d": "skipped",
+        "e": "completed",
+    }
+
+
+async def test_an_incomplete_early_reply_waits_for_an_explicit_dag_decision() -> None:
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.dag_adjudication import ABANDON, AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    dispatched = []
+    reports = []
+    judged = []
+
+    class Backend:
+        async def run(self, task, *, task_id, **kwargs):
+            dispatched.append(task_id)
+            activity.current().reported_early = True
+            return "Partial progress"
+
+    async def judge(*, reported_early, **kwargs):
+        judged.append(reported_early)
+        assert reported_early
+        return Verdict(accomplished=False, what_is_missing="Missing the deliverable.", follow_up="Try again.")
+
+    async def announce(_run_id, node_id, report, _origin, *, awaiting_decision, **kwargs):
+        reports.append(report)
+        assert awaiting_decision
+        assert desk.resolve(node_id, ABANDON, "Drop the node and its dependent.")
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "Produce a deliverable and use it downstream",
+            "nodes": [
+                {"id": "a", "subagent": "x", "node_summary": "produce", "prompt_template": "hi"},
+                {
+                    "id": "b",
+                    "subagent": "x",
+                    "node_summary": "use it",
+                    "prompt_template": "{{ a.output }}",
+                    "depends_on": ["a"],
+                },
+            ],
+        }
+    )
+    result = await asyncio.wait_for(
+        run_dag(
+            spec,
+            resolve=lambda _node: Backend(),
+            backend=_InMemBackend(),
+            workdir="/w",
+            run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
+            desk=desk,
+            judge_node=judge,
+            announce_exception=announce,
+            origin={"channel": "web", "chat_id": "c", "session_key": "web:c"},
+        ),
+        2,
+    )
+
+    assert dispatched == ["a"]
+    assert judged == [True]
+    assert "requested an early reply" in reports[0]
+    assert "Partial progress" in reports[0]
+    assert result.files[0]["reported_early"] is True
+    assert result.summary["failed"] == 1 and result.summary["skipped"] == 1
+    by_node = {row["node"]: row for row in result.files}
+    assert by_node["a"]["error"] == "The main agent abandoned this node."
+    assert by_node["b"]["error"] is None
+
+
+async def test_the_judge_of_an_early_reply_is_told_the_reply_was_early() -> None:
+    """A judge is a plain callable, not a backend with a ``run`` to introspect.
+
+    The early reply is judged under a different instruction -- the host already
+    sent a partial answer, so a verdict of accomplished must mean more than it
+    would for a finished turn -- and the flag reaches the judge as the keyword
+    it declares. A judge that never hears it verifies the wrong thing.
+    """
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    seen: list[dict[str, Any]] = []
+
+    class Backend:
+        async def run(self, task, *, task_id, **kwargs):
+            activity.current().reported_early = True
+            return "Partial progress"
+
+    async def judge(**kwargs):
+        seen.append(kwargs)
+        return Verdict(accomplished=True)
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "verify an early reply",
+            "nodes": [{"id": "a", "subagent": "x", "node_summary": "produce", "prompt_template": "hi"}],
+        }
+    )
+    result = await asyncio.wait_for(
+        run_dag(
+            spec,
+            resolve=lambda _node: Backend(),
+            backend=_InMemBackend(),
+            workdir="/w",
+            run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
+            judge_node=judge,
+        ),
+        5,
+    )
+
+    assert len(seen) == 1
+    assert seen[0]["reported_early"] is True
+    assert result.summary["completed"] == 1
+
+
+async def test_an_early_reply_whose_judge_raises_is_not_read_as_accomplished() -> None:
+    """The judge is what confirms an early reply; without it the partial output
+    stands unverified. Fail-open here would send a half-finished answer
+    downstream as the node's finished work."""
+    from raven.agent.subagent import activity
+
+    class Backend:
+        async def run(self, task, *, task_id, **kwargs):
+            activity.current().reported_early = True
+            return "Partial progress"
+
+    async def judge(**kwargs):
+        raise RuntimeError("verdict provider is down")
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "verify an early reply",
+            "nodes": [{"id": "a", "subagent": "x", "node_summary": "produce", "prompt_template": "hi"}],
+        }
+    )
+    result = await asyncio.wait_for(
+        run_dag(
+            spec,
+            resolve=lambda _node: Backend(),
+            backend=_InMemBackend(),
+            workdir="/w",
+            run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
+            judge_node=judge,
+        ),
+        5,
+    )
+
+    assert result.summary["failed"] == 1
+    assert result.files[0]["error"] == "The early reply could not be verified."
+
+
+async def test_an_early_reply_with_no_judge_is_not_reported_as_the_nodes_work() -> None:
+    """Without a judge nothing confirms the partial output, so the node fails
+    rather than feeding an unverified answer to whoever reads the run."""
+    from raven.agent.subagent import activity
+
+    class Backend:
+        async def run(self, task, *, task_id, **kwargs):
+            activity.current().reported_early = True
+            return "Partial progress"
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "verify an early reply",
+            "nodes": [{"id": "a", "subagent": "x", "node_summary": "produce", "prompt_template": "hi"}],
+        }
+    )
+    result = await asyncio.wait_for(
+        run_dag(
+            spec,
+            resolve=lambda _node: Backend(),
+            backend=_InMemBackend(),
+            workdir="/w",
+            run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
+        ),
+        5,
+    )
+
+    assert result.summary["failed"] == 1
+    assert result.files[0]["error"] == (
+        "The host requested an early reply, and no verdict confirmed the node's output."
+    )
+
+
+async def test_a_long_running_node_reports_its_elapsed_time_to_the_host() -> None:
+    """The notice is how a host learns a node is still working; the watcher is
+    the only thing that sends it, and it names the node it belongs to."""
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    notices = []
+
+    class Backend:
+        async def run(self, task, *, task_id, **kwargs):
+            await asyncio.sleep(0.3)
+            return "done"
+
+    async def judge(**kwargs):
+        return Verdict(accomplished=True)
+
+    async def announce(control, elapsed, run_id, node_id):
+        notices.append((control.call_id, elapsed, run_id, node_id))
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run a slow node",
+            "nodes": [{"id": "a", "subagent": "x", "node_summary": "slow", "prompt_template": "hi"}],
+        }
+    )
+    result = await asyncio.wait_for(
+        run_dag(
+            spec,
+            resolve=lambda _node: Backend(),
+            backend=_InMemBackend(),
+            workdir="/w",
+            run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
+            judge_node=judge,
+            long_run_notice_seconds=0.05,
+            announce_long_run=announce,
+        ),
+        5,
+    )
+
+    assert result.summary["completed"] == 1
+    assert notices, "a node running past the notice interval reported nothing"
+    assert {notice[3] for notice in notices} == {"a"}
+    assert notices[0][0]
 
 
 async def test_a_node_whose_reply_is_the_providers_error_fails_instead_of_completing() -> None:
@@ -1568,10 +1870,10 @@ class TestBackgroundRun:
 
         assert "started in the background" in out.model_text
         assert "2 nodes" in out.model_text
-        # This text is the only advertisement dag_status and cancel_dag get, so it
+        # These controls are hidden, so this receipt must give their call path.
         # carries the route as well as the names.
         assert "dag_status" in out.model_text
-        assert "cancel_dag" in out.model_text
+        assert "cancel_subagent" in out.model_text
         assert "tool_call" in out.model_text, "the controls are unnameable without the route"
         # The outcome cannot be in the result -- nothing has run yet.
         assert "completed" not in out.model_text
@@ -1598,14 +1900,14 @@ class TestBackgroundRun:
         reachable.set_context("web", "default", "web:sess1")
         out = await reachable.execute(task_summary="run the graph under test", nodes=[node])
         assert "dag_status" in out.model_text
-        assert "cancel_dag" in out.model_text
+        assert "cancel_subagent" in out.model_text
         assert "tool_call" in out.model_text, "the controls are unnameable without the route"
 
         muted.set_context("web", "default", "web:sess2")
         out = await muted.execute(task_summary="run the graph under test", nodes=[node])
         assert "started in the background" in out.model_text
         assert "dag_status" not in out.model_text
-        assert "cancel_dag" not in out.model_text
+        assert "cancel_subagent" not in out.model_text
 
     async def test_the_acceptance_text_mutes_the_hint_when_the_predicate_raises(self, tmp_path: Path) -> None:
         # The predicate runs after the background task exists, so a failing
@@ -1624,7 +1926,7 @@ class TestBackgroundRun:
 
         assert "started in the background" in out.model_text
         assert "dag_status" not in out.model_text
-        assert "cancel_dag" not in out.model_text
+        assert "cancel_subagent" not in out.model_text
 
     async def test_two_overlapping_runs_each_report_to_their_own_turn(self, tmp_path: Path) -> None:
         """Backgrounding makes concurrent runs on one shared tool the normal case.
@@ -8978,7 +9280,7 @@ async def test_the_acceptance_text_names_the_route_to_the_hidden_controls(tmp_pa
 
     assert "tool_call" in out.model_text, "the controls are unnameable without the route"
     assert "dag_status" in out.model_text
-    assert "cancel_dag" in out.model_text
+    assert "cancel_subagent" in out.model_text
     assert "resolve_dag_node" in out.model_text
 
 
