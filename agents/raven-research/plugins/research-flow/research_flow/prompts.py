@@ -271,7 +271,11 @@ _DR_REPORT_STRUCTURE_CLAUSE_READER = _derive(
             """   identifier may appear only in the sentence that already says so. When the
    task sets a length, keep the body inside it: make room by cutting
    repetition, background and secondary detail, never evidence, sources or
-   caveats. Without one, let the report run as long as the evidence needs.
+   caveats. A count within a twentieth of the bound meets it. Trim in one or
+   two passes, a paragraph or a sentence at a time, and stop once the count
+   meets the bound: a file edited over and over for a few characters costs
+   the turn more than the overrun. An edit keeps every heading its old text
+   holds. Without one, let the report run as long as the evidence needs.
    After you write or edit a markdown file, its tool result ends with a
    `[report length: ...]` line measured from that file. Unless the task says
    what its length covers, it covers prose and tables alike and leaves out

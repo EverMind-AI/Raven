@@ -294,6 +294,11 @@ PRODUCT_ONLY_FIELDS: dict[str, str] = {
         "(support/report_page.py), with model-selected highlights the flow checks against "
         "the report. Off as a class default; the product's base slice turns it on"
     ),
+    "draft_revisions": (
+        "a budget on revising a report file the turn already wrote: the reply asked for, "
+        "then the file tools withheld (gates/report_length.py). Off as a class default; "
+        "the product's base slice turns it on"
+    ),
     "plain_first": (
         "the first-reply gate: web tools withheld for the first model call, a plain "
         "answer judged or escalated to research (gates/plain_first.py). Off as a class "

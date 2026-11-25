@@ -711,7 +711,13 @@ def build_chain(
             )
         )
     if cfg.final_shape.report_structure and layout == READER_LAYOUT:
-        observers.append(ReportLengthNote())
+        budget = cfg.draft_revisions
+        observers.append(
+            ReportLengthNote(
+                note_after=budget.note_after if budget.enabled else None,
+                stop_after=budget.stop_after if budget.enabled else None,
+            )
+        )
     if cfg.fetch_floor.enabled:
         observers.append(
             FetchFloorObserver(

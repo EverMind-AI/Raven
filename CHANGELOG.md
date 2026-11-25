@@ -287,6 +287,20 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A Raven-Research turn no longer spends its iteration budget revising a report
+  file it already wrote. On one run the first draft stood at iteration 15 and
+  the next 45 iterations edited it a few characters at a time toward the
+  brief's length, until the iteration cap ended the turn. When an edit removes
+  a heading from the report file, its tool result now names that heading, so
+  the model puts the heading back instead of rewriting the whole file. With
+  `draftRevisions` on, which the product config sets, the flow counts the
+  iterations that change a report file the turn already wrote. After 8 it asks
+  for the reply. After 12 it withholds `write_file` and `edit_file` for the
+  rest of the turn. The report clause takes a length within a twentieth of the
+  brief's bound as met and asks for trimming in one or two passes. The product
+  label is now
+  `dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts`.
+
 - A model that refuses a forced tool choice is asked again with the tool on
   offer instead of failing the call, on every provider wire rather than only
   the Responses and Anthropic adapters. DeepSeek in thinking mode answers a

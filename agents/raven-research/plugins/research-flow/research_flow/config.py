@@ -257,6 +257,19 @@ class FinalShapeConfig(_Base):
         return self.report_layout if self.report_depth else "sections"
 
 
+class DraftRevisionsConfig(_Base):
+    """A budget on revising a report file the turn already wrote (``ReportLengthNote``).
+
+    Counted in iterations that changed such a file. At ``note_after`` the model is asked
+    to send the reply; at ``stop_after`` the file-writing tools are withheld for the rest
+    of the turn. Measured under the reader layout only, where the length note runs.
+    """
+
+    enabled: bool = False
+    note_after: int = 8
+    stop_after: int = 12
+
+
 class ReportPageConfig(_Base):
     """The report's reading page: the delivered report as one HTML file.
 
@@ -457,6 +470,12 @@ PRODUCT_SUPERSEDED_PROFILES: dict[str, str] = {
     # of sources after the limits, which is the page's source list, and a paragraph has
     # a length limit.
     "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page",
+    # 2026-11-25: a turn that keeps revising a report file it already wrote is told
+    # when an edit dropped a heading, asked for the reply after eight revising
+    # iterations and loses the file tools after twelve; the length clause takes a count
+    # within a twentieth of the bound as met. A report the turn used to keep editing to
+    # the iteration cap now ends earlier, so the label moves.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts",
     # The interim label this branch's 2026-09-07 batches ran under before it rebased onto
     # the cite-rank clause and the dr@3.7 rung; never shipped, retired so those bench
     # configs still load.
@@ -603,6 +622,7 @@ class FlowConfig(_Base):
     plain_first: PlainFirstConfig = Field(default_factory=PlainFirstConfig)
     final_shape: FinalShapeConfig = Field(default_factory=FinalShapeConfig)
     report_page: ReportPageConfig = Field(default_factory=ReportPageConfig)
+    draft_revisions: DraftRevisionsConfig = Field(default_factory=DraftRevisionsConfig)
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     ask_user: AskUserConfig = Field(default_factory=AskUserConfig)
 
@@ -731,6 +751,7 @@ __all__ = [
     "BudgetNoteConfig",
     "ConversationConfig",
     "DigestConfig",
+    "DraftRevisionsConfig",
     "EvidenceFloorConfig",
     "FetchFloorConfig",
     "FetchGateConfig",

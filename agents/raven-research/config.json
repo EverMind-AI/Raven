@@ -104,6 +104,9 @@
           "highlights": true,
           "removeMarkdown": true
         },
+        "draftRevisions": {
+          "enabled": true
+        },
         "askUser": {
           "enabled": true,
           "mode": "when_needed",
@@ -121,7 +124,7 @@
           "enabled": true,
           "judge": true
         },
-        "version": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page"
+        "version": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts"
       }
     }
   },

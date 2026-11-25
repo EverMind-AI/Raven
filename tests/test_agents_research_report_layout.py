@@ -752,6 +752,96 @@ def test_only_the_reader_layout_measures(tmp_path):
     assert not any("ReportLengthNote" in n for n in names({**reader, "report_layout": "sections"}))
 
 
+def _revision(path, messages, tool="edit_file"):
+    """One iteration that changed ``path``: its call, then the tool's own result line."""
+    line = f"Successfully edited {path}" if tool == "edit_file" else f"Successfully wrote 9 bytes to {path}"
+    messages.append({"role": "assistant", "content": "", "tool_calls": [{"id": "c"}]})
+    messages.append(_tool(tool, line))
+
+
+def _called(messages, metadata, tools=None):
+    response = _Response("")
+    response.has_tool_calls = True
+    return GateCtx(session_key="s", messages=messages, response=response, metadata=metadata, tools=tools)
+
+
+@pytest.mark.asyncio
+async def test_an_edit_that_drops_a_heading_is_named_on_its_result(tmp_path):
+    report = tmp_path / "r.md"
+    report.write_text("# T\n\n## One\n\ntext\n\n## Two\n\nmore\n", encoding="utf-8")
+    gate, messages, metadata = ReportLengthNote(), [], {}
+    _revision(report, messages, tool="write_file")
+    first = (await gate.after_iteration(_called(messages, metadata))).append_note
+    assert "[report structure:" not in first
+
+    report.write_text("# T\n\n## One\n\ntext\nmore\n", encoding="utf-8")
+    _revision(report, messages)
+    note = (await gate.after_iteration(_called(messages, metadata))).append_note
+
+    assert f"removed the heading `## Two` from {report}" in note
+    assert metadata["report_drafts"]["headings_lost"] == 1
+    # Put back, nothing is lost the next time.
+    report.write_text("# T\n\n## One\n\ntext\n\n## Two\n\nmore\n", encoding="utf-8")
+    _revision(report, messages)
+    assert "[report structure:" not in (await gate.after_iteration(_called(messages, metadata))).append_note
+
+
+def test_a_heading_inside_a_code_fence_is_not_a_heading():
+    from research_flow.gates.report_length import headings
+
+    assert headings("## A\n```\n## not one\n```\n### B\n") == ["## A", "### B"]
+
+
+@pytest.mark.asyncio
+async def test_the_revision_budget_asks_for_the_reply_then_withholds_the_file_tools(tmp_path):
+    report = tmp_path / "r.md"
+    report.write_text("## One\n\ntext\n", encoding="utf-8")
+    gate, messages, metadata = ReportLengthNote(note_after=2, stop_after=3), [], {}
+    tools = [{"function": {"name": n}} for n in ("web_search", "write_file", "edit_file", "read_file")]
+    notes = []
+    for i in range(4):
+        _revision(report, messages, tool="write_file" if i == 0 else "edit_file")
+        notes.append((await gate.after_iteration(_called(messages, metadata))).append_note)
+
+    # The first write is the draft, not a revision.
+    assert metadata["report_drafts"]["revisions"] == 3
+    assert "[report revisions:" not in notes[0] and "[report revisions:" not in notes[1]
+    assert "changed in 2 iterations" in notes[2] and "send the reply" in notes[2]
+    assert "withdrawn" in notes[3]
+    offered = (await gate.before_iteration(_called(messages, metadata, tools))).modified_tools
+    assert [t["function"]["name"] for t in offered] == ["web_search", "read_file"]
+
+
+@pytest.mark.asyncio
+async def test_without_a_budget_the_file_tools_stay(tmp_path):
+    report = tmp_path / "r.md"
+    report.write_text("## One\n", encoding="utf-8")
+    gate, messages, metadata = ReportLengthNote(), [], {}
+    for _ in range(20):
+        _revision(report, messages)
+        note = (await gate.after_iteration(_called(messages, metadata))).append_note
+        assert "[report revisions:" not in note
+    tools = [{"function": {"name": "edit_file"}}]
+    assert (await gate.before_iteration(_called(messages, metadata, tools))).modified_tools is None
+
+
+def test_the_budget_is_wired_only_when_the_config_turns_it_on(tmp_path):
+    def gate(**extra):
+        cfg = FlowConfig(
+            enabled=True,
+            final_shape={"report_structure": True, "report_depth": True, "report_layout": "reader"},
+            **extra,
+        )
+        chain = build_chain(
+            cfg, None, max_iterations=40, context_window_tokens=65536, tools=ToolHandles(), store=SessionStore(tmp_path)
+        )
+        return next(o for o in chain if o.name == "ReportLengthNote")
+
+    assert gate()._stop_after is None
+    on = gate(draft_revisions={"enabled": True, "note_after": 5, "stop_after": 9})
+    assert (on._note_after, on._stop_after) == (5, 9)
+
+
 # --------------------------------------------------------------------------- #
 # The delivery line stays on the reply                                         #
 # --------------------------------------------------------------------------- #
