@@ -373,9 +373,11 @@ const LIGHT_256_COLORS: ThemeColors = {
 
 // ── Tier 1: 16-color (per design tokens, docs/tui-color-problem/tokens.md) ──
 //
-// Two caveats vs the token spec, which a single color string can't encode:
-//   - `reverse` highlights (completionCurrentBg/completionMetaCurrentBg/
-//     selectionBg) fall back to brightBlack — the spec's stated alternative.
+// Three caveats vs the token spec, which a single color string can't encode:
+//   - `reverse` highlights (completionCurrentBg/completionMetaCurrentBg)
+//     fall back to brightBlack — the spec's stated alternative.
+//   - selectionBg picks a color the text foreground contrasts with, since
+//     brightBlack would make muted/label text invisible when selected.
 //   - statusCritical's `+ bold` is dropped (bold is a text style, not a
 //     color), leaving it `red` like the spec's base.
 
@@ -404,7 +406,7 @@ const DARK_16_COLORS: ThemeColors = {
   statusWarn: 'ansi:yellow',
   statusBad: 'ansi:redBright',
   statusCritical: 'ansi:red',
-  selectionBg: 'ansi:yellow',
+  selectionBg: 'ansi:cyan',
   diffAdded: 'ansi:blackBright',
   diffRemoved: 'ansi:blackBright',
   diffAddedWord: 'ansi:green',
