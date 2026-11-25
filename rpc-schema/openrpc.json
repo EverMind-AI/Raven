@@ -14087,6 +14087,10 @@
           "qr_login": {
             "description": "Whether this channel signs in by scanning a code.",
             "type": "boolean"
+          },
+          "error": {
+            "description": "Why the channel's field list could not be read, when it could not.",
+            "type": "string"
           }
         },
         "required": [
