@@ -293,15 +293,19 @@ class RavenLoopBackend:
         self.retry_after_output = retry_after_output
         # Resolved per run, never fixed here: the manager hands in the live config
         # value, so a sub-agent's budget is its agent's, not this backend's.
-        self._max_iterations = max_iterations
+        self._max_iterations: Callable[[], int | None] | None = (
+            (lambda: max_iterations) if isinstance(max_iterations, int) else max_iterations
+        )
         self.mcp_source: McpSource | None = None
 
     def _resolved_max_iterations(self) -> int | None:
-        source = self._max_iterations
-        budget = source() if callable(source) else source
+        resolver = self._max_iterations
+        budget = resolver() if resolver is not None else None
         # The config helper reads 0 and an explicit null as "no cap"; a negative
         # value is not a budget either.
-        return budget if budget and budget > 0 else None
+        if budget is not None and budget > 0:
+            return budget
+        return None
 
     def _web_key(self, vendor: str) -> str | None:
         return resolve_vendor_key(vendor, self.web_provider_keys, self.search_api_key, self.jina_api_key)
