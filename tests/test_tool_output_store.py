@@ -359,3 +359,235 @@ def test_blank_lines_after_an_over_budget_line_keep_that_line_for_exec(tmp_path:
     preview = visible.removeprefix(TOOL_RESULT_TRUNCATION_MARKER).lstrip("\n")
     assert preview == "y" * 100
     assert "the preview shows the end" in bounded
+
+
+def test_windows_branch_uses_owner_only_dacl_helpers_without_os_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On Windows, directory and file creation dispatch through owner-only DACL helpers."""
+    import raven.session.tool_output as store
+
+    events: list[tuple[str, Path]] = []
+
+    class _WindowsOS:
+        name = "nt"
+
+        def __getattr__(self, item: str) -> object:
+            return getattr(os, item)
+
+        def open(self, *args: object, **kwargs: object) -> int:
+            raise AssertionError("os.open must not create Windows managed tool output")
+
+    def fake_mkdir(directory: Path) -> None:
+        events.append(("mkdir", directory))
+        directory.mkdir(parents=True, exist_ok=True)
+
+    def fake_protect(directory: Path) -> None:
+        events.append(("protect", directory))
+
+    def fake_create(path: Path) -> int:
+        events.append(("create", path))
+        return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+
+    monkeypatch.setattr(store, "os", _WindowsOS())
+    monkeypatch.setattr(store, "_mkdir_owner_only_windows", fake_mkdir)
+    monkeypatch.setattr(store, "_protect_owner_only_windows", fake_protect)
+    monkeypatch.setattr(store, "_create_owner_only_windows", fake_create)
+
+    bounded = bound_tool_result(wrap_untrusted(LONG_BODY, source="exec"), tmp_path, limits=BYTES)
+
+    files = _files(tmp_path)
+    assert len(files) == 1
+    assert str(files[0].resolve()) in bounded
+    assert events == [
+        ("mkdir", tool_output_dir(tmp_path)),
+        ("protect", tool_output_dir(tmp_path)),
+        ("create", files[0]),
+    ]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows NTFS DACLs")
+def test_windows_managed_file_and_dir_deny_non_owner_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real Windows NTFS DACL check: owner reads cleanly while non-owner SIDs are denied."""
+    import ctypes
+    import subprocess
+    from ctypes import wintypes
+
+    import raven.session.tool_output as store
+
+    # Widen the parent workspace ACL explicitly so an unprotected file would
+    # inherit Everyone:F; the managed output must ignore that inheritance.
+    subprocess.run(
+        ["icacls", str(tmp_path), "/grant", "*S-1-1-0:(OI)(CI)F"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    real_open = os.open
+
+    def forbid_os_open(*args: object, **kwargs: object) -> int:
+        raise AssertionError("Windows path must create the file via CreateFileW DACL, not os.open")
+
+    monkeypatch.setattr(store.os, "open", forbid_os_open)
+    try:
+        bounded = bound_tool_result(wrap_untrusted(LONG_BODY, source="exec"), tmp_path, limits=BYTES)
+    finally:
+        monkeypatch.setattr(store.os, "open", real_open)
+
+    files = _files(tmp_path)
+    assert len(files) == 1
+    assert str(files[0].resolve()) in bounded
+    assert files[0].read_text(encoding="utf-8") == LONG_BODY
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    authz = ctypes.WinDLL("authz", use_last_error=True)
+
+    class _SidAttr(ctypes.Structure):
+        _fields_ = [("Sid", ctypes.c_void_p), ("Attributes", wintypes.DWORD)]
+
+    class _TokenUser(ctypes.Structure):
+        _fields_ = [("User", _SidAttr)]
+
+    class _Luid(ctypes.Structure):
+        _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", wintypes.LONG)]
+
+    class _AuthzRequest(ctypes.Structure):
+        _fields_ = [
+            ("DesiredAccess", wintypes.DWORD),
+            ("PrincipalSelfSid", ctypes.c_void_p),
+            ("ObjectTypeList", ctypes.c_void_p),
+            ("ObjectTypeListLength", wintypes.DWORD),
+            ("OptionalArguments", ctypes.c_void_p),
+        ]
+
+    class _AuthzReply(ctypes.Structure):
+        _fields_ = [
+            ("ResultListLength", wintypes.DWORD),
+            ("GrantedAccessMask", ctypes.POINTER(wintypes.DWORD)),
+            ("SaclEvaluationResults", ctypes.POINTER(wintypes.DWORD)),
+            ("Error", ctypes.POINTER(wintypes.DWORD)),
+        ]
+
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    kernel32.OpenProcessToken.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    advapi32.GetTokenInformation.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.GetTokenInformation.restype = wintypes.BOOL
+    advapi32.ConvertStringSidToSidW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
+    advapi32.ConvertStringSidToSidW.restype = wintypes.BOOL
+    advapi32.GetFileSecurityW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.GetFileSecurityW.restype = wintypes.BOOL
+    authz.AuthzInitializeResourceManager.argtypes = [
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        wintypes.LPCWSTR,
+        ctypes.POINTER(wintypes.HANDLE),
+    ]
+    authz.AuthzInitializeResourceManager.restype = wintypes.BOOL
+    authz.AuthzInitializeContextFromSid.argtypes = [
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.HANDLE,
+        ctypes.c_void_p,
+        _Luid,
+        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.HANDLE),
+    ]
+    authz.AuthzInitializeContextFromSid.restype = wintypes.BOOL
+    authz.AuthzAccessCheck.argtypes = [
+        wintypes.DWORD,
+        wintypes.HANDLE,
+        ctypes.POINTER(_AuthzRequest),
+        wintypes.HANDLE,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(_AuthzReply),
+        ctypes.c_void_p,
+    ]
+    authz.AuthzAccessCheck.restype = wintypes.BOOL
+    authz.AuthzFreeContext.argtypes = [wintypes.HANDLE]
+    authz.AuthzFreeResourceManager.argtypes = [wintypes.HANDLE]
+
+    token = wintypes.HANDLE()
+    assert kernel32.OpenProcessToken(kernel32.GetCurrentProcess(), 0x0008, ctypes.byref(token))
+    needed = wintypes.DWORD(0)
+    advapi32.GetTokenInformation(token, 1, None, 0, ctypes.byref(needed))
+    tbuf = ctypes.create_string_buffer(needed.value)
+    assert advapi32.GetTokenInformation(token, 1, tbuf, needed.value, ctypes.byref(needed))
+    owner_sid = ctypes.cast(tbuf, ctypes.POINTER(_TokenUser)).contents.User.Sid
+    kernel32.CloseHandle(token)
+
+    rm = wintypes.HANDLE()
+    assert authz.AuthzInitializeResourceManager(1, None, None, None, None, ctypes.byref(rm))
+    file_generic_read = 0x00120089
+    error_access_denied = 5
+    try:
+        for target in (tool_output_dir(tmp_path), files[0]):
+            need = wintypes.DWORD(0)
+            advapi32.GetFileSecurityW(str(target), 7, None, 0, ctypes.byref(need))
+            sd_buf = ctypes.create_string_buffer(need.value)
+            assert advapi32.GetFileSecurityW(str(target), 7, sd_buf, need.value, ctypes.byref(need))
+
+            # Owner can read.
+            owner_ctx = wintypes.HANDLE()
+            assert authz.AuthzInitializeContextFromSid(
+                2, owner_sid, rm, None, _Luid(0, 0), None, ctypes.byref(owner_ctx)
+            )
+            granted = wintypes.DWORD(0)
+            err = wintypes.DWORD(999)
+            req = _AuthzRequest(file_generic_read, None, None, 0, None)
+            reply = _AuthzReply(1, ctypes.pointer(granted), None, ctypes.pointer(err))
+            assert authz.AuthzAccessCheck(
+                0, owner_ctx, ctypes.byref(req), None, sd_buf, None, 0, ctypes.pointer(reply), None
+            )
+            authz.AuthzFreeContext(owner_ctx)
+            assert granted.value == file_generic_read and err.value == 0
+
+            # Non-owner user, Everyone, Authenticated Users, Users, and Admins are all denied.
+            for non_owner in ("S-1-5-21-0-0-0-1999", "S-1-1-0", "S-1-5-11", "S-1-5-32-545", "S-1-5-32-544"):
+                csid = ctypes.c_void_p()
+                assert advapi32.ConvertStringSidToSidW(non_owner, ctypes.byref(csid))
+                ctx = wintypes.HANDLE()
+                assert authz.AuthzInitializeContextFromSid(
+                    2, csid.value, rm, None, _Luid(0, 0), None, ctypes.byref(ctx)
+                )
+                g_other = wintypes.DWORD(1)
+                e_other = wintypes.DWORD(0)
+                r_other = _AuthzReply(1, ctypes.pointer(g_other), None, ctypes.pointer(e_other))
+                assert authz.AuthzAccessCheck(
+                    0, ctx, ctypes.byref(req), None, sd_buf, None, 0, ctypes.pointer(r_other), None
+                )
+                authz.AuthzFreeContext(ctx)
+                kernel32.LocalFree(csid)
+                assert g_other.value == 0 and e_other.value == error_access_denied
+    finally:
+        authz.AuthzFreeResourceManager(rm)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows CreateFileW CREATE_NEW")
+def test_windows_owner_only_create_refuses_existing_target(tmp_path: Path) -> None:
+    import raven.session.tool_output as store
+
+    existing = tmp_path / "existing.txt"
+    existing.write_text("keep", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        store._create_owner_only_windows(existing)
