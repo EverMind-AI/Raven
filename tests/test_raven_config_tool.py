@@ -1490,6 +1490,37 @@ async def test_a_channel_whose_field_read_failed_names_the_failure(config_file):
 
 
 @pytest.mark.asyncio
+async def test_a_channel_whose_field_read_failed_with_no_message_still_names_the_failure(config_file):
+    """``str(RuntimeError())`` is "", and the key is the fact, not the text.
+
+    Reading ``error`` for truth dropped the marker, so the row fell back to
+    "running, not connected yet" -- the scan-unpaired claim a failed read must
+    never make. The empty message is still a failure, and it is still passed
+    through.
+    """
+    status = {
+        "gateway_running": True,
+        "channels": [
+            {
+                "name": "feishu",
+                "enabled": True,
+                "running": True,
+                "fields": [],
+                "error": "",
+            }
+        ],
+    }
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"channels.status": status}))
+
+    described = json.loads(await _run(tool, action="describe", path="channels.feishu"))
+
+    assert described["error"] == ""
+    assert "QR" not in json.dumps(described), f"a failed row must not draw a scan instruction: {described}"
+    assert described["state"] == "running", "a row that could not be read cannot claim to be waiting for a scan"
+
+
+@pytest.mark.asyncio
 async def test_a_channel_read_carries_its_values_and_how_it_logs_in(config_file):
     """A silent Telegram was read with describe and then get for the same channel, and
     a WeChat setup asked the user for a token that the QR scan fills in."""
