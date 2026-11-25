@@ -864,6 +864,10 @@ def _finalize_tool_calls(slots: list[dict[str, Any]]) -> list[ToolCallRequest]:
             # it is the only evidence of what the model actually emitted.
             args = {RAW_ARGUMENTS_KEY: args_text}
             repaired = True
+        if not isinstance(args, dict):
+            # Valid JSON that is not an object ("bad", a list) is no set of arguments
+            # either; every reader of a call takes them as a mapping.
+            args = {RAW_ARGUMENTS_KEY: args_text}
         result.append(
             ToolCallRequest(
                 id=slot["id"] or "",
