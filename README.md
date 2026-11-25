@@ -322,16 +322,16 @@ raven web
 The command opens the WebUI in your browser and keeps Raven running in the background. Use `raven web --stop` to stop the background service.
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/d2c5c9f5-9f9e-4674-9962-e3188bd8c5d9"><img src="https://github.com/user-attachments/assets/d2c5c9f5-9f9e-4674-9962-e3188bd8c5d9" alt="Raven WebUI conversation with the tasks panel open" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/d2c5c9f5-9f9e-4674-9962-e3188bd8c5d9"><img src="https://github.com/user-attachments/assets/d2c5c9f5-9f9e-4674-9962-e3188bd8c5d9" alt="Raven WebUI conversation with the tasks tab open" width="90%"></a>
 </p>
 
-<p align="center"><em>Conversation: delegated work is tracked in the tasks panel beside the chat, grouped by matter, with the questions that need you.</em></p>
+<p align="center"><em>Conversation: delegated work is tracked in the tasks tab beside the chat, one Task Group per matter, with the questions that need you.</em></p>
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/f30e5657-6ea4-46e8-b916-08c9b61c41ff"><img src="https://github.com/user-attachments/assets/f30e5657-6ea4-46e8-b916-08c9b61c41ff" alt="Raven WebUI Task Board page" width="90%"></a>
 </p>
 
-<p align="center"><em>Task Board: every conversation's task groups in one place, sorted into Needs you, Running, Idle and Completed.</em></p>
+<p align="center"><em>Task Board page: every conversation's Task Groups in one place, in four columns: Needs you, Running, Idle and Completed.</em></p>
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/6b48e038-e761-4aa2-b62a-d63472c45139"><img src="https://github.com/user-attachments/assets/6b48e038-e761-4aa2-b62a-d63472c45139" alt="Raven WebUI subagents page" width="90%"></a>
