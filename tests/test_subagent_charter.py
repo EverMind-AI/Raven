@@ -753,7 +753,12 @@ def intake(text, step):
 
 HAND_BACK_THE_TEXT = """
 def intake(text, step):
-    return {"text": text}
+    return {"reply": text}
+"""
+
+USE_THE_TEXT_AS_THE_TASK = """
+def intake(text, step):
+    return {"text": "Summarise only the Q4 memo."}
 """
 
 SAY_NOTHING = """
@@ -824,9 +829,9 @@ async def test_a_generated_function_reads_the_task_the_model_wrote(tmp_path) -> 
 
 
 async def test_an_intake_reads_the_task_the_worker_is_handed(tmp_path) -> None:
-    """``intake`` reads the task the run will carry, charter preamble and all:
-    an intake that hands it back unchanged leaves the worker the same task, and
-    one handed the bare authored task would strip the brief off it."""
+    """``intake`` reads the task the run will carry, charter preamble and all.
+    Its reply is that text unchanged, so an intake handed the bare authored
+    task would answer with the bare text and strip the brief off it."""
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
     from raven.agent.subagent.delegate import dispatch_charter
 
@@ -835,7 +840,7 @@ async def test_an_intake_reads_the_task_the_worker_is_handed(tmp_path) -> None:
     prefixed = "Summarise in three bullets.\n\nSummarise the Q3 revenue table."
 
     with dispatch_charter({"brief": "Summarise in three bullets.", "functions": {"intake": HAND_BACK_THE_TEXT}}):
-        await backend.run(
+        answer = await backend.run(
             prefixed,
             task_id="t1",
             workspace=tmp_path,
@@ -844,7 +849,29 @@ async def test_an_intake_reads_the_task_the_worker_is_handed(tmp_path) -> None:
             authored_task="Summarise the Q3 revenue table.",
         )
 
-    assert provider.seen[-1][-1] == {"role": "user", "content": prefixed}
+    assert answer == prefixed
+
+
+async def test_an_intake_that_replaces_the_task_hands_the_worker_its_text(tmp_path) -> None:
+    """An intake may hand the worker a task of its own through ``text``; the
+    replacement is asked as the whole task, with no charter preamble added."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.subagent.delegate import dispatch_charter
+
+    provider = _stub_provider()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+
+    with dispatch_charter({"brief": "Summarise in three bullets.", "functions": {"intake": USE_THE_TEXT_AS_THE_TASK}}):
+        await backend.run(
+            "Summarise in three bullets.\n\nSummarise the Q3 revenue table.",
+            task_id="t1",
+            workspace=tmp_path,
+            executor=None,
+            history=[],
+            authored_task="Summarise the Q3 revenue table.",
+        )
+
+    assert provider.seen[-1][-1] == {"role": "user", "content": "Summarise only the Q4 memo."}
 
 
 async def test_an_intake_that_answers_nothing_leaves_the_worker_the_task_it_was_handed(tmp_path) -> None:
@@ -909,9 +936,20 @@ async def test_an_empty_authored_task_leaves_the_question_the_task_the_worker_wa
     assert answer == prefixed
 
 
-async def test_a_blank_authored_task_leaves_the_question_the_task_the_worker_was_handed(tmp_path) -> None:
-    """Whitespace alone carries no task either, so it falls back like the empty
-    one does instead of becoming a blank question."""
+@pytest.mark.parametrize(
+    ("label", "authored"),
+    [
+        ("whitespace of every kind", " \n\t "),
+        ("a single space", " "),
+        ("a newline alone", "\n"),
+        ("a tab alone", "\t"),
+    ],
+)
+async def test_a_blank_authored_task_leaves_the_question_the_task_the_worker_was_handed(
+    tmp_path, label: str, authored: str
+) -> None:
+    """Whitespace alone, of any kind, carries no task either: each falls back
+    like the empty one does instead of becoming a blank question."""
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
     from raven.agent.subagent.delegate import dispatch_charter
 
@@ -926,7 +964,7 @@ async def test_a_blank_authored_task_leaves_the_question_the_task_the_worker_was
             workspace=tmp_path,
             executor=None,
             history=[],
-            authored_task=" \n\t ",
+            authored_task=authored,
         )
 
     assert answer == prefixed
