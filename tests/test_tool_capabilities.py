@@ -362,6 +362,7 @@ def test_no_borrow_is_claimed_when_there_is_nothing_to_borrow(attr, tool, tmp_pa
     sets a model, gets a registered tool, and sees every call fail."""
     config = _config(tmp_path)
     cap = next(c for c in CAPABILITIES if c.tool == tool)
+    assert cap.media_attr == attr, "the row reads the section this tool runs on"
     assert not config.providers.openrouter.api_key, "this case needs nothing to borrow"
 
     assert borrowable_credential(cap, config) == ""
@@ -382,10 +383,14 @@ def test_a_borrow_claim_reads_the_env_reference_the_section_holds(
     monkeypatch.setenv("PROVIDER_KEY", "sk-held-by-env")
     config = _config(tmp_path)
     config.providers.openrouter.api_key_env = "PROVIDER_KEY"
+    getattr(config.tools.media, attr).model = "some/model"
     cap = next(c for c in CAPABILITIES if c.tool == tool)
+    assert cap.media_attr == attr, "the row reads the section this tool runs on"
     assert not config.providers.openrouter.api_key, "the variable must be the only source"
 
     assert borrowable_credential(cap, config) == "providers.openrouter.apiKey"
+    borrowed = getattr(config.effective_media_config(), attr)
+    assert borrowed.api_key == "sk-held-by-env", "the claim must name the key the tool receives"
 
 
 @pytest.mark.parametrize(
@@ -398,6 +403,7 @@ def test_a_named_but_unset_env_reference_claims_no_borrow(attr, tool, tmp_path: 
     config = _config(tmp_path)
     config.providers.openrouter.api_key_env = "PROVIDER_KEY_THAT_IS_NOT_SET"
     cap = next(c for c in CAPABILITIES if c.tool == tool)
+    assert cap.media_attr == attr, "the row reads the section this tool runs on"
 
     assert borrowable_credential(cap, config) == ""
 
@@ -413,6 +419,7 @@ def test_an_exported_key_is_reusable_too(attr, tool, monkeypatch: pytest.MonkeyP
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-from-env")
     config = _config(tmp_path)
     cap = next(c for c in CAPABILITIES if c.tool == tool)
+    assert cap.media_attr == attr, "the row reads the section this tool runs on"
     assert not config.providers.openrouter.api_key, "the environment must be the only source"
 
     assert borrowable_credential(cap, config) == "OPENROUTER_API_KEY"
