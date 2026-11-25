@@ -633,3 +633,34 @@ async def test_the_deck_fetch_tool_judges_off_the_event_loop(monkeypatch, tmp_pa
 
     assert "cannot be fetched" in answer, f"the deck tool answered {answer!r} instead of refusing"
     assert ticks >= 5, f"the loop advanced only {ticks} times while the resolver held"
+
+
+async def test_a_redirect_hop_judges_off_the_event_loop(monkeypatch) -> None:
+    """The hops after the first are judged too, and each resolution is its own
+    chance to hold the loop.
+
+    ``guarded_fetch`` follows the chain by hand so every hop is checked, so the
+    claim that the judge never runs on the loop has to hold past hop 0 as well:
+    a hop judged synchronously freezes the process for the length of one
+    resolution, and the inward hop is exactly the one a redirect lands on.
+    The first hop answers a public address at once, so the hold under
+    measurement is the redirect's own.
+    """
+
+    def per_host(host, *_args, **_kwargs):
+        if host == METADATA_HOST:
+            time.sleep(0.2)
+            return [(0, 0, 0, "", ("169.254.169.254", 0))]
+        return [(0, 0, 0, "", ("93.184.216.34", 0))]
+
+    monkeypatch.setattr("socket.getaddrinfo", per_host)
+
+    from raven.security.network import guarded_fetch
+
+    rec = _Recorder([(302, f"http://{METADATA_HOST}/latest/meta-data/")])
+
+    answer, ticks = await _the_loop_keeps_running(lambda: guarded_fetch(rec, "http://example.test/start", what="test"))
+
+    assert answer is None, "the redirected-to hop is refused: nothing is fetched"
+    assert rec.requested == ["http://93.184.216.34/start"], "only the first hop went out, pinned to its judged address"
+    assert ticks >= 5, f"the loop advanced only {ticks} times while the resolver held"
