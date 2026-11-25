@@ -361,7 +361,9 @@ async def test_a_reason_written_on_stderr_while_the_link_was_down_reaches_the_ru
     (endpoint,) = node.channels.values()
 
     os.kill(node.client._proc.pid, signal.SIGKILL)
-    await _until(lambda: endpoint.detached is not None)
+    # The heartbeat paces the detached signal, so the wait has to outlast a few
+    # heartbeat ticks under shard load, not just the link's own teardown.
+    await _until(lambda: endpoint.detached is not None, timeout=30)
     (workdir / "go").touch()
 
     with pytest.raises(RuntimeError, match=r"CLI agent 'where@box' exited 3: token expired$"):
