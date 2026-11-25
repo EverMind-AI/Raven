@@ -130,7 +130,8 @@ def test_file_uri_to_path_windows_localhost_drive_keeps_drive(monkeypatch):
     monkeypatch.setattr(media, "url2pathname", nturl2path.url2pathname)
 
     assert str(media.file_uri_to_path("file://localhost/C:/work/a.md")) == r"C:\work\a.md"
-    assert str(media.file_uri_to_path("file://localhost/c:/work/a.md")) == r"c:\work\a.md"
+    # Python < 3.14 upper-cases the drive letter in nturl2path.url2pathname; 3.14+ preserves it.
+    assert str(media.file_uri_to_path("file://localhost/c:/work/a.md")).casefold() == r"c:\work\a.md"
     assert str(media.file_uri_to_path("file://LOCALHOST/C:/work/a.md")) == r"C:\work\a.md"
 
 
