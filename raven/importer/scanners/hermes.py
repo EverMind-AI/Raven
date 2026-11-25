@@ -244,7 +244,7 @@ class HermesScanner:
         except OSError as exc:
             raise HermesExportError(f"cannot run the hermes CLI ({exc}); session not imported") from exc
         messages: list[ImportMessage] = []
-        for line in raw.splitlines():
+        for line in raw.split("\n"):
             stripped = line.strip()
             if not stripped:
                 continue

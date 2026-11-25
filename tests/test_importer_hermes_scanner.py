@@ -764,14 +764,15 @@ async def test_read_conversation_uses_session_id_export(tmp_path: Path) -> None:
     assert export_call[-1] == "-"
 
 
-async def test_read_conversation_tolerates_multiple_export_lines(tmp_path: Path) -> None:
+@pytest.mark.parametrize("first_content", ["first", "first\u2028line\u2029end\ntext"])
+async def test_read_conversation_tolerates_multiple_export_lines(tmp_path: Path, first_content: str) -> None:
     home = _make_home(tmp_path)
     sid = "s1"
-    first = {"id": sid, "messages": [{"role": "user", "content": "first", "timestamp": 1.0}]}
+    first = {"id": sid, "messages": [{"role": "user", "content": first_content, "timestamp": 1.0}]}
     second = {"id": sid, "messages": [{"role": "user", "content": "second", "timestamp": 2.0}]}
 
     async def cli(args: list[str]) -> str:
-        return json.dumps(first) + "\n" + json.dumps(second) + "\n"
+        return json.dumps(first, ensure_ascii=False) + "\n" + json.dumps(second) + "\n"
 
     scanner = HermesScanner(hermes_home=home, run_cli=cli)
     result = ScanResult(
@@ -783,7 +784,7 @@ async def test_read_conversation_tolerates_multiple_export_lines(tmp_path: Path)
         mtime=0.0,
     )
     session = await scanner.read(result)
-    assert [m.content for m in session.messages] == ["first", "second"]
+    assert [m.content for m in session.messages] == [first_content, "second"]
 
 
 async def test_scan_conversations_logs_a_warning_for_unlisted_sessions(
