@@ -175,6 +175,59 @@ async def test_a_file_url_for_another_machine_names_no_local_path(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_a_file_url_for_localhost_names_the_local_path(tmp_path: Path):
+    """A ``localhost`` authority names this machine, as the rest of the repo reads it."""
+    target = tmp_path / "notes.md"
+    target.write_text("facts", encoding="utf-8")
+
+    answer = await ReadFileTool(workspace=tmp_path).execute(
+        path=target.as_uri().replace("file://", "file://localhost", 1)
+    )
+
+    assert isinstance(answer, str)
+    assert answer.split("-- try ")[-1] == str(target), f"localhost names this machine: {answer}"
+
+
+@pytest.mark.parametrize(
+    "encoded, decoded",
+    [("%0A", "\n"), ("%00", "\x00"), ("%E2%80%A8", "\u2028")],
+)
+@pytest.mark.asyncio
+async def test_a_file_url_whose_decoded_path_has_a_control_character_names_no_path(
+    tmp_path: Path, encoded: str, decoded: str
+):
+    """A percent-encoded line break would forge a line in the tool result.
+
+    The resolver refuses such a path on the next call anyway, so naming one
+    would only put the control character into this answer.
+    """
+    read = ReadFileTool(workspace=tmp_path)
+
+    answer = await read.execute(path=f"file:///tmp/notes{encoded}forged.md")
+
+    assert isinstance(answer, str)
+    assert "file:// URL" in answer
+    assert "-- try" not in answer, f"no path may be named: {answer!r}"
+    assert decoded not in answer, f"the decoded character must not reach the answer: {answer!r}"
+
+
+@pytest.mark.asyncio
+async def test_a_file_url_with_a_literal_line_break_does_not_carry_it_into_the_answer(tmp_path: Path):
+    """The URL parser drops a newline, so the path it would report is not the caller's.
+
+    The refusal escapes the raw argument; the answer must not carry the line
+    break, which would let the argument forge a line of the result.
+    """
+    read = ReadFileTool(workspace=tmp_path)
+
+    answer = await read.execute(path="file:///tmp/notes\nforged.md")
+
+    assert isinstance(answer, str)
+    assert "-- try" not in answer, f"no path may be named: {answer!r}"
+    assert "\n" not in answer, f"the line break must not reach the answer: {answer!r}"
+
+
+@pytest.mark.asyncio
 async def test_a_file_url_that_cannot_be_parsed_names_no_local_path(tmp_path: Path):
     """A host that is not a valid IPv6 literal leaves the URL without a path."""
     read = ReadFileTool(workspace=tmp_path)
@@ -224,6 +277,7 @@ async def test_a_file_url_that_raises_in_the_platform_conversion_stays_a_refusal
     assert isinstance(answer, str)
     assert "file:// URL" in answer
     assert "plain path" in answer
+    assert "-- try" not in answer, f"a path that cannot be converted must not be named: {answer}"
 
 
 @pytest.mark.asyncio

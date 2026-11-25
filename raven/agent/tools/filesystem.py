@@ -244,15 +244,22 @@ def _url_argument(path: str) -> bool:
 _WINDOWS = os.name == "nt"
 
 
+def _has_control_character(text: str) -> bool:
+    """Whether ``text`` carries a Cc, Zl, or Zp character.
+
+    The tools echo a path into their result lines, and readers take a file back
+    out of those lines; a line break in a path would let it forge another one.
+    """
+    return any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in text)
+
+
 def resolve_path(
     path: str,
     workspace: Path | None = None,
     allowed_dirs: tuple[Path, ...] = (),
 ) -> Path:
     """Resolve path against workspace (if relative) and enforce the allowed roots."""
-    # The tools echo the path into their result lines, and readers take a file back
-    # out of those lines; a line break in a path would let it forge another one.
-    if any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in str(path)):
+    if _has_control_character(str(path)):
         raise PermissionError(f"Path {path!r} contains a line break or control character")
     p = Path(path).expanduser()
     # A URL argument is not a path on this machine, so its scheme colon is not
@@ -312,23 +319,31 @@ def _file_url_path(url: str) -> str | None:
     ``url2pathname`` is the platform-aware inverse of ``Path.as_uri()``: it
     percent-decodes the path, and on Windows it turns ``file:///C:/work/a.md``
     into ``C:\\work\\a.md``, where a bare strip of the scheme leaves
-    ``/C:/work/a.md`` -- a path Windows cannot open. A URL with an authority
-    names a host -- somebody else's machine, or a UNC share -- so it is not a
-    path on this one.
+    ``/C:/work/a.md`` -- a path Windows cannot open. A ``localhost`` authority
+    names this machine, as ``raven.channels.media.file_uri_to_path`` and
+    ``raven.acp.methods._file_uri_to_path`` also read it; any other host names
+    somebody else's machine, so it is not a path on this one.
     """
     try:
         parsed = urlparse(url)
     except ValueError:
         # urlparse raises on a bracketed host that is not a valid IPv6 literal.
         return None
-    if parsed.netloc or not parsed.path:
+    if parsed.netloc and parsed.netloc.casefold() != "localhost":
+        return None
+    if not parsed.path:
         return None
     try:
-        return url2pathname(parsed.path)
+        local = url2pathname(parsed.path)
     except OSError:
         # A malformed Windows spelling (``file:///C::/...``) raises inside
         # ``url2pathname``; a URL that cannot be converted names no path.
         return None
+    if _has_control_character(local):
+        # A percent-encoded control character decodes into a caller-read line,
+        # and the resolver refuses such a path on the next call anyway.
+        return None
+    return local
 
 
 def _missing(path: str) -> str:
@@ -469,7 +484,13 @@ class ReadFileTool(_FsTool):
         # where the URL's own spelling resolves to a real file (a drive-relative
         # path under Windows), leaving the refusal to the missing-file branch
         # would read it as a file instead of telling the caller to try a path.
-        if (m := _URL_SCHEME_RE.match(path.strip())) and m.group("scheme").lower() == "file":
+        # A path carrying a control character is left to the resolver, whose
+        # refusal escapes it; this branch would echo it into the result.
+        if (
+            (m := _URL_SCHEME_RE.match(path.strip()))
+            and m.group("scheme").lower() == "file"
+            and not _has_control_character(path)
+        ):
             local = _file_url_path(path.strip())
             hint = f" -- try {local}" if local else ""
             return f"Error: {path} is a file:// URL; read_file takes a plain path{hint}"
