@@ -463,6 +463,25 @@ class SubagentManager:
         configured = held(_WEB_VENDORS_KEY, lambda: web_providers(default_live()))
         return configured[1] or self.web_fetch_provider
 
+    def _builtin_max_iterations(self) -> int | None:
+        """The ReAct budget an in-process sub-agent run gets, resolved per run.
+
+        The same knob the main loop reads (``agents.defaults.maxToolIterations``),
+        so a built-in agent and the turn that dispatched it cannot run under two
+        ceilings. ``0`` or an explicit null is unbounded; an absent key keeps the
+        schema default the main loop falls back to.
+        """
+        from raven.config.live import LiveConfig, max_tool_iterations
+
+        if self._live_config is None:
+            self._live_config = LiveConfig()
+        configured = max_tool_iterations(self._live_config)
+        if configured is None:
+            from raven.config.schema import AgentDefaults
+
+            configured = AgentDefaults.model_fields["max_tool_iterations"].default
+        return configured if configured and configured > 0 else None
+
     def build_builtin_backend(self, row: "AgentRow", build: Any = None) -> "RavenLoopBackend":
         """An in-process raven loop for one ``builtin`` row, narrowed for one dispatch.
 
@@ -511,6 +530,7 @@ class SubagentManager:
             mcp_allow=getattr(row.config, "mcps", None),
             retry_delays=self.retry_delays,
             retry_after_output=self.retry_after_output,
+            max_iterations=self._builtin_max_iterations,
         )
 
     def build_role_backend(self, build: Any = None) -> "RavenLoopBackend":
@@ -538,6 +558,7 @@ class SubagentManager:
             skills_allow=getattr(build, "skills_allow", None),
             retry_delays=self.retry_delays,
             retry_after_output=self.retry_after_output,
+            max_iterations=self._builtin_max_iterations,
         )
 
     def set_mcp_source(self, source: Any) -> None:
