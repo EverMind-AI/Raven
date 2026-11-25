@@ -21,9 +21,11 @@ import './styles.css'
  */
 
 /* Configured means the schema's required fields are all set. Entries whose
-   schema declares no required fields count as configured out of the box. */
+   schema declares no required fields count as configured out of the box --
+   unless the field list could not be read at all: that leaves the same empty
+   list behind, and it declares nothing. */
 const isConfigured = (c: ConnChannel): boolean =>
-  (c.fields || []).length ? (c.missing || []).length === 0 : true
+  c.error === undefined && ((c.fields || []).length ? (c.missing || []).length === 0 : true)
 
 /* What this row may honestly claim. The config flag alone used to drive the
    dot, so a channel whose adapter never came up still read as connected -- the
@@ -79,9 +81,13 @@ function stateOf(c: ConnChannel): { cls: string; text: string } {
  * the addable group, whose whole job is to say what it costs to get in before
  * anything is running. So the schema answers instead: an entry with no required
  * field has no form to fill, and the only way into it is signing in. That is
- * derivable, always available, and true of exactly the scan channels.
+ * derivable, always available, and true of exactly the scan channels -- as
+ * long as there was a field list to derive it from. A read that failed leaves
+ * the same empty list, and sending the reader to a code is the bug this row
+ * exists to stop.
  */
-const scanLogin = (c: ConnChannel): boolean => !!c.qrLogin || (c.fields || []).filter((f) => f.required).length === 0
+const scanLogin = (c: ConnChannel): boolean =>
+  c.error === undefined && (!!c.qrLogin || (c.fields || []).filter((f) => f.required).length === 0)
 
 /* What it costs to get in, which is what the addable group is sorted by. */
 const costOf = (c: ConnChannel): number =>

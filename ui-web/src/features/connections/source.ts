@@ -32,6 +32,11 @@ export async function loadChannels(): Promise<void> {
        configure form is drawn from it, so the form and the config can't drift. */
     c.fields = s.fields || []
     c.missing = s.missing || []
+    /* A failed field read leaves the same empty list behind as a channel that
+       needs nothing; the error is the only thing that tells them apart, so the
+       page gets it. Cleared on the next read that worked. */
+    if (s.error === undefined) delete c.error
+    else c.error = s.error
     /* Three separate facts, kept separate. `on` is what the config asks for;
        `running` is whether the adapter came up; `connected` is whether the
        account is paired, which only the QR channels report. Absent means the

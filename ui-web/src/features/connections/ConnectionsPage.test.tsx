@@ -266,6 +266,22 @@ describe('connections island', () => {
       await mount()
       expect(subOf('Slack')).toBe('gui.conn.line_creds {"n":"1"}')
     })
+
+    /* The failed read's empty list is the read's shape, not the channel's
+       needs: reading it by shape alone drew the scan wizard for a credentials
+       channel and called the row configured -- the Settings-page failure the
+       rpc half was fixed for. */
+    it('does not read a failed field read as configured or as a scan login', async () => {
+      install([chan({ fields: [], missing: [], error: 'the schema cannot be flattened' })])
+      await mount()
+      expect(lineOf('Slack')).not.toBe('gui.conn.line_scan')
+      await act(async () => { openRow('Slack') })
+      expect(main().querySelector('.suwiz')).toBeNull()
+      expect(main().querySelector('#connDlgBody')).toBeTruthy()
+      /* `st_off` is the sentence a configured, switched-off row gets; this row
+         must not claim it. */
+      expect(paneHead().querySelector('.su-by')!.textContent).not.toBe('gui.conn.st_off')
+    })
   })
 
   /* The heart of it: pressing the button is a decision, not an arrival. An
