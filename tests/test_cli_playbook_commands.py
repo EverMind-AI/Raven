@@ -224,8 +224,8 @@ def test_run_executes_by_name_with_kv_params(library, monkeypatch):
     # `allow_disabled`: this entry is the user's own hand, and disabling only
     # takes a playbook out of what the model is offered.
     assert _FakeRuntime.last.ran == ("mine", {"target": "acme"}, {}, True)
-    # The explicit entry runs synchronously: the executor is built foreground.
-    assert _FakeRuntime.last.kwargs["executor"]._background is False
+    # The explicit entry runs synchronously: the executor waits for the result.
+    assert _FakeRuntime.last.kwargs["executor"]._wait_for_result is True
     # And it composes a prompt-mode graph itself -- there is no model in the room
     # to hand the guidance to, so without this the CLI could not run one at all.
     assert _FakeRuntime.last.kwargs["executor"]._compose_prompt_mode is True

@@ -3532,7 +3532,7 @@ class TestWhatAPersonApproves:
 
         from raven.agent.subagent.prompt_errors import RoundNotApprovedError
 
-        await tool.execute(nodes, task_summary="ordinary", confirm=True, background=False)
+        await tool.execute(nodes, task_summary="ordinary", confirm=True)
         # A refused round is an exception for the driver, which has a record
         # to close; the ordinary run above got the sentence a model reads.
         with pytest.raises(RoundNotApprovedError):
@@ -3563,7 +3563,6 @@ class TestWhatAPersonApproves:
             [{"id": "a", "subagent": "echo", "node_summary": "s", "prompt_template": "p"}],
             task_summary="innocent",
             confirm=True,
-            background=False,
             confirm_question="Run this harmless 1 step graph?",
         )
 

@@ -234,6 +234,10 @@ already passed the gate above.
 
 ## Failure modes
 
+> **Superseded 2026-11-21.** The "foreground run" row below describes a lane
+> that no longer exists: every call dispatches a background run. See
+> `docs/specs/2026-11-21-dag-single-lane-design.md`.
+
 | mode | before | after |
 |---|---|---|
 | `tool_call` withheld by operator | every suspended node burns 600s, blames the agent | node fails at once, names the missing route |

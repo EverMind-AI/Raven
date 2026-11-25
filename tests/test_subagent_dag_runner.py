@@ -562,10 +562,9 @@ async def test_the_graph_tool_resolves_the_turn_binding_per_dispatch(tmp_path: P
     # Two node ids: they are unique per conversation, so a second graph
     # reusing `a` would be refused before anything was dispatched.
     for node_id, expected in (("a", ("p-one", "m-one")), ("b", ("p-two", "m-two"))):
-        await tool.execute(
+        await tool.execute_to_completion(
             task_summary="run the graph under test",
             nodes=[{"id": node_id, "subagent": "echo", "node_summary": "say hello", "prompt_template": "go"}],
-            background=False,
         )
         assert (node.kwargs[-1]["provider"], node.kwargs[-1]["model"]) == expected
 
@@ -1308,6 +1307,47 @@ async def test_run_dag_cancel_skips_unfinished_and_reaps_in_flight_task(tmp_path
     assert leaked_run_groups == []
 
 
+async def test_a_cancelled_run_wakes_the_host_waiter_with_its_tally(tmp_path: Path, monkeypatch) -> None:
+    """A stop takes the cancelled branch, which returns before the announcer is
+    reached. The host waiter has no other wake-up: without the resolve there,
+    ``execute_to_completion`` -- what ``raven playbook run`` blocks on -- would
+    wait forever on a run that is already over.
+    """
+    running = asyncio.Event()
+
+    class _BlockingExec:
+        kind = "cli"
+
+        async def run(self, task: str, **kwargs: Any) -> str:
+            running.set()
+            await asyncio.sleep(3600)
+            return "never"
+
+    async with draining_dag_runs():
+        tool = SubAgentDagTool(
+            workspace=tmp_path,
+            agents=[ThirdPartyCliSubagentConfig(name="slow", command="cat")],
+        )
+        monkeypatch.setattr(tool, "_resolve_node", lambda node: _BlockingExec())
+        waiter = asyncio.create_task(
+            tool.execute_to_completion(
+                task_summary="run the graph under test",
+                nodes=[{"id": "a", "subagent": "slow", "node_summary": "hold the slot", "prompt_template": "hold"}],
+            )
+        )
+        try:
+            await asyncio.wait_for(running.wait(), timeout=10)
+            run_id = tool.active_run_ids()[0]
+            assert tool.request_cancel(run_id) is True
+            out = await asyncio.wait_for(waiter, timeout=10)
+        finally:
+            waiter.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await waiter
+
+    assert "1 cancelled" in str(out), str(out)
+
+
 async def test_an_injected_semaphore_bounds_concurrent_runs_together() -> None:
     """The cap has to mean total dispatches in flight, not per run.
 
@@ -1506,7 +1546,7 @@ async def test_a_node_naming_an_unconfigured_server_still_lets_the_graph_run(
     backend = _NoServers()
     monkeypatch.setattr(tool, "_resolve_node", lambda node: backend)
 
-    out = await tool.execute(
+    out = await tool.execute_to_completion(
         task_summary="run the graph under test",
         nodes=[
             {
@@ -1523,7 +1563,6 @@ async def test_a_node_naming_an_unconfigured_server_still_lets_the_graph_run(
                 "prompt_template": "go too",
             },
         ],
-        background=False,
     )
 
     text = getattr(out, "model_text", None) or str(out)
@@ -1540,7 +1579,7 @@ async def test_run_subagent_dag_tool_end_to_end(tmp_path: Path) -> None:
     assert tool.name == "run_subagent_dag"
     assert "echo" in tool.description
 
-    out = await tool.execute(
+    out = await tool.execute_to_completion(
         task_summary="run the graph under test",
         nodes=[
             {"id": "a", "subagent": "echo", "node_summary": "say hello world", "prompt_template": "hello world"},
@@ -1552,7 +1591,6 @@ async def test_run_subagent_dag_tool_end_to_end(tmp_path: Path) -> None:
                 "depends_on": ["a"],
             },
         ],
-        background=False,
     )
     assert "2 completed" in out.model_text
     assert "hello world" in out.model_text  # a's output flowed to b (the sink) and back
@@ -1604,7 +1642,7 @@ async def test_the_tool_lets_a_continued_instance_replace_its_mcps(
     backends = {"open": _Recording("open"), "later": _Recording("later")}
     monkeypatch.setattr(tool, "_resolve_node", lambda node: backends[node.id])
 
-    out = await tool.execute(
+    out = await tool.execute_to_completion(
         task_summary="run the graph under test",
         nodes=[
             {
@@ -1625,7 +1663,6 @@ async def test_the_tool_lets_a_continued_instance_replace_its_mcps(
                 "mcps": [],
             },
         ],
-        background=False,
     )
 
     # A refused graph comes back as the rendered refusal, not a run receipt, so
@@ -1648,7 +1685,7 @@ async def test_run_subagent_dag_tool_dispatches_to_a_name_with_a_space(tmp_path:
     )
     assert "General Audit" in tool.description
 
-    out = await tool.execute(
+    out = await tool.execute_to_completion(
         task_summary="run the graph under test",
         nodes=[
             {
@@ -1658,7 +1695,6 @@ async def test_run_subagent_dag_tool_dispatches_to_a_name_with_a_space(tmp_path:
                 "prompt_template": "hello world",
             }
         ],
-        background=False,
     )
     assert "1 completed" in out.model_text
     assert "hello world" in out.model_text
@@ -1993,15 +2029,11 @@ class TestBackgroundRun:
         assert announces.calls == []
         assert not (tmp_path / ".ravenx_dag").exists()
 
-    def test_the_flag_is_declared_and_defaults_to_true(self, tmp_path: Path) -> None:
-        """Backgrounding is opt-out, so the schema has to carry the flag and say
-        which way it points -- a model reading the description alone would
-        otherwise assume the old blocking behaviour it was trained on."""
+    def test_the_schema_has_no_background_flag(self, tmp_path: Path) -> None:
+        """There is one lane, so the schema must not offer a switch."""
         schema = self._tool(tmp_path).parameters
+        assert "background" not in schema["properties"]
         assert "background" not in schema["required"]
-        described = schema["properties"]["background"]
-        assert described["type"] == "boolean"
-        assert "Default true" in described["description"]
 
     @pytest.mark.parametrize("stop", ["by_session", "all", "by_id"])
     async def test_a_background_run_is_reachable_by_stop_and_shutdown(self, tmp_path: Path, stop: str) -> None:
@@ -2059,36 +2091,21 @@ class TestBackgroundRun:
         # A run torn down under the user's feet has nothing to report back.
         assert announces.calls == []
 
-    @pytest.mark.parametrize("background", [False, True], ids=["blocking", "background"])
-    async def test_a_graph_submitted_after_the_shutdown_sweep_is_refused_in_both_modes(
-        self, tmp_path: Path, monkeypatch, background: bool
-    ) -> None:
+    async def test_a_graph_submitted_after_the_shutdown_sweep_is_refused(self, tmp_path: Path, monkeypatch) -> None:
         """The manager closes admission at shutdown and refuses at adoption by
         cancelling the task it is handed. `_dispatch` creates that task and
         adopts it with no await between, so the cancel lands before its first
-        tick and never reaches `_run_detached`'s own handler -- the one that
-        stops the outbox. Unhandled, a blocking call parked on `outbox.take()`
-        for good, and a backgrounded one told the model its run had started
-        when nothing was running and no announce was coming. Both modes now
-        return the refusal, and the tray is stopped the way a real cancellation
-        stops it. The charge door is left unwired on purpose: wired, it refuses
-        first, and this test is about the door behind it."""
-        from raven.agent.subagent import dag_tool as dag_tool_mod
-        from raven.agent.subagent.dag_adjudication import Outbox, Stopped
+        tick and never reaches `_run_detached`'s own handler. Unhandled, the
+        model would be told its run had started when nothing was running and no
+        announce was coming. The refusal is returned instead. The charge door is
+        left unwired on purpose: wired, it refuses first, and this test is about
+        the door behind it."""
         from raven.agent.subagent.manager import SubagentManager
 
         class _Provider:
             def get_default_model(self) -> str:
                 return "m"
 
-        trays: list[Outbox] = []
-
-        class _RecordingOutbox(Outbox):
-            def __init__(self, *a: Any, **k: Any) -> None:
-                super().__init__(*a, **k)
-                trays.append(self)
-
-        monkeypatch.setattr(dag_tool_mod, "Outbox", _RecordingOutbox)
         mgr = SubagentManager(provider=_Provider(), workspace=tmp_path)
         announces = _Announces()
         tool = SubAgentDagTool(
@@ -2105,7 +2122,6 @@ class TestBackgroundRun:
             tool.execute(
                 task_summary="a graph submitted while the host shuts down",
                 nodes=[{"id": "a", "subagent": "echo", "node_summary": "node a", "prompt_template": "hi"}],
-                background=background,
             ),
             timeout=5,
         )
@@ -2116,11 +2132,6 @@ class TestBackgroundRun:
         assert tool.active_run_ids() == []
         assert mgr.get_running_count() == 0
         assert announces.calls == []
-        if background:
-            assert trays == []
-        else:
-            (tray,) = trays
-            assert isinstance(await asyncio.wait_for(tray.take(), 1), Stopped)
 
     async def test_a_stopped_run_announces_nothing(self, tmp_path: Path) -> None:
         """`run_dag` returns normally on a stop, with everything skipped. Turning
@@ -2184,7 +2195,7 @@ class TestBackgroundRun:
             }
 
         first = await tool.execute(task_summary="run the graph under test", nodes=[node("a")])
-        second = await tool.execute(task_summary="run the graph under test", nodes=[node("b")], background=False)
+        second = await tool.execute_to_completion(task_summary="run the graph under test", nodes=[node("b")])
         third = await tool.execute(task_summary="run the graph under test", nodes=[node("c")])
 
         assert "started in the background" in str(first)
@@ -2323,7 +2334,7 @@ class TestBackgroundRun:
         assert "backend exploded" in summary
         # The announce is a verbatim copy, so the foreground result is the same
         # text -- the id belongs to the summary, not to any announce framing.
-        foreground = await tool.execute(task_summary="run the graph under test", nodes=[dict(node)], background=False)
+        foreground = await tool.execute_to_completion(task_summary="run the graph under test", nodes=[dict(node)])
         assert str(foreground).startswith("Error running DAG ")
         assert "backend exploded" in str(foreground)
 
@@ -2645,7 +2656,7 @@ async def test_run_subagent_dag_tool_fans_progress_to_sink(tmp_path: Path) -> No
         events.append((conversation, name, payload))
 
     tool.set_progress_sink(sink)
-    await tool.execute(
+    await tool.execute_to_completion(
         task_summary="run the graph under test",
         nodes=[
             {"id": "a", "subagent": "echo", "node_summary": "node a", "prompt_template": "hi"},
@@ -2657,7 +2668,6 @@ async def test_run_subagent_dag_tool_fans_progress_to_sink(tmp_path: Path) -> No
                 "depends_on": ["a"],
             },
         ],
-        background=False,
     )
 
     assert all(conv == "web:sess1" for conv, _, _ in events)
@@ -2714,7 +2724,7 @@ class TestCallAndResultLabels:
         assert tool.display_call({"nodes": []}) is None
 
     async def test_result_preview_names_the_run_and_its_tally(self, tmp_path: Path) -> None:
-        out = await self._tool(tmp_path).execute(
+        out = await self._tool(tmp_path).execute_to_completion(
             task_summary="run the graph under test",
             nodes=[
                 {"id": "a", "subagent": "echo", "node_summary": "node a", "prompt_template": "hi"},
@@ -2726,7 +2736,6 @@ class TestCallAndResultLabels:
                     "depends_on": ["a"],
                 },
             ],
-            background=False,
         )
         preview = getattr(out, "display_text", None)
         assert preview is not None, "the result must carry a display string for the transcript"
@@ -2745,7 +2754,7 @@ class TestCallAndResultLabels:
                 ThirdPartyCliSubagentConfig(name="broken", command="false"),
             ],
         )
-        out = await tool.execute(
+        out = await tool.execute_to_completion(
             task_summary="run the graph under test",
             nodes=[
                 {"id": "boom", "subagent": "broken", "node_summary": "the node that fails", "prompt_template": "x"},
@@ -2757,7 +2766,6 @@ class TestCallAndResultLabels:
                     "depends_on": ["boom"],
                 },
             ],
-            background=False,
         )
         assert out.display_text is not None
         assert "1 failed (boom)" in out.display_text
@@ -2780,10 +2788,9 @@ async def test_run_subagent_dag_tool_stamps_tool_call_id_on_every_event(tmp_path
         events.append((name, payload))
 
     tool.set_progress_sink(sink)
-    await tool.execute(
+    await tool.execute_to_completion(
         task_summary="run the graph under test",
         nodes=[{"id": "a", "subagent": "echo", "node_summary": "node a", "prompt_template": "hi"}],
-        background=False,
     )
 
     assert events, "expected at least one progress event"
@@ -2805,10 +2812,9 @@ async def test_run_subagent_dag_tool_omits_tool_call_id_when_host_sets_none(tmp_
         events.append(payload)
 
     tool.set_progress_sink(sink)
-    await tool.execute(
+    await tool.execute_to_completion(
         task_summary="run the graph under test",
         nodes=[{"id": "a", "subagent": "echo", "node_summary": "node a", "prompt_template": "hi"}],
-        background=False,
     )
 
     assert events
@@ -2891,7 +2897,7 @@ class TestCapabilityGate:
 
     async def test_a_graph_that_respects_the_tags_still_runs(self, tmp_path: Path) -> None:
         tool = self._tool(tmp_path)
-        out = await tool.execute(
+        out = await tool.execute_to_completion(
             task_summary="run the graph under test",
             nodes=[
                 {
@@ -2908,7 +2914,6 @@ class TestCapabilityGate:
                     "depends_on": ["a"],
                 },
             ],
-            background=False,
         )
 
         assert "2 completed" in out.model_text
@@ -2937,7 +2942,6 @@ class TestCapabilityGate:
                     "instance": "author",
                 },
             ],
-            background=False,
         )
 
         # A rejection is a plain error string; a graph that ran comes back as a
@@ -3209,7 +3213,7 @@ async def test_the_tool_grants_this_conversations_history_and_nothing_wider(tmp_
     with workdir.bind(ws):
         # Foreground, so the outcome is this call's own result: what is asserted
         # is that the node ran and read the file, not that it was accepted.
-        ok = await tool.execute(
+        ok = await tool.execute_to_completion(
             task_summary="run the graph under test",
             nodes=[
                 {
@@ -3219,7 +3223,6 @@ async def test_the_tool_grants_this_conversations_history_and_nothing_wider(tmp_
                     "prompt_template": f"{{{{ ref:{ws / 'brief.md'} }}}}",
                 }
             ],
-            background=False,
         )
         assert "1 completed" in ok.model_text
 
@@ -3228,7 +3231,7 @@ async def test_the_tool_grants_this_conversations_history_and_nothing_wider(tmp_
         # report names -- a sibling of ``mas_dag`` under the same subagents root.
         run_dir = Path(str(ok.model_text).split("Run dir: ")[1].splitlines()[0])
         node_output = run_dir.parent.parent / "nodes" / "reads_workdir.out.md"
-        history = await tool.execute(
+        history = await tool.execute_to_completion(
             task_summary="run the graph under test",
             nodes=[
                 {
@@ -3238,7 +3241,6 @@ async def test_the_tool_grants_this_conversations_history_and_nothing_wider(tmp_
                     "prompt_template": f"{{{{ ref:{node_output} }}}}",
                 }
             ],
-            background=False,
         )
         assert "1 completed" in history.model_text
 
@@ -3249,7 +3251,7 @@ async def test_the_tool_grants_this_conversations_history_and_nothing_wider(tmp_
             ("reads_other_chat", home / "sessions" / "grp" / "other.jsonl"),
             ("reads_above", tmp_path / "outside.md"),
         ):
-            refused = await tool.execute(
+            refused = await tool.execute_to_completion(
                 task_summary="run the graph under test",
                 nodes=[
                     {
@@ -3322,7 +3324,7 @@ async def test_the_tool_refuses_an_absolute_path_to_a_node_that_may_not_execute(
     directory, which is the state a real conversation is in when it submits a graph.
     """
     (tmp_path / "sessions").mkdir()
-    tool = _foreground_tool(tmp_path, [])
+    tool = _judged_echo_tool(tmp_path, [])
     history = tool._history_root()
     assert history is not None
 
@@ -5118,10 +5120,9 @@ async def test_run_dag_records_whether_each_instance_was_minted() -> None:
 async def test_dag_summary_names_each_stateful_node_handle(tmp_path: Path) -> None:
     cfg = ThirdPartyCliSubagentConfig(name="worker", command="cat {agent_id}", resume_command="cat --resume {agent_id}")
     tool = SubAgentDagTool(workspace=tmp_path, agents=[cfg])
-    result = await tool.execute(
+    result = await tool.execute_to_completion(
         task_summary="run the graph under test",
         nodes=[{"id": "research", "subagent": "worker", "node_summary": "research the topic", "prompt_template": "go"}],
-        background=False,
     )
     assert re.search(r"- research \[\w+\] \(instance: research-[0-9a-f]{6}\):", str(result))
 
@@ -5158,7 +5159,7 @@ async def test_confirm_false_asks_nobody(tmp_path: Path) -> None:
     tool = _confirming_tool(tmp_path, True, asked)
     tool._registry._backends["on"] = _FakeExec()
 
-    out = await tool.execute(_one_node(), task_summary="run the graph under test", background=False)
+    out = await tool.execute_to_completion(_one_node(), task_summary="run the graph under test")
 
     assert asked == []
     assert isinstance(out, ToolResult), out
@@ -5170,7 +5171,7 @@ async def test_confirm_true_dispatches_only_on_approval(tmp_path: Path) -> None:
     backend = _FakeExec()
     tool._registry._backends["on"] = backend
 
-    out = await tool.execute(_one_node(), task_summary="run the graph under test", background=False, confirm=True)
+    out = await tool.execute_to_completion(_one_node(), task_summary="run the graph under test", confirm=True)
 
     assert len(asked) == 1
     assert isinstance(out, ToolResult), out
@@ -5183,7 +5184,7 @@ async def test_a_refused_graph_runs_nothing(tmp_path: Path) -> None:
     backend = _FakeExec()
     tool._registry._backends["on"] = backend
 
-    out = await tool.execute(_one_node(), task_summary="run the graph under test", background=False, confirm=True)
+    out = await tool.execute_to_completion(_one_node(), task_summary="run the graph under test", confirm=True)
 
     assert not backend.calls, "a refused graph must cost zero dispatches"
     assert "did not approve" in str(out)
@@ -5210,7 +5211,7 @@ async def test_the_question_names_every_step(tmp_path: Path) -> None:
             "depends_on": ["draft"],
         },
     ]
-    await tool.execute(nodes, task_summary="run the graph under test", background=False, confirm=True)
+    await tool.execute_to_completion(nodes, task_summary="run the graph under test", confirm=True)
 
     assert "draft" in asked[0]
     assert "publish" in asked[0]
@@ -5223,7 +5224,7 @@ async def test_an_unreachable_asker_is_a_no(tmp_path: Path) -> None:
     backend = _FakeExec()
     tool._registry._backends["on"] = backend
 
-    out = await tool.execute(_one_node(), task_summary="run the graph under test", background=False, confirm=True)
+    out = await tool.execute_to_completion(_one_node(), task_summary="run the graph under test", confirm=True)
 
     assert not backend.calls
     assert "did not approve" in str(out)
@@ -5239,7 +5240,7 @@ async def test_no_ask_channel_dispatches_and_says_so(tmp_path: Path) -> None:
     backend = _FakeExec()
     tool._registry._backends["on"] = backend
 
-    out = await tool.execute(_one_node(), task_summary="run the graph under test", background=False, confirm=True)
+    out = await tool.execute_to_completion(_one_node(), task_summary="run the graph under test", confirm=True)
 
     assert isinstance(out, ToolResult), out
     assert backend.calls
@@ -5254,7 +5255,7 @@ async def test_a_refused_graph_is_not_charged(tmp_path: Path) -> None:
     tool._charge = lambda key: charged.append(key) or None
     tool._registry._backends["on"] = _FakeExec()
 
-    await tool.execute(_one_node(), task_summary="run the graph under test", background=False, confirm=True)
+    await tool.execute_to_completion(_one_node(), task_summary="run the graph under test", confirm=True)
 
     assert charged == []
 
@@ -8200,126 +8201,6 @@ async def test_a_decision_restarts_the_window_for_the_nodes_still_waiting() -> N
     assert errors == {}
 
 
-async def test_a_bound_run_waits_without_a_deadline_until_it_is_released() -> None:
-    """While the turn that owns a foreground run is alive there is no clock.
-
-    The decision lands well past the configured window but inside a window that
-    starts at release; a wait clocked from entry would already have failed the
-    node when the release arrived.
-    """
-    from raven.agent.subagent.dag_adjudication import CONTINUE, AdjudicationDesk
-    from raven.agent.subagent.dag_runner import _await_adjudications
-
-    desk = AdjudicationDesk()
-    desk.open("n0")
-    status = {"n0": "exception"}
-    errors: dict[str, str] = {}
-    continuations: dict[str, str] = {}
-    released = asyncio.Event()
-
-    async def _release_later() -> None:
-        await asyncio.sleep(0.3)
-        released.set()
-
-    async def _decide_later() -> None:
-        await asyncio.sleep(0.4)
-        desk.resolve("n0", CONTINUE, "go on")
-
-    side = [asyncio.create_task(_release_later()), asyncio.create_task(_decide_later())]
-    try:
-        await _await_adjudications(desk, status, errors, continuations, timeout_s=0.2, cancel=None, released=released)
-    finally:
-        await asyncio.gather(*side)
-
-    assert status == {"n0": "pending"}
-    assert continuations == {"n0": "go on"}
-    assert errors == {}
-
-
-async def test_the_window_starts_when_the_run_is_released() -> None:
-    """Released and then ignored, the node fails one window after the release, not after entry."""
-    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
-    from raven.agent.subagent.dag_runner import _await_adjudications
-
-    desk = AdjudicationDesk()
-    desk.open("n0")
-    status = {"n0": "exception"}
-    errors: dict[str, str] = {}
-    released = asyncio.Event()
-    asyncio.get_running_loop().call_later(0.2, released.set)
-
-    started = time.perf_counter()
-    await _await_adjudications(desk, status, errors, {}, timeout_s=0.2, cancel=None, released=released)
-    elapsed = time.perf_counter() - started
-
-    assert status == {"n0": "failed"}
-    assert "timed out" in errors["n0"]
-    # The node waited twice the window here, so a message naming the window as the
-    # node's whole wait would be a false claim. It reports the silence instead.
-    assert "Nothing was decided for 0.2s" in errors["n0"], errors["n0"]
-    assert 0.35 < elapsed < 0.9, f"expected release (0.2s) + window (0.2s), got {elapsed:.3f}s"
-
-
-async def test_an_already_released_run_is_clocked_from_entry() -> None:
-    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
-    from raven.agent.subagent.dag_runner import _await_adjudications
-
-    desk = AdjudicationDesk()
-    desk.open("n0")
-    status = {"n0": "exception"}
-    errors: dict[str, str] = {}
-    released = asyncio.Event()
-    released.set()
-
-    started = time.perf_counter()
-    await _await_adjudications(desk, status, errors, {}, timeout_s=0.2, cancel=None, released=released)
-    elapsed = time.perf_counter() - started
-
-    assert status == {"n0": "failed"}
-    assert elapsed < 0.5
-
-
-async def test_a_decision_landing_while_unclocked_leaves_the_wait_unclocked() -> None:
-    """Two open nodes, still bound: resolving one must not start a clock for the other.
-
-    A regression to an unconditional ``deadline = loop.time() + timeout_s`` on any
-    decided node -- dropping the ``still_bound`` check -- would clock n1 the moment
-    n0 resolves, and n1 would time out long before release ever arrives.
-    """
-    from raven.agent.subagent.dag_adjudication import CONTINUE, AdjudicationDesk
-    from raven.agent.subagent.dag_runner import _await_adjudications
-
-    desk = AdjudicationDesk()
-    desk.open("n0")
-    desk.open("n1")
-    status = {"n0": "exception", "n1": "exception"}
-    errors: dict[str, str] = {}
-    continuations: dict[str, str] = {}
-    released = asyncio.Event()
-
-    async def _resolve_n0_early() -> None:
-        await asyncio.sleep(0.05)
-        desk.resolve("n0", CONTINUE, "go on n0")
-
-    async def _release_and_resolve_n1_past_the_window() -> None:
-        await asyncio.sleep(0.4)
-        released.set()
-        desk.resolve("n1", CONTINUE, "go on n1")
-
-    side = [
-        asyncio.create_task(_resolve_n0_early()),
-        asyncio.create_task(_release_and_resolve_n1_past_the_window()),
-    ]
-    try:
-        await _await_adjudications(desk, status, errors, continuations, timeout_s=0.2, cancel=None, released=released)
-    finally:
-        await asyncio.gather(*side)
-
-    assert status == {"n0": "pending", "n1": "pending"}
-    assert continuations == {"n0": "go on n0", "n1": "go on n1"}
-    assert errors == {}
-
-
 def test_the_report_has_one_shape_addressed_to_the_agent():
     """Both lanes hand the report to the main agent now, so there is one text.
 
@@ -8860,7 +8741,6 @@ async def test_an_unstarted_background_run_retires_every_per_run_entry(tmp_path:
     await tool.execute(
         task_summary="background run for the leak probe",
         nodes=[{"id": "a", "subagent": "echo", "node_summary": "n", "prompt_template": "p"}],
-        background=True,
     )
     (run_id,) = list(tool._runs)
     assert run_id in tool._cancels
@@ -9391,7 +9271,7 @@ async def test_the_no_route_failure_keeps_the_judge_s_reason(tmp_path) -> None:
 # --- a foreground run hands its reports to the turn awaiting it ------------------
 
 
-def _foreground_tool(tmp_path: Path, verdicts: list[Any], **kwargs: Any) -> SubAgentDagTool:
+def _judged_echo_tool(tmp_path: Path, verdicts: list[Any], **kwargs: Any) -> SubAgentDagTool:
     """A graph tool over a Python echo process, judged by a scripted verdict list.
 
     Each judge call pops the next verdict; once the list is spent every node is
@@ -9441,95 +9321,6 @@ _PAIR = [
 _SOLO = [{"id": "a", "subagent": "echo", "node_summary": "only", "prompt_template": "do a"}]
 
 
-async def test_a_foreground_call_returns_the_first_report_while_the_graph_keeps_running(tmp_path: Path) -> None:
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [_falls_short()])
-
-        out = await tool.execute(task_summary="fg", nodes=_CHAIN, background=False)
-
-        text = out.model_text
-        assert "did not accomplish its task" in text and "a token" in text
-        assert "resolve_dag_node" in text
-        assert "returned before the graph finished" in text, "the agent is told the protocol"
-        (run_id,) = list(tool._runs)
-        assert not tool._runs[run_id].done(), "the graph is still running"
-        assert tool.is_foreground(run_id)
-
-
-async def test_resolving_the_node_and_awaiting_returns_the_final_result(tmp_path: Path) -> None:
-    from raven.agent.subagent.dag_adjudication import Final
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [_falls_short()])
-        await tool.execute(task_summary="fg", nodes=_CHAIN, background=False)
-        (run_id,) = list(tool._runs)
-
-        assert tool.resolve_node(run_id, "a", "continue", "use the staging token")
-        event = await tool.await_run(run_id)
-
-        assert isinstance(event, Final) and not event.stopped
-        final = tool.render_event(run_id, event)
-        assert "2 completed" in final.model_text
-        assert await tool.await_run(run_id) in (event, None), "after the run ends there is nothing more to wait for"
-
-
-async def test_a_second_suspended_node_is_handed_over_on_the_next_await(tmp_path: Path) -> None:
-    from raven.agent.subagent.dag_adjudication import Final, Report
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [_falls_short("token a"), _falls_short("token b")])
-        first = await tool.execute(task_summary="fg", nodes=_PAIR, background=False)
-        (run_id,) = list(tool._runs)
-        first_node = "a" if "node 'a'" in first.model_text else "b"
-        other = "b" if first_node == "a" else "a"
-
-        assert tool.resolve_node(run_id, first_node, "continue", "here you go")
-        second = await tool.await_run(run_id)
-
-        assert isinstance(second, Report) and second.node_id == other, "one report per take, the other node's"
-        assert tool.resolve_node(run_id, other, "abandon", None)
-        final = await tool.await_run(run_id)
-        assert isinstance(final, Final)
-        assert "1 completed" in tool.render_event(run_id, final).model_text
-        assert "1 failed" in tool.render_event(run_id, final).model_text
-
-
-async def test_a_foreground_run_with_no_suspension_returns_the_summary_as_before(tmp_path: Path) -> None:
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [])
-        out = await tool.execute(task_summary="fg", nodes=_CHAIN, background=False)
-        assert "2 completed" in out.model_text
-        assert "returned before the graph finished" not in out.model_text
-        assert not tool._runs, "a finished run leaves no task behind"
-        assert not tool._outboxes
-
-
-async def test_a_terminal_report_does_not_return_the_blocking_call(tmp_path: Path) -> None:
-    """A node that exhausts its continuations is failed, not suspended: the call that
-    resolves its last real suspension must reach the run's summary, not a report the
-    agent can never resolve."""
-    from raven.agent.subagent.dag_adjudication import Final
-    from raven.config.raven import SubagentDagConfig
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(
-            tmp_path,
-            [_falls_short(), _falls_short()],
-            verdict_config=SubagentDagConfig(max_continuations=1),
-        )
-        first = await tool.execute(task_summary="fg", nodes=_CHAIN[:1], background=False)
-        assert "returned before the graph finished" in first.model_text, "the real suspension carries the tail"
-        (run_id,) = list(tool._runs)
-
-        assert tool.resolve_node(run_id, "a", "continue", "use the staging token")
-        event = await tool.await_run(run_id)
-
-        assert isinstance(event, Final), f"expected the run's summary, got {event!r}"
-        final = tool.render_event(run_id, event)
-        assert "finished:" in final.model_text
-        assert "returned before the graph finished" not in final.model_text
-
-
 async def test_a_backgrounded_run_still_announces_a_terminal_report(tmp_path: Path) -> None:
     """The suspended-only guard belongs to the foreground closure alone: a background
     run's announcer must still learn that a node exhausted its continuations."""
@@ -9541,13 +9332,13 @@ async def test_a_backgrounded_run_still_announces_a_terminal_report(tmp_path: Pa
         reported.append(node_id)
 
     async with draining_dag_runs():
-        tool = _foreground_tool(
+        tool = _judged_echo_tool(
             tmp_path,
             [_falls_short(), _falls_short()],
             announce_exception=_announce_exception,
             verdict_config=SubagentDagConfig(max_continuations=1),
         )
-        await tool.execute(task_summary="bg", nodes=_CHAIN[:1], background=True)
+        await tool.execute(task_summary="bg", nodes=_CHAIN[:1])
         (run_id,) = list(tool._runs)
         for _ in range(300):
             if reported:
@@ -9563,34 +9354,6 @@ async def test_a_backgrounded_run_still_announces_a_terminal_report(tmp_path: Pa
         assert reported == ["a", "a"], "both the suspension and the terminal report reach the announcer"
 
 
-async def test_cancelling_the_awaiting_call_cancels_the_run(tmp_path: Path) -> None:
-    class _Sleeper:
-        kind = "raven-loop"
-
-        async def run(self, task: str, **_kwargs: Any) -> str:
-            await asyncio.sleep(60)
-            return "never"
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [])
-        tool._resolve_node = lambda node: _Sleeper()  # type: ignore[method-assign]
-        call = asyncio.create_task(tool.execute(task_summary="fg", nodes=_CHAIN[:1], background=False))
-        for _ in range(100):
-            await asyncio.sleep(0.01)
-            if tool._runs:
-                break
-        (run_id,) = list(tool._runs)
-        run_task = tool._runs[run_id]
-
-        call.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await call
-        await asyncio.gather(run_task, return_exceptions=True)
-
-        assert run_task.cancelled()
-        assert run_id not in tool._runs and run_id not in tool._outboxes
-
-
 # --- a turn's end releases the foreground runs it still binds --------------------
 
 
@@ -9601,91 +9364,6 @@ async def _both_suspended(tool: SubAgentDagTool, run_id: str) -> None:
             return
         await asyncio.sleep(0.01)
     raise AssertionError("both nodes should have suspended by now")
-
-
-async def test_release_re_sends_the_unanswered_report_and_clocks_the_run(tmp_path: Path) -> None:
-    """A released foreground run becomes a backgrounded one, with full information."""
-    from raven.config.raven import SubagentDagConfig
-
-    re_sent: list[tuple[str, str, dict]] = []
-    results: list[str] = []
-
-    async def _announce_exception(run_id: str, node_id: str, report: str, origin: dict, **_kwargs: Any) -> None:
-        re_sent.append((node_id, report, origin))
-
-    async def _announce(run_id: str, summary: str, origin: dict) -> None:
-        results.append(summary)
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(
-            tmp_path,
-            [_falls_short("token a"), _falls_short("token b")],
-            announce=_announce,
-            announce_exception=_announce_exception,
-            verdict_config=SubagentDagConfig(adjudication_timeout_seconds=0.3),
-        )
-        first = await tool.execute(task_summary="fg", nodes=_PAIR, background=False)
-        (run_id,) = list(tool._runs)
-        run_task = tool._runs[run_id]
-        await _both_suspended(tool, run_id)
-        handed = "a" if "node 'a'" in first.model_text else "b"
-        buffered = "b" if handed == "a" else "a"
-
-        await tool.release_turn("web:fg", flush=True)
-
-        assert not tool.is_foreground(run_id)
-        assert [node for node, _, _ in re_sent] == [handed, buffered], (
-            "both are unanswered: the turn took one and never decided it, and never saw the other"
-        )
-        assert re_sent[0][2]["session_key"] == "web:fg"
-        assert "returned before the graph finished" not in re_sent[0][1], "an announced report carries no tail"
-
-        await asyncio.wait_for(run_task, timeout=5)
-        assert len(results) == 1 and "2 failed" in results[0], (
-            "clocked after release, both nodes time out and the summary announces"
-        )
-
-
-async def test_a_re_sent_report_still_carries_what_the_node_returned(tmp_path: Path, monkeypatch) -> None:
-    """The outbox holds a report across the turn; the node's output is held with it.
-
-    Re-sent without it, a released foreground run's row would fold open onto the
-    brief again -- the same report, read the wrong way only because it waited.
-    """
-    from raven.config.raven import SubagentDagConfig
-
-    spawn = asyncio.create_subprocess_exec
-
-    async def without_cat(*args, **kwargs):
-        if Path(args[0]).name == "cat":
-            raise FileNotFoundError("cat is not installed")
-        return await spawn(*args, **kwargs)
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", without_cat)
-    re_sent: list[dict] = []
-
-    async def _announce_exception(run_id: str, node_id: str, report: str, origin: dict, **kwargs: Any) -> None:
-        re_sent.append(kwargs)
-
-    async def _announce(run_id: str, summary: str, origin: dict) -> None:
-        return None
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(
-            tmp_path,
-            [_falls_short("token a")],
-            announce=_announce,
-            announce_exception=_announce_exception,
-            verdict_config=SubagentDagConfig(adjudication_timeout_seconds=0.3),
-        )
-        await tool.execute(task_summary="fg", nodes=_SOLO, background=False)
-        (run_id,) = list(tool._runs)
-        run_task = tool._runs[run_id]
-
-        await tool.release_turn("web:fg", flush=True)
-
-        assert re_sent and "do a" in re_sent[0]["output"], "the process echoes the prompt, so that is what came back"
-        await asyncio.wait_for(run_task, timeout=5)
 
 
 async def test_a_stint_driver_passes_a_notification_on_with_its_output(tmp_path: Path) -> None:
@@ -9700,7 +9378,7 @@ async def test_a_stint_driver_passes_a_notification_on_with_its_output(tmp_path:
     async def _adjudicate(node_id: str, report: str) -> tuple[str, str]:
         raise AssertionError("a notification is not the driver's to decide")
 
-    tool = _foreground_tool(tmp_path, [])
+    tool = _judged_echo_tool(tmp_path, [])
     announce = tool._answered_by(AdjudicationDesk(), _adjudicate, _host)
 
     await announce("r", "a", "report", {}, awaiting_decision=False, output="what a said")
@@ -9708,272 +9386,20 @@ async def test_a_stint_driver_passes_a_notification_on_with_its_output(tmp_path:
     assert passed == [{"awaiting_decision": False, "informational": False, "output": "what a said"}]
 
 
-async def test_release_re_sends_a_report_the_turn_took_but_never_answered(tmp_path: Path) -> None:
-    """A take is not an answer.
-
-    One node, so nothing else can be re-sent in its place. The turn was handed the
-    report and ended without deciding; the node is still open on the desk and no
-    other route will ever ask about it again, which is what the returned tail
-    promises and what a backgrounded run would have done.
-    """
-    from raven.config.raven import SubagentDagConfig
-
-    re_sent: list[str] = []
-
-    async def _announce_exception(run_id: str, node_id: str, report: str, origin: dict, **_kwargs: Any) -> None:
-        re_sent.append(node_id)
-
-    async def _announce(run_id: str, summary: str, origin: dict) -> None:
-        return None
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(
-            tmp_path,
-            [_falls_short("token a")],
-            announce=_announce,
-            announce_exception=_announce_exception,
-            verdict_config=SubagentDagConfig(adjudication_timeout_seconds=0.3),
-        )
-        first = await tool.execute(task_summary="fg", nodes=_SOLO, background=False)
-        assert "node 'a'" in first.model_text
-        run_task = tool._runs[next(iter(tool._runs))]
-
-        await tool.release_turn("web:fg", flush=True)
-
-        assert re_sent == ["a"], "the turn took this report and never answered it"
-        await asyncio.wait_for(run_task, timeout=5)
-
-
-async def test_release_does_not_re_send_a_report_the_turn_answered(tmp_path: Path) -> None:
-    """The guard on the other side: a decided node must not be asked about twice."""
-    from raven.agent.subagent.dag_adjudication import CONTINUE
-    from raven.config.raven import SubagentDagConfig
-
-    re_sent: list[str] = []
-
-    async def _announce_exception(run_id: str, node_id: str, report: str, origin: dict, **_kwargs: Any) -> None:
-        re_sent.append(node_id)
-
-    async def _announce(run_id: str, summary: str, origin: dict) -> None:
-        return None
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(
-            tmp_path,
-            [_falls_short("token a")],
-            announce=_announce,
-            announce_exception=_announce_exception,
-            verdict_config=SubagentDagConfig(adjudication_timeout_seconds=0.3),
-        )
-        await tool.execute(task_summary="fg", nodes=_SOLO, background=False)
-        run_id = next(iter(tool._runs))
-        run_task = tool._runs[run_id]
-        assert tool.resolve_node(run_id, "a", CONTINUE, "here is the token")
-
-        await tool.release_turn("web:fg", flush=True)
-
-        assert re_sent == [], "an answered report is not re-sent"
-        await asyncio.wait_for(run_task, timeout=5)
-
-
-async def test_release_without_flush_drops_the_report_but_still_announces_the_result(tmp_path: Path) -> None:
-    from raven.config.raven import SubagentDagConfig
-
-    re_sent: list[str] = []
-    results: list[str] = []
-
-    async def _announce_exception(run_id: str, node_id: str, report: str, origin: dict, **_kwargs: Any) -> None:
-        re_sent.append(node_id)
-
-    async def _announce(run_id: str, summary: str, origin: dict) -> None:
-        results.append(summary)
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(
-            tmp_path,
-            [_falls_short("token a"), _falls_short("token b")],
-            announce=_announce,
-            announce_exception=_announce_exception,
-            verdict_config=SubagentDagConfig(adjudication_timeout_seconds=0.3),
-        )
-        await tool.execute(task_summary="fg", nodes=_PAIR, background=False)
-        (run_id,) = list(tool._runs)
-        run_task = tool._runs[run_id]
-        await _both_suspended(tool, run_id)
-
-        await tool.release_turn("web:fg", flush=False)
-
-        await asyncio.wait_for(run_task, timeout=5)
-        assert re_sent == []
-        assert len(results) == 1
-
-
-async def test_a_released_run_announces_a_terminal_report_as_a_notification(tmp_path: Path) -> None:
-    """After the release there is no blocking call for the summary to reach.
-
-    Dropping a non-suspending report is right while the run is bound: the call is
-    still waiting and the summary is on its way to it. Released, that call is gone,
-    so a dropped terminal report reaches nobody until the whole graph finishes --
-    while `CONTEXT.md` promises a released run behaves as a backgrounded one, whose
-    announcer takes notifications as readily as questions.
-    """
-    from raven.agent.subagent.dag_adjudication import CONTINUE
-    from raven.config.raven import SubagentDagConfig
-
-    seen: list[tuple[str, bool]] = []
-
-    async def _announce_exception(
-        run_id: str,
-        node_id: str,
-        report: str,
-        origin: dict,
-        *,
-        awaiting_decision: bool = True,
-        informational: bool = False,
-        output: str | None = None,
-    ) -> None:
-        seen.append((node_id, awaiting_decision))
-
-    async def _announce(run_id: str, summary: str, origin: dict) -> None:
-        return None
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(
-            tmp_path,
-            [_falls_short("token a"), _falls_short("token a still")],
-            announce=_announce,
-            announce_exception=_announce_exception,
-            verdict_config=SubagentDagConfig(max_continuations=1, adjudication_timeout_seconds=5.0),
-        )
-        await tool.execute(task_summary="fg", nodes=_SOLO, background=False)
-        run_id = next(iter(tool._runs))
-        run_task = tool._runs[run_id]
-
-        await tool.release_turn("web:fg", flush=True)
-        assert seen == [("a", True)], "the suspension replays on release, as promised"
-
-        assert tool.resolve_node(run_id, "a", CONTINUE, "use the staging token")
-        await asyncio.wait_for(run_task, timeout=10)
-
-    assert seen == [("a", True), ("a", False)], (
-        "the retry ended terminally after the release, so its report is a notification the "
-        "released lane must still announce"
-    )
-
-
-async def test_resolving_a_queued_node_is_answered_with_the_other_node_not_its_own(tmp_path: Path) -> None:
-    """The model-facing shape of the retirement rule, against a real outbox.
-
-    Both nodes suspend; the blocking call is handed one and the other queues. The
-    agent can still decide the queued one -- the report it did get names the nodes
-    blocked behind it, and `dag_status` lists them. Answering it must not be
-    followed by that same node's question.
-
-    Driven through the `resolve_node` / `await_run` pair `resolve_dag_node` itself
-    calls, because that tool's own tests stand on a stub loop and a stub stops
-    exactly where this defect lives.
-
-    What comes back instead is the other node's report: it was handed once, nobody
-    decided it, and `Outbox` records exactly that debt. An earlier version of this
-    test asserted a timeout here, on the reading that a retired report leaves
-    nothing to hand over. A timeout cannot tell "the decided node came back" from
-    "nothing came back at all", and what it blessed was a park that production has
-    no clock to end.
-    """
-    from raven.agent.subagent.dag_adjudication import CONTINUE
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [_falls_short("token a"), _falls_short("token b")])
-        first = await tool.execute(task_summary="fg", nodes=_PAIR, background=False)
-        run_id = next(iter(tool._runs))
-        try:
-            await _both_suspended(tool, run_id)
-            handed = "a" if "node 'a'" in first.model_text else "b"
-            queued = "b" if handed == "a" else "a"
-
-            assert tool.resolve_node(run_id, queued, CONTINUE, "here is what was missing")
-
-            try:
-                event = await asyncio.wait_for(tool.await_run(run_id), timeout=5)
-            except asyncio.TimeoutError:
-                raise AssertionError(
-                    f"nothing came back, and nothing ever will: node {handed!r} was handed once and is "
-                    "still undecided, so no node can suspend and the run cannot finish"
-                ) from None
-            assert getattr(event, "node_id", None) == handed, (
-                f"the next question is the node still open, not {getattr(event, 'node_id', event)!r}"
-            )
-        finally:
-            tool.request_cancel(run_id)
-
-
-async def test_deciding_the_node_the_call_was_not_handed_still_ends_the_tool_call(tmp_path: Path) -> None:
-    """The turn comes back, driven through the caller the model actually reaches.
-
-    Two nodes suspend, one report goes to the blocking call and the other queues,
-    and the agent decides the queued one. That is an ordinary decision: the report
-    it holds names the nodes blocked behind it and `dag_status` lists them.
-
-    Deciding it used to park the call with nothing able to wake it. Nothing can
-    suspend while the runner waits -- it waits only once nothing else can run --
-    so no report can arrive; the run cannot finish while a node is open, so no
-    final can either; and a bound run has no deadline. `blocking_for` keeps the
-    registry's ceiling off the call, asserted below, so "parked" meant "until
-    something kills the turn" -- and the cancel handler aborts the whole graph.
-
-    The outbox level is covered by `test_resolving_a_queued_node_is_answered_with_
-    the_other_node_not_its_own`. This drives `ResolveDagNodeTool.execute`, because
-    the absence of a ceiling is a property of the caller and the registry, not of
-    the outbox.
-    """
-    from types import SimpleNamespace
-
-    from raven.agent.subagent.dag_control_tools import ResolveDagNodeTool
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [_falls_short("token a"), _falls_short("token b")])
-        first = await tool.execute(task_summary="fg", nodes=_PAIR, background=False)
-        run_id = next(iter(tool._runs))
-        try:
-            await _both_suspended(tool, run_id)
-            handed = "a" if "node 'a'" in first.model_text else "b"
-            queued = "b" if handed == "a" else "a"
-
-            control = ResolveDagNodeTool(
-                loop=SimpleNamespace(tools=SimpleNamespace(get=lambda n: tool if n == "run_subagent_dag" else None))
-            )
-            control.set_context("web", "default", "web:fg")
-            params = {"run_id": run_id, "node_id": queued, "decision": "continue", "message": "here it is"}
-            assert control.blocking_for(params), "with a ceiling on this call the park would end as a timeout"
-
-            try:
-                out = await asyncio.wait_for(control.execute(**params), timeout=5)
-            except asyncio.TimeoutError:
-                raise AssertionError(
-                    f"the call never returned: node {handed!r} is still open, so the runner waits with no "
-                    "deadline while this taker waits for an event nobody can send"
-                ) from None
-
-            assert f"node {handed} needs a decision" in getattr(out, "display_text", ""), (
-                f"the still-open node is what this call is owed, got {getattr(out, 'display_text', out)!r}"
-            )
-        finally:
-            tool.request_cancel(run_id)
-
-
 async def test_a_suspended_node_holds_no_dispatch_slot(tmp_path: Path) -> None:
     """The wait for a decision happens after the node has given its slot back.
 
     Structural today -- the wait sits in the wave loop, outside the `async with
-    semaphore` in the node -- and nothing asserted it. A bound run has no deadline,
-    so a slot held across that wait would starve every unrelated spawn and graph
-    sharing the gate, with no clock to end it.
+    semaphore` in the node -- and nothing asserted it. A suspended run's wait can
+    last for its whole adjudication window, so a slot held across it would starve
+    every unrelated spawn and graph sharing the gate.
     """
     gate = asyncio.Semaphore(1)
     async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [_falls_short("token a")], gate=gate)
-        await tool.execute(task_summary="fg", nodes=_SOLO, background=False)
-        run_id = next(iter(tool._runs))
+        tool = _judged_echo_tool(tmp_path, [_falls_short("token a")], gate=gate, announce_exception=_announce_exception)
+        await tool.execute(task_summary="fg", nodes=_SOLO)
+        await _wait_until(lambda: bool(tool._desks))
+        run_id = next(iter(tool._desks))
         try:
             # Let the wave loop reach the wait first. Sampling the gate the instant the
             # report comes back proves nothing: it is free then because the node has
@@ -9985,134 +9411,6 @@ async def test_a_suspended_node_holds_no_dispatch_slot(tmp_path: Path) -> None:
             gate.release()
         finally:
             tool.request_cancel(run_id)
-
-
-async def test_a_resolve_through_the_control_tool_is_handed_the_run_it_completes(tmp_path: Path) -> None:
-    """The no-yield ordering, guarded at the caller that has to keep it.
-
-    `_retire` drops the run's outbox from the index `release_turn` reaches runs
-    through, so a run finishing before a taker exists has nowhere left to deliver.
-    Nothing opens that window because `ResolveDagNodeTool.execute` resolves and
-    awaits with no yield between -- and that is the code this drives, over a real
-    outbox. An earlier version called the tool's own `resolve_node` / `await_run`
-    back to back, which pins the outbox but never executes the call site, so an
-    `await` added there left it green.
-
-    What this catches is a yield long enough to lose the race; `await sleep(0)`
-    passes a tick, the run has not finished, and this stays green. The structural
-    half of the claim belongs to
-    `test_the_resolve_tool_parks_its_taker_before_it_yields`.
-    """
-    from types import SimpleNamespace
-
-    from raven.agent.subagent.dag_control_tools import ResolveDagNodeTool
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [_falls_short("token a")])
-        await tool.execute(task_summary="fg", nodes=_SOLO, background=False)
-        run_id = next(iter(tool._runs))
-
-        control = ResolveDagNodeTool(
-            loop=SimpleNamespace(tools=SimpleNamespace(get=lambda n: tool if n == "run_subagent_dag" else None))
-        )
-        control.set_context("web", "default", "web:fg")
-        out = await asyncio.wait_for(
-            control.execute(run_id=run_id, node_id="a", decision="continue", message="here is the token"),
-            timeout=10,
-        )
-
-        text = getattr(out, "model_text", out)
-        assert "finished: 1 completed" in text, (
-            f"the run finished on this decision, so its result belongs to this call, got {text[:200]!r}"
-        )
-        assert "will run again with your message" not in text, (
-            "that is the answer given when the run had nowhere left to deliver its result"
-        )
-
-
-async def test_a_stopped_run_tells_the_waiting_call_that_it_was_stopped(tmp_path: Path) -> None:
-    """The one sentence a hard-cancelled run gives the call that was waiting on it.
-
-    `stop()` is how a hard cancel reaches the outbox, and it wakes every parked
-    taker with `Stopped` rather than leaving it hanging. That event has exactly one
-    rendering and it is all the model gets -- no result, no report, no error -- so
-    if it rendered as nothing the blocking call would return nothing and the turn
-    would read as a graph that simply produced no answer.
-
-    Driven through the blocking call itself: `await_run` refuses a run that is
-    already stopped, because it is no longer bound, so a `Stopped` only ever
-    reaches a caller that was parked before the stop.
-    """
-
-    class _Sleeper:
-        kind = "raven-loop"
-
-        async def run(self, task: str, **_kwargs: Any) -> str:
-            await asyncio.sleep(60)
-            return "never"
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [])
-        tool._resolve_node = lambda node: _Sleeper()  # type: ignore[method-assign]
-        call = asyncio.create_task(tool.execute(task_summary="fg", nodes=_SOLO, background=False))
-        for _ in range(300):
-            await asyncio.sleep(0.01)
-            run_id = next(iter(tool._outboxes), None)
-            if run_id is not None and tool._outboxes[run_id]._takers:
-                break
-        run_id = next(iter(tool._outboxes))
-        assert tool._outboxes[run_id]._takers, "the blocking call never parked, so this is not the state under test"
-
-        tool._outboxes[run_id].stop()
-        out = await asyncio.wait_for(call, timeout=10)
-
-        text = getattr(out, "model_text", out)
-        assert run_id in text, f"the answer has to name the run it is about, got {text!r}"
-        assert "stopped" in text, f"and say what happened to it, got {text!r}"
-
-
-async def test_release_touches_only_the_named_conversation(tmp_path: Path) -> None:
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [_falls_short()])
-        await tool.execute(task_summary="fg", nodes=_CHAIN, background=False)
-        (run_id,) = list(tool._runs)
-
-        await tool.release_turn("web:somebody-else", flush=True)
-
-        assert tool.is_foreground(run_id), "another conversation's turn ending must not release this run"
-
-
-async def test_release_turn_survives_a_raising_outbox_and_still_releases_the_rest(tmp_path: Path) -> None:
-    """release_turn drains every outbox bound to the conversation even when one of
-    them blows up: a run behind a failing release must not be left bound to a
-    turn that has already ended -- unclocked, and waiting for a decision nobody
-    will make."""
-    second_chain = [
-        {"id": "c", "subagent": "echo", "node_summary": "first", "prompt_template": "do c"},
-        {
-            "id": "d",
-            "subagent": "echo",
-            "node_summary": "second",
-            "prompt_template": "{{ c.output }}",
-            "depends_on": ["c"],
-        },
-    ]
-    async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [_falls_short(), _falls_short()])
-        await tool.execute(task_summary="fg1", nodes=_CHAIN, background=False)
-        await tool.execute(task_summary="fg2", nodes=second_chain, background=False)
-        run_ids = list(tool._runs)
-        assert len(run_ids) == 2
-        first_outbox, second_outbox = (tool._outboxes[run_id] for run_id in run_ids)
-
-        async def _raise(*, flush: bool) -> None:
-            raise RuntimeError("boom")
-
-        first_outbox.release = _raise
-
-        await tool.release_turn("web:fg", flush=True)
-
-        assert second_outbox.released.is_set(), "the second outbox still releases after the first one raises"
 
 
 async def test_a_replan_cancels_a_node_in_flight_rather_than_draining_it(tmp_path) -> None:
@@ -11798,43 +11096,42 @@ def test_the_tally_line_names_the_new_count_only_when_there_is_one() -> None:
     )
 
 
-def _final_of(summary: dict, *, stopped: bool = False) -> Any:
-    from raven.agent.subagent.dag_adjudication import Final
-
-    return Final(DagRunResult(run_id="r1", dir="/d", summary=summary), stopped=stopped)
+def _result_of(summary: dict) -> DagRunResult:
+    return DagRunResult(run_id="r1", dir="/d", summary=summary)
 
 
 def test_a_run_whose_only_oddity_is_an_unselected_branch_is_still_clean() -> None:
-    from raven.agent.subagent.dag_tool import _successful_final
+    from raven.agent.subagent.dag_tool import _successful_result
 
     plain = {"total": 2, "completed": 2, "failed": 0, "skipped": 0, "cancelled": 0}
     branched = {**plain, "completed": 1, "not_executed": 1}
 
-    assert _successful_final(_final_of(plain)) is True
-    assert _successful_final(_final_of(branched)) is True
-    assert _successful_final(_final_of(branched, stopped=True)) is False
-    assert _successful_final(_final_of({})) is False
-    assert _successful_final(_final_of({**branched, "total": 3})) is False, "one node is counted nowhere"
+    assert _successful_result(_result_of(plain), stopped=False) is True
+    assert _successful_result(_result_of(branched), stopped=False) is True
+    assert _successful_result(_result_of(branched), stopped=True) is False
+    assert _successful_result(_result_of({}), stopped=False) is False
+    assert _successful_result(_result_of({**branched, "total": 3}), stopped=False) is False, (
+        "one node is counted nowhere"
+    )
 
 
 @pytest.mark.parametrize("oddity", ["failed", "skipped", "cancelled"])
 def test_an_unselected_branch_does_not_excuse_anything_else_that_went_wrong(oddity: str) -> None:
-    from raven.agent.subagent.dag_tool import _successful_final
+    from raven.agent.subagent.dag_tool import _successful_result
 
     summary = {"total": 3, "completed": 1, "failed": 0, "skipped": 0, "cancelled": 0, "not_executed": 1, oddity: 1}
 
-    assert _successful_final(_final_of(summary)) is False
+    assert _successful_result(_result_of(summary), stopped=False) is False
 
 
 async def test_a_run_that_took_one_branch_is_a_clean_final() -> None:
     """The recorded-as-a-playbook gate reads the tally the runner really produced."""
-    from raven.agent.subagent.dag_adjudication import Final
-    from raven.agent.subagent.dag_tool import _successful_final
+    from raven.agent.subagent.dag_tool import _successful_result
 
     result, _ = await _settle_run(_branching_spec(), _routing_judge("docs"))
 
     assert result.summary["not_executed"] == 1
-    assert _successful_final(Final(result, stopped=False)) is True
+    assert _successful_result(result, stopped=False) is True
 
 
 def test_the_transcript_label_of_a_graph_without_branches_is_unchanged() -> None:
@@ -11872,7 +11169,7 @@ def _facts_of(text: str) -> tuple[str, Path, Path]:
 
 async def test_the_finish_text_of_a_graph_without_branches_is_unchanged(tmp_path: Path) -> None:
     async with draining_dag_runs():
-        out = await _foreground_tool(tmp_path, []).execute(task_summary="fg", nodes=_PAIR, background=False)
+        out = await _judged_echo_tool(tmp_path, []).execute_to_completion(task_summary="fg", nodes=_PAIR)
 
     run_id, run_dir, nodes = _facts_of(out.model_text)
     assert out.model_text == "\n".join(
@@ -11908,7 +11205,7 @@ async def test_the_finish_text_counts_and_explains_the_branches_that_were_not_ta
     ]
     picked = Verdict(accomplished=True, routes=("docs", "perf"), route_evidence="THE-JUDGES-QUOTE")
     async with draining_dag_runs():
-        out = await _foreground_tool(tmp_path, [picked]).execute(task_summary="fg", nodes=graph, background=False)
+        out = await _judged_echo_tool(tmp_path, [picked]).execute_to_completion(task_summary="fg", nodes=graph)
 
     run_id, run_dir, nodes = _facts_of(out.model_text)
     head, _, terminal = out.model_text.partition("\n\nTerminal outputs:\n")
@@ -11939,8 +11236,8 @@ async def test_the_finish_text_says_when_a_decision_selected_nothing(tmp_path: P
         _bnode("g", subagent="echo", depends_on=["r"], when="r.a"),
     ]
     async with draining_dag_runs():
-        out = await _foreground_tool(tmp_path, [Verdict(accomplished=True, routes=())]).execute(
-            task_summary="fg", nodes=graph, background=False
+        out = await _judged_echo_tool(tmp_path, [Verdict(accomplished=True, routes=())]).execute_to_completion(
+            task_summary="fg", nodes=graph
         )
 
     run_id, run_dir, nodes = _facts_of(out.model_text)
@@ -12463,10 +11760,10 @@ async def test_branch_e2e_a_node_inside_a_branch_needs_a_guard_once_something_ou
 
 async def test_branch_e2e_one_tool_call_classifies_runs_one_branch_and_merges(tmp_path: Path) -> None:
     async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [])
+        tool = _judged_echo_tool(tmp_path, [])
         tool._judge_node = lambda: _picking_judge({"triage": ("bug",), "risk": ("low",)})  # type: ignore[method-assign]
 
-        out = await tool.execute(task_summary="triage issue 123", nodes=_triage_nodes("echo"), background=False)
+        out = await tool.execute_to_completion(task_summary="triage issue 123", nodes=_triage_nodes("echo"))
 
     run_id, run_dir, nodes = _facts_of(out.model_text)
     head, _, terminal = out.model_text.partition("\n\nTerminal outputs:\n")
@@ -12542,6 +11839,73 @@ def _echo_tool(tmp_path: Path, announce: Any) -> SubAgentDagTool:
     return tool
 
 
+async def test_execute_to_completion_returns_the_final_result(tmp_path: Path) -> None:
+    async with draining_dag_runs():
+        tool = _echo_tool(tmp_path, None)
+        out = await tool.execute_to_completion(task_summary="wait", nodes=_SOLO)
+    assert "1 completed" in str(out)
+
+
+async def test_execute_to_completion_returns_a_refusal_without_waiting(tmp_path: Path) -> None:
+    async with draining_dag_runs():
+        tool = _echo_tool(tmp_path, None)
+        out = await tool.execute_to_completion(
+            task_summary="bad",
+            nodes=[{"id": "a", "node_summary": "one", "prompt_template": "hi"}],
+        )
+    assert str(out).startswith("Error")
+    assert not tool._runs
+
+
+async def test_cancelling_the_waiter_leaves_the_run_alive(tmp_path: Path) -> None:
+    async with draining_dag_runs():
+        tool = _echo_tool(tmp_path, None)
+        call = asyncio.create_task(tool.execute_to_completion(task_summary="wait", nodes=_SOLO))
+        await _wait_until(lambda: bool(tool._runs))
+        (run_id,) = list(tool._runs)
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        assert run_id in tool.active_run_ids()
+        tool.request_cancel(run_id)
+
+
+async def test_a_captured_run_schedules_its_finisher_without_staying_live(tmp_path: Path) -> None:
+    from raven.playbook.run_record import PlaybookRunCapture, capture_scope
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _finished(run_id: str) -> None:
+        started.set()
+        await release.wait()
+
+    capture = PlaybookRunCapture(query="q", capture_workflow=True)
+    capture.on_finished = _finished
+    async with draining_dag_runs():
+        tool = _echo_tool(tmp_path, None)
+        with capture_scope(capture):
+            out = await tool.execute(task_summary="capture", nodes=_SOLO)
+        assert "started in the background" in str(out)
+        await _wait_until(started.is_set)
+        assert tool.active_run_ids() == [], "the run ended before its finalizer"
+        release.set()
+
+
+async def test_a_legacy_background_key_is_ignored_with_a_notice(tmp_path: Path) -> None:
+    async with draining_dag_runs():
+        tool = _echo_tool(tmp_path, None)
+        out = await tool.execute(
+            task_summary="legacy",
+            nodes=_SOLO,
+            background=False,
+        )
+        assert "no longer has a background switch" in str(out)
+        assert tool.active_run_ids()
+        for run_id in list(tool.active_run_ids()):
+            tool.request_cancel(run_id)
+
+
 async def test_a_backgrounded_graph_s_result_links_to_the_span_that_dispatched_it(tmp_path, monkeypatch) -> None:
     _traced(monkeypatch, tmp_path)
     announces = _Announces()
@@ -12571,51 +11935,6 @@ async def test_a_graph_dispatched_outside_any_span_reports_with_no_link(tmp_path
     with trace.span("unrelated.op"):
         await manager.announce_dag_result(run_id, summary, origin)
     assert submitted[0].dispatch_link is None, "the span the report is sent from is not where the graph came from"
-
-
-async def test_a_released_foreground_graph_links_each_report_to_its_attempt_and_its_result_to_the_dispatch(
-    tmp_path, monkeypatch
-) -> None:
-    """Released at its turn's end, after every span involved has closed: a node's report
-    still names the attempt that sent it, and the graph's result the span that dispatched it."""
-    from raven.config.raven import SubagentDagConfig
-
-    _traced(monkeypatch, tmp_path)
-    reports: list[tuple[str, dict]] = []
-    finals: list[dict] = []
-
-    async def _announce_exception(run_id: str, node_id: str, report: str, origin: dict, **_kwargs: Any) -> None:
-        reports.append((node_id, origin))
-
-    async def _announce(run_id: str, summary: str, origin: dict) -> None:
-        finals.append(origin)
-
-    async with draining_dag_runs():
-        tool = _foreground_tool(
-            tmp_path,
-            [_falls_short("token a"), _falls_short("token b")],
-            announce=_announce,
-            announce_exception=_announce_exception,
-            verdict_config=SubagentDagConfig(adjudication_timeout_seconds=0.1),
-        )
-        with trace.span("tool.call") as dispatch:
-            await tool.execute(task_summary="fg", nodes=_PAIR, background=False)
-        (run_id,) = list(tool._runs)
-        run_task = tool._runs[run_id]
-        await _both_suspended(tool, run_id)
-
-        assert trace.dispatch_link() is None
-        await tool.release_turn("web:fg", flush=True)
-        await asyncio.wait_for(run_task, timeout=5)
-
-    spans = _recorded(tmp_path / "traces")
-    assert {node_id for node_id, _origin in reports} == {"a", "b"} and finals
-    for node_id, origin in reports:
-        (suspended,) = [a for a in _attempts(spans, node_id) if a["attributes"]["subagent.outcome"] == "exception"]
-        assert trace.dispatch_link_of(origin) == (suspended["traceId"], suspended["spanId"])
-        assert suspended["parentSpanId"] == dispatch.span_id
-    expected = (dispatch.trace_id, dispatch.span_id)
-    assert [trace.dispatch_link_of(origin) for origin in finals] == [expected] * len(finals)
 
 
 async def test_a_stint_s_progress_line_links_to_the_span_it_is_said_from(tmp_path, monkeypatch) -> None:
@@ -13218,9 +12537,9 @@ async def test_a_backgrounded_graph_s_attempts_nest_under_the_call_that_dispatch
 async def test_a_foreground_graph_s_attempts_nest_under_the_call_that_dispatched_it(tmp_path, monkeypatch) -> None:
     _traced(monkeypatch, tmp_path)
     async with draining_dag_runs():
-        tool = _foreground_tool(tmp_path, [])
+        tool = _judged_echo_tool(tmp_path, [])
         with trace.span("tool.call", {"tool.name": "run_subagent_dag"}) as dispatch:
-            await tool.execute(task_summary="fg", nodes=_PAIR, background=False)
+            await tool.execute_to_completion(task_summary="fg", nodes=_PAIR)
 
     spans = _recorded(tmp_path / "traces")
     for nid in ("a", "b"):
@@ -16443,6 +15762,10 @@ def _verdict_config(**kwargs: Any) -> Any:
     return SubagentDagConfig(adjudication_timeout_seconds=5, **kwargs)
 
 
+async def _announce_exception(*_args: Any, **_kwargs: Any) -> None:
+    return None
+
+
 async def test_end_to_end_reassign_through_the_real_control_tool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -16469,6 +15792,7 @@ async def test_end_to_end_reassign_through_the_real_control_tool(
         workspace=tmp_path,
         agents=[_stateful_agent("alpha"), _stateful_agent("beta")],
         progress_publisher=publish,
+        announce_exception=_announce_exception,
         verdict_config=_verdict_config(),
     )
     tool.set_context("test", "chat", "test:chat")
@@ -16498,17 +15822,14 @@ async def test_end_to_end_reassign_through_the_real_control_tool(
     ]
 
     async with draining_dag_runs():
-        start = asyncio.create_task(tool.execute(nodes=graph, task_summary="repair and consume", background=False))
+        start = asyncio.create_task(tool.execute(nodes=graph, task_summary="repair and consume"))
         await _wait_until(lambda: bool(tool.active_run_ids()))
         run_id = tool.active_run_ids()[0]
         run_task = tool._runs[run_id]
-        first = await asyncio.wait_for(start, 15)
-        first_text = getattr(first, "model_text", None) or str(first)
-        assert "fix" in first_text and "parser" in first_text, "the first event is the exception report"
+        await asyncio.wait_for(start, 15)
+        await _wait_until(lambda: tool.is_awaiting_decision(run_id, "fix"))
         assert alpha.calls and alpha.calls[0]["task_id"] == "fix"
         assert not beta.calls, "planning for a decision runs no target backend"
-
-        await _wait_until(lambda: tool.is_awaiting_decision(run_id, "fix"))
         state = tool._run_contexts[run_id].state
         run_dir = Path(tool._run_root("test:chat")) / run_id
         graph_before = (run_dir / "graph.json").read_bytes()
@@ -16620,7 +15941,7 @@ async def test_end_to_end_reassign_through_the_real_control_tool(
     assert any(row.get("attemptAgents") == ["alpha", "beta"] for row in listed["instances"])
 
     answer_text = getattr(answer, "model_text", None) or str(answer)
-    assert "2 completed" in answer_text, "the caller blocked on the foreground run is handed its outcome"
+    assert "will run again on beta" in answer_text, "the resolve acknowledges the move and returns"
     started = [payload for wire, payload in frames if wire == "dag.run_started"]
     assert started and sorted(node["id"] for node in started[0]["nodes"]) == ["consumer", "fix"]
     completed = [payload for wire, payload in frames if wire == "dag.run_completed"]
@@ -16650,6 +15971,7 @@ async def test_a_run_without_a_reassign_stores_and_publishes_the_shape_it_always
         workspace=tmp_path,
         agents=[_stateful_agent("alpha"), _stateful_agent("beta")],
         progress_publisher=publish,
+        announce_exception=_announce_exception,
         verdict_config=_verdict_config(),
     )
     tool.set_context("test", "chat", "test:plain")
@@ -16668,7 +15990,7 @@ async def test_a_run_without_a_reassign_stores_and_publishes_the_shape_it_always
     ]
 
     async with draining_dag_runs():
-        result = await asyncio.wait_for(tool.execute(nodes=graph, task_summary="plain graph", background=False), 20)
+        result = await asyncio.wait_for(tool.execute_to_completion(nodes=graph, task_summary="plain graph"), 20)
 
     assert "2 completed" in result.model_text
     run_id = next(payload["run_id"] for name, payload in events if name == "dag_run_started")
@@ -16770,6 +16092,7 @@ async def test_end_to_end_a_shared_instance_moves_its_pending_sibling_and_seeds_
         workspace=tmp_path,
         agents=[_stateful_agent("alpha"), _stateful_agent("beta"), _stateful_agent("gamma")],
         progress_publisher=publish,
+        announce_exception=_announce_exception,
         verdict_config=_verdict_config(),
     )
     tool.set_context("test", "chat", "test:shared")
@@ -16810,12 +16133,11 @@ async def test_end_to_end_a_shared_instance_moves_its_pending_sibling_and_seeds_
     ]
 
     async with draining_dag_runs():
-        start = asyncio.create_task(tool.execute(nodes=graph, task_summary="share a session", background=False))
+        start = asyncio.create_task(tool.execute(nodes=graph, task_summary="share a session"))
         await _wait_until(lambda: bool(tool.active_run_ids()))
         run_id = tool.active_run_ids()[0]
         run_task = tool._runs[run_id]
-        first = await asyncio.wait_for(start, 15)
-        assert "write" in (getattr(first, "model_text", None) or str(first))
+        await asyncio.wait_for(start, 15)
         await _wait_until(lambda: tool.is_awaiting_decision(run_id, "write"))
         await _wait_until(lambda: judge.waited("z-survey"))
         state = tool._run_contexts[run_id].state
@@ -16930,6 +16252,7 @@ async def _shared_graph_tool(
         workspace=tmp_path,
         agents=[_stateful_agent("alpha"), _stateful_agent("beta"), _stateful_agent("gamma")],
         progress_publisher=publish,
+        announce_exception=_announce_exception,
         verdict_config=_verdict_config(),
     )
     tool.set_context("test", "chat", "test:shared")
@@ -16992,9 +16315,7 @@ async def test_end_to_end_cancelling_while_a_move_is_staged_leaves_no_session_be
     loop = _GraphToolLoop(tool)
 
     async with draining_dag_runs():
-        start = asyncio.create_task(
-            tool.execute(nodes=_shared_graph(), task_summary="share a session", background=False)
-        )
+        start = asyncio.create_task(tool.execute(nodes=_shared_graph(), task_summary="share a session"))
         await _wait_until(lambda: bool(tool.active_run_ids()))
         run_id = tool.active_run_ids()[0]
         run_task = tool._runs[run_id]
@@ -17053,9 +16374,7 @@ async def test_end_to_end_two_simultaneous_reassigns_of_one_node_land_exactly_on
     loop = _GraphToolLoop(tool)
 
     async with draining_dag_runs():
-        start = asyncio.create_task(
-            tool.execute(nodes=_shared_graph(), task_summary="share a session", background=False)
-        )
+        start = asyncio.create_task(tool.execute(nodes=_shared_graph(), task_summary="share a session"))
         await _wait_until(lambda: bool(tool.active_run_ids()))
         run_id = tool.active_run_ids()[0]
         run_task = tool._runs[run_id]
@@ -17198,9 +16517,7 @@ async def test_end_to_end_a_destination_that_becomes_occupied_fails_the_moved_no
     loop = _GraphToolLoop(tool)
 
     async with draining_dag_runs():
-        start = asyncio.create_task(
-            tool.execute(nodes=_shared_graph(), task_summary="share a session", background=False)
-        )
+        start = asyncio.create_task(tool.execute(nodes=_shared_graph(), task_summary="share a session"))
         await _wait_until(lambda: bool(tool.active_run_ids()))
         run_id = tool.active_run_ids()[0]
         run_task = tool._runs[run_id]
@@ -17261,6 +16578,7 @@ async def test_end_to_end_a_moved_worker_node_keeps_its_frozen_charter(
     tool = SubAgentDagTool(
         workspace=tmp_path,
         agents=[_stateful_agent("alpha"), _stateful_agent("beta")],
+        announce_exception=_announce_exception,
         verdict_config=_verdict_config(),
         worker_table_for=lambda: table,
     )
@@ -17284,7 +16602,7 @@ async def test_end_to_end_a_moved_worker_node_keeps_its_frozen_charter(
     ]
 
     async with draining_dag_runs():
-        start = asyncio.create_task(tool.execute(nodes=graph, task_summary="draft it", background=False))
+        start = asyncio.create_task(tool.execute(nodes=graph, task_summary="draft it"))
         await _wait_until(lambda: bool(tool.active_run_ids()))
         run_id = tool.active_run_ids()[0]
         run_task = tool._runs[run_id]

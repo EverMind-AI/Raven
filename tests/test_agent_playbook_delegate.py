@@ -39,6 +39,10 @@ from raven.playbook.agent_spec import AgentPlaybookSpec
 from raven.providers.base import LLMProvider, LLMResponse
 
 
+async def _noop_exception(*_args: object, **_kwargs: object) -> None:
+    return None
+
+
 class _Stub(LLMProvider):
     def get_default_model(self) -> str:
         return "stub"
@@ -338,7 +342,7 @@ async def test_stored_playbook_dag_ignores_the_turn_worker_table(workspace, monk
     loop = _loop(workspace, "generate")
     runtime = loop._playbooks
     assert runtime is not None
-    runtime._executor._background = False
+    runtime._executor._wait_for_result = True
     tool = runtime.dag_tool
     backend = _RecordingBackend()
     resolved: list[str] = []
@@ -841,7 +845,6 @@ async def test_a_reassigned_worker_keeps_the_charter_and_payload_frozen_at_admis
     afterwards -- a different brief, a different payload -- cannot reach the node
     the move dispatches.
     """
-    import asyncio
 
     from raven.agent.subagent.dag_adjudication import ReassignPlan
     from raven.agent.subagent.dag_tool import SubAgentDagTool
@@ -869,6 +872,7 @@ async def test_a_reassigned_worker_keeps_the_charter_and_payload_frozen_at_admis
         ],
     )
     tool.set_context("web", "default", "web:worker")
+    tool._announce_exception = _noop_exception
     monkeypatch.setattr(tool, "_resolve_node", lambda node: {"alpha": alpha, "beta": beta}[node.subagent])
     remaining = {"a"}
 
@@ -903,8 +907,8 @@ async def test_a_reassigned_worker_keeps_the_charter_and_payload_frozen_at_admis
                         "prompt_template": "do it",
                     }
                 ],
-                background=False,
             )
+        await _wait_until(lambda: bool(tool._desks))
         run_id = next(iter(tool._desks))
         await _wait_until(lambda: tool._desks[run_id].is_open("a"))
         assert alpha.calls and alpha.calls[0]["task"].startswith("BRIEF-A\n\n")
@@ -922,8 +926,7 @@ async def test_a_reassigned_worker_keeps_the_charter_and_payload_frozen_at_admis
             prepared = await tool.prepare_reassign(run_id, "a", "beta", "use the parser", "web:worker")
             assert isinstance(prepared, ReassignPlan), prepared
             assert tool.commit_reassign(run_id, prepared, "use the parser")
-        event = await asyncio.wait_for(tool.await_run(run_id), timeout=10)
-        assert event is not None
+        await _wait_until(lambda: not tool.active_run_ids(), timeout=10)
 
     assert beta.calls, "the moved attempt ran on the target"
     assert beta.calls[0]["task"].startswith("BRIEF-A\n\n"), "the admitted charter, not the rewritten one"
@@ -958,6 +961,7 @@ async def test_a_worker_less_table_still_contributes_its_harness(workspace, monk
         worker_table_for=lambda: DelegateTable(workers={}, harness=harness),
     )
     tool.set_context("web", "default", "web:harness")
+    tool._announce_exception = _noop_exception
     monkeypatch.setattr(tool, "_resolve_node", lambda node: _Backend())
     remaining = {"a"}
 
@@ -973,9 +977,9 @@ async def test_a_worker_less_table_still_contributes_its_harness(workspace, monk
         await tool.execute(
             task_summary="one node",
             nodes=[{"id": "a", "subagent": "alpha", "node_summary": "a step", "prompt_template": "do it"}],
-            background=False,
             confirm=False,
         )
+        await _wait_until(lambda: bool(tool._desks))
         run_id = next(iter(tool._desks))
         await _wait_until(lambda: tool._desks[run_id].is_open("a"))
 

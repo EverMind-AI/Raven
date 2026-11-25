@@ -125,6 +125,34 @@ async def test_the_turn_message_reaches_the_tool_so_its_listing_can_be_ranked(tm
     assert seen == ["sort out this week's user feedback"]
 
 
+async def test_an_announcement_turn_does_not_generate_a_harness(tmp_path):
+    """A delegated result is not a request to create a playbook."""
+    from types import SimpleNamespace
+
+    from raven.config.schema import PlaybookConfig
+
+    provider = _Provider()
+    loop = AgentLoop(
+        provider=provider,
+        workspace=tmp_path,
+        model="fake/default",
+        engine=EngineWiring(playbook_config=PlaybookConfig(enabled=True, agentHarness="generate")),
+    )
+    req = TurnRequest(
+        origin=Origin.SUBAGENT,
+        source=Source(channel="web", chat_id="c", sender_id="u", chat_type=ChatType.DM),
+        text="DAG run dag-1 finished: 1 completed.",
+        conversation="web:abc",
+    )
+
+    resolution = await loop._resolve_playbook_turn(
+        req, "web:abc", SimpleNamespace(provider=provider, model="fake/default")
+    )
+
+    assert not resolution.active
+    assert provider.calls == 0
+
+
 async def test_every_origin_records_the_playbook_address(tmp_path):
     """A cron turn can call load_playbook too, and its graph announces somewhere.
 

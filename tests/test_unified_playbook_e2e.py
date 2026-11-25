@@ -195,6 +195,13 @@ async def test_whole_turn_saves_a_composite_ready_playbook(tmp_path) -> None:
         stream=False,
     )
 
+    for _ in range(200):
+        if list((playbook_root / ".runs").glob("*.json")):
+            break
+        await asyncio.sleep(0.05)
+    else:
+        pytest.fail("the deferred capture never finalized")
+
     loaded = PlaybookStore(playbook_root).load("evidence-brief")
     assert isinstance(loaded, UnifiedPlaybookSpec)
     assert loaded.harness is not None and loaded.workflow is not None
@@ -1681,6 +1688,112 @@ async def test_a_private_loaded_playbook_captures_no_workflow(tmp_path) -> None:
     assert store.path_for("evidence-brief").read_bytes() == before
     record = json.loads(next((playbook_root / ".runs").glob("*.json")).read_text(encoding="utf-8"))
     assert record["dags"][0]["attemptAgents"] == {"draft": ["alpha", "beta"]}
+
+
+@pytest.mark.asyncio
+async def test_a_deferred_capture_compiles_when_the_run_finishes(tmp_path) -> None:
+    playbook_root = tmp_path / "playbooks"
+    projected, extended, harness = _draft_projection()
+    provider = _EchoWorkflowProvider()
+    loop = _capture_loop(tmp_path, provider, playbook_root)
+    capture = PlaybookRunCapture(query="write the brief", capture_workflow=True)
+    capture.active_run_id = "run-1"
+    resolution = _task_resolution(harness, persisted=False)
+    binding = SimpleNamespace(provider=provider, model="stub")
+
+    await loop._finish_playbook_turn(resolution, capture, binding)
+    assert capture.deferred is True and capture.finalized is False
+    assert list((playbook_root / ".runs").glob("*.json")) == []
+
+    record_completed_dag(projected, "run-1", capture, harness=extended)
+    await loop._capture_run_finished(resolution, capture, binding, "run-1")
+
+    assert capture.finalized is True
+    assert len(provider.calls) == 1
+    assert len(list((playbook_root / ".runs").glob("*.json"))) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_finalized_capture_is_not_compiled_by_a_late_run_finish(tmp_path) -> None:
+    playbook_root = tmp_path / "playbooks"
+    _projected, _extended, harness = _draft_projection()
+    provider = _EchoWorkflowProvider()
+    loop = _capture_loop(tmp_path, provider, playbook_root)
+    capture = PlaybookRunCapture(query="write the brief", capture_workflow=True)
+    capture.active_run_id = "run-1"
+    capture.deferred = True
+    capture.finalized = True
+
+    await loop._capture_run_finished(
+        _task_resolution(harness, persisted=False),
+        capture,
+        SimpleNamespace(provider=provider, model="stub"),
+        "run-1",
+    )
+
+    assert provider.calls == []
+    assert list((playbook_root / ".runs").glob("*.json")) == []
+
+
+@pytest.mark.asyncio
+async def test_only_the_last_captured_run_owns_the_capture(tmp_path) -> None:
+    playbook_root = tmp_path / "playbooks"
+    _projected, _extended, harness = _draft_projection()
+    provider = _EchoWorkflowProvider()
+    loop = _capture_loop(tmp_path, provider, playbook_root)
+    capture = PlaybookRunCapture(query="write the brief", capture_workflow=True)
+    capture.active_run_id = "run-2"
+    capture.deferred = True
+    resolution = _task_resolution(harness, persisted=False)
+    binding = SimpleNamespace(provider=provider, model="stub")
+
+    await loop._capture_run_finished(resolution, capture, binding, "run-1")
+    assert capture.active_run_id == "run-2"
+    assert capture.finalized is False
+
+    await loop._capture_run_finished(resolution, capture, binding, "run-2")
+    assert capture.finalized is True
+
+
+@pytest.mark.asyncio
+async def test_a_deferred_capture_with_a_failed_run_saves_no_workflow(tmp_path) -> None:
+    playbook_root = tmp_path / "playbooks"
+    _projected, _extended, harness = _draft_projection()
+    provider = _EchoWorkflowProvider()
+    loop = _capture_loop(tmp_path, provider, playbook_root)
+    capture = PlaybookRunCapture(query="write the brief", capture_workflow=True)
+    capture.active_run_id = "run-1"
+    resolution = _task_resolution(harness, persisted=False)
+    binding = SimpleNamespace(provider=provider, model="stub")
+
+    await loop._finish_playbook_turn(resolution, capture, binding)
+    assert capture.deferred is True
+
+    await loop._capture_run_finished(resolution, capture, binding, "run-1")
+
+    assert capture.finalized is True
+    assert provider.calls == []
+    assert len(list((playbook_root / ".runs").glob("*.json"))) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_turn_finalizes_a_capture_and_a_late_finish_does_nothing(tmp_path) -> None:
+    playbook_root = tmp_path / "playbooks"
+    _projected, _extended, harness = _draft_projection()
+    provider = _EchoWorkflowProvider()
+    loop = _capture_loop(tmp_path, provider, playbook_root)
+    capture = PlaybookRunCapture(query="write the brief", capture_workflow=True)
+    capture.active_run_id = "run-1"
+    resolution = _task_resolution(harness, persisted=False)
+    binding = SimpleNamespace(provider=provider, model="stub")
+
+    loop._finalize_failed_capture(capture, flush=False, failure=None)
+    assert capture.finalized is True and capture.status == "cancelled"
+
+    await loop._capture_run_finished(resolution, capture, binding, "run-1")
+
+    assert provider.calls == []
+    assert len(list((playbook_root / ".runs").glob("*.json"))) == 1
 
 
 class _ReplyBackend:

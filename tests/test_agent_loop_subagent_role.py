@@ -490,9 +490,9 @@ def test_every_wired_graph_tool_can_take_a_reassign(workspace) -> None:
     """Both graph tool instances carry the move surface, with separate run bookkeeping.
 
     A playbook's private tool dispatches its own runs; a move decided for one of
-    them has to be admitted against that instance's desk, outbox and frozen
-    admission data. Wiring the two from one class is what makes that possible,
-    and the separate dicts are what keep one run's move out of the other's state.
+    them has to be admitted against that instance's desk and frozen admission
+    data. Wiring the two from one class is what makes that possible, and the
+    separate dicts are what keep one run's move out of the other's state.
     """
     loop = _loop(workspace, playbook_config=PlaybookConfig(enabled=True))
     registered = loop.tools.get("run_subagent_dag")
@@ -510,4 +510,3 @@ def test_every_wired_graph_tool_can_take_a_reassign(workspace) -> None:
 
     assert registered._run_contexts is not private._run_contexts
     assert registered._desks is not private._desks
-    assert registered._outboxes is not private._outboxes
