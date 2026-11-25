@@ -490,6 +490,10 @@ class _Connection:
         """How long nothing has happened here: no frame from the agent and no lease, as of ``now``."""
         return min(self.client.idle_seconds, now - self.leased_at)
 
+    def holds_a_session(self) -> bool:
+        """Whether a run holds one of this connection's sessions right now."""
+        return any(lock.locked() for lock in self._session_locks.values())
+
     def session_lock(self, session_id: str) -> asyncio.Lock:
         """Serialises turns on one session id.
 
@@ -967,9 +971,16 @@ class AcpConnectionPool:
         reopened in the next process with ``session/load`` or ``session/resume``,
         so only an agent that advertises one of them, or one that never opened a
         session, is closed.
+
+        A held session lock is in flight too: a run holds it for its whole turn,
+        and in a Background Settle that turn has no request pending while the
+        agent's background command can stay silent for many minutes. Closing
+        then would end the run early and kill the command it is waiting for.
         """
         client = connection.client
         if not connection.alive or getattr(client, "busy", True):
+            return False
+        if connection.holds_a_session():
             return False
         if connection.idle_for(now) < budget:
             return False

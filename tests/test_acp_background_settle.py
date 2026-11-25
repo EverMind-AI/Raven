@@ -684,3 +684,31 @@ async def test_another_agent_returns_on_the_answer(tmp_path):
     out = await _go(_scenario("settle-not-claude", "forever", ACP_STUB_AGENT_NAME="stub-agent"), tmp_path)
     assert out == "started"
     assert time.monotonic() - started < 2
+
+
+async def test_a_quiet_settle_survives_the_idle_close(tmp_path, monkeypatch):
+    """A background command that prints nothing keeps the wire quiet for as long as it runs.
+
+    Without a pending request the connection reads as idle, and closing it would
+    end the run with a connection notice and kill the command the run waits for.
+    """
+    monkeypatch.setattr(background_settle, "SETTLE_CEILING_S", 1.5)
+    backend = _scenario("settle-idle-close", "forever")
+    settling = asyncio.Event()
+    settle = AcpAgentBackend._settle
+
+    async def entered(self: AcpAgentBackend, **kwargs: Any) -> str | None:
+        settling.set()
+        return await settle(self, **kwargs)
+
+    monkeypatch.setattr(AcpAgentBackend, "_settle", entered)
+    run = asyncio.create_task(_go(backend, tmp_path))
+    await asyncio.wait_for(settling.wait(), timeout=10)
+    await asyncio.sleep(0.2)
+    for connection in get_pool().live(backend.name):
+        connection.leased_at -= 3600.0
+    assert await get_pool().close_idle(0.01) == [], "the idle close took a settling run's connection"
+    out = await run
+    assert "still had background work running" in out
+    assert "connection" not in out
+    assert await get_pool().close_idle(0.01) == [backend.name], "the run left its connection marked in use"

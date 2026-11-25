@@ -312,6 +312,11 @@ cue. Cases:
   run.
 - Each existing Claude Code session is rebuilt once by the adapter at its first
   load after the change.
+- The pool's idle close (`idleCloseS`) treats a connection as in use while a run
+  holds one of its sessions, so a background command that prints nothing for
+  longer than the idle budget does not end the settle early. Background work
+  still running after the run returns is not protected; the idle close can end
+  it, as before.
 - Rollback: make the dialect hook return nothing. No `session_state_changed`
   then arrives, and every run returns on the prompt answer as today.
 
