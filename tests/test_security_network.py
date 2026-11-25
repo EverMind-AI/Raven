@@ -664,3 +664,64 @@ async def test_a_redirect_hop_judges_off_the_event_loop(monkeypatch) -> None:
     assert answer is None, "the redirected-to hop is refused: nothing is fetched"
     assert rec.requested == ["http://93.184.216.34/start"], "only the first hop went out, pinned to its judged address"
     assert ticks >= 5, f"the loop advanced only {ticks} times while the resolver held"
+
+
+# ---------------------------------------------------------------------------
+# The fake-IP opt-in (RAVEN_NETWORK_ALLOW_BENCHMARK)
+#
+# 198.18.0.0/15 is in the threat table above because the default install
+# refuses it like every non-public range. A transparent proxy's fake-IP
+# resolver answers every name from that range, so on a proxied machine the
+# refusal is the proxy's own answer, not an internal target. The operator
+# says so through the environment -- the same shape RAVEN_BROWSER_BLOCK_PRIVATE
+# takes, in the other direction.
+# ---------------------------------------------------------------------------
+
+
+def test_the_benchmark_range_is_refused_without_the_switch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(net.FAKE_IP_ENV_VAR, raising=False)
+    _mock_resolve(monkeypatch, "198.18.2.194")
+
+    ok, err = net.validate_url_target("https://example.com/img.png")
+
+    assert not ok
+    assert "198.18.2.194" in err
+
+
+@pytest.mark.parametrize("value", ["1", "true", "YES", "on"])
+def test_the_benchmark_range_is_allowed_when_the_operator_says_so(value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(net.FAKE_IP_ENV_VAR, value)
+    _mock_resolve(monkeypatch, "198.18.2.194")
+
+    ok, err = net.validate_url_target("https://example.com/img.png")
+
+    assert ok, f"blocked with {net.FAKE_IP_ENV_VAR}={value}: {err}"
+
+
+def test_the_switch_lets_only_the_benchmark_range_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The opt-in names one range, not "allow private": an RFC1918 answer is
+    still refused with the switch on."""
+    monkeypatch.setenv(net.FAKE_IP_ENV_VAR, "1")
+    _mock_resolve(monkeypatch, "10.1.2.3")
+
+    ok, err = net.validate_url_target("https://example.com/img.png")
+
+    assert not ok
+    assert "10.1.2.3" in err
+
+
+def test_the_benchmark_range_is_allowed_through_a_redirect_when_switched(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(net.FAKE_IP_ENV_VAR, "1")
+    _mock_resolve(monkeypatch, "198.18.2.194")
+
+    ok, err = net.validate_resolved_url("https://cdn.example/moved.png")
+
+    assert ok, err
+
+
+def test_a_literal_benchmark_ip_follows_the_switch_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A URL naming the address itself takes the same path as a resolved one."""
+    monkeypatch.delenv(net.FAKE_IP_ENV_VAR, raising=False)
+    assert not net.validate_url_target("http://198.18.2.194/x")[0]
+    monkeypatch.setenv(net.FAKE_IP_ENV_VAR, "1")
+    assert net.validate_url_target("http://198.18.2.194/x")[0]
