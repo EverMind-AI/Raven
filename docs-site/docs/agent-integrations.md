@@ -206,8 +206,10 @@ your local installation has passed a live task.
 | `mirothinker` | OpenAI-compatible HTTP | Endpoint/model/key; preset opts out of stateful replay |
 | `mirasim_<agent>` | Raven's own ACP adapter over the Mirasim host's protocol | Mirasim installed on this computer and running, and the agent installed inside it. The rows are offered when Raven finds Mirasim: a host to reach (a port a Mirasim host wrote its token for, such as the desktop app's or `mirasim serve`'s, or the socket of a server Mirasim runs here over ssh, either one answering), else the launcher Mirasim writes under its home (`~/.mirasim/bin/mirasim`, which it puts on no PATH), `mirasim` on the login shell's PATH, or a server a Mirasim installed here over ssh (`~/.mirasim-remote`); a row whose Mirasim is installed but not running says to open the app or start `mirasim serve`, or to let the app on another computer reach this one again. Session MCP withheld via `sessionMcp: false` |
 
-GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi also
-have preset entries. Adapter versions and exact commands are maintained in
+Antigravity, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code,
+and Pi also have preset entries. Antigravity's entry runs `agy acp` from the CLI
+the user installed; sign in once with `agy acp --login` (Google OAuth) before
+Raven can open a session. Adapter versions and exact commands are maintained in
 `raven/agent/subagent/presets.py`, `raven/agent/subagent/acp_registry_presets.py`,
 and `raven/agent/subagent/mirasim_presets.py`.
 Prefer the installed version's preset instead of reconstructing its flags.

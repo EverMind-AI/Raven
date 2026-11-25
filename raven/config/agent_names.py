@@ -65,6 +65,7 @@ names are ordered newest first to break ties between equally dated stores."""
 
 THIRD_PARTY_PRESET_NAMES: frozenset[str] = frozenset(
     {
+        "antigravity",
         "claude_code",
         "codebuddy",
         "codex",

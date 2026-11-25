@@ -47,8 +47,8 @@ and the DAG tool -- rather than a handshake plus one prompt.
 
 Every row here also **completed a real turn**, rendered its tool calls into the
 rows a reader gets, held context across two prompts on one session, and resumed a
-session from a fresh process. That bar is why there are seven rows and not
-seventeen: the registry offered ten more that reach ``ready`` and then cannot do
+session from a fresh process. That bar is why there are eight rows and not
+eighteen: the registry offered ten more that reach ``ready`` and then cannot do
 the work,
 almost all of them waiting on a credential their owner has to grant. They are a
 separate change, once logged in and re-measured, because a roster entry that
@@ -64,21 +64,35 @@ Left out, deliberately:
   the whole 240s budget rather than failing, which is the shape a row would have
   had on every user's machine too. The last two were the registry's only ``uvx``
   entries, which is why no row here uses one.
-- Registry entries distributed as a platform binary (cursor, antigravity, goose,
-  junie, devin, amp, mistral-vibe and the rest). A preset is a command, not an
+- Registry entries distributed as a platform binary (cursor, goose, junie,
+  devin, amp, mistral-vibe and the rest). A preset is a command, not an
   installer, and the archive-per-platform table those carry is the installer's
   job. ``kimi_code`` is not a breach of that: its own installer appends
   ``$KIMI_INSTALL_DIR/bin`` to the shell rc unless ``KIMI_NO_MODIFY_PATH`` is
   set, so the row names an executable the user already has on ``PATH`` and raven
-  fetches nothing. The rule bars raven from installing a binary, not from naming
-  one that installed itself. It carries no :data:`ACP_REGISTRY_INSTALL_HINTS`
-  entry for the reason that table gives: its install is one command on
-  macOS/Linux and a different one on Windows, and a hint is a single string.
+  fetches nothing. ``antigravity`` is a second such row: ``agy install`` appends
+  its directory to the shell profile unless ``--skip-path`` is given, so it too
+  names an executable the user installed. The rule bars raven from installing a
+  binary, not from naming one that installed itself. Neither carries an
+  :data:`ACP_REGISTRY_INSTALL_HINTS` entry for the reason that table gives: an
+  install that differs per platform is not one command, and a hint is a single
+  string.
 - ``agoragentic``, which takes ``--acp`` but is an agent marketplace settling
   per-call payments in USDC rather than an agent, and does not belong in a
   default roster.
 - Kiro CLI and OpenHands, which speak ACP but have no registry entry, so neither
   a pinnable shim nor a documented executable name could be read for them.
+
+``antigravity`` was added on 2026-11-25 against its installed CLI (``agy``
+1.5.17), not a registry stand-in. Measured through the chain: a tool-using turn
+(``write_file`` rendered as ``tool_call`` and
+``tool_call_update`` with its diff), two prompts on one session, a
+``session/load`` from a fresh process with the history replayed, and
+``session/cancel`` answered with ``stopReason: cancelled``. Its model and
+thinking-level menus were switched through ``session/set_config_option``, and
+its modes are ``default``, ``accept-edits``, ``auto`` and ``plan``. Sign-in is
+its own Google OAuth, out of band (``agy acp --login``), which the shared
+refusal reader already reports as a credential problem.
 
 ``sessionMcp`` is undeclared on every row, which resolves to ``True`` -- see
 :func:`raven.agent.subagent.presets.session_mcp_for`. Whether one session's MCP
@@ -130,6 +144,13 @@ the executable name the probe already reports.
 """
 
 ACP_REGISTRY_PRESETS: dict[str, dict[str, Any]] = {
+    "antigravity": {
+        "name": "Antigravity",
+        "preset": "antigravity",
+        "kind": "acp",
+        "description": "Google's agentic coding tool.",
+        "command": "agy acp",
+    },
     "github_copilot": {
         "name": "GitHub Copilot",
         "preset": "github_copilot",
