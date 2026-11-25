@@ -2890,6 +2890,7 @@ async def test_minimax_h3_returns_failures_without_resubmitting(monkeypatch, tmp
     assert len(posts) == (0 if case == "unreadable_reference" else 1)
     if case == "unreadable_reference":
         assert answer["error"] == "could not read input image"
+        assert answer["model"] == "MiniMax-H3-Image"
     elif case == "timeout":
         assert answer["retryable"] is False and answer["error"] == "ReadTimeout"
     elif case == "http_error":
@@ -2898,6 +2899,26 @@ async def test_minimax_h3_returns_failures_without_resubmitting(monkeypatch, tmp
         assert Path(answer["paths"][0]).read_bytes() == _PNG
     else:
         assert answer["detail"] == [error] and answer["retryable"] is False
+
+
+async def test_a_minimax_transport_failure_names_the_wire_model_the_request_used(monkeypatch, tmp_path):
+    """A transport error carried no model, so the failed call's selection fell
+    back to the stored Settings spelling (``minimax/image-01``) instead of the id
+    the request was actually built with (``image-01``)."""
+
+    def handler(request):
+        raise httpx.ConnectError("boom")
+
+    tool = _minimax_image_tool(monkeypatch, handler, tmp_path, model="minimax/image-01")
+    answer = json.loads(await tool.execute("portrait", model="MiniMax-H3-Image"))
+
+    assert answer["error"] == "ConnectError"
+    assert answer["selection"]["model"] == {
+        "requested": "MiniMax-H3-Image",
+        "sent": "image-01",
+        "source": "settings",
+    }
+    assert answer["model"] == "image-01"
 
 
 async def test_h3_deadline_follows_the_model_selected_for_this_call(monkeypatch, tmp_path):

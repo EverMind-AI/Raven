@@ -1248,7 +1248,10 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             try:
                 refs = [self._image_part(ref)["image_url"]["url"] for ref in images]
             except OSError as e:
-                return json.dumps({"error": "could not read input image", "detail": str(e)}, ensure_ascii=False)
+                return json.dumps(
+                    {"error": "could not read input image", "detail": str(e), "model": model_id},
+                    ensure_ascii=False,
+                )
             if h3:
                 body["images"] = [{"image_url": ref} for ref in refs]
             else:
@@ -1279,7 +1282,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         except _PictureUnfetchableError as e:
             return e.answer(model_id)
         except httpx.TransportError as e:
-            answer: dict[str, Any] = {"error": type(e).__name__, "detail": str(e)}
+            answer: dict[str, Any] = {"error": type(e).__name__, "detail": str(e), "model": model_id}
             if h3:
                 answer.update(retryable=False, note="Generation may still finish and be billed.")
             return json.dumps(answer, ensure_ascii=False)
