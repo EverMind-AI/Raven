@@ -12,12 +12,18 @@ serves both the verdict and the connection, so a DNS answer that changes
 between them — rebinding — has nothing left to bite; the URL keeps the
 hostname, so Host, SNI and the certificate check still name the site.
 
+The judge resolves, and ``socket.getaddrinfo`` is synchronous: on a slow
+resolver it holds for seconds. One process serves every session's turn, so
+every async caller runs the judge through :func:`asyncio.to_thread` and the
+resolution waits in a worker instead of on the loop.
+
 Ported from nanobot/security/network.py (MIT) with the module-level CIDR
 allowlist removed; revisit if a Tailscale-style whitelist becomes needed.
 """
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import socket
 from typing import TYPE_CHECKING, Protocol
@@ -207,7 +213,8 @@ async def guarded_fetch(
     both the verdict and the connection, so a DNS answer that changes between
     them (rebinding) has nothing left to bite. The URL keeps the hostname for
     ``Host``, SNI and certificate verification; only the TCP connection is
-    pinned.
+    pinned. The resolution itself runs in a worker thread, because it is
+    synchronous and one process serves every session's turn.
 
     The chain is followed by hand, with ``follow_redirects=False`` on each
     request, because that is the only way each hop gets checked: a client that
@@ -223,7 +230,12 @@ async def guarded_fetch(
     """
     current = url
     for hop in range(max_redirects + 1):
-        ok, err, addrs = (judge_url_target if hop == 0 else judge_resolved_url)(current)
+        # Off the loop: ``socket.getaddrinfo`` is synchronous and can hold for
+        # seconds on a slow resolver, and one process serves every session's
+        # turn. The judge is looked up per hop, so a caller that patches the
+        # module's names still lands.
+        judge = judge_url_target if hop == 0 else judge_resolved_url
+        ok, err, addrs = await asyncio.to_thread(judge, current)
         if not ok:
             logger.warning("{}: refusing {} ({})", what, current, err)
             return None
