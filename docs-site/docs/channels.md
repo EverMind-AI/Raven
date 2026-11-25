@@ -156,6 +156,33 @@ is not a download link, and a successful model answer is not proof of successful
 file upload. Platform permissions, formats, size limits, and transient transport
 errors still apply to file-capable adapters.
 
+## Matrix: a federated channel with an opt-in SDK
+
+Matrix is an open protocol for decentralized messaging: accounts live on
+homeservers, rooms can span servers, and end-to-end encryption is built in.
+Raven supports it because it is the only channel in the table that is both
+open-source and end-to-end encrypted by design, which makes it a natural fit for
+self-hosted or privacy-conscious deployments where Slack or Discord is not an
+option.
+
+The adapter is built on matrix-nio and ships as an optional extra
+(`channel-matrix`). It authenticates with a homeserver URL, a user id, and an
+access token — no bot approval flow is needed, but the account must already
+exist on the homeserver. E2EE is enabled by default; turning it off is a
+deliberate config change because it exposes credentials and message bodies to
+the homeserver in plaintext.
+
+Room behavior follows the same `allowFrom` / `groupPolicy` rules as the other
+channels. A direct room is always answered; a group room respects `open`,
+`mention`, or `allowlist`. The adapter sends a typing notice while a turn runs
+and supports file attachments up to the homeserver's advertised limit (or
+`max_media_bytes`, whichever is lower).
+
+One operational note: because Matrix is federated, the `homeserver` field is
+sensitive — it decides which server receives credentials and messages. The
+default `https://matrix.org` is a public homeserver; a private deployment should
+point at its own.
+
 ## QR login and lifecycle
 
 Only adapters declaring interactive login use `channels login`. Today that is
