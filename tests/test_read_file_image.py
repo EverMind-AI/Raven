@@ -2025,7 +2025,10 @@ def test_an_attachment_that_cannot_be_prepared_is_named_not_dropped(tmp_path: Pa
     assert "could not be prepared" in out
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="chmod 000 does not block root")
+@pytest.mark.skipif(
+    os.name == "nt" or os.geteuid() == 0,
+    reason="Windows chmod toggles read-only, not owner bits, and chmod 000 does not block root",
+)
 def test_an_attachment_that_cannot_be_read_costs_a_note_not_the_turn(tmp_path: Path) -> None:
     """Resolution only proved the path pointed at a file. Permissions can change
     between then and the read, and the file can be gone -- and this renderer runs

@@ -1436,7 +1436,10 @@ class TestAnUnwritableRootFailsAsAStartFailure:
     situation the user can act on: fix the permissions and run it again.
     """
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="chmod 0o555 does not block root")
+    @pytest.mark.skipif(
+        os.name == "nt" or os.geteuid() == 0,
+        reason="Windows chmod toggles read-only, not owner bits, and chmod 0o555 does not block root",
+    )
     def test_it_surfaces_as_runtime_error(self, tmp_path, monkeypatch) -> None:
         from raven_everos import server as _server
 

@@ -342,7 +342,10 @@ def test_answering_a_question_nobody_asked_is_refused_rather_than_silently_lost(
     assert (project / ".stint" / "HUMAN_DECISIONS.md").read_text(encoding="utf-8") == DOCUMENT
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="chmod 000 does not block root")
+@pytest.mark.skipif(
+    os.name == "nt" or os.geteuid() == 0,
+    reason="Windows chmod toggles read-only, not owner bits, and chmod 000 does not block root",
+)
 def test_a_decisions_file_that_cannot_be_read_is_no_questions_rather_than_a_crash(tmp_path: Path) -> None:
     """Every round opens by reading this file. One lost permission bit taking the
     whole run down would be a worse answer than an empty list."""
