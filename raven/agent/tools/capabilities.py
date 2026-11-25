@@ -418,6 +418,15 @@ def borrowable_credential(cap: Capability, config: "Config") -> str:
     openrouter = config.providers.get("openrouter")
     if openrouter and openrouter.api_key:
         return _OPENROUTER_KEY
+    if openrouter is not None:
+        # The section may name an environment variable instead: reading the
+        # flat field there says nothing while the provider still serves the
+        # media tools the request is about.
+        from raven.config.update_providers import provider_connection
+
+        _, api_key, _ = provider_connection("openrouter", openrouter)
+        if api_key:
+            return _OPENROUTER_KEY
     return cap.env_var if os.environ.get(cap.env_var) else ""
 
 
