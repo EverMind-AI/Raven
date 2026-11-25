@@ -567,6 +567,20 @@ def test_editable_checkout_reads_the_directory_from_pep_610_metadata(
     assert upgrade_commands.editable_checkout() == checkout
 
 
+def test_editable_checkout_reads_a_url_with_a_mixed_case_localhost(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Host names are case-insensitive, so ``LOCALHOST`` is this machine."""
+    checkout = tmp_path / "source checkout"
+    distribution = Mock()
+    distribution.read_text.return_value = json.dumps(
+        {"url": checkout.as_uri().replace("://", "://LOCALHOST", 1), "dir_info": {"editable": True}}
+    )
+    monkeypatch.setattr(upgrade_commands.metadata, "distribution", lambda name: distribution)
+
+    assert upgrade_commands.editable_checkout() == checkout
+
+
 @pytest.mark.parametrize("url", ["https://example.com/source", "file://remote/source", "file:relative"])
 def test_editable_checkout_refuses_a_url_that_is_not_a_local_directory(
     monkeypatch: pytest.MonkeyPatch, url: str
@@ -1297,6 +1311,24 @@ class TestTheHelperAnswersOnThePagePort:
         self._helper()(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4242", self.RELAUNCH])
 
         assert seen == [421]
+
+    def test_a_mixed_case_localhost_host_header_is_still_the_page(
+        self, port: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Host names are case-insensitive, so ``LOCALHOST`` is the page's own
+        origin too."""
+        seen: list[int] = []
+
+        def run(_argv, check, env):
+            seen.append(_get(port, "/upgrade/status", host=f"LOCALHOST:{port}")[0])
+            return Mock(returncode=0)
+
+        monkeypatch.setattr(subprocess, "run", run)
+        monkeypatch.setattr(subprocess, "Popen", Mock())
+
+        self._helper()(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4242", self.RELAUNCH])
+
+        assert seen == [200]
 
     def test_a_failure_is_held_until_the_page_has_read_it(self, port: int, monkeypatch: pytest.MonkeyPatch) -> None:
         """Otherwise the old Raven comes straight back and the page reloads onto

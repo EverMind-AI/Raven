@@ -81,6 +81,11 @@ def test_a_loopback_host_named_in_the_address_is_the_one_connected_to() -> None:
     assert parse_address("127.0.0.1:5001", {}) == HostAddress(port=5001)
 
 
+def test_a_mixed_case_localhost_is_still_loopback() -> None:
+    """Host names are case-insensitive, so ``LOCALHOST`` stays on this machine."""
+    assert parse_address("LOCALHOST:5001", {}).describe() == "LOCALHOST:5001"
+
+
 @pytest.mark.parametrize("value", ["unix:", "example.com:4970", "4970x", "0", "70000", "192.168.1.2:4970"])
 def test_an_address_that_is_not_one_is_refused(value: str) -> None:
     with pytest.raises(ValueError):

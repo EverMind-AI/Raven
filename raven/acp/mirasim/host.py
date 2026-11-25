@@ -165,7 +165,7 @@ def parse_address(value: str, env: Mapping[str, str] | None = None) -> HostAddre
             raise ValueError(f"{HOST_ENV}={value!r} names no socket")
         return HostAddress(socket=path)
     host, _, port_text = value.rpartition(":")
-    if host not in ("", "127.0.0.1", "localhost", "[::1]"):
+    if host.casefold() not in ("", "127.0.0.1", "localhost", "[::1]"):
         raise ValueError(f"{HOST_ENV}={value!r}: the host must listen on this machine's loopback")
     if not port_text.isdigit() or not 0 < int(port_text) < 65536:
         raise ValueError(f"{HOST_ENV}={value!r} names no port")
