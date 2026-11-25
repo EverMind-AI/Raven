@@ -153,6 +153,36 @@ base URL 改指向 Anthropic 兼容端点也不会切换它的协议——每个
 一个 `protocol: anthropic`、`apiBase` 指向上述地址的服务商，可以在**设置 >
 模型服务商（Settings > Model providers）**中添加，也可以在
 `~/.raven/config.json` 里加一节。
+### 密钥放在环境变量里 { #keys-kept-in-an-environment-variable }
+
+把密钥放在秘密管理服务里的部署，不必再把密钥本身写进 `config.json`：在服务商
+配置段写变量名而不是值——设置 `apiKeyEnv`，或运行
+`raven provider set <名字> --api-key-env <变量名>`，Raven 在构建该服务商时于
+内存中解析它。该字段供 `config.json` 与 CLI 使用，**设置 > 模型服务商
+（Settings > Model providers）**页面不提供它。
+
+```json
+{
+  "providers": {
+    "anthropic": { "apiKeyEnv": "ANTHROPIC_API_KEY" }
+  }
+}
+```
+
+在 Raven 运行的地方导出该变量（写进 shell 配置文件或服务单元），让 Raven 启动
+的每个进程都能收到。一个配置段只能写 `apiKey` 或 `apiKeyEnv` 之一，不能两者
+都写；同时携带两者的配置文件会在加载时被拒绝，删掉其中一个即可。变量未设置或
+为空时，Raven 仍会启动：该配置段视为已配置，而首次模型调用会失败并点名该变量，
+而不是把空密钥发给 API。`raven provider test <名字>` 会把同一情况报告为
+`missing_env`。启动时的凭据门禁只读配置里的声明，因此不会因为变量尚未导出
+（例如在进程启动之后才注入）而拒绝启动。
+
+`apiKeyEnv` 只代替扁平字段 `apiKey`。配置段一旦使用 `apiKeyList` 或
+`endpoints` 这类成组条目，密钥就来自那些条目，此处写的变量名会被忽略。
+
+变量名要与导出的写法完全一致。Windows 读取环境变量名时不区分大小写，拼写错误
+的名称在该系统上仍能取到值，在 Linux 或 macOS 上却取不到；需要跨主机使用的配置
+必须与导出时的拼写完全相同。
 
 ### 公司代理或私有 CA { #behind-a-corporate-proxy-or-private-ca }
 

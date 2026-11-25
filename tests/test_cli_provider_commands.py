@@ -335,6 +335,23 @@ def test_get_with_show_secrets_returns_plaintext(tmp_config: Path) -> None:
     assert "test-key" in r.stdout
 
 
+def test_set_refuses_two_key_sources_in_one_call_without_erasing_either(tmp_config: Path) -> None:
+    """Both sources in one call is a mistake: report it, keep the stored key.
+
+    The two supersede rules applied in turn cleared the literal key and then
+    the environment reference, deleting the credential and exiting 0.
+    """
+    runner.invoke(app, ["provider", "set", "openrouter", "--api-key", "sk-kept"])
+
+    r = runner.invoke(app, ["provider", "set", "openrouter", "--api-key", "sk-new", "--api-key-env", "NEW_ENV"])
+
+    assert r.exit_code == 1, r.stdout
+    assert "not both" in r.output
+    section = json.loads(tmp_config.read_text(encoding="utf-8"))["providers"]["openrouter"]
+    assert section["apiKey"] == "sk-kept"
+    assert not section.get("apiKeyEnv")
+
+
 def test_set_oauth_provider_via_api_key_rejected(tmp_config: Path) -> None:
     r = runner.invoke(app, ["provider", "set", "github_copilot", "--api-key", "X"])
     assert r.exit_code != 0

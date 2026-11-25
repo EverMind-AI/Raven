@@ -1,6 +1,6 @@
 """Tests for ``raven.config.schema.AgentDefaults.context_window_tokens``,
-``AgentDefaults.compaction``, ``AgentDefaults.empty_retry_cost_threshold_usd`` and
-``ProviderConfig.endpoints``.
+``AgentDefaults.compaction``, ``AgentDefaults.empty_retry_cost_threshold_usd``,
+``ProviderConfig.endpoints`` and the ``ProviderConfig`` key-source rule.
 
 The context-window tests: None (or 0) means "figure it out" against the
 model's real window; a positive value pins it. See
@@ -11,6 +11,10 @@ The endpoints tests: ``ProviderEndpoint`` is the S1 data shape for a provider
 section holding several url/key/header groups. See
 ``raven.providers.endpoints.provider_endpoints`` for the read point that
 resolves it against the older flat/``api_key_list`` shapes.
+
+The key-source tests: a section holds a literal ``apiKey`` or names an
+``apiKeyEnv`` variable, never both, so the resolution in
+``ProviderConfig.effective_api_key`` has exactly one source to read.
 """
 
 from __future__ import annotations
@@ -79,6 +83,23 @@ def test_provider_config_endpoints_round_trip_with_camel_alias() -> None:
     dumped = section.model_dump(by_alias=True)
     assert dumped["endpoints"][0]["apiKey"] == "sk-1"
     assert dumped["endpoints"][1]["label"] == "backup"
+
+
+def test_api_key_env_loads_from_camel_and_round_trips() -> None:
+    section = ProviderConfig.model_validate({"apiKeyEnv": "MY_VENDOR_KEY"})
+    assert section.api_key_env == "MY_VENDOR_KEY"
+    assert section.api_key == ""
+    assert section.model_dump(by_alias=True, exclude_none=True)["apiKeyEnv"] == "MY_VENDOR_KEY"
+
+
+def test_a_section_states_exactly_one_key_source() -> None:
+    """``apiKey`` and ``apiKeyEnv`` are mutually exclusive, so neither masks the other."""
+    with pytest.raises(ValidationError, match="not both"):
+        ProviderConfig.model_validate({"apiKey": "sk-literal", "apiKeyEnv": "MY_VENDOR_KEY"})
+    with pytest.raises(ValidationError, match="not both"):
+        ProviderConfig(api_key="sk-literal", api_key_env="MY_VENDOR_KEY")
+    assert ProviderConfig(api_key="sk-literal").api_key_env is None
+    assert ProviderConfig(api_key_env="MY_VENDOR_KEY").api_key == ""
 
 
 def test_endpoint_strategy_defaults_to_sticky() -> None:
@@ -279,3 +300,38 @@ def test_a_negative_mode_cap_is_refused_too() -> None:
         AcpModeConfig(name="fast", max_tool_iterations=-1)
     assert AcpModeConfig(name="fast", max_tool_iterations=0).max_tool_iterations == 0
     assert AcpModeConfig(name="fast").max_tool_iterations is None
+
+
+def test_a_media_tool_borrows_an_environment_backed_openrouter_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The key the media tools borrow may live in the environment.
+
+    Reading the OpenRouter section's flat key answered "" for a section that
+    names a variable, so a configured OpenRouter key reached the chat tools
+    and not the image or video ones.
+    """
+    from raven.config.schema import Config
+
+    monkeypatch.setenv("RAVEN_OPENROUTER_KEY", "sk-or-env")
+    payload = {
+        "tools": {"media": {"image": {"model": "m"}}},
+        "providers": {"openrouter": {"apiKeyEnv": "RAVEN_OPENROUTER_KEY"}},
+    }
+
+    media = Config.model_validate(payload).effective_media_config()
+
+    assert media.image.api_key == "sk-or-env"
+
+
+def test_a_media_tool_borrows_nothing_when_the_variable_is_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A variable named but unset is no key: the tool keeps its own fallback."""
+    from raven.config.schema import Config
+
+    monkeypatch.delenv("RAVEN_OPENROUTER_KEY", raising=False)
+    payload = {
+        "tools": {"media": {"image": {"model": "m"}}},
+        "providers": {"openrouter": {"apiKeyEnv": "RAVEN_OPENROUTER_KEY"}},
+    }
+
+    media = Config.model_validate(payload).effective_media_config()
+
+    assert media.image.api_key == ""

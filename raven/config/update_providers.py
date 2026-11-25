@@ -32,7 +32,13 @@ from pydantic.fields import PydanticUndefined
 
 from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import ProviderConfig, ProviderEndpoint, ProvidersConfig
-from raven.providers.endpoints import provider_endpoints
+from raven.providers.endpoints import (
+    provider_endpoints,
+    provider_endpoints_for_request,
+    resolve_api_key_env,
+    uses_flat_key,
+)
+from raven.providers.errors import MissingCredentialsError
 from raven.providers.registry import (
     SHAPE_LOCAL,
     ProviderSpec,
@@ -785,9 +791,25 @@ def set_provider_fields(
                 coerced = None
             prev[path_key] = _set_nested(path_key, coerced, working)
 
+        # apiKey and apiKeyEnv are mutually exclusive (ProviderConfig._one_key_source).
+        # Naming both in one call is a mistake, not a precedence to guess at:
+        # applying the two supersede rules in turn cleared the literal key and
+        # then the environment reference, deleting the credential the section
+        # already held. One source supersedes the other.
+        if fields.get("api_key") and fields.get("api_key_env"):
+            raise ValueError("set apiKey or apiKeyEnv, not both")
+        if fields.get("api_key") and working.get("api_key_env"):
+            prev.setdefault("api_key_env", working["api_key_env"])
+            working["api_key_env"] = None
+        if fields.get("api_key_env") and working.get("api_key"):
+            prev.setdefault("api_key", working["api_key"])
+            working["api_key"] = ""
+
         validated = cls.model_validate(working)
 
-        _write_raw_section(data, name, validated.model_dump(by_alias=True))
+        # Unset fields are absent, not nulls: every `provider set` used to
+        # write `apiKeyEnv: null` into sections that never named a variable.
+        _write_raw_section(data, name, validated.model_dump(by_alias=True, exclude_none=True))
         return json.dumps(data, indent=2, ensure_ascii=False), prev
 
     return atomic_update(path, _apply)
@@ -1355,14 +1377,22 @@ def provider_connection(name: str, section: Any) -> tuple[str, str, dict[str, st
     key, else the first endpoint's address, then the spec's default. The headers
     are that same endpoint's, the section's flat ones included where it names
     none -- a url/key/header group is reachable only whole. Any part may come back
-    empty -- an OAuth seat hands out no key, and a vendor nothing here knows an
-    address for has none -- and what an empty part means is the caller's to say.
+    empty -- an OAuth seat hands out no key, a vendor nothing here knows an
+    address for has none, and a named-but-unset ``apiKeyEnv`` reads the same way
+    -- and what an empty part means is the caller's to say. Reading the variable
+    here rather than refusing lets config assembly (the media tools, the web
+    borrow) keep working; the build is what names an unset one.
     """
+    from raven.providers.auth import MissingCredentialsError
+
     name = canonical_provider_name(name)
     spec = _provider_spec(name)
     if spec is not None and spec.is_oauth:
         return "", "", {}
-    endpoints = provider_endpoints(section) if section is not None else []
+    try:
+        endpoints = provider_endpoints_for_request(section) if section is not None else []
+    except MissingCredentialsError:
+        endpoints = []
     endpoint = next((ep for ep in endpoints if ep.api_key), endpoints[0] if endpoints else None)
     api_key = endpoint.api_key if endpoint else ""
     api_base = (
@@ -1542,6 +1572,26 @@ def test_provider(
                 "error": "no OAuth token stored",
             }
         api_key = oauth_access
+
+    # The probe reports on the credential a request would carry, so a flat
+    # `apiKeyEnv` is resolved here. An unset variable gets its own verdict:
+    # the section is configured -- it names the source -- and the fix is to
+    # export the variable, which `not_configured` does not say.
+    if not api_key and uses_flat_key(instance):
+        from raven.providers.auth import MissingCredentialsError
+
+        try:
+            api_key = resolve_api_key_env(instance, provider=name)
+        except MissingCredentialsError as exc:
+            return {
+                "ok": False,
+                "status": "missing_env",
+                "elapsed_ms": 0,
+                "http_status": None,
+                "models_count": None,
+                "model_ids": None,
+                "error": f"{exc.summary} {exc.remedy}".strip(),
+            }
 
     if not api_key and not (spec and spec.is_local):
         return {
@@ -2332,12 +2382,13 @@ def lend_provider_credentials(provider: str) -> dict[str, str]:
 
     Only a group this can hand over whole: see the header check below.
 
-    Read through ``provider_endpoints``, which is the one place that knows the
-    precedence a section can be written in -- ``endpoints`` first, then
-    ``api_key_list``, then the flat pair. Reading ``api_key`` off the section
-    instead answers "" for both of the shapes that precedence exists for, so a
-    provider serving traffic every day would be offered as a lender and then
-    refuse to lend.
+    Read through ``provider_endpoints_for_request``, which is the one place that
+    knows the precedence a section can be written in -- ``endpoints`` first,
+    then ``api_key_list``, then the flat pair -- and resolves a flat
+    ``apiKeyEnv`` into the key the section actually holds. Reading ``api_key``
+    off the section instead answers "" for both of the shapes that precedence
+    exists for, so a provider serving traffic every day would be offered as a
+    lender and then refuse to lend.
 
     This asks a narrower question than ``credential_status``, which owns "is
     this Provider usable": a provider can be perfectly usable and have nothing
@@ -2355,7 +2406,8 @@ def lend_provider_credentials(provider: str) -> dict[str, str]:
     Raises:
         KeyError: no such provider is configured.
         ValueError: it is configured but has nothing that can be handed over
-            whole -- no key to lend, or a group that authenticates with headers.
+            whole -- no key to lend, a key held in an environment variable that
+            is not set, or a group that authenticates with headers.
     """
     from raven.config import load_config
 
@@ -2370,8 +2422,14 @@ def lend_provider_credentials(provider: str) -> dict[str, str]:
         raise KeyError(provider)
 
     # The first endpoint holding a key. A section can offer several, and any one
-    # of them is a key that works against the same address.
-    lent = next((e for e in provider_endpoints(section) if e.api_key), None)
+    # of them is a key that works against the same address. Read through the
+    # request-side reader, so a section whose flat key is an environment
+    # variable lends the variable's value rather than nothing.
+    try:
+        endpoints = provider_endpoints_for_request(section, provider=provider)
+    except MissingCredentialsError as exc:
+        raise ValueError(f"{provider} has no api key to lend: {exc.summary}") from exc
+    lent = next((e for e in endpoints if e.api_key), None)
     if lent is None:
         raise ValueError(f"{provider} has no api key to lend")
     # A url/key/header group is reachable only whole. A borrowing section holds a

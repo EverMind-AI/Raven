@@ -472,11 +472,11 @@ def _register_config_commands(app: typer.Typer) -> None:
         except KeyError as exc:
             console.print(f"[red]✗[/red] {exc}")
             raise typer.Exit(1)
-        except RuntimeError as exc:
-            console.print(f"[red]✗[/red] {exc}")
-            raise typer.Exit(1)
         except ValidationError as exc:
             console.print(f"[red]✗ Validation failed:[/red]\n{exc}")
+            raise typer.Exit(1)
+        except (RuntimeError, ValueError) as exc:
+            console.print(f"[red]✗[/red] {exc}")
             raise typer.Exit(1)
 
         console.print(f"[green]✓[/green] {name} updated: {', '.join(prev)}")
