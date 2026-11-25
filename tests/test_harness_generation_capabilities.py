@@ -279,16 +279,27 @@ def test_a_worker_whose_catalogue_enables_tools_names_no_skew() -> None:
     assert said == []
 
 
+def test_a_dispatch_with_an_empty_restriction_names_the_skew_it_drops(tmp_path, monkeypatch) -> None:
+    _disabled_document(tmp_path, monkeypatch)
+
+    with _warnings() as said:
+        charter = parse({"brief": "the dispatch brief", "tools": []})
+
+    assert charter is not None
+    assert charter.tools is None
+    assert [line for line in said if "capability.tools" in line] == [
+        "charter: a host sent 0 tool name(s) but this install's catalogue disables "
+        "capability.tools; the dispatch keeps the worker's own toolset"
+    ]
+
+
 def test_a_dispatch_that_carries_no_tools_names_no_skew(tmp_path, monkeypatch) -> None:
     _disabled_document(tmp_path, monkeypatch)
 
     with _warnings() as said:
-        empty = parse({"brief": "the dispatch brief", "tools": []})
         absent = parse({"brief": "the dispatch brief"})
 
-    assert empty is not None
     assert absent is not None
-    assert empty.tools is None
     assert absent.tools is None
     assert said == []
 

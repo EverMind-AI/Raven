@@ -164,7 +164,7 @@ def parse(payload: Any) -> Charter | None:
         sent = tuple(str(name) for name in raw_tools[:MAX_TOOLS] if isinstance(name, str) and name)
         if _parameter_enabled("capability", "tools"):
             tools = sent
-        elif sent:
+        else:
             logger.warning(
                 "charter: a host sent {} tool name(s) but this install's catalogue disables "
                 "capability.tools; the dispatch keeps the worker's own toolset",
