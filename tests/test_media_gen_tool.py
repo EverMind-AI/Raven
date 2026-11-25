@@ -1809,6 +1809,7 @@ async def test_a_batch_that_lost_every_picture_is_named_by_its_call_not_by_a_liv
     )
 
     assert out["model"] == "openai/gpt-image-2"
+    assert all(item["model"] == "openai/gpt-image-2" for item in out["results"])
 
 
 async def test_a_batch_where_every_picture_failed_to_write_is_named_by_its_attempts_not_by_a_live_read(
