@@ -342,12 +342,7 @@ class RavenLoopBackend:
             # The same line the ACP lane logs on arrival. Without it a briefed
             # in-process run and an unbriefed one read identically in the log,
             # and the difference between them is the whole of this feature.
-            logger.info(
-                "agent playbook: charter applied to this run ({} tool(s), {} check(s){})",
-                "all" if charter.tools is None else len(charter.tools),
-                len(charter.checks),
-                ", judge" if charter.code else "",
-            )
+            logger.info("agent playbook: charter applied to this run {}", charter.boundary_summary())
         run = activity.current()
         control = run.control if run is not None else None
         report = TurnReport(run.uid) if control is not None and run is not None else None

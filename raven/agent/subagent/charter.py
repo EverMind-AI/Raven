@@ -122,6 +122,26 @@ class Charter:
             or self.stop_when
         )
 
+    def boundary_summary(self) -> str:
+        """What a charter crossing the process boundary says in one log line.
+
+        Written on the type rather than at the two boundaries that print it --
+        ``bind_session_charter`` when a dispatch is staged and the in-process
+        worker lane when a run picks it up -- so the two read identically, and
+        a charter carrying only generated functions is not logged as an empty
+        one. ``tools`` is "all" rather than a count because a ``None`` means no
+        narrowing was asked for, not zero names. The prompt and stop-condition
+        stay out of the line: they are the host's words, and the boundary only
+        needs to say the charter arrived and what it narrowed, not repeat it.
+        """
+        tail = ", judge" if self.code else ""
+        tail += "".join(f", {name}" for name, _ in self.functions)
+        return "({} tool(s), {} check(s){})".format(
+            "all" if self.tools is None else len(self.tools),
+            len(self.checks),
+            tail,
+        )
+
 
 def parse(payload: Any) -> Charter | None:
     """Read a charter off the wire, dropping anything unrecognised.

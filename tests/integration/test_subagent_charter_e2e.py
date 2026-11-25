@@ -128,11 +128,31 @@ def test_the_payload_survives_the_round_trip_to_a_charter() -> None:
 
 
 def test_a_staged_charter_is_taken_by_the_turn(workspace) -> None:
+    """The staging line is the only record that a brief crossed the boundary,
+    so it has to name the generated verbs the dispatch carries: without them a
+    charter carrying only functions reads as an empty one."""
+    import io
+
+    from loguru import logger
+
     loop = _loop(workspace)
-    loop.bind_session_charter("s1", {"prompt": BRIEF, "tools": ["grep"]})
+    logged = io.StringIO()
+    sink = logger.add(logged, format="{message}", level="INFO")
+    try:
+        loop.bind_session_charter(
+            "s1",
+            {
+                "prompt": BRIEF,
+                "tools": ["grep"],
+                "functions": {"advise": "def advise(step):\n    return None"},
+            },
+        )
+    finally:
+        logger.remove(sink)
     taken = loop._take_session_charter("s1")
     assert taken is not None
     assert taken.prompt == BRIEF
+    assert "agent playbook: charter staged for this session (1 tool(s), 0 check(s), advise)" in logged.getvalue()
 
 
 def test_a_charter_is_taken_once_and_not_again(workspace) -> None:
@@ -523,8 +543,13 @@ async def test_a_sub_agent_that_runs_in_this_process_is_held_to_its_charter(work
     here, with no wire between the dispatch and the run, so the ``_meta`` that
     carries a charter to a forked worker has nothing to travel on. Without this
     the brief would ride along in the task text while the tools, the checks and
-    the deadline it named were dropped without a word.
+    the deadline it named were dropped without a word. The line the run logs is
+    the other half of the record, and it has to name the generated verbs.
     """
+    import io
+
+    from loguru import logger
+
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 
     seen: dict[str, object] = {}
@@ -539,12 +564,23 @@ async def test_a_sub_agent_that_runs_in_this_process_is_held_to_its_charter(work
 
     backend._run = _capture  # type: ignore[method-assign]
 
-    with dispatch_charter({"prompt": BRIEF, "tools": ["grep"]}):
-        await backend.run("do the thing", task_id="t1", workspace=workspace, executor=None)
+    payload = {
+        "prompt": BRIEF,
+        "tools": ["grep"],
+        "functions": {"advise": "def advise(step):\n    return None"},
+    }
+    logged = io.StringIO()
+    sink = logger.add(logged, format="{message}", level="INFO")
+    try:
+        with dispatch_charter(payload):
+            await backend.run("do the thing", task_id="t1", workspace=workspace, executor=None)
+    finally:
+        logger.remove(sink)
 
     assert seen["prompt"] == BRIEF
     assert seen["tools"] == ("grep",)
     assert current_charter() is None, "the scope closes with the run"
+    assert "agent playbook: charter applied to this run (1 tool(s), 0 check(s), advise)" in logged.getvalue()
 
 
 @pytest.mark.asyncio

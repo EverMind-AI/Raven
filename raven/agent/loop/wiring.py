@@ -1112,12 +1112,7 @@ class WiringMixin:
         # Without it the only record that a brief crossed the process boundary
         # is the behaviour it produced, and a charter that was dropped on the
         # way looks exactly like one that was never written.
-        logger.info(
-            "agent playbook: charter staged for this session ({} tool(s), {} check(s){})",
-            "all" if charter.tools is None else len(charter.tools),
-            len(charter.checks),
-            ", judge" if charter.code else "",
-        )
+        logger.info("agent playbook: charter staged for this session {}", charter.boundary_summary())
         self._session_charters[session_key] = charter
 
     def _take_session_charter(self, session_key: str) -> "Charter | None":
