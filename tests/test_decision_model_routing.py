@@ -30,12 +30,16 @@ from raven.providers.binding import ModelBinding
 @dataclass
 class _StubReply:
     content: str | None
+    finish_reason: str = "stop"
 
 
 class _StubProvider:
-    def __init__(self, reply: str | None = None, *, error: Exception | None = None) -> None:
+    def __init__(
+        self, reply: str | None = None, *, error: Exception | None = None, finish_reason: str = "stop"
+    ) -> None:
         self._reply = reply
         self._error = error
+        self._finish_reason = finish_reason
         self.calls: list[dict[str, Any]] = []
 
     def get_default_model(self) -> str:
@@ -60,7 +64,7 @@ class _StubProvider:
         )
         if self._error is not None:
             raise self._error
-        return _StubReply(content=self._reply)
+        return _StubReply(content=self._reply, finish_reason=self._finish_reason)
 
 
 class _StubPool:
@@ -101,68 +105,33 @@ def _write_live_config(tmp_path: Path, data: dict[str, Any]) -> LiveConfig:
 # ---------------------------------------------------------------- system 1 filter
 
 
-@pytest.mark.parametrize(
-    "model_id",
-    [
-        "Microsoft-decision-1",
-        "Gemini-decision-1",
-        "gpt-4o-mini",
-        "gpt-4.1-mini",
-        "gpt-4.1-nano",
-        "gpt-5-mini",
-        "gpt-5-nano",
-        "gemini-2.5-flash",
-        "gemini-2.0-flash-lite",
-        "claude-haiku-4-5",
-        "claude-3-5-haiku",
-        "openai/gpt-5-mini",
-        "ghe-copilot/gpt-4o-mini",
-        "llama-3.1-8b-instant",
-        "qwen2.5-7b",
-        "phi-4-mini",
-        "gemma-3-4b",
-    ],
-)
-def test_is_system1_decision_model_accepts_fast_non_reasoning_models(model_id: str) -> None:
+ACCEPTED = [
+    "microsoft-decision-1", "Microsoft-decision-1", "ghe-copilot/microsoft-decision-1",
+    "ghe-copilot/microsoft-decision-1-1", "gemini/gemini-decision-1", "Gemini-decision-1",
+    "gpt-6-luna-decisions", "github-copilot/gpt-6-luna-decisions", "custom/decisions",
+    "decisions", "e2e-decision-1",
+]
+REJECTED = [
+    "", "   ", "ghe-copilot/gpt-4o-mini", "gpt-4o-mini", "gpt-4.1-nano", "claude-haiku-4-5",
+    "claude-haiku-5.5", "gemini-2.5-flash", "mai-code-2-flash", "custom/lite", "o1", "o1-mini",
+    "o3-mini", "o4-mini", "deepseek-r1", "gemini-2.5-flash-thinking", "qwq-32b", "marco-o1",
+    "claude-sonnet-4-6", "claude-opus-4-6", "gpt-4o", "gpt-5", "gemini-2.5-pro",
+]
+
+
+@pytest.mark.parametrize("model_id", ACCEPTED)
+def test_is_system1_decision_model_accepts_dedicated_decision_models(model_id: str) -> None:
     assert is_system1_decision_model(model_id) is True
 
 
-@pytest.mark.parametrize(
-    "model_id",
-    [
-        "",
-        "   ",
-        "o1",
-        "o1-mini",
-        "openai/o1-preview",
-        "o3",
-        "o3-mini",
-        "o4-mini",
-        "deepseek-r1",
-        "deepseek/deepseek-r1-distill-qwen-7b",
-        "gemini-2.5-flash-thinking",
-        "deepseek-reasoner",
-        "qwq-32b",
-        "marco-o1",
-        "claude-sonnet-4-6",
-        "claude-opus-4-6",
-        "gpt-4o",
-        "gpt-4.1",
-        "gpt-5",
-        "gemini-2.5-pro",
-        "gemini-1.5-pro",
-        "deepseek-v3",
-        "llama-3.3-70b",
-    ],
-)
-def test_is_system1_decision_model_rejects_reasoning_and_heavy_models(model_id: str) -> None:
+@pytest.mark.parametrize("model_id", REJECTED)
+def test_is_system1_decision_model_rejects_everything_else(model_id: str) -> None:
     assert is_system1_decision_model(model_id) is False
 
 
 def test_is_system1_decision_model_rejects_when_reasoning_flag_true() -> None:
-    assert is_system1_decision_model("gpt-4o-mini", reasoning=True) is False
-    assert is_system1_decision_model("Microsoft-decision-1", reasoning=True) is False
-    assert is_system1_decision_model("gpt-4o-mini", reasoning=False) is True
+    assert is_system1_decision_model("microsoft-decision-1", reasoning=True) is False
+    assert is_system1_decision_model("microsoft-decision-1", reasoning=False) is True
 
 
 # ---------------------------------------------------------------- resolver
@@ -171,18 +140,18 @@ def test_is_system1_decision_model_rejects_when_reasoning_flag_true() -> None:
 def test_resolve_decision_binding_returns_bound_model(tmp_path: Path) -> None:
     live = _write_live_config(
         tmp_path,
-        {"decisionModel": {"model": "fast-judge", "provider": "openai", "useForSkills": True}},
+        {"decisionModel": {"model": "microsoft-decision-1", "provider": "openai", "useForSkills": True}},
     )
     decision_provider = _StubProvider()
-    expected = ModelBinding(provider=decision_provider, model="fast-judge")
-    pool = _StubPool({("fast-judge", "openai"): expected})
+    expected = ModelBinding(provider=decision_provider, model="microsoft-decision-1")
+    pool = _StubPool({("microsoft-decision-1", "openai"): expected})
 
     resolved = resolve_decision_binding(live, pool)
     assert resolved is expected
-    assert pool.requests == [("fast-judge", "openai")]
+    assert pool.requests == [("microsoft-decision-1", "openai")]
 
 
-@pytest.mark.parametrize("bad_model", ["claude-opus-4-6", "o3-mini", "deepseek-r1", "gpt-5"])
+@pytest.mark.parametrize("bad_model", [m for m in REJECTED if m.strip()])
 def test_resolve_decision_binding_returns_none_for_non_system1_model(tmp_path: Path, bad_model: str) -> None:
     live = _write_live_config(
         tmp_path,
@@ -204,18 +173,18 @@ def test_resolve_decision_binding_returns_none_when_unconfigured(tmp_path: Path)
 
 
 def test_resolve_decision_binding_returns_none_without_pool(tmp_path: Path) -> None:
-    live = _write_live_config(tmp_path, {"decisionModel": {"model": "fast-judge", "provider": "openai"}})
+    live = _write_live_config(tmp_path, {"decisionModel": {"model": "microsoft-decision-1", "provider": "openai"}})
 
     assert resolve_decision_binding(live, None) is None
     assert resolve_decision_binding(None, _StubPool({})) is None
 
 
 def test_resolve_decision_binding_returns_none_when_credentials_unusable(tmp_path: Path) -> None:
-    live = _write_live_config(tmp_path, {"decisionModel": {"model": "fast-judge", "provider": "openai"}})
-    pool = _StubPool({("fast-judge", "openai"): None})
+    live = _write_live_config(tmp_path, {"decisionModel": {"model": "microsoft-decision-1", "provider": "openai"}})
+    pool = _StubPool({("microsoft-decision-1", "openai"): None})
 
     assert resolve_decision_binding(live, pool) is None
-    assert pool.requests == [("fast-judge", "openai")]
+    assert pool.requests == [("microsoft-decision-1", "openai")]
 
 
 # ---------------------------------------------------------------- skill helper
@@ -224,7 +193,7 @@ def test_resolve_decision_binding_returns_none_when_credentials_unusable(tmp_pat
 @pytest.mark.asyncio
 async def test_select_skills_with_decision_model_filters_and_orders() -> None:
     provider = _StubProvider('["hub/sql-opt", "hub/not-real", "local/testing", "hub/sql-opt"]')
-    binding = ModelBinding(provider=provider, model="fast-judge")
+    binding = ModelBinding(provider=provider, model="microsoft-decision-1")
     candidates = [
         ("local/testing", "Testing methodology"),
         ("hub/sql-opt", "Optimize SQL queries"),
@@ -235,13 +204,13 @@ async def test_select_skills_with_decision_model_filters_and_orders() -> None:
 
     assert result == ["hub/sql-opt", "local/testing"]
     assert len(provider.calls) == 1
-    assert provider.calls[0]["model"] == "fast-judge"
+    assert provider.calls[0]["model"] == "microsoft-decision-1"
 
 
 @pytest.mark.asyncio
 async def test_select_skills_with_decision_model_accepts_fenced_json() -> None:
     provider = _StubProvider('```json\n["hub/sql-opt"]\n```')
-    binding = ModelBinding(provider=provider, model="fast-judge")
+    binding = ModelBinding(provider=provider, model="microsoft-decision-1")
 
     result = await select_skills_with_decision_model(
         binding,
@@ -256,19 +225,19 @@ async def test_select_skills_with_decision_model_accepts_fenced_json() -> None:
 async def test_select_skills_with_decision_model_returns_none_on_error_or_bad_json() -> None:
     candidates = [("hub/sql-opt", "Optimize SQL queries")]
 
-    err_binding = ModelBinding(provider=_StubProvider(error=RuntimeError("boom")), model="fast-judge")
+    err_binding = ModelBinding(provider=_StubProvider(error=RuntimeError("boom")), model="microsoft-decision-1")
     assert await select_skills_with_decision_model(err_binding, "sql", candidates) is None
 
-    bad_binding = ModelBinding(provider=_StubProvider("not json at all"), model="fast-judge")
+    bad_binding = ModelBinding(provider=_StubProvider("not json at all"), model="microsoft-decision-1")
     assert await select_skills_with_decision_model(bad_binding, "sql", candidates) is None
 
-    obj_binding = ModelBinding(provider=_StubProvider('{"ids": ["hub/sql-opt"]}'), model="fast-judge")
+    obj_binding = ModelBinding(provider=_StubProvider('{"ids": ["hub/sql-opt"]}'), model="microsoft-decision-1")
     assert await select_skills_with_decision_model(obj_binding, "sql", candidates) is None
 
 
 @pytest.mark.asyncio
 async def test_select_skills_with_decision_model_timeout_returns_none() -> None:
-    binding = ModelBinding(provider=_StubProvider(error=asyncio.TimeoutError()), model="fast-judge")
+    binding = ModelBinding(provider=_StubProvider(error=asyncio.TimeoutError()), model="microsoft-decision-1")
     assert (
         await select_skills_with_decision_model(
             binding,
@@ -294,10 +263,10 @@ def _sample_hits() -> list[_StubHit]:
 async def test_scent_menu_uses_decision_model_when_toggle_on(tmp_path: Path) -> None:
     live = _write_live_config(
         tmp_path,
-        {"decisionModel": {"model": "fast-judge", "provider": "openai", "useForSkills": True}},
+        {"decisionModel": {"model": "microsoft-decision-1", "provider": "openai", "useForSkills": True}},
     )
     decision_provider = _StubProvider('["hub/python-debug", "local/alpha"]')
-    pool = _StubPool({("fast-judge", "openai"): ModelBinding(provider=decision_provider, model="fast-judge")})
+    pool = _StubPool({("microsoft-decision-1", "openai"): ModelBinding(provider=decision_provider, model="microsoft-decision-1")})
     router = _StubRouter(_sample_hits())
     menu = ScentMenu(
         router,
@@ -309,17 +278,17 @@ async def test_scent_menu_uses_decision_model_when_toggle_on(tmp_path: Path) -> 
 
     assert result.skill_ids == ["hub/python-debug", "local/alpha"]
     assert len(decision_provider.calls) == 1
-    assert decision_provider.calls[0]["model"] == "fast-judge"
+    assert decision_provider.calls[0]["model"] == "microsoft-decision-1"
 
 
 @pytest.mark.asyncio
 async def test_scent_menu_skips_decision_model_when_toggle_off(tmp_path: Path) -> None:
     live = _write_live_config(
         tmp_path,
-        {"decisionModel": {"model": "fast-judge", "provider": "openai", "useForSkills": False}},
+        {"decisionModel": {"model": "microsoft-decision-1", "provider": "openai", "useForSkills": False}},
     )
     decision_provider = _StubProvider('["hub/python-debug"]')
-    pool = _StubPool({("fast-judge", "openai"): ModelBinding(provider=decision_provider, model="fast-judge")})
+    pool = _StubPool({("microsoft-decision-1", "openai"): ModelBinding(provider=decision_provider, model="microsoft-decision-1")})
     router = _StubRouter(_sample_hits())
     menu = ScentMenu(
         router,
@@ -355,10 +324,10 @@ async def test_scent_menu_skips_decision_model_when_unconfigured(tmp_path: Path)
 async def test_scent_menu_falls_back_on_decision_model_error_or_bad_json(tmp_path: Path) -> None:
     live = _write_live_config(
         tmp_path,
-        {"decisionModel": {"model": "fast-judge", "provider": "openai", "useForSkills": True}},
+        {"decisionModel": {"model": "microsoft-decision-1", "provider": "openai", "useForSkills": True}},
     )
     for provider in (_StubProvider(error=RuntimeError("network down")), _StubProvider("not-json")):
-        pool = _StubPool({("fast-judge", "openai"): ModelBinding(provider=provider, model="fast-judge")})
+        pool = _StubPool({("microsoft-decision-1", "openai"): ModelBinding(provider=provider, model="microsoft-decision-1")})
         router = _StubRouter(_sample_hits())
         menu = ScentMenu(
             router,
@@ -376,10 +345,10 @@ async def test_scent_menu_falls_back_on_decision_model_error_or_bad_json(tmp_pat
 async def test_scent_menu_returns_silent_when_decision_model_returns_empty_list(tmp_path: Path) -> None:
     live = _write_live_config(
         tmp_path,
-        {"decisionModel": {"model": "fast-judge", "provider": "openai", "useForSkills": True}},
+        {"decisionModel": {"model": "microsoft-decision-1", "provider": "openai", "useForSkills": True}},
     )
     decision_provider = _StubProvider("[]")
-    pool = _StubPool({("fast-judge", "openai"): ModelBinding(provider=decision_provider, model="fast-judge")})
+    pool = _StubPool({("microsoft-decision-1", "openai"): ModelBinding(provider=decision_provider, model="microsoft-decision-1")})
     router = _StubRouter(_sample_hits())
     menu = ScentMenu(
         router,
@@ -399,10 +368,10 @@ async def test_scent_menu_returns_silent_when_decision_model_returns_empty_list(
 async def test_find_skill_tool_uses_decision_model_and_falls_back(tmp_path: Path) -> None:
     live = _write_live_config(
         tmp_path,
-        {"decisionModel": {"model": "fast-judge", "provider": "openai", "useForSkills": True}},
+        {"decisionModel": {"model": "microsoft-decision-1", "provider": "openai", "useForSkills": True}},
     )
     decision_provider = _StubProvider('["hub/python-debug"]')
-    pool = _StubPool({("fast-judge", "openai"): ModelBinding(provider=decision_provider, model="fast-judge")})
+    pool = _StubPool({("microsoft-decision-1", "openai"): ModelBinding(provider=decision_provider, model="microsoft-decision-1")})
     router = _StubRouter(_sample_hits())
     tool = FindSkillTool(
         lambda: router,
@@ -416,7 +385,7 @@ async def test_find_skill_tool_uses_decision_model_and_falls_back(tmp_path: Path
     assert len(decision_provider.calls) == 1
 
     bad_provider = _StubProvider("invalid-json")
-    bad_pool = _StubPool({("fast-judge", "openai"): ModelBinding(provider=bad_provider, model="fast-judge")})
+    bad_pool = _StubPool({("microsoft-decision-1", "openai"): ModelBinding(provider=bad_provider, model="microsoft-decision-1")})
     fallback_tool = FindSkillTool(
         lambda: router,
         decision_binding=lambda: resolve_decision_binding(live, bad_pool) if decision_for_skills(live) else None,
@@ -432,10 +401,10 @@ async def test_find_skill_tool_uses_decision_model_and_falls_back(tmp_path: Path
 async def test_find_skill_tool_skips_decision_model_when_toggle_off_or_unconfigured(tmp_path: Path) -> None:
     live_off = _write_live_config(
         tmp_path / "off",
-        {"decisionModel": {"model": "fast-judge", "provider": "openai", "useForSkills": False}},
+        {"decisionModel": {"model": "microsoft-decision-1", "provider": "openai", "useForSkills": False}},
     )
     off_provider = _StubProvider('["hub/python-debug"]')
-    off_pool = _StubPool({("fast-judge", "openai"): ModelBinding(provider=off_provider, model="fast-judge")})
+    off_pool = _StubPool({("microsoft-decision-1", "openai"): ModelBinding(provider=off_provider, model="microsoft-decision-1")})
     router = _StubRouter(_sample_hits())
     off_tool = FindSkillTool(
         lambda: router,
@@ -473,10 +442,10 @@ async def test_find_skill_tool_skips_decision_model_when_toggle_off_or_unconfigu
 async def test_find_skill_tool_falls_back_to_router_hits_when_decision_model_returns_empty(tmp_path: Path) -> None:
     live = _write_live_config(
         tmp_path,
-        {"decisionModel": {"model": "fast-judge", "provider": "openai", "useForSkills": True}},
+        {"decisionModel": {"model": "microsoft-decision-1", "provider": "openai", "useForSkills": True}},
     )
     decision_provider = _StubProvider("[]")
-    pool = _StubPool({("fast-judge", "openai"): ModelBinding(provider=decision_provider, model="fast-judge")})
+    pool = _StubPool({("microsoft-decision-1", "openai"): ModelBinding(provider=decision_provider, model="microsoft-decision-1")})
     router = _StubRouter(_sample_hits())
     tool = FindSkillTool(
         lambda: router,
@@ -497,7 +466,7 @@ async def test_find_skill_tool_falls_back_to_router_hits_when_decision_model_ret
 
 @pytest.mark.asyncio
 async def test_select_specialist_with_decision_model_validates_choice() -> None:
-    binding = ModelBinding(provider=_StubProvider("`coder`"), model="fast-judge")
+    binding = ModelBinding(provider=_StubProvider("`coder`"), model="microsoft-decision-1")
     choice = await select_specialist_with_decision_model(
         binding,
         "fix failing tests",
@@ -506,7 +475,7 @@ async def test_select_specialist_with_decision_model_validates_choice() -> None:
     )
     assert choice == "coder"
 
-    unknown_binding = ModelBinding(provider=_StubProvider("hallucinated"), model="fast-judge")
+    unknown_binding = ModelBinding(provider=_StubProvider("hallucinated"), model="microsoft-decision-1")
     assert (
         await select_specialist_with_decision_model(
             unknown_binding,
@@ -517,7 +486,7 @@ async def test_select_specialist_with_decision_model_validates_choice() -> None:
         is None
     )
 
-    none_binding = ModelBinding(provider=_StubProvider("NONE"), model="fast-judge")
+    none_binding = ModelBinding(provider=_StubProvider("NONE"), model="microsoft-decision-1")
     assert (
         await select_specialist_with_decision_model(
             none_binding,
@@ -531,7 +500,7 @@ async def test_select_specialist_with_decision_model_validates_choice() -> None:
 
 @pytest.mark.asyncio
 async def test_select_specialist_with_decision_model_timeout_returns_none() -> None:
-    binding = ModelBinding(provider=_StubProvider(error=asyncio.TimeoutError()), model="fast-judge")
+    binding = ModelBinding(provider=_StubProvider(error=asyncio.TimeoutError()), model="microsoft-decision-1")
     assert (
         await select_specialist_with_decision_model(
             binding,
@@ -546,7 +515,7 @@ async def test_select_specialist_with_decision_model_timeout_returns_none() -> N
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reply", ["coder.", "coder\n(best fit)"])
 async def test_select_specialist_with_decision_model_strips_punctuation_and_extra_lines(reply: str) -> None:
-    binding = ModelBinding(provider=_StubProvider(reply), model="fast-judge")
+    binding = ModelBinding(provider=_StubProvider(reply), model="microsoft-decision-1")
     choice = await select_specialist_with_decision_model(
         binding,
         "fix failing tests",
@@ -576,11 +545,11 @@ def _make_manager(
 async def test_subagent_classify_uses_decision_model_when_toggle_on(tmp_path: Path) -> None:
     live = _write_live_config(
         tmp_path,
-        {"decisionModel": {"model": "fast-judge", "provider": "openai", "useForSpecialists": True}},
+        {"decisionModel": {"model": "microsoft-decision-1", "provider": "openai", "useForSpecialists": True}},
     )
     main_provider = _StubProvider("writer")
     decision_provider = _StubProvider("coder")
-    pool = _StubPool({("fast-judge", "openai"): ModelBinding(provider=decision_provider, model="fast-judge")})
+    pool = _StubPool({("microsoft-decision-1", "openai"): ModelBinding(provider=decision_provider, model="microsoft-decision-1")})
     manager = _make_manager(tmp_path, main_provider=main_provider, pool=pool, live=live)
 
     result = await manager._classify(
@@ -592,7 +561,7 @@ async def test_subagent_classify_uses_decision_model_when_toggle_on(tmp_path: Pa
     assert decision_for_specialists(live) is True
     assert result == "coder"
     assert len(decision_provider.calls) == 1
-    assert decision_provider.calls[0]["model"] == "fast-judge"
+    assert decision_provider.calls[0]["model"] == "microsoft-decision-1"
     assert main_provider.calls == []
 
 
@@ -600,11 +569,11 @@ async def test_subagent_classify_uses_decision_model_when_toggle_on(tmp_path: Pa
 async def test_subagent_classify_uses_main_provider_when_toggle_off(tmp_path: Path) -> None:
     live = _write_live_config(
         tmp_path,
-        {"decisionModel": {"model": "fast-judge", "provider": "openai", "useForSpecialists": False}},
+        {"decisionModel": {"model": "microsoft-decision-1", "provider": "openai", "useForSpecialists": False}},
     )
     main_provider = _StubProvider("writer")
     decision_provider = _StubProvider("coder")
-    pool = _StubPool({("fast-judge", "openai"): ModelBinding(provider=decision_provider, model="fast-judge")})
+    pool = _StubPool({("microsoft-decision-1", "openai"): ModelBinding(provider=decision_provider, model="microsoft-decision-1")})
     manager = _make_manager(tmp_path, main_provider=main_provider, pool=pool, live=live)
 
     result = await manager._classify(
@@ -642,11 +611,11 @@ async def test_subagent_classify_falls_back_when_unconfigured(tmp_path: Path) ->
 async def test_subagent_classify_falls_back_on_decision_model_error_or_invalid_name(tmp_path: Path) -> None:
     live = _write_live_config(
         tmp_path,
-        {"decisionModel": {"model": "fast-judge", "provider": "openai", "useForSpecialists": True}},
+        {"decisionModel": {"model": "microsoft-decision-1", "provider": "openai", "useForSpecialists": True}},
     )
     for decision_provider in (_StubProvider(error=RuntimeError("timeout")), _StubProvider("not-a-specialist")):
         main_provider = _StubProvider("writer")
-        pool = _StubPool({("fast-judge", "openai"): ModelBinding(provider=decision_provider, model="fast-judge")})
+        pool = _StubPool({("microsoft-decision-1", "openai"): ModelBinding(provider=decision_provider, model="microsoft-decision-1")})
         manager = _make_manager(tmp_path, main_provider=main_provider, pool=pool, live=live)
 
         result = await manager._classify(
@@ -665,11 +634,11 @@ async def test_subagent_classify_falls_back_on_decision_model_error_or_invalid_n
 async def test_subagent_classify_returns_default_from_decision_model_without_main_provider(tmp_path: Path) -> None:
     live = _write_live_config(
         tmp_path,
-        {"decisionModel": {"model": "fast-judge", "provider": "openai", "useForSpecialists": True}},
+        {"decisionModel": {"model": "microsoft-decision-1", "provider": "openai", "useForSpecialists": True}},
     )
     main_provider = _StubProvider("writer")
     decision_provider = _StubProvider("general")
-    pool = _StubPool({("fast-judge", "openai"): ModelBinding(provider=decision_provider, model="fast-judge")})
+    pool = _StubPool({("microsoft-decision-1", "openai"): ModelBinding(provider=decision_provider, model="microsoft-decision-1")})
     manager = _make_manager(tmp_path, main_provider=main_provider, pool=pool, live=live)
 
     result = await manager._classify(
@@ -745,10 +714,10 @@ def _sample_agent_metas() -> list[AgentMeta]:
 async def test_spawn_tool_auto_routing_when_enabled(tmp_path: Path) -> None:
     live = _write_live_config(
         tmp_path,
-        {"decisionModel": {"model": "fast-judge", "provider": "openai", "useForSpecialists": True}},
+        {"decisionModel": {"model": "microsoft-decision-1", "provider": "openai", "useForSpecialists": True}},
     )
     decision_provider = _StubProvider("coder")
-    pool = _StubPool({("fast-judge", "openai"): ModelBinding(provider=decision_provider, model="fast-judge")})
+    pool = _StubPool({("microsoft-decision-1", "openai"): ModelBinding(provider=decision_provider, model="microsoft-decision-1")})
     manager = _StubSpawnManager(tmp_path, _sample_agent_metas())
     tool = SpawnTool(
         manager,  # type: ignore[arg-type]
@@ -783,7 +752,7 @@ async def test_spawn_tool_auto_routing_when_enabled(tmp_path: Path) -> None:
     assert manager.spawn_calls[-1]["agent"] == "writer"
 
     none_provider = _StubProvider("NONE")
-    none_pool = _StubPool({("fast-judge", "openai"): ModelBinding(provider=none_provider, model="fast-judge")})
+    none_pool = _StubPool({("microsoft-decision-1", "openai"): ModelBinding(provider=none_provider, model="microsoft-decision-1")})
     fallback_tool = SpawnTool(
         manager,  # type: ignore[arg-type]
         decision_binding=lambda: resolve_decision_binding(live, none_pool) if decision_for_specialists(live) else None,
@@ -802,9 +771,9 @@ def test_spawn_tool_schema_without_auto_routing(tmp_path: Path) -> None:
     manager = _StubSpawnManager(tmp_path, _sample_agent_metas())
     live_off = _write_live_config(
         tmp_path / "off",
-        {"decisionModel": {"model": "fast-judge", "provider": "openai", "useForSpecialists": False}},
+        {"decisionModel": {"model": "microsoft-decision-1", "provider": "openai", "useForSpecialists": False}},
     )
-    pool = _StubPool({("fast-judge", "openai"): ModelBinding(provider=_StubProvider("coder"), model="fast-judge")})
+    pool = _StubPool({("microsoft-decision-1", "openai"): ModelBinding(provider=_StubProvider("coder"), model="microsoft-decision-1")})
 
     tool_off = SpawnTool(
         manager,  # type: ignore[arg-type]
@@ -824,10 +793,10 @@ def test_spawn_tool_schema_without_auto_routing(tmp_path: Path) -> None:
 async def test_dag_tool_auto_routing_schema_and_resolution(tmp_path: Path) -> None:
     live = _write_live_config(
         tmp_path,
-        {"decisionModel": {"model": "fast-judge", "provider": "openai", "useForSpecialists": True}},
+        {"decisionModel": {"model": "microsoft-decision-1", "provider": "openai", "useForSpecialists": True}},
     )
     decision_provider = _StubProvider("coder")
-    pool = _StubPool({("fast-judge", "openai"): ModelBinding(provider=decision_provider, model="fast-judge")})
+    pool = _StubPool({("microsoft-decision-1", "openai"): ModelBinding(provider=decision_provider, model="microsoft-decision-1")})
     registry = _StubDagRegistry(_sample_agent_metas())
     tool = SubAgentDagTool(
         workspace=tmp_path,
@@ -851,7 +820,7 @@ async def test_dag_tool_auto_routing_schema_and_resolution(tmp_path: Path) -> No
 
     live_off = _write_live_config(
         tmp_path / "off",
-        {"decisionModel": {"model": "fast-judge", "provider": "openai", "useForSpecialists": False}},
+        {"decisionModel": {"model": "microsoft-decision-1", "provider": "openai", "useForSpecialists": False}},
     )
     tool_off = SubAgentDagTool(
         workspace=tmp_path,
@@ -861,3 +830,361 @@ async def test_dag_tool_auto_routing_schema_and_resolution(tmp_path: Path) -> No
     off_node_schema = tool_off.node_schema()
     assert "auto" not in off_node_schema["properties"]["subagent"]["enum"]
     assert "subagent" in off_node_schema["required"]
+
+
+@pytest.mark.asyncio
+async def test_finish_reason_error_falls_back_to_none_and_warns() -> None:
+    from loguru import logger
+
+    msgs: list[str] = []
+    sink = logger.add(lambda m: msgs.append(str(m)), level="WARNING")
+    try:
+        # Valid-looking content proves the error reason, not parsing, causes the fallback.
+        skill = ModelBinding(
+            provider=_StubProvider('["hub/sql-opt"]', finish_reason="error"), model="microsoft-decision-1"
+        )
+        assert await select_skills_with_decision_model(skill, "sql", [("hub/sql-opt", "SQL")]) is None
+        spec = ModelBinding(provider=_StubProvider("coder", finish_reason="error"), model="microsoft-decision-1")
+        assert await select_specialist_with_decision_model(spec, "t", "- coder: x", ["coder"]) is None
+    finally:
+        logger.remove(sink)
+    joined = " ".join(msgs)
+    assert "skill selection returned finish_reason=error; falling back" in joined
+    assert "specialist selection returned finish_reason=error; falling back" in joined
+
+
+# ---------------------------------------------------------------- native Decision API
+
+
+class _NamedProvider(_StubProvider):
+    def __init__(self, name: str, api_key: str = "gk") -> None:
+        super().__init__("unused")
+        self.provider_name = name
+        self.api_key = api_key
+        self.api_base = None
+
+
+def _install_http(monkeypatch: pytest.MonkeyPatch, handler: Any) -> list[Any]:
+    import httpx
+
+    import raven.agent.decision_model as dm
+
+    seen: list[Any] = []
+
+    def _handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return handler(request)
+
+    monkeypatch.setattr(
+        dm, "_new_client", lambda timeout, verify=True: httpx.AsyncClient(transport=httpx.MockTransport(_handle), timeout=timeout)
+    )
+    monkeypatch.setattr(dm, "_copilot_credentials", lambda: ("cop-key", "https://api.enterprise.githubcopilot.com"))
+    return seen
+
+
+def _map_answer(choice: str, probs: dict[str, float]) -> dict[str, Any]:
+    return {"answers": {"q1": {"type": "choice", "choice": choice, "confidence": 1.0, "probabilities": probs}}}
+
+
+def _array_answer(choice: str, probs: dict[str, float]) -> dict[str, Any]:
+    return {
+        "answers": [
+            {
+                "type": "choice", "name": "q1", "choice": choice, "confidence": 1.0,
+                "probabilities": [{"value": k, "probability": v} for k, v in probs.items()],
+            }
+        ]
+    }
+
+
+def test_decision_protocol_routing() -> None:
+    from raven.agent.decision_model import _decision_protocol as proto
+
+    assert proto("gemini", "gemini/gemini-decision-1") == "gemini_decisions"
+    assert proto("github_copilot", "github-copilot/microsoft-decision-1") == "copilot_systemone"
+    assert proto("github_copilot", "microsoft-decision-1-1") == "copilot_systemone"
+    assert proto("github_copilot", "gpt-6-luna-decisions") == "copilot_decisions"
+    assert proto("custom", "decisions") == "chat"
+    assert proto("", "microsoft-decision-1") == "chat"
+
+
+_CANDS = [("hub/a", "desc A"), ("hub/b", "desc B"), ("hub/c", "desc C")]
+
+
+@pytest.mark.asyncio
+async def test_gemini_decisions_skill_request_and_multi_skill(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    seen = _install_http(
+        monkeypatch,
+        lambda r: httpx.Response(200, json=_map_answer("hub/a", {"hub/a": 0.6, "hub/b": 0.3, "hub/c": 0.1})),
+    )
+    binding = ModelBinding(provider=_NamedProvider("gemini"), model="gemini/gemini-decision-1")
+    got = await select_skills_with_decision_model(binding, "query", _CANDS, max_skills=3)
+    assert got == ["hub/a", "hub/b"]
+    req = seen[0]
+    assert str(req.url) == "https://generativelanguage.googleapis.com/v1beta/decisions"
+    assert req.headers["x-goog-api-key"] == "gk"
+    body = json.loads(req.content)
+    assert body["model"] == "gemini-decision-1" and body["input"] == "query"
+    crit = body["questions"]["q1"]["criteria"]
+    assert body["questions"]["q1"]["type"] == "choice"
+    assert list(crit)[0] == "__none__" and set(crit) == {"__none__", "hub/a", "hub/b", "hub/c"}
+
+
+@pytest.mark.asyncio
+async def test_gemini_decisions_caps_and_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    _install_http(
+        monkeypatch,
+        lambda r: httpx.Response(200, json=_map_answer("hub/a", {"hub/a": 0.4, "hub/b": 0.3, "hub/c": 0.3})),
+    )
+    binding = ModelBinding(provider=_NamedProvider("gemini"), model="gemini-decision-1")
+    assert await select_skills_with_decision_model(binding, "q", _CANDS, max_skills=2) == ["hub/a", "hub/b"]
+    _install_http(monkeypatch, lambda r: httpx.Response(200, json=_map_answer("__none__", {"__none__": 1.0})))
+    assert await select_skills_with_decision_model(binding, "q", _CANDS) == []
+
+
+@pytest.mark.asyncio
+async def test_copilot_systemone_uses_map_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    seen = _install_http(monkeypatch, lambda r: httpx.Response(200, json=_map_answer("coder", {"coder": 0.99})))
+    binding = ModelBinding(
+        provider=_NamedProvider("github_copilot"), model="github-copilot/microsoft-decision-1"
+    )
+    got = await select_specialist_with_decision_model(binding, "fix", "- coder: code", ["coder", "default"])
+    assert got == "coder"
+    req = seen[0]
+    assert str(req.url) == "https://api.enterprise.githubcopilot.com/v1/systemone"
+    assert req.headers["authorization"] == "Bearer cop-key"
+    body = json.loads(req.content)
+    assert body["model"] == "microsoft-decision-1"
+    assert "input" not in body
+    assert "fix" in body["questions"]["q1"]["instructions"]
+    assert set(body["questions"]["q1"]["criteria"]) == {"__none__", "coder", "default"}
+
+
+@pytest.mark.asyncio
+async def test_copilot_decisions_uses_array_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    seen = _install_http(
+        monkeypatch,
+        lambda r: httpx.Response(200, json=_array_answer("hub/b", {"hub/b": 0.7, "hub/a": 0.28, "__none__": 0.02})),
+    )
+    binding = ModelBinding(
+        provider=_NamedProvider("github_copilot"), model="github-copilot/gpt-6-luna-decisions"
+    )
+    assert await select_skills_with_decision_model(binding, "q", _CANDS) == ["hub/b", "hub/a"]
+    req = seen[0]
+    assert str(req.url) == "https://api.enterprise.githubcopilot.com/v1/decisions"
+    body = json.loads(req.content)
+    assert body["model"] == "gpt-6-luna-decisions"
+    q = body["questions"][0]
+    assert q["name"] == "q1" and q["type"] == "choice"
+    assert [c["value"] for c in q["choices"]] == ["__none__", "hub/a", "hub/b", "hub/c"]
+
+    _install_http(monkeypatch, lambda r: httpx.Response(200, json=_array_answer("__none__", {"__none__": 1.0})))
+    assert await select_specialist_with_decision_model(binding, "t", "- coder", ["coder"]) is None
+
+
+@pytest.mark.asyncio
+async def test_native_decision_http_error_and_timeout_fall_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+    from loguru import logger
+
+    msgs: list[str] = []
+    sink = logger.add(lambda m: msgs.append(str(m)), level="WARNING")
+    binding = ModelBinding(provider=_NamedProvider("gemini"), model="gemini-decision-1")
+    try:
+        _install_http(monkeypatch, lambda r: httpx.Response(400, json={"error": "model_not_supported"}))
+        assert await select_skills_with_decision_model(binding, "q", _CANDS) is None
+        assert await select_specialist_with_decision_model(binding, "t", "- coder", ["coder"]) is None
+
+        def boom(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadTimeout("slow", request=request)
+
+        _install_http(monkeypatch, boom)
+        assert await select_skills_with_decision_model(binding, "q", _CANDS, timeout=2.0) is None
+
+        _install_http(monkeypatch, lambda r: httpx.Response(200, json={"nope": 1}))
+        assert await select_skills_with_decision_model(binding, "q", _CANDS) is None
+    finally:
+        logger.remove(sink)
+    joined = " ".join(msgs)
+    assert "gemini_decisions request failed (HTTP 400); falling back" in joined
+    assert "gemini_decisions request timed out after 2.0s; falling back" in joined
+
+
+class _Inner:
+    provider_name = "gemini"
+
+    def __init__(self, api_key: str = "ik", api_base: str | None = None, tls_verify: bool = True) -> None:
+        self.api_key = api_key
+        self.api_base = api_base
+        self.tls_verify = tls_verify
+
+
+class _Rotor(_StubProvider):
+    """Stand-in for EndpointRotorProvider: no key of its own, keys live on _inners."""
+
+    def __init__(self, inners: list[Any]) -> None:
+        super().__init__("unused")
+        self.provider_name = "gemini"
+        self._inners = inners
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api_base", "expected"),
+    [
+        ("https://gw.example/v1beta", "https://gw.example/v1beta/decisions"),
+        ("https://gw.example/v1beta/", "https://gw.example/v1beta/decisions"),
+        ("https://gw.example", "https://gw.example/v1beta/decisions"),
+    ],
+)
+async def test_gemini_decisions_api_base_joining(monkeypatch: pytest.MonkeyPatch, api_base: str, expected: str) -> None:
+    import httpx
+
+    seen = _install_http(monkeypatch, lambda r: httpx.Response(200, json=_map_answer("hub/a", {"hub/a": 1.0})))
+    prov = _NamedProvider("gemini")
+    prov.api_base = api_base
+    binding = ModelBinding(provider=prov, model="gemini-decision-1")
+    assert await select_skills_with_decision_model(binding, "q", _CANDS) == ["hub/a"]
+    assert str(seen[0].url) == expected
+
+
+@pytest.mark.asyncio
+async def test_gemini_decisions_unwraps_rotor_and_passes_tls_verify(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    import raven.agent.decision_model as dm
+
+    seen = _install_http(monkeypatch, lambda r: httpx.Response(200, json=_map_answer("hub/a", {"hub/a": 1.0})))
+    verifies: list[Any] = []
+    orig = dm._new_client
+
+    def spy(timeout: float, verify: bool = True) -> Any:
+        verifies.append(verify)
+        return orig(timeout, verify)
+
+    monkeypatch.setattr(dm, "_new_client", spy)
+    inner = _Inner(api_key="inner-key", api_base="https://gw.example/v1beta", tls_verify=False)
+    binding = ModelBinding(provider=_Rotor([_Inner(api_key=""), inner]), model="gemini-decision-1")
+    assert await select_skills_with_decision_model(binding, "q", _CANDS) == ["hub/a"]
+    assert seen[0].headers["x-goog-api-key"] == "inner-key"
+    assert str(seen[0].url) == "https://gw.example/v1beta/decisions"
+    assert verifies == [False]
+
+
+@pytest.mark.asyncio
+async def test_gemini_decisions_empty_key_makes_no_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    seen = _install_http(monkeypatch, lambda r: httpx.Response(200, json=_map_answer("hub/a", {})))
+    for prov in (_NamedProvider("gemini", api_key=""), _Rotor([_Inner(api_key="")])):
+        binding = ModelBinding(provider=prov, model="gemini-decision-1")
+        assert await select_skills_with_decision_model(binding, "q", _CANDS) is None
+    assert seen == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"answers": []},
+        {"answers": {}},
+        {"answers": {"q1": {"type": "choice", "choice": "not-a-candidate", "probabilities": {}}}},
+        {"answers": {"q1": {"type": "choice", "choice": 5}}},
+        {"answers": {"q1": {"type": "choice", "choice": "hub/a", "probabilities": {"hub/b": "high"}}}},
+    ],
+)
+async def test_parse_answer_edge_cases_fall_back(monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]) -> None:
+    import httpx
+
+    _install_http(monkeypatch, lambda r: httpx.Response(200, json=payload))
+    binding = ModelBinding(provider=_NamedProvider("gemini"), model="gemini-decision-1")
+    assert await select_skills_with_decision_model(binding, "q", _CANDS) is None
+    assert await select_specialist_with_decision_model(binding, "t", "- coder", ["coder"]) is None
+
+
+@pytest.mark.asyncio
+async def test_parse_answer_null_probabilities_keeps_top_choice(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    _install_http(
+        monkeypatch,
+        lambda r: httpx.Response(200, json={"answers": {"q1": {"choice": "hub/a", "probabilities": None}}}),
+    )
+    binding = ModelBinding(provider=_NamedProvider("gemini"), model="gemini-decision-1")
+    assert await select_skills_with_decision_model(binding, "q", _CANDS) == ["hub/a"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "route", "answer"),
+    [
+        ("microsoft-decision-1", "systemone", _map_answer("hub/a", {"hub/a": 1.0})),
+        ("gpt-6-luna-decisions", "decisions", _array_answer("hub/a", {"hub/a": 1.0})),
+    ],
+)
+async def test_copilot_base_none_falls_back_to_default_base(
+    monkeypatch: pytest.MonkeyPatch, model: str, route: str, answer: dict[str, Any]
+) -> None:
+    import httpx
+
+    import raven.agent.decision_model as dm
+
+    seen = _install_http(monkeypatch, lambda r: httpx.Response(200, json=answer))
+    monkeypatch.setattr(dm, "_copilot_credentials", lambda: ("cop-key", None))
+    binding = ModelBinding(provider=_NamedProvider("github_copilot"), model=model)
+    assert await select_skills_with_decision_model(binding, "q", _CANDS) == ["hub/a"]
+    assert str(seen[0].url) == f"{dm._COPILOT_BASE}/v1/{route}"
+
+
+@pytest.mark.asyncio
+async def test_copilot_credentials_timeout_and_empty_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    import httpx
+
+    import raven.agent.decision_model as dm
+
+    seen = _install_http(monkeypatch, lambda r: httpx.Response(200, json=_map_answer("hub/a", {})))
+    binding = ModelBinding(provider=_NamedProvider("github_copilot"), model="microsoft-decision-1")
+
+    def slow() -> tuple[str, str | None]:
+        time.sleep(0.5)
+        return "k", None
+
+    monkeypatch.setattr(dm, "_copilot_credentials", slow)
+    assert await select_skills_with_decision_model(binding, "q", _CANDS, timeout=0.05) is None
+
+    monkeypatch.setattr(dm, "_copilot_credentials", lambda: ("", None))
+    assert await select_skills_with_decision_model(binding, "q", _CANDS) is None
+    assert seen == []
+
+
+@pytest.mark.asyncio
+async def test_native_options_dedupe_exclude_none_and_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    seen = _install_http(monkeypatch, lambda r: httpx.Response(200, json=_array_answer("hub/a", {"hub/a": 1.0})))
+    binding = ModelBinding(provider=_NamedProvider("github_copilot"), model="gpt-6-luna-decisions")
+
+    dupes = [("hub/a", "A"), ("hub/b", "B"), ("hub/a", "A again"), ("__none__", "clash")]
+    assert await select_skills_with_decision_model(binding, "q", dupes) == ["hub/a"]
+    values = [c["value"] for c in json.loads(seen[0].content)["questions"][0]["choices"]]
+    assert values == ["__none__", "hub/a", "hub/b"]
+
+    only_none = [("__none__", "clash"), ("__none__", "again")]
+    assert await select_skills_with_decision_model(binding, "q", only_none) == []
+    assert await select_specialist_with_decision_model(binding, "t", "r", ["__none__"]) is None
+    assert len(seen) == 1
+
+    many = [(f"s{i}", f"d{i}") for i in range(300)]
+    await select_skills_with_decision_model(binding, "q", many)
+    values = [c["value"] for c in json.loads(seen[1].content)["questions"][0]["choices"]]
+    assert len(values) == 255 and values[0] == "__none__" and values[-1] == "s253"

@@ -1087,8 +1087,8 @@ def _chk_decision_model(key: str):
 
         if not is_system1_decision_model(model):
             raise ConfigValidationError(
-                "decisionModel must be a fast non-reasoning (System 1) model "
-                f"(e.g. decision, mini, flash, haiku, nano, lite); got '{model}'"
+                "decisionModel must be a dedicated decision model "
+                f"(e.g. microsoft-decision-1, gemini-decision-1, gpt-6-luna-decisions); got '{model}'"
             )
         return model
 

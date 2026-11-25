@@ -15,7 +15,7 @@ import type { ProviderRow, SettingsSnapshot } from '../types'
 import type { JSX } from 'react'
 
 const SYSTEM2_RE = /(?:^|[-_.:/])(?:o[134]|r1|reasoner|reasoning|thinking|thought|qwq|marco-o1)(?:$|[-_.:/])/i
-const SYSTEM1_RE = /(?:^|[-_.:/])(?:decision|mini|nano|flash|haiku|lite|light|fast|instant|small|micro|tiny|turbo|phi|gemma|(?:0\.5|1|1\.5|2|3|4|7|8|9|12|14)b)(?:$|[-_.:/])/i
+const DECISION_RE = /(?:^|[^a-z0-9])decisions?(?:$|[^a-z0-9])/i
 
 export function isSystem1DecisionModel(modelId: string, reasoning?: boolean): boolean {
   if (reasoning === true) return false
@@ -25,7 +25,7 @@ export function isSystem1DecisionModel(modelId: string, reasoning?: boolean): bo
   const name = (slash >= 0 ? raw.slice(slash + 1) : raw).trim().toLowerCase()
   if (!name) return false
   if (SYSTEM2_RE.test(name)) return false
-  return SYSTEM1_RE.test(name)
+  return DECISION_RE.test(name)
 }
 
 const isDecisionModelOption = (model: string, provider: Provider): boolean => {

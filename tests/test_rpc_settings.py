@@ -1883,7 +1883,7 @@ async def test_settings_leaf_write_follows_the_non_null_alias(cfg, snake_active,
     "camel,snake,model_field,provider_field,keep,new_model",
     [
         ("sessionTitle", "session_title", "model", "provider", {"enabled": False}, "openai/new"),
-        ("decisionModel", "decision_model", "model", "provider", {"useForSkills": True}, "openai/gpt-4o-mini"),
+        ("decisionModel", "decision_model", "model", "provider", {"useForSkills": True}, "openai/microsoft-decision-1"),
     ],
 )
 async def test_settings_pin_merge_follows_the_non_null_alias(
@@ -1984,7 +1984,7 @@ async def test_settings_set_media_speech_selection_merges(cfg):
     "parent,model_field,provider_field,model_val,provider_val",
     [
         ("sessionTitle", "model", "provider", "deepseek-chat", "deepseek"),
-        ("decisionModel", "model", "provider", "gpt-4o-mini", "openai"),
+        ("decisionModel", "model", "provider", "microsoft-decision-1", "openai"),
     ],
 )
 async def test_settings_set_pin_pairs_write_as_one_merged_object(
@@ -2007,29 +2007,29 @@ async def test_settings_set_decision_model_round_trip(cfg):
     from raven.config.raven import load_raven_config
 
     await rpc_console.settings_set(
-        {"key": "decisionModel", "value": {"model": "openai/gpt-5-mini", "provider": "openai"}}
+        {"key": "decisionModel", "value": {"model": "openai/gpt-6-luna-decisions", "provider": "openai"}}
     )
     await rpc_console.settings_set({"key": "decisionModel.useForSkills", "value": True})
     await rpc_console.settings_set({"key": "decisionModel.useForSpecialists", "value": True})
 
     got = await rpc_console.settings_get({})
     assert got["settings"]["decisionModel"] == {
-        "model": "openai/gpt-5-mini",
+        "model": "openai/gpt-6-luna-decisions",
         "provider": "openai",
         "useForSkills": True,
         "useForSpecialists": True,
     }
     loaded = load_raven_config(config_path=cfg).decision_model
-    assert loaded.model == "openai/gpt-5-mini"
+    assert loaded.model == "openai/gpt-6-luna-decisions"
     assert loaded.provider == "openai"
     assert loaded.use_for_skills is True
     assert loaded.use_for_specialists is True
 
-    await rpc_console.settings_set({"key": "decisionModel.model", "value": "anthropic/claude-haiku-4-5"})
+    await rpc_console.settings_set({"key": "decisionModel.model", "value": "anthropic/gemini-decision-1"})
     await rpc_console.settings_set({"key": "decisionModel.provider", "value": "anthropic"})
     await rpc_console.settings_set({"key": "decisionModel.useForSkills", "value": False})
     loaded = load_raven_config(config_path=cfg).decision_model
-    assert loaded.model == "anthropic/claude-haiku-4-5"
+    assert loaded.model == "anthropic/gemini-decision-1"
     assert loaded.provider == "anthropic"
     assert loaded.use_for_skills is False
     assert loaded.use_for_specialists is True
@@ -2044,7 +2044,7 @@ async def test_settings_set_decision_model_clear_preserves_flags(cfg):
     from raven.config.raven import load_raven_config
 
     await rpc_console.settings_set(
-        {"key": "decisionModel", "value": {"model": "openai/gpt-5-mini", "provider": "openai"}}
+        {"key": "decisionModel", "value": {"model": "openai/gpt-6-luna-decisions", "provider": "openai"}}
     )
     await rpc_console.settings_set({"key": "decisionModel.useForSkills", "value": True})
     await rpc_console.settings_set({"key": "decisionModel.useForSpecialists", "value": True})
@@ -2430,7 +2430,7 @@ async def test_role_write_is_refused_for_the_cloud_backend(memory_cfg):
     assert "everos-cloud" not in str(exc.value)  # refused for its own reason (no such provider), not the backend's
 
 
-@pytest.mark.parametrize("model", ["claude-opus-4-6", "o3-mini", "deepseek-r1", "gpt-4o"])
+@pytest.mark.parametrize("model", ["ghe-copilot/gpt-4o-mini", "gpt-4o-mini", "claude-haiku-4-5", "gemini-2.5-flash", "custom/lite", "o3-mini", "deepseek-r1", "claude-opus-4-6", "claude-sonnet-4-6"])
 @pytest.mark.parametrize("key", ["decisionModel", "decisionModel.model"])
 async def test_settings_set_decision_model_rejects_non_system1(cfg, key, model):
     value = {"model": model, "provider": "openai"} if key == "decisionModel" else model
@@ -2439,7 +2439,7 @@ async def test_settings_set_decision_model_rejects_non_system1(cfg, key, model):
     assert ei.value.code == -32011
 
 
-@pytest.mark.parametrize("model", ["Microsoft-decision-1", "Gemini-decision-1"])
+@pytest.mark.parametrize("model", ["Microsoft-decision-1", "Gemini-decision-1", "gpt-6-luna-decisions", "decisions"])
 @pytest.mark.parametrize("key", ["decisionModel", "decisionModel.model"])
 async def test_settings_set_decision_model_accepts_decision_models(cfg, key, model):
     value = {"model": model, "provider": "openai"} if key == "decisionModel" else model
@@ -2448,6 +2448,6 @@ async def test_settings_set_decision_model_accepts_decision_models(cfg, key, mod
 
 
 async def test_settings_set_decision_model_leaf_clear(cfg):
-    await rpc_console.settings_set({"key": "decisionModel.model", "value": "gpt-4o-mini"})
+    await rpc_console.settings_set({"key": "decisionModel.model", "value": "microsoft-decision-1"})
     await rpc_console.settings_set({"key": "decisionModel.model", "value": None})
     assert _read(cfg)["decisionModel"]["model"] is None
