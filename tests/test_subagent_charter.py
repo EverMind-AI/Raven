@@ -140,6 +140,34 @@ def test_an_empty_tool_list_survives_the_read() -> None:
     assert parse({"prompt": "x"}).tools is None
 
 
+def test_the_boundary_line_names_the_functions_a_charter_carries() -> None:
+    """Both process boundaries -- a dispatch staged, a run applied -- print the
+    same summary. Without the function names a charter carrying only generated
+    verbs reads as "(all tool(s), 0 check(s))", indistinguishable from one
+    carrying nothing, and the verbs are the whole reason it was sent."""
+    empty = parse({"brief": "x"})
+    only_functions = parse(
+        {
+            "functions": {
+                "advise": "def advise(step):\n    return 'keep going'",
+                "intake": "def intake(messages):\n    return messages",
+            }
+        }
+    )
+    full = parse(
+        {
+            "tools": ["read_file"],
+            "checks": [{"tool": "read_file"}],
+            "code": "def judge(name, params, prior):\n    return []",
+            "functions": {"salvage": "def salvage(step):\n    return None"},
+        }
+    )
+
+    assert empty.boundary_summary() == "(all tool(s), 0 check(s))"
+    assert only_functions.boundary_summary() == "(all tool(s), 0 check(s), advise, intake)"
+    assert full.boundary_summary() == "(1 tool(s), 1 check(s), judge, salvage)"
+
+
 # --------------------------------------------------------------------------- #
 # Narrowing: only ever downward                                                 #
 # --------------------------------------------------------------------------- #
