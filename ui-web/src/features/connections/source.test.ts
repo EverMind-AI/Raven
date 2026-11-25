@@ -106,6 +106,14 @@ describe('merging one status answer', () => {
     expect(row('slack')).not.toHaveProperty('error')
   })
 
+  /* A null error is no error: the page reads the key's presence as the
+     failure, so a key that says nothing must not become one. */
+  it('drops a null error rather than carry it as a failure', async () => {
+    answering([{ name: 'slack', enabled: true, fields: [], missing: [], error: null }])
+    await loadChannels()
+    expect(row('slack')).not.toHaveProperty('error')
+  })
+
   /* Three separate facts, kept separate: what the config asks for, whether the
      adapter came up, and whether the account is paired. */
   it('keeps enabled, running and connected apart', async () => {
