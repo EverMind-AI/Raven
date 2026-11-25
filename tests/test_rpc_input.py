@@ -92,9 +92,12 @@ async def test_a_backslash_escaped_path_matches(tmp_path: Path) -> None:
 
 
 async def test_a_file_uri_matches(tmp_path: Path) -> None:
+    """as_uri(), not "file://" + str(target): on Windows the str() is a
+    backslash drive path, so concatenation leaves the backslashes in the
+    authority and the URI names no path anywhere."""
     target = tmp_path / "dropped file.txt"
     target.write_text("x")
-    uri = "file://" + str(target).replace(" ", "%20")
+    uri = target.as_uri()
     result = await input_detect_drop({"text": uri})
     assert result["matched"] is True
     assert result["text"] == str(target.resolve())
