@@ -10,9 +10,29 @@ import { Card, Row, Rov, Seg, Stepper, Switch } from '../Fields'
 import { dig } from '../source'
 import * as store from '../store'
 
-import type { Kind, Offer } from '../../model/types'
+import type { Kind, Offer, Provider } from '../../model/types'
 import type { ProviderRow, SettingsSnapshot } from '../types'
 import type { JSX } from 'react'
+
+const SYSTEM2_RE = /(?:^|[-_.:/])(?:o[134]|r1|reasoner|reasoning|thinking|thought|qwq|marco-o1)(?:$|[-_.:/])/i
+const SYSTEM1_RE = /(?:^|[-_.:/])(?:decision|mini|nano|flash|haiku|lite|light|fast|instant|small|micro|tiny|turbo|phi|gemma|(?:0\.5|1|1\.5|2|3|4|7|8|9|12|14)b)(?:$|[-_.:/])/i
+
+export function isSystem1DecisionModel(modelId: string, reasoning?: boolean): boolean {
+  if (reasoning === true) return false
+  const raw = (modelId || '').trim()
+  if (!raw) return false
+  const slash = raw.lastIndexOf('/')
+  const name = (slash >= 0 ? raw.slice(slash + 1) : raw).trim().toLowerCase()
+  if (!name) return false
+  if (SYSTEM2_RE.test(name)) return false
+  return SYSTEM1_RE.test(name)
+}
+
+const isDecisionModelOption = (model: string, provider: Provider): boolean => {
+  const facts = provider.labels?.[model]
+  const reasoning = facts?.capabilities?.includes('reasoning') ? true : undefined
+  return isSystem1DecisionModel(model, reasoning)
+}
 
 export type RoleId =
   | 'chat' | 'decisionModel' | 'title' | 'memllm'
@@ -351,6 +371,7 @@ export function RolePill({ role, setup }: { role: Role; setup?: boolean }): JSX.
   const offer: Offer = {
     kind: ROLE_KIND[role.id],
     providers: provs.map((p) => p.id),
+    filter: role.id === 'decisionModel' ? isDecisionModelOption : undefined,
     title: roleName(role),
     current: val ?? (inherit && chat ? chat : undefined),
     pick: async (model, provider, typed, kind) => {
@@ -551,7 +572,13 @@ const decisionFlag = (raw: Record<string, unknown>, camel: string, snake: string
 function DecisionToggles({ role }: { role: Role }): JSX.Element {
   const s = store.get()
   const raw = s.snap.raw
-  const hasModel = !!roleValue(role, s.snap)
+  const val = roleValue(role, s.snap)
+  const savedProvider = val ? s.snap.providers.find((p) => p.id === val.provider) : undefined
+  const hasDecisionModel = !!val && (savedProvider
+    ? isDecisionModelOption(val.model, savedProvider)
+    : isSystem1DecisionModel(val.model))
+  const busy = s.busy.includes('decisionModel.useForSkills') || s.busy.includes('decisionModel.useForSpecialists') || s.busy.includes(`role:${role.id}`)
+  const disabled = busy || !hasDecisionModel
   const useForSkills = decisionFlag(raw, 'useForSkills', 'use_for_skills')
   const useForSpecialists = decisionFlag(raw, 'useForSpecialists', 'use_for_specialists')
   const skillsLabel = t('gui.settings.roles.decision_skills')
@@ -562,17 +589,25 @@ function DecisionToggles({ role }: { role: Role }): JSX.Element {
         <Switch
           on={useForSkills}
           label={skillsLabel}
-          onChange={(next) => void store.write('decisionModel.useForSkills', next, { remount: false })}
+          disabled={disabled}
+          onChange={(next) => {
+            if (disabled) return
+            void store.write('decisionModel.useForSkills', next, { remount: false })
+          }}
         />
       </Row>
       <Row label={specialistsLabel} sub={t('gui.settings.roles.decision_specialists_use')}>
         <Switch
           on={useForSpecialists}
           label={specialistsLabel}
-          onChange={(next) => void store.write('decisionModel.useForSpecialists', next, { remount: false })}
+          disabled={disabled}
+          onChange={(next) => {
+            if (disabled) return
+            void store.write('decisionModel.useForSpecialists', next, { remount: false })
+          }}
         />
       </Row>
-      {!hasModel && (useForSkills || useForSpecialists) && (
+      {!hasDecisionModel && (
         <div className="settings-cfnote">{t('gui.settings.roles.decision_pick_first')}</div>
       )}
     </div>

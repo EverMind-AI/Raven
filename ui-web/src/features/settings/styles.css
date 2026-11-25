@@ -106,6 +106,8 @@ h1 {font-size:34px; font-weight:700; letter-spacing:-.02em; margin:8px 0 8px}
 .settings-swi[aria-checked="true"] {background:var(--set-accent-2); border-color:var(--set-accent-2)}
 .settings-swi[aria-checked="true"]::after {transform:translateX(16px); box-shadow:none}
 .settings-swi:focus-visible {outline:2px solid var(--warm); outline-offset:2px}
+.settings-swi:disabled {opacity:.45; cursor:not-allowed; box-shadow:none}
+.settings-swi:disabled[aria-checked="true"] {background:var(--line); border-color:var(--line)}
 /* Built in: the row is here so the tool is not invisible, and there is
    nothing to set. `aria-disabled` alone says so only to a screen reader --
    drawn like every other switch, with a pointer cursor, it reads as a

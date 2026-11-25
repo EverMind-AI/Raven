@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetSources, setSources } from '../../../state/sources'
 import { install, modelSource, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
-import { ROLES, everosLocked, followsChat, roleProviders, roleValue, rolesUsing } from './Roles'
+import { ROLES, isSystem1DecisionModel, everosLocked, followsChat, roleProviders, roleValue, rolesUsing } from './Roles'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -646,9 +646,17 @@ describe('another memory backend', () => {
   })
 })
 
+const withHaiku = (): ReturnType<typeof snap> => {
+  const data = snap()
+  data.providers = data.providers.map((p) => (p.id === 'anthropic'
+    ? { ...p, models: [...p.models, 'claude-haiku-4-5'], configured: [...(p.configured ?? []), 'claude-haiku-4-5'] }
+    : p))
+  return data
+}
+
 describe('decision model role and toggles', () => {
   it('renders decision model role picker and both routing switches', async () => {
-    install()
+    install(withHaiku())
     await mount('model')
 
     const pickerBtn = pill('gui.settings.roles.decision')
@@ -658,11 +666,31 @@ describe('decision model role and toggles', () => {
     const specialistsSwitch = screen.getByRole('switch', { name: 'gui.settings.roles.decision_specialists' })
     expect(skillsSwitch.getAttribute('aria-checked')).toBe('false')
     expect(specialistsSwitch.getAttribute('aria-checked')).toBe('false')
-    expect(screen.queryByText('gui.settings.roles.decision_pick_first')).toBe(null)
+    expect((skillsSwitch as HTMLButtonElement).disabled).toBe(true)
+    expect((specialistsSwitch as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText('gui.settings.roles.decision_pick_first')).toBeTruthy()
+  })
+
+  it('does not call settings.set when a disabled switch is clicked without a decision model', async () => {
+    const { calls } = install(withHaiku())
+    await mount('model')
+    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'gui.settings.roles.decision_skills' })) })
+    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'gui.settings.roles.decision_specialists' })) })
+    expect(sets(calls)).toEqual([])
+  })
+
+  it('offers only System 1 models in the decision picker', async () => {
+    install(withHaiku())
+    await mount('model')
+    await act(async () => { fireEvent.click(pill('gui.settings.roles.decision')) })
+    const scope = within(picker())
+    expect(scope.getAllByText('claude-haiku-4-5').length).toBeGreaterThan(0)
+    expect(scope.queryByText('claude-sonnet-4-5')).toBe(null)
+    expect(scope.queryByText('claude-opus-4-5')).toBe(null)
   })
 
   it('picks and clears decisionModel atomically through decisionModel pair key', async () => {
-    const data = snap()
+    const data = withHaiku()
     const { calls } = install(data, {
       set: async (key, value) => {
         calls.push(['set', { key, value }])
@@ -679,9 +707,9 @@ describe('decision model role and toggles', () => {
     })
     await mount('model')
 
-    await pick('gui.settings.roles.decision', 'claude-sonnet-4-5')
+    await pick('gui.settings.roles.decision', 'claude-haiku-4-5')
     expect(sets(calls)).toEqual([
-      { key: 'decisionModel', value: { model: 'claude-sonnet-4-5', provider: 'anthropic' } },
+      { key: 'decisionModel', value: { model: 'claude-haiku-4-5', provider: 'anthropic' } },
     ])
 
     calls.length = 0
@@ -694,8 +722,8 @@ describe('decision model role and toggles', () => {
   })
 
   it('writes decisionModel.useForSkills and decisionModel.useForSpecialists when toggled and hides warning when model is set', async () => {
-    const data = snap()
-    data.raw.decisionModel = { model: 'claude-sonnet-4-5', provider: 'anthropic', useForSkills: false, useForSpecialists: true }
+    const data = withHaiku()
+    data.raw.decisionModel = { model: 'claude-haiku-4-5', provider: 'anthropic', useForSkills: false, useForSpecialists: true }
     const { calls } = install(data)
     await mount('model')
 
@@ -714,7 +742,7 @@ describe('decision model role and toggles', () => {
   })
 
   it('shows helper hint when a routing toggle is enabled without a decision model selected, and clears it once picked', async () => {
-    const data = snap()
+    const data = withHaiku()
     data.raw.decision_model = { use_for_skills: true, use_for_specialists: false }
     const { calls } = install(data, {
       set: async (key, value) => {
@@ -733,9 +761,45 @@ describe('decision model role and toggles', () => {
     await mount('model')
 
     expect(screen.getByRole('switch', { name: 'gui.settings.roles.decision_skills' }).getAttribute('aria-checked')).toBe('true')
+    expect((screen.getByRole('switch', { name: 'gui.settings.roles.decision_skills' }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByText('gui.settings.roles.decision_pick_first')).toBeTruthy()
 
-    await pick('gui.settings.roles.decision', 'claude-sonnet-4-5')
+    await pick('gui.settings.roles.decision', 'claude-haiku-4-5')
     expect(screen.queryByText('gui.settings.roles.decision_pick_first')).toBe(null)
+  })
+
+  it('excludes a System-1-named model flagged with the reasoning capability from the picker', async () => {
+    const data = withHaiku()
+    data.providers = data.providers.map((p) => (p.id === 'anthropic'
+      ? { ...p, labels: { ...(p.labels ?? {}), 'claude-haiku-4-5': { label: 'claude-haiku-4-5', capabilities: ['reasoning'] } } }
+      : p))
+    install(data)
+    await mount('model')
+    await act(async () => { fireEvent.click(pill('gui.settings.roles.decision')) })
+    expect(within(picker()).queryByText('claude-haiku-4-5')).toBe(null)
+  })
+
+  it('keeps both switches disabled and shows the hint when the saved model is not System 1', async () => {
+    const data = withHaiku()
+    data.raw.decisionModel = { model: 'claude-opus-4-5', provider: 'anthropic', useForSkills: true, useForSpecialists: true }
+    const { calls } = install(data)
+    await mount('model')
+    const skills = screen.getByRole('switch', { name: 'gui.settings.roles.decision_skills' }) as HTMLButtonElement
+    const specs = screen.getByRole('switch', { name: 'gui.settings.roles.decision_specialists' }) as HTMLButtonElement
+    expect(skills.disabled).toBe(true)
+    expect(specs.disabled).toBe(true)
+    expect(screen.getByText('gui.settings.roles.decision_pick_first')).toBeTruthy()
+    await act(async () => { fireEvent.click(skills) })
+    expect(sets(calls)).toEqual([])
+  })
+})
+
+describe('isSystem1DecisionModel', () => {
+  it.each(['Microsoft-decision-1', 'Gemini-decision-1', 'gpt-4o-mini', 'claude-haiku-4-5', 'gemini-2.5-flash', 'provider/gpt-4o-mini'])(
+    'accepts %s', (m) => { expect(isSystem1DecisionModel(m)).toBe(true) })
+  it.each(['o1', 'o1-mini', 'o3-mini', 'o4-mini', 'deepseek-r1', 'gemini-2.5-flash-thinking', 'claude-sonnet-4-6', 'gpt-4o', '', '   '])(
+    'rejects %j', (m) => { expect(isSystem1DecisionModel(m)).toBe(false) })
+  it('rejects when reasoning is true', () => {
+    expect(isSystem1DecisionModel('gpt-4o-mini', true)).toBe(false)
   })
 })

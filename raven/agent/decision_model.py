@@ -18,6 +18,29 @@ if TYPE_CHECKING:
     from raven.providers.pool import ProviderPool
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+_SYSTEM2_RE = re.compile(
+    r"(?:^|[-_.:/])(?:o[134]|r1|reasoner|reasoning|thinking|thought|qwq|marco-o1)(?:$|[-_.:/])",
+    re.IGNORECASE,
+)
+_SYSTEM1_RE = re.compile(
+    r"(?:^|[-_.:/])(?:decision|mini|nano|flash|haiku|lite|light|fast|instant|small|micro|tiny|turbo|phi|gemma|(?:0\.5|1|1\.5|2|3|4|7|8|9|12|14)b)(?:$|[-_.:/])",
+    re.IGNORECASE,
+)
+
+
+def is_system1_decision_model(model_id: str, *, reasoning: bool | None = None) -> bool:
+    """Return True when ``model_id`` is a fast non-reasoning (System 1) decision model."""
+    if reasoning is True:
+        return False
+    raw = (model_id or "").strip()
+    if not raw:
+        return False
+    name = raw.rsplit("/", 1)[-1].strip().lower()
+    if not name:
+        return False
+    if _SYSTEM2_RE.search(name):
+        return False
+    return bool(_SYSTEM1_RE.search(name))
 
 
 def resolve_decision_binding(
@@ -26,8 +49,8 @@ def resolve_decision_binding(
 ) -> "ModelBinding | None":
     """Resolve the configured ``decisionModel`` pin through ``provider_pool``.
 
-    Returns ``None`` when unconfigured, missing a pool, or backed by no usable
-    credentials so callers can fall back without raising.
+    Returns ``None`` when unconfigured, missing a pool, not a System 1 model, or
+    backed by no usable credentials so callers can fall back without raising.
     """
     if live_config is None or provider_pool is None:
         return None
@@ -37,6 +60,12 @@ def resolve_decision_binding(
         logger.warning("decision_model: failed to read decision pin: {}", exc)
         return None
     if not model:
+        return None
+    if not is_system1_decision_model(model):
+        logger.warning(
+            "decision_model: ignoring non-System-1 decision model {!r}; configure a fast non-reasoning model",
+            model,
+        )
         return None
     try:
         return provider_pool.bind_pin(model, provider_name)

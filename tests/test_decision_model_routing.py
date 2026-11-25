@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from raven.agent.decision_model import (
+    is_system1_decision_model,
     resolve_decision_binding,
     select_skills_with_decision_model,
     select_specialist_with_decision_model,
@@ -97,6 +98,73 @@ def _write_live_config(tmp_path: Path, data: dict[str, Any]) -> LiveConfig:
     return LiveConfig(path)
 
 
+# ---------------------------------------------------------------- system 1 filter
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "Microsoft-decision-1",
+        "Gemini-decision-1",
+        "gpt-4o-mini",
+        "gpt-4.1-mini",
+        "gpt-4.1-nano",
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash-lite",
+        "claude-haiku-4-5",
+        "claude-3-5-haiku",
+        "openai/gpt-5-mini",
+        "ghe-copilot/gpt-4o-mini",
+        "llama-3.1-8b-instant",
+        "qwen2.5-7b",
+        "phi-4-mini",
+        "gemma-3-4b",
+    ],
+)
+def test_is_system1_decision_model_accepts_fast_non_reasoning_models(model_id: str) -> None:
+    assert is_system1_decision_model(model_id) is True
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "",
+        "   ",
+        "o1",
+        "o1-mini",
+        "openai/o1-preview",
+        "o3",
+        "o3-mini",
+        "o4-mini",
+        "deepseek-r1",
+        "deepseek/deepseek-r1-distill-qwen-7b",
+        "gemini-2.5-flash-thinking",
+        "deepseek-reasoner",
+        "qwq-32b",
+        "marco-o1",
+        "claude-sonnet-4-6",
+        "claude-opus-4-6",
+        "gpt-4o",
+        "gpt-4.1",
+        "gpt-5",
+        "gemini-2.5-pro",
+        "gemini-1.5-pro",
+        "deepseek-v3",
+        "llama-3.3-70b",
+    ],
+)
+def test_is_system1_decision_model_rejects_reasoning_and_heavy_models(model_id: str) -> None:
+    assert is_system1_decision_model(model_id) is False
+
+
+def test_is_system1_decision_model_rejects_when_reasoning_flag_true() -> None:
+    assert is_system1_decision_model("gpt-4o-mini", reasoning=True) is False
+    assert is_system1_decision_model("Microsoft-decision-1", reasoning=True) is False
+    assert is_system1_decision_model("gpt-4o-mini", reasoning=False) is True
+
+
 # ---------------------------------------------------------------- resolver
 
 
@@ -112,6 +180,19 @@ def test_resolve_decision_binding_returns_bound_model(tmp_path: Path) -> None:
     resolved = resolve_decision_binding(live, pool)
     assert resolved is expected
     assert pool.requests == [("fast-judge", "openai")]
+
+
+@pytest.mark.parametrize("bad_model", ["claude-opus-4-6", "o3-mini", "deepseek-r1", "gpt-5"])
+def test_resolve_decision_binding_returns_none_for_non_system1_model(tmp_path: Path, bad_model: str) -> None:
+    live = _write_live_config(
+        tmp_path,
+        {"decisionModel": {"model": bad_model, "provider": "openai", "useForSkills": True}},
+    )
+    expected = ModelBinding(provider=_StubProvider(), model=bad_model)
+    pool = _StubPool({(bad_model, "openai"): expected})
+
+    assert resolve_decision_binding(live, pool) is None
+    assert pool.requests == []
 
 
 def test_resolve_decision_binding_returns_none_when_unconfigured(tmp_path: Path) -> None:

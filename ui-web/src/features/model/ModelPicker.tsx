@@ -205,7 +205,8 @@ function Pick(): JSX.Element {
      it rather than one per group, because an id is added to one provider. */
   const typedTo = currentProvider ?? providers[0]
   const exact = !!typedTo && providers.some((p) => store.column(p).some((m) => store.short(m).toLowerCase() === q))
-  const showTyped = !!q && !exact && !!typedTo
+  const typedAllowed = !at.offer.filter || (!!typedTo && at.offer.filter(query.trim(), typedTo))
+  const showTyped = !!q && !exact && !!typedTo && typedAllowed
 
   /* The last picks, for the composer's opening and only while nothing is
      searched: a search is already the short way to a model. Each is shown

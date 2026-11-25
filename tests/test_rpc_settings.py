@@ -1880,20 +1880,20 @@ async def test_settings_leaf_write_follows_the_non_null_alias(cfg, snake_active,
 
 @pytest.mark.parametrize("snake_active", [False, True])
 @pytest.mark.parametrize(
-    "camel,snake,model_field,provider_field,keep",
+    "camel,snake,model_field,provider_field,keep,new_model",
     [
-        ("sessionTitle", "session_title", "model", "provider", {"enabled": False}),
-        ("decisionModel", "decision_model", "model", "provider", {"useForSkills": True}),
+        ("sessionTitle", "session_title", "model", "provider", {"enabled": False}, "openai/new"),
+        ("decisionModel", "decision_model", "model", "provider", {"useForSkills": True}, "openai/gpt-4o-mini"),
     ],
 )
 async def test_settings_pin_merge_follows_the_non_null_alias(
-    cfg, snake_active, camel, snake, model_field, provider_field, keep
+    cfg, snake_active, camel, snake, model_field, provider_field, keep, new_model
 ):
     from raven.config.raven import load_raven_config
 
     active, empty = (snake, camel) if snake_active else (camel, snake)
     previous = {model_field: "old/model", provider_field: "openai"}
-    value = {model_field: "openai/new", provider_field: "openai"}
+    value = {model_field: new_model, provider_field: "openai"}
     cfg.write_text(json.dumps({empty: None, active: {**keep, **previous}}), encoding="utf-8")
     load_raven_config(config_path=cfg)
 
@@ -1981,20 +1981,22 @@ async def test_settings_set_media_speech_selection_merges(cfg):
 
 
 @pytest.mark.parametrize(
-    "parent,model_field,provider_field",
+    "parent,model_field,provider_field,model_val,provider_val",
     [
-        ("sessionTitle", "model", "provider"),
-        ("decisionModel", "model", "provider"),
+        ("sessionTitle", "model", "provider", "deepseek-chat", "deepseek"),
+        ("decisionModel", "model", "provider", "gpt-4o-mini", "openai"),
     ],
 )
-async def test_settings_set_pin_pairs_write_as_one_merged_object(cfg, parent, model_field, provider_field):
+async def test_settings_set_pin_pairs_write_as_one_merged_object(
+    cfg, parent, model_field, provider_field, model_val, provider_val
+):
     cfg.write_text(json.dumps({parent: {"keep": True}}), encoding="utf-8")
     r = await rpc_console.settings_set(
-        {"key": parent, "value": {model_field: "deepseek-chat", provider_field: "deepseek"}}
+        {"key": parent, "value": {model_field: model_val, provider_field: provider_val}}
     )
     assert r["applied"] is True
     block = _read(cfg)[parent]
-    assert block == {"keep": True, model_field: "deepseek-chat", provider_field: "deepseek"}
+    assert block == {"keep": True, model_field: model_val, provider_field: provider_val}
     await rpc_console.settings_set({"key": parent, "value": {model_field: None, provider_field: None}})
     assert _read(cfg)[parent] == {"keep": True, model_field: None, provider_field: None}
     with pytest.raises(ConfigValidationError):
@@ -2426,3 +2428,26 @@ async def test_role_write_is_refused_for_the_cloud_backend(memory_cfg):
     with pytest.raises(ConfigValidationError) as exc:
         await rpc_console.settings_everos_set({"section": "embedding", "model": "m", "provider": "p"})
     assert "everos-cloud" not in str(exc.value)  # refused for its own reason (no such provider), not the backend's
+
+
+@pytest.mark.parametrize("model", ["claude-opus-4-6", "o3-mini", "deepseek-r1", "gpt-4o"])
+@pytest.mark.parametrize("key", ["decisionModel", "decisionModel.model"])
+async def test_settings_set_decision_model_rejects_non_system1(cfg, key, model):
+    value = {"model": model, "provider": "openai"} if key == "decisionModel" else model
+    with pytest.raises(ConfigValidationError) as ei:
+        await rpc_console.settings_set({"key": key, "value": value})
+    assert ei.value.code == -32011
+
+
+@pytest.mark.parametrize("model", ["Microsoft-decision-1", "Gemini-decision-1"])
+@pytest.mark.parametrize("key", ["decisionModel", "decisionModel.model"])
+async def test_settings_set_decision_model_accepts_decision_models(cfg, key, model):
+    value = {"model": model, "provider": "openai"} if key == "decisionModel" else model
+    await rpc_console.settings_set({"key": key, "value": value})
+    assert _read(cfg)["decisionModel"]["model"] == model
+
+
+async def test_settings_set_decision_model_leaf_clear(cfg):
+    await rpc_console.settings_set({"key": "decisionModel.model", "value": "gpt-4o-mini"})
+    await rpc_console.settings_set({"key": "decisionModel.model", "value": None})
+    assert _read(cfg)["decisionModel"]["model"] is None

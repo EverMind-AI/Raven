@@ -1076,6 +1076,25 @@ def _chk_pin_model(key: str):
     return chk
 
 
+def _chk_decision_model(key: str):
+    inner = _chk_pin_model(key)
+
+    def chk(v: Any) -> str | None:
+        model = inner(v)
+        if model is None:
+            return None
+        from raven.agent.decision_model import is_system1_decision_model
+
+        if not is_system1_decision_model(model):
+            raise ConfigValidationError(
+                "decisionModel must be a fast non-reasoning (System 1) model "
+                f"(e.g. decision, mini, flash, haiku, nano, lite); got '{model}'"
+            )
+        return model
+
+    return chk
+
+
 def _configured_provider_section(slug: str) -> bool:
     """Whether this config holds a section for ``slug``."""
     try:
@@ -1253,7 +1272,7 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "sessionTitle.provider": _chk_pin_provider("sessionTitle.provider"),
     "translate.model": _chk_pin_model("translate.model"),
     "translate.provider": _chk_pin_provider("translate.provider"),
-    "decisionModel.model": _chk_pin_model("decisionModel.model"),
+    "decisionModel.model": _chk_decision_model("decisionModel.model"),
     "decisionModel.provider": _chk_pin_provider("decisionModel.provider"),
     "decisionModel.useForSkills": _chk_bool("decisionModel.useForSkills"),
     "decisionModel.useForSpecialists": _chk_bool("decisionModel.useForSpecialists"),
