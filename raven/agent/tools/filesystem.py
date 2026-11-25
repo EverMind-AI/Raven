@@ -319,10 +319,19 @@ def _file_url_path(url: str) -> str | None:
     ``url2pathname`` is the platform-aware inverse of ``Path.as_uri()``: it
     percent-decodes the path, and on Windows it turns ``file:///C:/work/a.md``
     into ``C:\\work\\a.md``, where a bare strip of the scheme leaves
-    ``/C:/work/a.md`` -- a path Windows cannot open. A ``localhost`` authority
-    names this machine, as ``raven.channels.media.file_uri_to_path`` and
+    ``/C:/work/a.md`` -- a path Windows cannot open.
+
+    A ``localhost`` authority names this machine, as
+    ``raven.channels.media.file_uri_to_path`` and
     ``raven.acp.methods._file_uri_to_path`` also read it; any other host names
-    somebody else's machine, so it is not a path on this one.
+    somebody else's machine, so it is not a path on this one. On Windows the
+    authority still survives: ``url2pathname`` folds it away into a
+    root-relative path, so a single leading backslash keeps the host as the
+    UNC share it named (``file://localhost/share/x`` reads
+    ``\\\\localhost\\share\\x``), the way
+    ``raven.acp.mirasim.server._local_file`` reads it. A drive path
+    (``file://localhost/C:/work/a.md``) keeps its drive, because there the
+    authority names this machine rather than a share.
     """
     try:
         parsed = urlparse(url)
@@ -339,6 +348,10 @@ def _file_url_path(url: str) -> str | None:
         # A malformed Windows spelling (``file:///C::/...``) raises inside
         # ``url2pathname``; a URL that cannot be converted names no path.
         return None
+    if _WINDOWS and parsed.netloc and local.startswith("\\") and not local.startswith("\\\\"):
+        # url2pathname folds the localhost authority away; a root-relative
+        # result is the share it named, so the authority stays as the UNC host.
+        local = f"\\\\{parsed.netloc}{local}"
     if _has_control_character(local):
         # A percent-encoded control character decodes into a caller-read line,
         # and the resolver refuses such a path on the next call anyway.
