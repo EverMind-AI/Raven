@@ -155,9 +155,21 @@ def parse(payload: Any) -> Charter | None:
         else ""
     )
     tools: tuple[str, ...] | None = None
-    raw_tools = payload.get("tools") if _parameter_enabled("capability", "tools") else None
+    raw_tools = payload.get("tools")
     if isinstance(raw_tools, list):
-        tools = tuple(str(name) for name in raw_tools[:MAX_TOOLS] if isinstance(name, str) and name)
+        # Read the list even when this install's catalogue refuses the field:
+        # the host that enables it sends one, and a list dropped without a
+        # word leaves the dispatch running with the worker's whole toolset,
+        # which is wider than the host asked for and says so nowhere.
+        sent = tuple(str(name) for name in raw_tools[:MAX_TOOLS] if isinstance(name, str) and name)
+        if _parameter_enabled("capability", "tools"):
+            tools = sent
+        elif sent:
+            logger.warning(
+                "charter: a host sent {} tool name(s) but this install's catalogue disables "
+                "capability.tools; the dispatch keeps the worker's own toolset",
+                len(sent),
+            )
     checks: list[CheckRule] = []
     # Type-guarded like ``tools`` above, and for a sharper reason: this arrives
     # from another process, and a non-list here (a bare number, an object the
