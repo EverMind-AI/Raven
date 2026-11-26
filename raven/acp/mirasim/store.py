@@ -39,7 +39,7 @@ from typing import Any
 from loguru import logger
 
 from raven.home import raven_home
-from raven.utils.atomic_io import atomic_update
+from raven.utils.atomic_io import atomic_update, write_transaction
 
 STORE_VERSION = 1
 RETENTION_DAYS = 90
@@ -115,10 +115,15 @@ class BindingStore:
         return {binding.mirasim_key: sid for sid, binding in self._live().items() if binding.mirasim_key}
 
     def _live(self) -> dict[str, Binding]:
-        try:
-            raw = self.path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return {}
+        # The write side holds this lock across its read-modify-write, so the
+        # read has to take it too: a read that does not can land on the
+        # writer's os.replace window, which on Windows fails the open with
+        # PermissionError instead of showing either the old or the new file.
+        with write_transaction(self.path):
+            try:
+                raw = self.path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                return {}
         horizon = _now_ms() - _RETENTION_MS
         live: dict[str, Binding] = {}
         for session_id, row in _decode(raw, self.path).items():
