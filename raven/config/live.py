@@ -597,16 +597,16 @@ def reasoning_effort(live: LiveConfig) -> str | None:
     return None
 
 
-AUTONOMY_MODES = ("lite", "standard", "max")
+AUTONOMY_MODES = ("manual", "balanced", "auto")
 
 
 def autonomy_mode(live: LiveConfig) -> str:
-    """``agents.defaults.autonomyMode`` as the file has it; unknown or absent is ``standard``."""
+    """``agents.defaults.autonomyMode`` as the file has it; unknown or absent is ``balanced``."""
     for key in ("agents.defaults.autonomyMode", "agents.defaults.autonomy_mode"):
         value = live.get(key)
         if isinstance(value, str) and value.strip().lower() in AUTONOMY_MODES:
             return value.strip().lower()
-    return "standard"
+    return "balanced"
 
 
 def personalization_enabled(live: LiveConfig) -> bool | None:
