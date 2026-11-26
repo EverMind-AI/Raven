@@ -229,7 +229,11 @@ const sectionOf = async (name: string): Promise<string | undefined> => {
 
 const sheet = (): HTMLElement | null => document.querySelector('#dBody .extAgents-sheet')
 const sheetName = (): string | null => sheet()?.querySelector('h3')?.textContent ?? null
-const sheetStatus = (): string | null => sheet()?.querySelector('.extAgents-by')?.textContent ?? null
+/* An agent's sheet says its state in the strip at the top of its body; a
+   machine's sheet keeps the line under its name. */
+const sheetStatus = (): string | null => sheet()?.querySelector('.extAgents-say-t b, .extAgents-by')?.textContent ?? null
+const sheetWhen = (): string | null => sheet()?.querySelector('.extAgents-say-when')?.textContent ?? null
+const sheetOut = (): HTMLButtonElement | null => sheet()?.querySelector<HTMLButtonElement>('.extAgents-out') ?? null
 const sheetActs = (): Array<string | null> => [...(sheet()?.querySelectorAll('.extAgents-act button') ?? [])].map((b) => b.textContent)
 const sheetTextarea = (): HTMLTextAreaElement | null => sheet()?.querySelector('textarea') ?? null
 
@@ -941,8 +945,13 @@ describe('connecting', () => {
     })
     await mount()
     await openSheet('off_one')
+    expect(sheetStatus()).toBe('gui.agent.st_off')
     await click(sheet()!.querySelector('.extAgents-act button'))
     expect(sheetActs()).toEqual(['gui.agent.testing'])
+    /* The press says what runs; the strip keeps the state the row is in, in
+       the busy colour, rather than saying "testing" twice. */
+    expect(sheetStatus()).toBe('gui.agent.st_off')
+    expect(sheet()!.querySelector('.extAgents-stat')!.className).toContain('extAgents-stat-busy')
     await act(async () => {
       release()
       await gate
@@ -968,7 +977,7 @@ describe('connecting', () => {
     })
     await mount()
     await openSheet('on_one')
-    await click(sheet()!.querySelector('.extAgents-act button.danger'))
+    await click(sheetOut())
     expect(footOf('on_one')).toEqual({ k: 'gui.agent.disconnecting', r: null })
     await act(async () => {
       release()
@@ -1077,7 +1086,7 @@ describe('disconnecting', () => {
     const { acts } = install([row({ name: 'on_one' })])
     await mount()
     await openSheet('on_one')
-    await click(sheet()!.querySelector('.extAgents-act button.danger'))
+    await click(sheetOut())
     expect(acts).toEqual([['toggle', 'on_one', { enabled: false }]])
     expect(await sectionOf('on_one')).toBe('gui.agent.g_avail')
     expect(controlOf('on_one')).toBe('gui.agent.connect')
@@ -1085,13 +1094,17 @@ describe('disconnecting', () => {
 })
 
 describe('the sheet', () => {
-  it('names the agent, says who makes it, and offers disconnect and test for a connected one', async () => {
+  it('names the agent and who makes it, offers Test in its strip and Disconnect on a row of its own', async () => {
     install([row({ name: 'claude_code' })])
     await mount()
     await openSheet('claude_code')
     expect(sheetName()).toBe('claude_code')
-    expect(sheetStatus()).toBe('gui.agent.hd_on_by {"by":"Anthropic"}')
-    expect(sheetActs()).toEqual(['gui.agent.disconnect', 'gui.agent.test_label'])
+    expect(sheet()!.querySelector('.extAgents-maker')!.textContent).toBe('Anthropic')
+    expect(sheetStatus()).toBe('gui.agent.g_on')
+    expect(sheetWhen()).toBe('gui.agent.test_never')
+    expect(sheet()!.querySelector('.extAgents-stat')!.className).toContain('extAgents-stat-good')
+    expect(sheetActs()).toEqual(['gui.agent.test_label'])
+    expect(sheetOut()!.textContent).toBe('gui.agent.disconnect')
   })
 
   it('offers nothing to press on the built-in loop', async () => {
@@ -1099,7 +1112,11 @@ describe('the sheet', () => {
     await mount()
     await openSheet('Raven')
     expect(sheetActs()).toEqual([])
-    expect(sheetStatus()).toBe('gui.agent.hd_on_by {"by":"gui.agent.by_raven"}')
+    expect(sheetOut()).toBeNull()
+    expect(sheetStatus()).toBe('gui.agent.g_on')
+    /* Never tested, and never offered a test: no line saying so. */
+    expect(sheetWhen()).toBeNull()
+    expect(sheet()!.querySelector('.extAgents-maker')!.textContent).toBe('gui.agent.by_raven')
     expect(sheetTextarea()).toBeNull()
     expect(sheet()!.querySelector('.extAgents-ro')!.textContent).toBe('Claude Code CLI')
   })
@@ -1111,17 +1128,19 @@ describe('the sheet', () => {
     ])
     await mount()
     await openSheet('passed')
-    expect(sheetStatus()).toBe('gui.agent.hd_on_tested')
+    expect(sheetStatus()).toBe('gui.agent.g_on')
+    expect(sheetWhen()).toContain('gui.agent.st_tested_ago')
+    expect(sheetWhen()).toContain('gui.time.ago_d')
     await act(async () => {
       detail.close()
     })
     await openSheet('failed')
-    /* The head says which state it is in; the block at the top of the body
-       says what failed, when, and -- the server having named no fix -- shows
-       its sentence as it came rather than folding the only reason away. */
-    expect(sheetStatus()).toBe('gui.agent.hd_on_test_bad')
-    expect(sheet()!.querySelector('.extAgents-by')!.className).toContain('extAgents-by-bad')
+    /* The note takes the strip's place: what failed, when, and -- the server
+       having named no fix -- its sentence as it came rather than folding the
+       only reason away, with the retest at its foot. */
+    expect(sheet()!.querySelector('.extAgents-stat')).toBeNull()
     const note = sheet()!.querySelector('.extAgents-note')!
+    expect(note.querySelector('.extAgents-act')!.textContent).toBe('gui.agent.test_again')
     expect(note.querySelector('.extAgents-note-t')!.firstChild!.textContent).toBe('gui.agent.st_test_bad')
     expect(note.querySelector('.extAgents-note-when')!.textContent).toContain('gui.time.ago_d')
     expect(note.querySelector('.extAgents-note-p')!.textContent).toBe(
@@ -1129,7 +1148,8 @@ describe('the sheet', () => {
     )
     expect(note.querySelector('.extAgents-note-said')!.textContent).toBe('it returned nothing')
     expect(note.querySelector('details')).toBeNull()
-    expect(sheetActs()).toEqual(['gui.agent.disconnect', 'gui.agent.test_again'])
+    expect(sheetActs()).toEqual(['gui.agent.test_again'])
+    expect(sheetOut()).not.toBeNull()
     /* The card says it too, under the line about the agent, with a retest. */
     expect(rowNamed('failed').querySelector('.extAgents-one')!.className).toBe('extAgents-one')
     expect(footOf('failed')).toEqual({ k: 'gui.agent.st_test_bad', r: expect.stringContaining('gui.time.ago_d') })
@@ -1152,19 +1172,19 @@ describe('the sheet', () => {
     })
     await mount()
     await openSheet('claude_code')
-    await click(sheet()!.querySelectorAll('.extAgents-act button')[1])
+    await click(sheet()!.querySelector('.extAgents-act button'))
     expect(sheetStatus()).toBe('gui.agent.testing_head')
     /* A cli test can run for two minutes on the agent's own quota, so the
        running state keeps a control: Stop, in place of the Test that started it. */
-    expect(sheetActs()).toEqual(['gui.agent.disconnect', 'gui.stop'])
-    expect((sheet()!.querySelectorAll('.extAgents-act button')[1] as HTMLButtonElement).disabled).toBe(false)
-    await click(sheet()!.querySelectorAll('.extAgents-act button')[1])
+    expect(sheetActs()).toEqual(['gui.stop'])
+    expect((sheet()!.querySelector('.extAgents-act button') as HTMLButtonElement).disabled).toBe(false)
+    await click(sheet()!.querySelector('.extAgents-act button'))
     expect(acts.map((a) => a[0])).toEqual(['test', 'test_cancel'])
     await act(async () => {
       release()
       await gate
     })
-    expect(sheetActs()).toEqual(['gui.agent.disconnect', 'gui.agent.test_label'])
+    expect(sheetActs()).toEqual(['gui.agent.test_label'])
   })
 
   it('writes what the agent is good at when the field is left, and keeps the old text when it is left blank', async () => {
@@ -1174,6 +1194,7 @@ describe('the sheet', () => {
     expect(sheetTextarea()!.value).toBe('Claude Code CLI')
     await typeInto(sheetTextarea(), 'Fixes the failing test')
     await blur(sheetTextarea())
+    expect(sheet()!.querySelector('.extAgents-hint')!.textContent).toBe('gui.agent.good_at_hint {"agent":"claude_code"}')
     expect(acts).toEqual([['update', 'claude_code', { description: 'Fixes the failing test' }]])
     await typeInto(sheetTextarea(), '   ')
     await blur(sheetTextarea())
@@ -1335,7 +1356,9 @@ describe('the sheet', () => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } })
     await mount()
     await openSheet('qwen')
-    expect(sheetStatus()).toBe('gui.agent.hd_missing_by {"by":"gui.agent.by_qwen_code"}')
+    expect(sheetStatus()).toBe('gui.agent.not_installed')
+    expect(sheet()!.querySelector('.extAgents-maker')!.textContent).toBe('gui.agent.by_qwen_code')
+    expect(sheetOut()).toBeNull()
     expect(sheet()!.querySelector('.extAgents-cmd code')!.textContent).toBe('npm install -g @qwen-code/qwen-code')
     expect(sheet()!.querySelector<HTMLAnchorElement>('.extAgents-site')!.href).toBe('https://github.com/QwenLM/qwen-code')
     expect(sheetActs()).toEqual(['gui.agent.recheck'])
@@ -1364,13 +1387,13 @@ describe('the sheet', () => {
     expect(controlOf('codex')).toBe('gui.agent.unauthorized')
     expect(buttonOf('codex')).toBeNull()
     expect(acts).toEqual([])
-    /* The sheet says the same, and offers the one press that can take it
-       back: a Test re-measures the handshake. */
+    /* The sheet's strip says the same, and offers the one press that can take
+       it back: a Test re-measures the handshake. */
     await openSheet('codex')
-    expect(sheetActs()).toEqual(['gui.agent.unauthorized', 'gui.agent.test_label'])
-    const [named, test] = [...sheet()!.querySelectorAll<HTMLButtonElement>('.extAgents-act button')]
-    expect(named!.disabled).toBe(true)
-    await click(test)
+    expect(sheetStatus()).toBe('gui.agent.unauthorized')
+    expect(sheet()!.querySelector('.extAgents-stat')!.className).toContain('extAgents-stat-warn')
+    expect(sheetActs()).toEqual(['gui.agent.test_label'])
+    await click(sheet()!.querySelector('.extAgents-act button'))
     expect(acts.map((a) => a.slice(0, 2))).toEqual([['test', 'codex']])
   })
 
@@ -1395,12 +1418,12 @@ describe('the sheet', () => {
     await mount()
     expect(ledOf('on_warn')).toBe('extAgents-led extAgents-led-warn')
     await openSheet('on_warn')
-    const line = sheet()!.querySelector('.extAgents-by')!
-    expect(line.querySelector('.extAgents-led')!.className).toBe('extAgents-led extAgents-led-warn')
-    expect(line.textContent).toBe('gui.agent.hd_on_attention')
-    expect(line.querySelector('details')).toBeNull()
+    /* The note stands in for the strip, in the warning colour, and carries the
+       strip's press -- the test that clears a caveat. */
+    expect(sheet()!.querySelector('.extAgents-stat')).toBeNull()
     const note = sheet()!.querySelector('.extAgents-note')!
     expect(note.className).toBe('extAgents-note extAgents-note-warn')
+    expect(note.querySelector('.extAgents-act')!.textContent).toBe('gui.agent.test_label')
     expect(note.querySelector('.extAgents-note-t')!.textContent).toBe(said('gui.agent.warn_title', { agent: 'on_warn' }))
     expect(note.querySelector('.extAgents-note-p')!.textContent).toBe(
       said('gui.agent.warn_lead', { agent: 'on_warn', button: 'gui.agent.test_label' }),
@@ -1478,8 +1501,9 @@ describe('the sheet', () => {
     await mount()
     await openSheet('ua')
     await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.test_label'))
-    /* Not connected, so the head names the maker rather than "connected". */
-    expect(sheetStatus()).toBe('gui.agent.st_test_bad · Anthropic')
+    /* The note stands in for the strip; the head names the maker. */
+    expect(sheet()!.querySelector('.extAgents-stat')).toBeNull()
+    expect(sheet()!.querySelector('.extAgents-maker')!.textContent).toBe('Anthropic')
     const note = sheet()!.querySelector('.extAgents-note')!
     expect(note.querySelector('.extAgents-note-t')!.textContent).toBe('gui.agent.st_test_bad')
     expect(note.querySelector('.extAgents-note-said')!.textContent).toBe('it connected and then answered nothing')
@@ -1548,7 +1572,7 @@ describe('a refusal that names its fix', () => {
     expect(raw()!.querySelector('summary')!.textContent).toBe('gui.agent.fix_raw')
     expect(raw()!.textContent).toContain(hermesSaid)
     expect(raw()!.open).toBe(false)
-    expect(sheet()!.querySelector('.extAgents-by')!.className).toContain('extAgents-by-bad')
+    expect(sheet()!.querySelector('.extAgents-stat')).toBeNull()
   })
 
   it('says a refused connect needs a sign-in, names Retry, and copies the command', async () => {
@@ -1565,7 +1589,8 @@ describe('a refusal that names its fix', () => {
     await mount()
     await openSheet('Codex')
     await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
-    expect(sheetStatus()).toBe('gui.agent.st_connect_bad · OpenAI')
+    expect(sheet()!.querySelector('.extAgents-stat')).toBeNull()
+    expect(sheet()!.querySelector('.extAgents-maker')!.textContent).toBe('OpenAI')
     expect(title()).toBe(say('gui.agent.bad_sign_in', { agent: 'Codex' }))
     expect(lead()).toBe(say('gui.agent.fix_sign_in', { agent: 'Codex', button: 'gui.retry' }))
     expect(sheetActs()).toEqual(['gui.retry'])
@@ -1983,10 +2008,15 @@ describe('a refusal that names its fix', () => {
     install([r], { refuse: (op) => (op === 'toggle' ? 'subagent not found: Codex' : null) })
     await mount()
     await openSheet('Codex')
-    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.disconnect'))
-    expect(sheetStatus()).toBe('gui.agent.st_disconnect_bad · OpenAI')
+    await click(sheetOut())
+    expect(sheet()!.querySelector('.extAgents-stat')).toBeNull()
     expect(title()).toBe(say('gui.agent.bad_disconnect', { agent: 'Codex' }))
     expect(lead()).toBe(say('gui.agent.said_disconnect', { button: 'gui.retry' }))
+    /* The note names Retry, and Retry is the press at its foot; the row is
+       not shown as connected while the refusal stands, so no second
+       Disconnect is offered beside it. */
+    expect(sheetActs()).toEqual(['gui.retry'])
+    expect(sheetOut()).toBeNull()
     expect(footOf('Codex')).toEqual({ k: 'gui.agent.st_disconnect_bad', r: 'gui.agent.why_open' })
   })
 
@@ -2179,7 +2209,7 @@ describe('the model pill', () => {
     const { acts } = install([row({ model_source: 'agent', model_choices: choices })])
     await mount()
     await openSheet('claude_code')
-    expect(pill()!.textContent).toBe('gui.agent.model_own_default⌄')
+    expect(pill()!.textContent).toBe('gui.agent.model_own_default')
     expect(pill()!.disabled).toBe(false)
     expect(sheet()!.querySelector('.extAgents-mx')).toBeNull()
     await click(pill())
@@ -2219,7 +2249,7 @@ describe('the model pill', () => {
     expect(picker()!.textContent).toContain('Own key')
   })
 
-  it('re-reads on the card-corner button too, forced, without opening the picker', async () => {
+  it('re-reads from the button on the model row, forced, without opening the picker', async () => {
     const calls: boolean[] = []
     const r = row({ model_source: 'agent', model_choices: choices })
     install([r], {
@@ -2236,11 +2266,11 @@ describe('the model pill', () => {
     await mount()
     await openSheet('claude_code')
 
-    /* The card keeps this action at its top-right corner, not beside the
-       field: the model pill's line holds the picker and its clear only. */
-    const refresh = sheet()!.querySelector('.extAgents-head .extAgents-mrf')
+    /* The re-read sits on the row of the list it re-reads, beside the pill,
+       not in the head beside the drawer's close control. */
+    const refresh = sheet()!.querySelector('.extAgents-grp .extAgents-fld .extAgents-mrf')
     expect(refresh).toBeTruthy()
-    expect(sheet()!.querySelector('.extAgents-fld .extAgents-mrf')).toBeNull()
+    expect(sheet()!.querySelector('.extAgents-head .extAgents-mrf')).toBeNull()
     await click(refresh)
     await act(async () => {})
 
@@ -2288,6 +2318,10 @@ describe('the model pill', () => {
     await mount()
     await openSheet('claude_code')
 
+    /* The agent's own "Default" rung would stand beside the segment that
+       clears to the agent's default under the same word, so this ladder keeps
+       the select. */
+    expect(sheet()!.querySelector('.extAgents-rungs')).toBeNull()
     const select = sheet()!.querySelector<HTMLSelectElement>('.extAgents-effort')!
     expect(select).toBeTruthy()
     expect(select.value).toBe('low')
@@ -2310,6 +2344,57 @@ describe('the model pill', () => {
     expect(acts).toEqual([
       ['effort', 'claude_code', { effort: 'high' }],
       ['effort', 'claude_code', { clear_effort: true }],
+    ])
+  })
+
+  it('draws a short effort ladder as one row of rungs, and writes the pick or the clear', async () => {
+    const { acts } = install([
+      row({
+        model_source: 'agent',
+        model_choices: choices,
+        effort: 'high',
+        effort_choices: [
+          { value: 'low', name: 'Low' },
+          { value: 'high', name: 'High' },
+          { value: 'max', name: 'Max' },
+        ],
+      }),
+    ])
+    await mount()
+    await openSheet('claude_code')
+    expect(sheet()!.querySelector('.extAgents-effort')).toBeNull()
+    const rungs = (): HTMLButtonElement[] => [...sheet()!.querySelectorAll<HTMLButtonElement>('.extAgents-rungs button')]
+    expect(rungs().map((b) => b.textContent)).toEqual(['gui.agent.effort_default_short', 'Low', 'High', 'Max'])
+    expect(rungs().map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'true', 'false'])
+    expect(rungs()[0]!.title).toBe('gui.agent.effort_default')
+    /* The rung already on is no write. */
+    await click(rungs()[2])
+    await click(rungs()[3])
+    await click(rungs()[0])
+    expect(acts).toEqual([
+      ['effort', 'claude_code', { effort: 'max' }],
+      ['effort', 'claude_code', { clear_effort: true }],
+    ])
+  })
+
+  it('keeps the select for a ladder with more rungs than one row holds', async () => {
+    install([
+      row({
+        model_source: 'agent',
+        model_choices: choices,
+        effort_choices: ['minimal', 'low', 'medium', 'high', 'xhigh'].map((value) => ({ value, name: value })),
+      }),
+    ])
+    await mount()
+    await openSheet('claude_code')
+    expect(sheet()!.querySelector('.extAgents-rungs')).toBeNull()
+    expect([...sheet()!.querySelector<HTMLSelectElement>('.extAgents-effort')!.options].map((o) => o.value)).toEqual([
+      '',
+      'minimal',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
     ])
   })
 
@@ -2419,7 +2504,7 @@ describe('the model pill', () => {
     const { acts } = install([builtin()])
     await mount()
     await openSheet('Raven')
-    expect(pill()!.textContent).toBe('gui.agent.model_follow⌄')
+    expect(pill()!.textContent).toBe('gui.agent.model_follow')
     await click(pill())
     expect(picker()!.textContent).toContain('OpenRouter')
     expect(picker()!.textContent).not.toContain('Not connected')
@@ -2496,7 +2581,7 @@ describe('the model pill', () => {
     ])
     await mount()
     await openSheet('Raven-Code')
-    expect(pill()!.textContent).toBe('gui.agent.model_follow⌄')
+    expect(pill()!.textContent).toBe('gui.agent.model_follow')
     expect(pill()!.disabled).toBe(false)
     await click(pill())
     expect(picker()!.textContent).toContain('OpenRouter')
@@ -2616,8 +2701,9 @@ describe('the model pill', () => {
     const { acts } = install([row({ name: 'Raven-Code', preset: undefined, kind: 'acp', vendored: true, configured: false, own: true })])
     await mount()
     await openSheet('Raven-Code')
-    expect(sheetActs()).toEqual(['gui.agent.disconnect', 'gui.agent.test_label'])
-    await click(sheet()!.querySelectorAll('.extAgents-act button')[1])
+    expect(sheetActs()).toEqual(['gui.agent.test_label'])
+    expect(sheetOut()).not.toBeNull()
+    await click(sheet()!.querySelector('.extAgents-act button'))
     expect(acts.map((a) => a.slice(0, 2))).toEqual([['test', 'Raven-Code']])
   })
 
@@ -2630,7 +2716,7 @@ describe('the model pill', () => {
     const { acts } = install([row({ name: 'Raven-Code', preset: undefined, kind: 'acp', vendored: true, configured: false, own: true })])
     await mount()
     await openSheet('Raven-Code')
-    await click([...sheet()!.querySelectorAll<HTMLElement>('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.disconnect'))
+    await click(sheetOut())
     expect(acts).toEqual([['toggle', 'Raven-Code', { enabled: false }]])
     await click([...sheet()!.querySelectorAll<HTMLElement>('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
     expect(acts.at(-1)).toEqual(['toggle', 'Raven-Code', { enabled: true }])

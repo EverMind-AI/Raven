@@ -244,9 +244,10 @@
 
 /* ── the sheet ──────────────────────────────────────────────────── */
 
-/* The panel is the owner's fixed 520x500 box (page.css sizes `.dpanel` off
-   `data-owner`), whatever the body holds: a note at the top scrolls with the
-   body. The sheet fills it, and spends the padding itself. */
+/* The panel is the owner's 520px box (page.css sizes `.dpanel` off
+   `data-owner`): 500px tall for the machine sheets and the family picker, as
+   tall as its content for an agent's own sheet. What does not fit scrolls
+   with the body. The sheet fills it, and spends the padding itself. */
 .extAgents-sheet { width: 100%; flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .extAgents-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 20px 48px 0 20px; }
 .extAgents-head .extAgents-tile .agent-mark { width: 46px; height: 46px; border-radius: 12px; }
@@ -360,6 +361,109 @@
    is the window less a gutter; wrapped, the primary keeps the last row's right
    end. */
 .extAgents-act { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 9px; padding: 14px 20px 18px; border-top: 1px solid var(--line-soft); }
+
+/* ── the agent's sheet: a settings list ─────────────────────────────
+
+   Framed groups on a ground a shade off the paper, so the groups -- white,
+   like every field -- read as the things to touch. Reading and typing
+   surfaces stay neutral; colour is spent on the state alone. The machine
+   sheets and the family picker share the drawer and keep the plain ground
+   and the action bar above. */
+.extAgents-sheet-agent { background: color-mix(in srgb, var(--text) 3.2%, var(--ink)); }
+.extAgents-maker { font-size: 12px; color: var(--faint); margin-top: 2px; }
+.extAgents-sheet-agent .extAgents-body { display: flex; flex-direction: column; gap: 16px; padding: 18px 20px 20px; }
+/* The column's gap is the spacing; the margins the fields carry for the
+   other sheets would add to it. */
+.extAgents-sheet-agent .extAgents-body > *,
+.extAgents-sheet-agent .extAgents-body > .extAgents-about + .extAgents-fld { margin-top: 0; margin-bottom: 0; }
+
+/* The status strip: the state, how the last test went, and the presses that
+   change it. Tinted by the state; the note takes its place when there is
+   something to explain, and wears the same frame. */
+.extAgents-stat {
+  display: flex; align-items: center; gap: 12px; padding: 10px 10px 10px 14px; min-height: 52px; box-sizing: border-box;
+  background: var(--paper); border: 1px solid var(--line-soft); border-radius: 12px;
+}
+.extAgents-stat-good { background: color-mix(in oklab, var(--moss) 7%, var(--paper)); border-color: color-mix(in oklab, var(--moss) 18%, var(--line-soft)); }
+.extAgents-stat-busy, .extAgents-stat-warn { background: color-mix(in oklab, var(--amber) 6%, var(--paper)); border-color: color-mix(in oklab, var(--amber) 22%, var(--line-soft)); }
+.extAgents-stat-bad { background: color-mix(in oklab, var(--clay) 5%, var(--paper)); border-color: color-mix(in oklab, var(--clay) 22%, var(--line)); }
+.extAgents-say { flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px; }
+.extAgents-say .extAgents-led { width: 8px; height: 8px; }
+.extAgents-say .extAgents-spin { margin-right: 0; }
+.extAgents-stat-good .extAgents-led { box-shadow: 0 0 0 3px color-mix(in oklab, var(--moss) 16%, transparent); }
+.extAgents-led-none { background: var(--faint); }
+.extAgents-say-t { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.extAgents-say-t b { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+/* The state's word in its colour, darkened toward the ink where the colour
+   alone is under 4.5:1 on its own tint. */
+.extAgents-stat-good .extAgents-say-t b { color: color-mix(in oklab, var(--moss) 80%, var(--text)); }
+.extAgents-stat-warn .extAgents-say-t b { color: var(--gold); }
+.extAgents-stat-bad .extAgents-say-t b { color: var(--clay); }
+.extAgents-say-when { font-size: 11.5px; color: var(--faint); }
+/* The presses ride inside the strip, not in a bar under the sheet. */
+.extAgents-sheet-agent .extAgents-stat .extAgents-act,
+.extAgents-sheet-agent .extAgents-note .extAgents-act { padding: 0; border-top: 0; flex-wrap: wrap; }
+.extAgents-sheet-agent .extAgents-note .extAgents-act { justify-content: flex-start; margin-top: 12px; }
+.extAgents-sheet-agent .extAgents-act .mini:not(.go):not(:disabled) { background: var(--paper); }
+.extAgents-sheet-agent .extAgents-note { border-radius: 12px; }
+/* The note's title leads with the state's dot, as the strip it stands in for does. */
+.extAgents-sheet-agent .extAgents-note-t::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+/* page.css sets every fold in tracked mono capitals; inside a note written in
+   sentence case that read as a second voice. */
+.extAgents-sheet-agent .extAgents-note-raw summary { font: 12px/1.5 var(--sans); letter-spacing: 0; text-transform: none; }
+
+/* What it is good at: a white box as tall as its text, with a line under it
+   saying who reads it. */
+.extAgents-sheet-agent .extAgents-fld > textarea {
+  height: auto; max-height: 168px; padding: 10px 13px; border-color: var(--line-soft); border-radius: 12px;
+  font-size: 13px; line-height: 1.6;
+}
+.extAgents-sheet-agent .extAgents-ro { background: var(--paper); border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px 13px; font-size: 13px; line-height: 1.6; }
+.extAgents-sheet-agent .extAgents-k { margin-left: 2px; }
+.extAgents-hint { display: block; margin: 6px 0 0 2px; font-size: 11.5px; line-height: 1.5; color: var(--faint); }
+
+/* How it runs: one group, one row per setting, the label at the left and the
+   control taking the rest. The model pill has no frame of its own here -- the
+   group is the frame -- and shows one under the pointer and while open. */
+.extAgents-grp { background: var(--paper); border: 1px solid var(--line-soft); border-radius: 12px; }
+.extAgents-grp:empty { display: none; }
+.extAgents-grp > .extAgents-fld {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0;
+  min-height: 50px; padding: 7px 8px 7px 14px; box-sizing: border-box;
+}
+.extAgents-grp > .extAgents-fld + .extAgents-fld { margin-top: 0; border-top: 1px solid var(--line-soft); }
+.extAgents-grp > .extAgents-fld > .extAgents-k { flex: none; width: 76px; margin: 0; font-size: 13px; color: var(--text); }
+.extAgents-grp .extAgents-pill { flex: 1; width: auto; min-width: 0; border-color: transparent; background: none; }
+.extAgents-grp .extAgents-pill:hover { border-color: transparent; background: color-mix(in srgb, var(--text) 4%, transparent); }
+.extAgents-grp .extAgents-mx { background: none; }
+.extAgents-grp > .extAgents-fld > .extAgents-in, .extAgents-grp .extAgents-fld .keyfield { flex: 1; width: auto; min-width: 0; }
+/* What sits under a control lines up with the control, past the label. */
+.extAgents-grp .extAgents-mnote, .extAgents-grp > .extAgents-fld > .extAgents-about { flex-basis: 100%; margin: 0 0 4px 88px; }
+.extAgents-mch svg {
+  display: block; width: 12px; height: 12px; margin: 0 auto;
+  fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* Effort as its rungs, where they fit (`rungsOf`): the pick is visible
+   without opening anything, and one press changes it. A neutral well, not
+   the register form's warm one: it sits in a white settings group. */
+/* Two classes: `.extAgents-seg` comes later in this sheet and would otherwise
+   put its warm ground and its frame back. */
+.extAgents-seg.extAgents-rungs { flex: 1; min-width: 0; height: 34px; background: color-mix(in srgb, var(--text) 5%, var(--ink)); border-color: transparent; }
+.extAgents-rungs button { flex: 1; min-width: 0; padding: 0 6px; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; }
+.extAgents-rungs button:hover:not(:disabled) { color: var(--text); }
+.extAgents-rungs button:disabled { cursor: default; opacity: .55; }
+.extAgents-rungs button:focus-visible { outline: 2px solid var(--warm); outline-offset: -2px; }
+
+/* Taking the agent off the roster: its own row at the foot of the list,
+   apart from the presses that keep it working. */
+.extAgents-out {
+  display: flex; align-items: center; width: 100%; height: 44px; padding: 0 14px; box-sizing: border-box;
+  background: var(--paper); border: 1px solid var(--line-soft); border-radius: 12px;
+  font: inherit; font-size: 13px; color: var(--clay); text-align: left; cursor: pointer;
+}
+.extAgents-out:hover { background: color-mix(in oklab, var(--clay) 6%, var(--paper)); }
+.extAgents-out:focus-visible { outline: 2px solid var(--warm); outline-offset: 1px; }
 
 /* ── the model pill ─────────────────────────────────────────────── */
 

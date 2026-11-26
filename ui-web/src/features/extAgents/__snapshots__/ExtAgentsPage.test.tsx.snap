@@ -82,20 +82,27 @@ div.extAgents-grid
 
 exports[`the sheet > keeps its rendered shape, sheet 1`] = `
 "div
-  div.extAgents-sheet
+  div.extAgents-sheet.extAgents-sheet-agent
     div.extAgents-head
       span.extAgents-tile
         span.agent-mark
           img[data-agent=claude_code]
       div.extAgents-meta
         h3
-        div.extAgents-by
-          span.extAgents-led
+        div.extAgents-maker
     div.extAgents-body
+      div.extAgents-stat.extAgents-stat-good
+        div.extAgents-say
+          span.extAgents-led
+          span.extAgents-say-t
+            b
+            span.extAgents-say-when
+        div.extAgents-act
+          button.mini
       label.extAgents-fld
         span.extAgents-k
         textarea
-    div.extAgents-act
-      button.mini.danger
-      button.mini"
+        span.extAgents-hint
+      div.extAgents-grp
+      button.extAgents-out"
 `;

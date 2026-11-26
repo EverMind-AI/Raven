@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
@@ -20,7 +20,7 @@ import { gridEntries, hasEntry, sectionOf, stageOf } from './source'
 import * as store from './store'
 
 import type { PickerProvider } from '../../components/ModelPicker'
-import type { Shown } from './health'
+import type { Shown, Tone } from './health'
 import type { GridEntry, Section } from './source'
 import type { ExtAgentsState } from './store'
 import type { ExtAgentRow, Remedy } from './types'
@@ -70,7 +70,16 @@ const canTest = (row: ExtAgentRow): boolean => !row.builtin
    drawn as text rather than as a field that will not take typing. */
 function GoodAt({ row, saved, readOnly }: { row: ExtAgentRow; saved: string; readOnly: boolean }): JSX.Element {
   const [draft, setDraft] = useState(saved)
+  const box = useRef<HTMLTextAreaElement>(null)
   useEffect(() => setDraft(saved), [saved])
+  /* As tall as its text, up to the stylesheet's ceiling: a one-line
+     description in a fixed five-line box read as a form left empty. */
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`
+  }, [draft])
   const commit = (): void => {
     const next = draft.trim()
     if (!next) {
@@ -94,8 +103,11 @@ function GoodAt({ row, saved, readOnly }: { row: ExtAgentRow; saved: string; rea
         aria-label={t('gui.agent.good_at')}
         onBlur={commit}
         onChange={(e) => setDraft(e.target.value)}
+        ref={box}
+        rows={1}
         value={draft}
       />
+      <span className="extAgents-hint">{t('gui.agent.good_at_hint', { agent: row.name })}</span>
     </label>
   )
 }
@@ -251,6 +263,38 @@ function RefreshGlyph(): JSX.Element {
   )
 }
 
+/* The pill's chevron. Drawn rather than typed: the down-caret character sits
+   on the text's baseline, so it drew below the middle of every pill. */
+function ChevronGlyph(): JSX.Element {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M6 9.5l6 6 6-6" />
+    </svg>
+  )
+}
+
+/* The effort ladder as one segmented control, or null where it would not read
+   as one: more rungs than fit a line beside the label, a rung long enough to
+   be cut, a rung the agent itself calls "default" (it would stand beside the
+   segment that clears to the agent's own default under the same word), or a
+   stored rung the menu no longer offers, which only the select can still
+   draw. The select carries every one of those. */
+const RUNGS_MAX = 4
+const RUNG_CHARS = 12
+
+function rungsOf(row: ExtAgentRow): Array<{ value: string; label: string; title: string }> | null {
+  const choices = (row.effort_choices || []).map((c) => ({ value: c.value, label: c.name || c.value, title: c.name || c.value }))
+  const own = t('gui.agent.effort_default_short')
+  if (choices.length > RUNGS_MAX) return null
+  if (row.effort && !choices.some((c) => c.value === row.effort)) return null
+  const clash = (word: string): boolean => {
+    const w = word.trim().toLowerCase()
+    return w === 'default' || w === own.toLowerCase()
+  }
+  if (choices.some((c) => c.label.length > RUNG_CHARS || clash(c.label) || clash(c.value))) return null
+  return [{ value: '', label: own, title: t('gui.agent.effort_default') }, ...choices]
+}
+
 /* The model a row answers with, and the picker that changes it. Unset reads by
    ownership: one of Raven's own follows the main Raven, a third party runs on
    its own default. A row with no menu wears the pill disabled: an openai or
@@ -269,15 +313,18 @@ function ModelPill({
   busy,
   held,
   s,
+  testing,
 }: {
   row: ExtAgentRow
   busy: boolean
   held?: string
   s: ExtAgentsState
+  testing: boolean
 }): JSX.Element | null {
   const pill = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
   const refreshFailed = s.menusFailed[row.name] || ''
+  const refreshing = s.menusBusy.includes(row.name)
   if (!row.model_source) return null
   const own = isOwnRow(row)
   const provs = pickerProvidersFor(row)
@@ -294,6 +341,7 @@ function ModelPill({
      chat credential runs on that key and the model beside it, so "follows the
      main Raven" was the one thing it does not do. */
   const unset = own && !fixed ? 'gui.agent.model_follow' : menuless ? 'gui.agent.model_managed' : 'gui.agent.model_own_default'
+  const rungs = rungsOf(row)
   const cls = [
     'extAgents-pill',
     menuless ? 'extAgents-pill-fixed' : busy ? 'extAgents-pill-busy' : '',
@@ -336,7 +384,11 @@ function ModelPill({
           ) : (
             <span className="extAgents-mid">{t(unset)}</span>
           )}
-          {menuless ? null : <span className="extAgents-mch">{'⌄'}</span>}
+          {menuless ? null : (
+            <span className="extAgents-mch">
+              <ChevronGlyph />
+            </span>
+          )}
         </button>
         {shown ? (
           <button
@@ -353,6 +405,22 @@ function ModelPill({
           </button>
         ) : null}
       </span>
+      {/* The re-read sits on the row it re-reads: an acp agent's menu can
+          move while its row stays the same, and a reader who came to change
+          the model should be able to read it again without opening the picker
+          first. Only for a row whose model is the agent's own menu. */}
+      {row.model_source === 'agent' ? (
+        <button
+          aria-label={t('gui.agent.model_refresh')}
+          className="extAgents-mrf"
+          disabled={refreshing || !!s.joining[row.name] || testing}
+          onClick={() => void store.refreshMenus(row, { force: true })}
+          title={t('gui.agent.model_refresh')}
+          type="button"
+        >
+          {refreshing ? <Spin /> : <RefreshGlyph />}
+        </button>
+      ) : null}
       {refreshFailed ? <div className="extAgents-mnote">{t('gui.agent.model_refresh_failed', { detail: refreshFailed })}</div> : null}
       {open ? (
         <ModelPicker
@@ -377,7 +445,29 @@ function ModelPill({
       {/* A preset has no row to write an effort to until Connect adds it. The
           model can ride that add (the family drawer's pick); effort cannot, so
           the field appears on the card the add writes, not on the preset. */}
-      {row.effort_choices?.length && !pending ? (
+      {row.effort_choices?.length && !pending && rungs ? (
+        <div className="extAgents-fld">
+          <span className="extAgents-k">{t('gui.agent.effort_label')}</span>
+          <div aria-label={t('gui.agent.effort_label')} className="extAgents-seg extAgents-rungs" role="group">
+            {rungs.map((r) => (
+              <button
+                aria-pressed={(row.effort || '') === r.value}
+                disabled={busy}
+                key={r.value || '-'}
+                onClick={() => {
+                  if ((row.effort || '') === r.value) return
+                  if (r.value) void store.setEffort(row, r.value)
+                  else void store.clearEffort(row)
+                }}
+                title={r.title}
+                type="button"
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : row.effort_choices?.length && !pending ? (
         <label className="extAgents-fld">
           <span className="extAgents-k">{t('gui.agent.effort_label')}</span>
           <select
@@ -568,7 +658,21 @@ function noteOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown, press: string
   return { ...warn, ask: askFor('gui.agent.ask_check', agent, warn, signIn) }
 }
 
-function Note({ title, when, lead, command, then, note, raw, folded, warn, ask }: NoteSpec): JSX.Element {
+/* `actions` are the presses that answer the note -- Test again, Retry -- drawn
+   at its foot, since in the sheet the note is the status strip itself. */
+function Note({
+  title,
+  when,
+  lead,
+  command,
+  then,
+  note,
+  raw,
+  folded,
+  warn,
+  ask,
+  actions,
+}: NoteSpec & { actions?: JSX.Element | null }): JSX.Element {
   return (
     <div className={warn ? 'extAgents-note extAgents-note-warn' : 'extAgents-note'}>
       <div className="extAgents-note-h">
@@ -606,64 +710,82 @@ function Note({ title, when, lead, command, then, note, raw, folded, warn, ask }
       ) : (
         <pre className="extAgents-note-said">{raw}</pre>
       )}
+      {actions ? <div className="extAgents-act">{actions}</div> : null}
     </div>
   )
 }
 
-/* One line under the name in the sheet: `healthOf`'s verdict, drawn with the
-   room a sheet has -- a refusal with its fix, a caveat with the probe's own
-   words folded under it -- or who makes the agent when there is nothing to say
-   about it. */
-function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtAgentsState }): JSX.Element {
-  const by = byOf(row)
-  const health = healthOf(row, s)
-  const led = <span aria-hidden="true" className={ledClass(health.tone)} />
-  if (health.tone === 'busy') {
-    return (
-      <div className="extAgents-by">
-        <Spin />
-        {health.label}
+/* The strip at the top of the sheet: the agent's state in a word, under it
+   how the last test went, and beside it the presses that change the state --
+   Test where it is connected, Connect where it is not. Test sits with the
+   state because a test is how that state is measured. Where there is
+   something to explain -- a refusal with its fix, a failed test, a caveat --
+   the note takes the strip's place and carries the same presses at its foot,
+   so the why and the press that answers it are one block.
+
+   The words come from `healthOf`, as the card's dot does, except while a write
+   is in flight: the press then wears the write's own word ("Testing"), so the
+   strip keeps the state the row is in rather than saying it twice. */
+function StatusStrip({
+  row,
+  shown,
+  s,
+  note,
+  actions,
+}: {
+  row: ExtAgentRow
+  shown: Shown
+  s: ExtAgentsState
+  note: NoteSpec | null
+  actions: JSX.Element | null
+}): JSX.Element {
+  if (note) return <Note {...note} actions={actions} />
+  const say = sayOf(row, shown, s)
+  /* `ledClass` draws no dot for `none`; the strip still wants one, in grey. */
+  const led = say.tone === 'none' ? 'extAgents-led extAgents-led-none' : ledClass(say.tone)
+  return (
+    <div className={`extAgents-stat extAgents-stat-${say.tone}`}>
+      <div className="extAgents-say">
+        {say.spin ? <Spin /> : <span aria-hidden="true" className={led} />}
+        <span className="extAgents-say-t">
+          <b>{say.word}</b>
+          {say.when ? <span className="extAgents-say-when">{say.when}</span> : null}
+        </span>
       </div>
-    )
-  }
-  /* The head says only which state: the why and the how are the block at the
-     top of the body (`noteOf`). */
-  if (health.from === 'write') {
-    const failed = s.failed[row.name]
-    return (
-      <div className="extAgents-by extAgents-by-bad">
-        {led}
-        {[failed ? refusedLabel(failed) : t('gui.agent.st_connect_bad'), by].filter(Boolean).join(' · ')}
-      </div>
-    )
-  }
-  if (health.from === 'test') {
-    return (
-      <div className="extAgents-by extAgents-by-bad">
-        {led}
-        {shown === 'on' ? t('gui.agent.hd_on_test_bad') : [t('gui.agent.st_test_bad'), by].filter(Boolean).join(' · ')}
-      </div>
-    )
-  }
-  /* A caveat reads as one line here, like every other state; what the check
-     found, and its own words, are the note at the top of the body. */
-  if (health.tone === 'warn' || health.tone === 'good') {
-    return (
-      <div className="extAgents-by">
-        {led}
-        {health.label}
-      </div>
-    )
-  }
-  if (shown === 'missing') return <div className="extAgents-by">{t('gui.agent.hd_missing_by', { by })}</div>
-  return <div className="extAgents-by">{by}</div>
+      {actions ? <div className="extAgents-act">{actions}</div> : null}
+    </div>
+  )
 }
 
-/* The sheet: identity and this moment's status, the fields the reader owns,
-   and the actions the state calls for -- right-aligned, primary rightmost,
-   the destructive one left of it. Every change lands as it is made, so there
-   is no Save. The shared drawer's own close control floats at the top right;
-   the head leaves it room. */
+function sayOf(row: ExtAgentRow, shown: Shown, s: ExtAgentsState): { tone: Tone; word: string; when: string; spin: boolean } {
+  const testing = s.testing.includes(row.name) || row.test_running
+  if (testing) return { tone: 'busy', word: t('gui.agent.testing_head'), when: '', spin: true }
+  const on = sectionOf(row) === 'on'
+  if (shown === 'pending') return { tone: 'busy', word: t(on ? 'gui.agent.g_on' : 'gui.agent.st_off'), when: '', spin: false }
+  const health = healthOf(row, s)
+  /* A failure or a caveat with no note to carry it -- Raven's own loop, which
+     is never tested -- still says what it is. */
+  if (health.tone === 'bad' || health.tone === 'warn') return { tone: health.tone, word: health.label, when: '', spin: false }
+  if (shown === 'missing') return { tone: 'none', word: t('gui.agent.not_installed'), when: '', spin: false }
+  if (on) {
+    const when =
+      row.last_test_ok && row.last_test_at_ms
+        ? t('gui.agent.st_tested_ago', { ago: ago(row.last_test_at_ms) })
+        : canTest(row) && row.last_test_ok == null
+          ? t('gui.agent.test_never')
+          : ''
+    return { tone: 'good', word: t('gui.agent.g_on'), when, spin: false }
+  }
+  if (stageOf(row) === 'unauthorized') return { tone: 'warn', word: t('gui.agent.unauthorized'), when: '', spin: false }
+  return { tone: 'none', word: t('gui.agent.st_off'), when: '', spin: false }
+}
+
+/* The sheet, drawn as a settings list: who the agent is, a strip with its
+   state and the presses that change it, then the fields the reader owns in
+   framed groups -- what it is good at, and how it runs -- and at the foot,
+   on a row of its own, the one press that takes it off the roster. Every
+   change lands as it is made, so there is no Save. The shared drawer's own
+   close control floats at the top right; the head leaves it room. */
 function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Element {
   const dHost = store.detailHost()
   const ms = useSyncExternalStore(machines.subscribe, machines.get)
@@ -740,30 +862,26 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
             the reader connected, does not keep one on: the reader can still want
             it out of the dispatching model's reach, and a shipped folder is
             switched off by a row the server writes for it, like any other. */}
-        <button className="mini danger" onClick={() => store.disconnectRow(row)}>
-          {t('gui.agent.disconnect')}
-        </button>
         {canTest(row) && testing ? (
           <button className="mini danger" onClick={() => store.stopTest(row)}>
             <Spin />
             {t('gui.stop')}
           </button>
         ) : canTest(row) ? (
-          <button className="mini" onClick={() => void store.runTest(row)}>
+          /* After a failed test, testing again is the press the note asks for,
+             so it is the primary; on a passing row it is a check, not a call. */
+          <button className={row.last_test_ok === false ? 'mini go' : 'mini'} onClick={() => void store.runTest(row)}>
             {t(row.last_test_ok === false ? 'gui.agent.test_again' : 'gui.agent.test_label')}
           </button>
         ) : null}
       </>
     )
   } else if (stage === 'unauthorized' && shown === 'off') {
-    /* The same sentence the row carries, and beside it the one press that
-       can take it back: Test re-measures the handshake, and a sign-in that
-       has happened since lets the row return to Connect. */
+    /* The strip says the row needs a sign-in; the one press that can take it
+       back is Test, which re-measures the handshake, and a sign-in that has
+       happened since lets the row return to Connect. */
     actions = (
       <>
-        <button className="mini" disabled>
-          {t('gui.agent.unauthorized')}
-        </button>
         {testing ? (
           <button className="mini danger" onClick={() => store.stopTest(row)}>
             <Spin />
@@ -785,34 +903,19 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
     )
   }
 
+  const by = byOf(row)
+  const strip = <StatusStrip actions={actions} note={note} row={row} s={lineState} shown={shownOf(row, lineState)} />
   return createPortal(
-    <div className="extAgents-sheet" aria-label={row.name} role="document">
+    <div className="extAgents-sheet extAgents-sheet-agent" aria-label={row.name} role="document">
       <div className="extAgents-head">
         <Tile row={row} />
         <div className="extAgents-meta">
           <h3>{row.name}</h3>
-          <StatusLine row={row} s={lineState} shown={shownOf(row, lineState)} />
+          {by ? <div className="extAgents-maker">{by}</div> : null}
         </div>
-        {/* The card's own action, at the corner where a card keeps one: an acp
-            agent's menu can move while its row stays the same, and a reader who
-            came to this card to change the model should be able to read it
-            again without opening the picker first. Hidden for a missing agent
-            -- there is nothing to handshake -- and for every row whose model is
-            not the agent's own menu. */}
-        {row.model_source === 'agent' && shown !== 'missing' ? (
-          <button
-            aria-label={t('gui.agent.model_refresh')}
-            className="extAgents-mrf"
-            disabled={s.menusBusy.includes(row.name) || !!s.joining[row.name] || testing}
-            onClick={() => void store.refreshMenus(row, { force: true })}
-            title={t('gui.agent.model_refresh')}
-            type="button"
-          >
-            {s.menusBusy.includes(row.name) ? <Spin /> : <RefreshGlyph />}
-          </button>
-        ) : null}
       </div>
       <div className="extAgents-body">
+        {strip}
         {shown === 'missing' ? (
           <>
             {row.description ? <div className="extAgents-about">{row.description}</div> : null}
@@ -829,7 +932,6 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
           </>
         ) : (
           <>
-            {note ? <Note {...note} /> : null}
             {pictureBlocked ? (
               <div className="extAgents-probe extAgents-probe-bad">{t('gui.agent.route_no_picture')}</div>
             ) : null}
@@ -838,30 +940,46 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
               row={row}
               saved={(!row.configured && !row.vendored && store.draftOf(row.name)) || row.description || ''}
             />
-            <ModelPill busy={shown === 'pending'} held={s.picked[row.name]} row={asAsked(row, s)} s={s} />
-            {/* Only a preset not yet on the roster picks where it runs -- at
-                the add stage, or at the key stage an openai preset waits in
-                until its key is typed: the machine is written with the add,
-                and a row that exists has its machine on its card. */}
-            {!row.configured && !row.builtin && !row.vendored ? <WhereField ms={ms} row={row} /> : null}
-            {keyField ? (
-              <label className="extAgents-fld">
-                <span className="extAgents-k">{t('gui.agent.key')}</span>
-                <KeyInput
-                  aria-label={t('gui.agent.key')}
-                  onChange={(e) => setKeyTyped(!!e.target.value.trim())}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && keyTyped && !primaryDisabled) saveKey()
-                  }}
-                  placeholder={row.has_api_key ? t('gui.agent.key_set') : ''}
-                  ref={keyRef}
-                />
-              </label>
+            {/* How it runs, one row per setting. Empty -- a server that
+                predates the model field, on a row with nothing else to set --
+                the group draws nothing (`:empty` in the sheet). */}
+            <div className="extAgents-grp">
+              <ModelPill busy={shown === 'pending'} held={s.picked[row.name]} row={asAsked(row, s)} s={s} testing={testing} />
+              {/* Only a preset not yet on the roster picks where it runs -- at
+                  the add stage, or at the key stage an openai preset waits in
+                  until its key is typed: the machine is written with the add,
+                  and a row that exists has its machine on its card. */}
+              {!row.configured && !row.builtin && !row.vendored ? <WhereField ms={ms} row={row} /> : null}
+              {keyField ? (
+                <label className="extAgents-fld">
+                  <span className="extAgents-k">{t('gui.agent.key')}</span>
+                  <KeyInput
+                    aria-label={t('gui.agent.key')}
+                    onChange={(e) => setKeyTyped(!!e.target.value.trim())}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && keyTyped && !primaryDisabled) saveKey()
+                    }}
+                    placeholder={row.has_api_key ? t('gui.agent.key_set') : ''}
+                    ref={keyRef}
+                  />
+                </label>
+              ) : null}
+            </div>
+            {/* Every agent but the built-in loop can leave the roster, Raven's
+                own specialists included. Coming with Raven, rather than being
+                something the reader connected, does not keep one on: the reader
+                can still want it out of the dispatching model's reach, and a
+                shipped folder is switched off by a row the server writes for
+                it, like any other. Its own row, apart from the presses that
+                keep the agent working. */}
+            {shown === 'on' && !row.builtin ? (
+              <button className="extAgents-out" onClick={() => store.disconnectRow(row)} type="button">
+                {t('gui.agent.disconnect')}
+              </button>
             ) : null}
           </>
         )}
       </div>
-      <div className="extAgents-act">{actions}</div>
     </div>,
     dHost,
   )
@@ -954,7 +1072,11 @@ function PickRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Eleme
                 <span className="extAgents-mid">
                   {shown ? shown.id : t(menuless ? 'gui.agent.model_managed' : 'gui.agent.model_own_default')}
                 </span>
-                {menuless ? null : <span className="extAgents-mch">{'⌄'}</span>}
+                {menuless ? null : (
+                  <span className="extAgents-mch">
+                    <ChevronGlyph />
+                  </span>
+                )}
               </button>
             </span>
             {row.model_source === 'agent' ? (
