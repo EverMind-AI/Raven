@@ -331,6 +331,32 @@ def set_channel_fields(
     return _patch_channel(name, dict(fields), config_path)
 
 
+def channel_field_values(
+    name: str,
+    *,
+    raw_section: dict[str, Any] | None = None,
+    config_path: Path | None = None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """``(field specs, effective values)`` for every declared channel field.
+
+    The read every caller must share, one schema discovery for both: the file
+    spells field keys camelCase while declarations speak snake_case, so the
+    section is normalized against the declaration before values materialize
+    over its defaults -- a snake_case-only lookup misses everything a writer
+    stored. ``raw_section`` spares a caller that just loaded the config a
+    second file read; without it the section comes from ``config_path``, or
+    from the default config file.
+    """
+    from raven.config.admission import normalize_slice_keys
+
+    declaration = _channel_schema(name)
+    if raw_section is None:
+        data = read_raw_or_raise(config_path or get_config_path())
+        raw_section = (data.get("channels") or {}).get(name) or {}
+    values = _materialize(declaration, normalize_slice_keys(declaration, raw_section))
+    return _flatten_schema(declaration), _flatten_values(declaration, values)
+
+
 def get_channel_config(
     name: str,
     *,
@@ -344,16 +370,10 @@ def get_channel_config(
     - non-empty value renders as ``'****set****'``
     - empty / None renders as ``'(empty)'``
     """
-    from raven.config.admission import normalize_slice_keys
-
-    declaration = _channel_schema(name)
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
-    raw_section = (data.get("channels") or {}).get(name) or {}
-    values = _materialize(declaration, normalize_slice_keys(declaration, raw_section))
+    specs, flat = channel_field_values(name, raw_section=(data.get("channels") or {}).get(name) or {})
 
-    specs = _flatten_schema(declaration)
-    flat = _flatten_values(declaration, values)
     out: dict[str, Any] = {}
     for path_key, spec in specs.items():
         val = flat.get(path_key)
@@ -438,6 +458,7 @@ def _patch_channel(
 __all__ = [
     "channel_names",
     "channel_field_specs",
+    "channel_field_values",
     "coerce_field_value",
     "enable_channel",
     "disable_channel",

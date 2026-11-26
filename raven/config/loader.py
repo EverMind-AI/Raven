@@ -466,24 +466,26 @@ def _persist_migrations(path: Path, from_version: int = 0, *, refresh_interprete
 # The raw channel sections, exactly as the file spells them (sparse: only what
 # the user set). The delivery path reads cargo from here through the admission
 # door, so declared defaults -- not the central model's -- own an absent key.
-# Keyed per load; a malformed section yields an empty slice and a warning
-# rather than taking the load down (the socket half still validates).
-_channel_slices: dict[str, dict] = {}
+# Keyed by config path, so loads of different files never clobber each other;
+# a malformed section yields an empty slice and a warning rather than taking
+# the load down (the socket half still validates).
+_channel_slices: dict[str, dict[str, dict]] = {}
 
 
 def channel_cargo_slice(name: str) -> dict:
     """The sparse, file-true cargo slice for one channel (empty when unset)."""
-    return dict(_channel_slices.get(name, {}))
+    return dict(_channel_slices.get(str(get_config_path()), {}).get(name, {}))
 
 
-def _stash_channel_slices(data: dict) -> None:
-    _channel_slices.clear()
+def _stash_channel_slices(data: dict, path: Path) -> None:
+    entry = _channel_slices.setdefault(str(path), {})
+    entry.clear()
     channels = data.get("channels")
     if not isinstance(channels, dict):
         return
     for name, section in channels.items():
         if isinstance(section, dict):
-            _channel_slices[name] = dict(section)
+            entry[name] = dict(section)
         elif name not in _CHANNELS_SECTION_FIELDS:
             logging.getLogger(__name__).warning("channels.%s is not a table; its cargo reads as unset", name)
 
@@ -515,6 +517,11 @@ def load_config(config_path: Path | None = None) -> Config:
     """
     path = config_path or get_config_path()
 
+    # A load that boots on defaults drops only its own path's cargo slices:
+    # stale cargo must not stay authoritative for a defaults model, and a
+    # failed probe of an unrelated path (secret scanning walks candidate
+    # configs) must not wipe this file's slices either.
+    _channel_slices.pop(str(path), None)
     config: Config | None = None
     if path.exists():
         try:
@@ -536,7 +543,7 @@ def load_config(config_path: Path | None = None) -> Config:
             # range is repaired here and rewritten by the persist call below.
             tail_repaired = _repair_compaction_tail_ratio(data, notify=True)
             data = _migrate_config(data, from_version=from_version, config_path=path)
-            _stash_channel_slices(data)
+            _stash_channel_slices(data, path)
         except json.JSONDecodeError as e:
             # Boot on defaults for a malformed file (a transient mid-write race
             # shouldn't brick callers) but warn LOUDLY -- a persistent syntax

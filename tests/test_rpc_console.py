@@ -1673,14 +1673,14 @@ async def test_a_channel_whose_field_read_fails_is_not_drawn_as_configured(
     """
     from raven.config import update_channels
 
-    existed = update_channels.channel_field_specs
+    existed = update_channels.channel_field_values
 
-    def refuse(name: str):
+    def refuse(name: str, **kwargs):
         if name == "telegram":
             raise RuntimeError("this channel's schema cannot be flattened")
-        return existed(name)
+        return existed(name, **kwargs)
 
-    monkeypatch.setattr(update_channels, "channel_field_specs", refuse)
+    monkeypatch.setattr(update_channels, "channel_field_values", refuse)
 
     r = await console_module.channels_status({})
 
@@ -1701,14 +1701,14 @@ async def test_a_failed_field_read_replaces_the_row_rather_than_adding_one(
     """
     from raven.config import update_channels
 
-    existed = update_channels.channel_field_specs
+    existed = update_channels.channel_field_values
 
-    def refuse(name: str):
+    def refuse(name: str, **kwargs):
         if name == "telegram":
             raise RuntimeError("this channel's schema cannot be flattened")
-        return existed(name)
+        return existed(name, **kwargs)
 
-    monkeypatch.setattr(update_channels, "channel_field_specs", refuse)
+    monkeypatch.setattr(update_channels, "channel_field_values", refuse)
 
     r = await console_module.channels_status({})
 
@@ -1731,14 +1731,14 @@ async def test_a_failed_field_read_with_an_empty_message_still_marks_the_row(
     """
     from raven.config import update_channels
 
-    existed = update_channels.channel_field_specs
+    existed = update_channels.channel_field_values
 
-    def refuse(name: str):
+    def refuse(name: str, **kwargs):
         if name == "telegram":
             raise RuntimeError()
-        return existed(name)
+        return existed(name, **kwargs)
 
-    monkeypatch.setattr(update_channels, "channel_field_specs", refuse)
+    monkeypatch.setattr(update_channels, "channel_field_values", refuse)
 
     r = await console_module.channels_status({})
 
@@ -1765,6 +1765,66 @@ async def test_channels_configure_stores_the_field_and_status_says_so(isolated_c
     token = next(f for f in tg["fields"] if f["key"] == "token")
     assert token["set"] is True
     assert "123:abc" not in _json.dumps(status), "secret values must never ride the status wire"
+
+
+async def test_channels_status_reads_credentials_the_writers_spell(isolated_config: None) -> None:
+    """The configure writer stores camelCase keys (appId, appSecret), and a
+    multi-word field read through a snake_case attribute walk never found its
+    value -- so a configured Feishu reported itself as missing its credentials
+    forever, while single-word fields like Telegram's token hid the bug."""
+    r = await console_module.channels_configure(
+        {"name": "feishu", "fields": {"app_id": "cli_1", "app_secret": "s3cret"}}
+    )
+    assert r == {"applied": True}
+
+    status = await console_module.channels_status({})
+    fs = next(c for c in status["channels"] if c["name"] == "feishu")
+    assert fs["missing"] == []
+    assert fs["configured"] is True
+    app_id = next(f for f in fs["fields"] if f["key"] == "app_id")
+    assert app_id["set"] is True
+    assert "cli_1" not in json.dumps(status) and "s3cret" not in json.dumps(status)
+
+
+async def test_channels_status_reads_a_nested_dotted_field(isolated_config: None) -> None:
+    """A dotted field lives in a nested table (`dm.policy` -> `dm: {policy}`),
+    which a flat lookup cannot reach; the declaration-guided read must follow
+    it, or a configured Slack DM policy draws as unset forever."""
+    from raven.config.loader import get_config_path
+
+    get_config_path().write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"workspace": str(get_config_path().parent / "ws")}},
+                "channels": {"slack": {"enabled": True, "dm": {"policy": "allowlist"}}},
+            }
+        )
+    )
+
+    status = await console_module.channels_status({})
+    slack = next(c for c in status["channels"] if c["name"] == "slack")
+    policy = next(f for f in slack["fields"] if f["key"] == "dm.policy")
+    assert policy["set"] is True
+
+
+async def test_channels_status_tells_one_story_when_the_file_stops_parsing(isolated_config: None) -> None:
+    """A mid-write corruption makes load_config boot on defaults; the cargo
+    stash from the last clean parse used to survive that, so the poll drew
+    every channel disabled yet fully credentialed."""
+    from raven.config.loader import get_config_path
+
+    await console_module.channels_configure({"name": "feishu", "fields": {"app_id": "cli_1", "app_secret": "s3cret"}})
+    ok = await console_module.channels_status({})
+    fs = next(c for c in ok["channels"] if c["name"] == "feishu")
+    assert fs["configured"] is True
+
+    get_config_path().write_text("{ not json")
+
+    broken = await console_module.channels_status({})
+    fs = next(c for c in broken["channels"] if c["name"] == "feishu")
+    assert fs["enabled"] is False
+    assert fs["configured"] is False
+    assert fs["missing"] == ["app_id", "app_secret"]
 
 
 async def test_channels_configure_skips_blanks_and_refuses_unknown_fields(isolated_config: None) -> None:

@@ -226,19 +226,27 @@ def normalize_slice_keys(declaration: dict[str, Any], table: dict[str, Any]) -> 
     Config files hold camelCase (the pydantic-era writers dumped by alias);
     declarations speak snake_case. Only keys that resolve to a declared field
     are renamed, and only declared sub-tables are descended into -- map keys
-    (mochat group room ids) pass verbatim.
+    (mochat group room ids) pass verbatim. A file that carries both spellings
+    of one field keeps its canonical snake_case value: the alias fills only a
+    gap, whatever order the file happens to spell them in.
     """
     out: dict[str, Any] = {}
     for key, value in table.items():
-        resolved = key if key in declaration else _snake(key)
+        if key not in declaration:
+            continue
+        sub = declaration[key].get("fields")
+        out[key] = normalize_slice_keys(sub, value) if isinstance(sub, dict) and isinstance(value, dict) else value
+    for key, value in table.items():
+        if key in declaration:
+            continue
+        resolved = _snake(key)
         if resolved not in declaration:
             out[key] = value
             continue
+        if resolved in out:
+            continue
         sub = declaration[resolved].get("fields")
-        if isinstance(sub, dict) and isinstance(value, dict):
-            out[resolved] = normalize_slice_keys(sub, value)
-        else:
-            out[resolved] = value
+        out[resolved] = normalize_slice_keys(sub, value) if isinstance(sub, dict) and isinstance(value, dict) else value
     return out
 
 

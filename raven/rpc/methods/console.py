@@ -1908,8 +1908,8 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
 
 
 async def channels_status(params: dict, *, agent_loop_factory=None) -> dict:
-    from raven.config.loader import load_config
-    from raven.config.update_channels import channel_field_specs, channel_names
+    from raven.config.loader import channel_cargo_slice, load_config
+    from raven.config.update_channels import channel_field_values, channel_names
 
     config = load_config()
     items = []
@@ -1923,24 +1923,16 @@ async def channels_status(params: dict, *, agent_loop_factory=None) -> dict:
         # crosses the wire on every status poll and secrets among them.
         fields: list[dict] = []
         try:
-            for field, spec in channel_field_specs(name).items():
+            # The read goes through the declaration, not the runtime model:
+            # writers store camelCase keys (appId) that ride the model as extras
+            # under their file spelling, so a snake_case attribute walk misses
+            # every multi-word field -- and dotted paths cross nested tables,
+            # which no attribute walk on extras could follow either.
+            specs, values = channel_field_values(name, raw_section=channel_cargo_slice(name))
+            for field, spec in specs.items():
                 if field == "enabled":
                     continue
-                # A walk over the flat keys, not one getattr, so the camelCase
-                # fallback can reach a field spelled either way. Nested cargo
-                # (slack's dm.policy) is a dict, so this walk does not reach it;
-                # that gap predates this change.
-                current: Any = model
-                for part in field.split("."):
-                    value = getattr(current, part, None)
-                    if value is None:
-                        # The Web UI writes cargo under camelCase keys, which the
-                        # socket model keeps as extras; the spec names are snake_case.
-                        head, *rest = part.split("_")
-                        value = getattr(current, head + "".join(w.title() for w in rest), None)
-                    current = value
-                    if current is None:
-                        break
+                current = values.get(field)
                 is_set = current not in (None, "", []) and current != spec.get("default")
                 if spec.get("required") and current in (None, "", []):
                     missing.append(field)
