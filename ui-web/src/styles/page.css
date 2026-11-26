@@ -5100,8 +5100,11 @@ details[open] summary { margin-bottom: 8px; }
 .two-pane-add:hover { background: var(--raised); color: var(--text); }
 .two-pane-add svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
 .two-pane-list {
+  /* The gutter the list pads by and the card below steps in by: one value, so
+     the two cannot drift apart. */
+  --two-pane-gutter: 5px;
   display: flex; flex-direction: column; gap: 1px; flex: 1; min-height: 0;
-  overflow-y: auto; margin: 0 -5px; padding: 0 5px 2px;
+  overflow-y: auto; margin: 0 -5px; padding: 0 var(--two-pane-gutter) 2px;
   /* A context of its own, so the card below stays inside it and does not
      slide out behind the column it belongs to. */
   position: relative; z-index: 0;
@@ -5115,7 +5118,7 @@ details[open] summary { margin-bottom: 8px; }
   /* The list's padding box is the card's containing block, but the rows sit in
      its content box: zero offsets would make the card 5px wider on each side
      than the row it marks. */
-  position: absolute; left: 5px; right: 5px; top: 0; z-index: -1;
+  position: absolute; left: var(--two-pane-gutter); right: var(--two-pane-gutter); top: 0; z-index: -1;
   border-radius: 8px; background: var(--raised);
   box-shadow: inset 0 0 0 1px var(--line);
   pointer-events: none;
