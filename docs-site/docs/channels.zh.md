@@ -136,14 +136,25 @@ Matrix 是去中心化消息开放协议：账号住在 homeserver 上，房间�
 协议。Raven 支持它，因为它是表格中唯一既开源又设计即端到端加密的渠道，天然适合 Slack、
 Discord 不可用的自托管或隐私敏感部署。
 
-适配器基于 matrix-nio，以可选 extra（`channel-matrix`）形式分发；matrix-nio SDK 未发布
-Windows 版本，因此该渠道在 Windows 上不可用。它用 homeserver URL、
-用户 id 和 access token 认证——不需要 bot 审批流程，但账号必须已存在于 homeserver。
-E2EE 默认开启；关闭它是有意的配置变更，因为会把凭据和消息正文以明文暴露给 homeserver。
+适配器基于 matrix-nio，以可选 extra（`channel-matrix`）形式分发。它在 Windows 上不可用，
+但原因出在 Raven 自己的 extra 而非 SDK：matrix-nio 发布的是 `py3-none-any` wheel，任何
+平台都能装，是这个 extra 声明了 `sys_platform != 'win32'`，依赖在那边根本不会被拉进来。
+它用 homeserver URL、用户 id 和 access token 认证——不需要 bot 审批流程，但账号必须已存在
+于 homeserver。
 
-房间行为遵循与其他渠道相同的 `allowFrom` / `groupPolicy` 规则。私聊房间总会应答；
-群聊房间遵循 `open`、`mention` 或 `allowlist`。适配器在一轮回复进行时发送 typing
-通知，支持附件，上限取 homeserver 宣告值与 `max_media_bytes` 中的较小者。
+端到端加密默认开启（`e2eeEnabled: true`），而它开箱并不能用：该 extra 装的是不带 `e2e`
+extra 的 matrix-nio，因此没有 `python-olm`，`MatrixChannel.start()` 会抛出
+`ImportWarning: Encryption is enabled in the client configuration but dependencies
+for E2E encryption aren't installed`。请先自行安装 `matrix-nio[e2e]` 再启用该渠道，
+或把 `e2eeEnabled` 设为 `false`。即使装了 olm，也只有设置了 `deviceId` 时才会加载加密
+存储；没有它，重启可能重放近期消息。关闭 E2EE 是有意的配置变更——它会让消息正文与附件在
+传输中可被他人读取，而 access token 无论开关与否都会到达 homeserver。
+
+房间行为遵循 `allowFrom`，此外 Matrix 有自己的群规则：这里的 `groupPolicy` 默认是
+`open`，而 Telegram、Discord、Feishu 与 Slack 默认是 `mention`；`allowlist` 选项读取的
+是 `groupAllowFrom`，里面放的是房间 id 而不是发送者 id。私聊房间——两名或更少成员——
+仍然受 `allowFrom` 约束，私聊不是绕行通道。适配器在一轮回复进行时发送 typing 通知，支持
+附件，上限取 homeserver 宣告值与 `maxMediaBytes` 中的较小者。
 
 一个运维注意点：因为 Matrix 是联邦化的，`homeserver` 字段很敏感——它决定哪台服务器接收
 凭据与消息。默认的 `https://matrix.org` 是公共 homeserver；私有部署应指向自己的服务器。
