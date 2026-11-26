@@ -60,6 +60,7 @@ async def test_d1_unicode_and_space_in_filename(workspace):
     assert any("测试" in p for p in changed), f"got: {changed!r}"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
 async def test_d1_symlink_snapshotted_as_symlink(workspace):
     """Symlinks are first-class in git (mode 120000). add -A stages the link
     itself, not the target — so the snapshot doesn't accidentally inline a
@@ -100,6 +101,7 @@ async def test_d1_file_to_directory_transition(workspace):
     assert "thing" in changed or "thing/x.py" in changed
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows git does not track an executable bit")
 async def test_d1_chmod_only_change_captured(workspace):
     """Mode-bit change (e.g. chmod +x on a script) without content change is
     still a recoverable diff — git tracks executable bit and we want recovery
