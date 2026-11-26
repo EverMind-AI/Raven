@@ -3682,6 +3682,12 @@ async def test_the_account_is_published_while_the_run_is_still_going(tmp_path) -
     assert len(did.transcript) >= seen[1], "the final write is not smaller than the mid-flight one"
 
 
+# The ReAct budget the runs below are given. Not fifteen: the backend carries no
+# budget of its own, and a test using the old number could not tell a
+# caller-owned budget from the constant it replaced.
+_TEST_BUDGET = 4
+
+
 class _AlwaysToolsProvider(LLMProvider):
     """Never stops calling tools -- what a research task actually looked like."""
 
@@ -3710,11 +3716,50 @@ class _AlwaysToolsProvider(LLMProvider):
         )
 
 
+class _ToolsThenAnswerProvider(LLMProvider):
+    """Calls tools for a fixed number of rounds, then answers on its own."""
+
+    def __init__(self, tool_rounds: int) -> None:
+        super().__init__(api_key="test")
+        self._tool_rounds = tool_rounds
+        self.rounds = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.providers.base import ToolCallRequest
+
+        self.rounds += 1
+        if self.rounds <= self._tool_rounds:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[ToolCallRequest(id=f"c{self.rounds}", name="list_dir", arguments={"path": "."})],
+            )
+        return LLMResponse(content="done", finish_reason="stop")
+
+
+async def test_a_run_may_use_more_rounds_than_the_old_constant(tmp_path) -> None:
+    """The 15-round cap is gone. A caller that sets no budget is bounded only by
+    the model finishing, so a task needing more rounds can finish instead of
+    being cut at fifteen and answered from the wrap-up."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    provider = _ToolsThenAnswerProvider(tool_rounds=20)
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+
+    out = await backend.run("research it", task_id="n6", workspace=tmp_path, executor=None)
+
+    assert out == "done"
+    assert provider.rounds == 21
+
+
 async def test_a_run_out_of_rounds_answers_from_what_it_gathered(tmp_path) -> None:
     """The budget ending is not the same as having nothing to say.
 
-    A research node spent all fifteen rounds on web_fetch, never answered, and
-    the run's entire output was "Task completed but no final response was
+    A research node spent its whole tool budget on web_fetch, never answered,
+    and the run's entire output was "Task completed but no final response was
     generated" -- 51 bytes, recorded ``completed``, and merged by the next step
     as if it were the research. Everything it fetched was in the message list
     the whole time, so the last round asks for an answer with no tools attached:
@@ -3723,13 +3768,93 @@ async def test_a_run_out_of_rounds_answers_from_what_it_gathered(tmp_path) -> No
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 
     provider = _AlwaysToolsProvider()
-    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path, max_iterations=_TEST_BUDGET)
 
     out = await backend.run("research it", task_id="n1", workspace=tmp_path, executor=None)
 
     assert out.startswith("here is what I have\n\n[raven] ")
-    assert provider.rounds == RavenLoopBackend._MAX_ITERATIONS, "the budget is still a budget"
+    assert provider.rounds == _TEST_BUDGET, "the budget is still a budget"
     assert provider.toolless_calls == 1, "asked exactly once, after the rounds ran out"
+
+
+async def test_the_budget_is_the_callers_and_is_resolved_per_run(tmp_path) -> None:
+    """The backend carries no number of its own. The manager hands in a resolver
+    that reads the live config, so a budget changed between runs reaches the next
+    run without rebuilding the backend."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    provider = _AlwaysToolsProvider()
+    budgets = iter((3, 5))
+    backend = RavenLoopBackend(
+        provider=provider, model="stub", agent_home=tmp_path, max_iterations=lambda: next(budgets)
+    )
+
+    await backend.run("first", task_id="n1", workspace=tmp_path, executor=None)
+    assert provider.rounds == 3
+    provider.rounds = 0
+    await backend.run("second", task_id="n2", workspace=tmp_path, executor=None)
+    assert provider.rounds == 5
+
+
+def test_the_builtin_budget_follows_the_live_config(tmp_path, monkeypatch) -> None:
+    """The in-process backend's budget is the same config knob the main loop
+    reads, so a sub-agent and the turn that dispatched it cannot run under two
+    different ceilings. An absent key keeps the schema default; an explicit null
+    or zero is unbounded."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    config = home / "config.json"
+    manager = SubagentManager(provider=_StubProvider(), workspace=tmp_path)
+
+    config.write_text(json.dumps({"agents": {"defaults": {"maxToolIterations": 7}}}))
+    assert manager._builtin_max_iterations() == 7
+    assert manager.build_role_backend()._resolved_max_iterations() == 7
+
+    config.write_text(json.dumps({"agents": {"defaults": {"maxToolIterations": None}}}))
+    assert manager._builtin_max_iterations() is None
+
+    config.write_text("{}")
+    default = AgentDefaults.model_fields["max_tool_iterations"].default
+    assert manager._builtin_max_iterations() == default
+
+
+def test_the_builtin_budget_is_held_for_the_turn(tmp_path, monkeypatch) -> None:
+    """A spawn dispatched mid-turn runs under the cap its turn started on, not
+    the file's value now. The turn scope holds the cap, and reading the live
+    file instead let one turn's spawn and the turn itself run under two
+    different ceilings."""
+    from raven.config.live import hold_for_this_turn
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    config = home / "config.json"
+    config.write_text(json.dumps({"agents": {"defaults": {"maxToolIterations": 9}}}))
+    manager = SubagentManager(provider=_StubProvider(), workspace=tmp_path)
+
+    with hold_for_this_turn(**{"agents.defaults.maxToolIterations": 5}):
+        assert manager._builtin_max_iterations() == 5
+    assert manager._builtin_max_iterations() == 9
+
+
+def test_the_builtin_budget_falls_back_to_the_loops_default(tmp_path, monkeypatch) -> None:
+    """With no key in the file, the budget is the number the loop itself falls
+    back to, not a second schema default: a loop built on another
+    ``TurnPolicy`` cap (or one whose file lost the key after boot) must not
+    hand its spawns a different ceiling. A negative is "no answer" to the
+    shared reader, so it lands on the same fallback."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    config = home / "config.json"
+    config.write_text("{}")
+    manager = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_iterations_fallback=lambda: 25)
+
+    assert manager._builtin_max_iterations() == 25
+
+    config.write_text(json.dumps({"agents": {"defaults": {"maxToolIterations": -5}}}))
+    assert manager._builtin_max_iterations() == 25
 
 
 async def test_a_run_out_of_rounds_says_its_answer_is_partial(tmp_path) -> None:
@@ -3741,7 +3866,9 @@ async def test_a_run_out_of_rounds_says_its_answer_is_partial(tmp_path) -> None:
     """
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 
-    backend = RavenLoopBackend(provider=_AlwaysToolsProvider(), model="stub", agent_home=tmp_path)
+    backend = RavenLoopBackend(
+        provider=_AlwaysToolsProvider(), model="stub", agent_home=tmp_path, max_iterations=_TEST_BUDGET
+    )
     seen: list[str] = []
 
     async def on_delta(text: str) -> None:
@@ -3749,10 +3876,7 @@ async def test_a_run_out_of_rounds_says_its_answer_is_partial(tmp_path) -> None:
 
     out = await backend.run("research it", task_id="n8", workspace=tmp_path, executor=None, on_delta=on_delta)
 
-    notice = (
-        f"\n\n[raven] The sub-agent used all {RavenLoopBackend._MAX_ITERATIONS} tool rounds "
-        "before finishing; reply is partial."
-    )
+    notice = f"\n\n[raven] The sub-agent used all {_TEST_BUDGET} tool rounds before finishing; reply is partial."
     assert out == "here is what I have" + notice
     assert seen == ["here is what I have", notice], seen
 
@@ -3765,7 +3889,9 @@ async def test_the_partial_notice_stays_out_of_the_instances_own_history(tmp_pat
     its notices into the agent's session, for the same reason."""
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 
-    backend = RavenLoopBackend(provider=_AlwaysToolsProvider(), model="stub", agent_home=tmp_path)
+    backend = RavenLoopBackend(
+        provider=_AlwaysToolsProvider(), model="stub", agent_home=tmp_path, max_iterations=_TEST_BUDGET
+    )
     kept: list[list[dict[str, Any]]] = []
 
     out = await backend.run(
@@ -3783,7 +3909,10 @@ async def test_a_run_with_nothing_to_say_fails_instead_of_reading_as_done(tmp_pa
     from raven.contracts.subagent_backend import SubagentNoAnswerError
 
     backend = RavenLoopBackend(
-        provider=_AlwaysToolsProvider(answer_when_toolless=None), model="stub", agent_home=tmp_path
+        provider=_AlwaysToolsProvider(answer_when_toolless=None),
+        model="stub",
+        agent_home=tmp_path,
+        max_iterations=_TEST_BUDGET,
     )
 
     with pytest.raises(SubagentNoAnswerError, match="no answer"):
@@ -3797,7 +3926,7 @@ async def test_a_run_out_of_rounds_is_told_its_budget_ran_out(tmp_path) -> None:
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 
     provider = _AlwaysToolsProvider()
-    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path, max_iterations=_TEST_BUDGET)
 
     await backend.run("research it", task_id="n3", workspace=tmp_path, executor=None)
 
@@ -3848,7 +3977,7 @@ async def test_a_blank_reply_is_asked_once_more_instead_of_being_the_answer(tmp_
 
 async def test_a_reply_that_stays_blank_fails_and_names_the_blank(tmp_path) -> None:
     """Raised, not returned, like the run out of rounds -- and the failure says
-    what happened, not that fifteen rounds were used when one was."""
+    what happened, not that a whole budget was used when one call was."""
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
     from raven.contracts.subagent_backend import SubagentNoAnswerError
 
@@ -3989,7 +4118,7 @@ async def test_the_answer_asked_for_after_the_rounds_run_out_reaches_a_watching_
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 
     provider = _AlwaysToolsProvider()
-    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path, max_iterations=_TEST_BUDGET)
     seen: list[str] = []
 
     async def on_delta(text: str) -> None:
