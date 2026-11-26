@@ -33,7 +33,8 @@ import time
 from collections.abc import Callable
 from itertools import count
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 from uuid import uuid4
 
 from loguru import logger
@@ -1776,10 +1777,12 @@ def _write_upload(data: bytes, suffix: str) -> str:
 def _file_uri_to_path(uri: str) -> str | None:
     """The filesystem path behind a ``file://`` URI, or ``None``.
 
-    Percent-decoded, because an editor encodes spaces, and restricted to a local
-    URI: ``file://host/share`` names somebody else's machine, and turning it
-    into a local path would point the agent at the wrong file rather than at
-    none.
+    ``url2pathname`` is the platform-aware inverse of ``Path.as_uri()``: it
+    percent-decodes the path, and on Windows it turns ``file:///C:/work/a.md``
+    into ``C:\\work\\a.md``, where ``unquote`` alone leaves ``/C:/work/a.md`` --
+    a path Windows cannot open. A ``localhost`` authority names this machine;
+    any other host names somebody else's machine, and turning the URI into a
+    local path would point the agent at the wrong file rather than at none.
     """
     if not uri.startswith("file://"):
         return None
@@ -1790,10 +1793,21 @@ def _file_uri_to_path(uri: str) -> str | None:
         # literal. A URI that cannot be parsed is one whose path cannot be
         # trusted, so it is passed through as text rather than guessed at.
         return None
-    if parsed.netloc and parsed.netloc != "localhost":
+    if parsed.netloc and parsed.netloc.casefold() != "localhost":
         return None
-    path = unquote(parsed.path)
-    return path or None
+    if not parsed.path:
+        return None
+    try:
+        local = url2pathname(parsed.path)
+    except OSError:
+        # A malformed Windows spelling raises inside ``url2pathname``; a URI
+        # that cannot be converted names no path.
+        return None
+    if os.name == "nt" and parsed.netloc and local.startswith("\\") and not local.startswith("\\\\"):
+        # url2pathname folds the localhost authority away; a root-relative
+        # result is the share it named, so the authority stays as the UNC host.
+        local = f"\\\\{parsed.netloc}{local}"
+    return local or None
 
 
 __all__ = [
