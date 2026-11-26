@@ -458,6 +458,12 @@ jobs:
       - name: Test regenerated prompt files
         run: uv run --frozen --python 3.13 --no-sync pytest tests/test_config_product_render.py tests/test_atomic_io.py::test_a_failed_replace_takes_its_tmp_with_it tests/test_atomic_io.py::test_a_read_only_tmp_a_dead_writer_left_does_not_block_the_replace -q -n 0 --tb=short
 
+      # The managed tool-output directory and its file carry a protected
+      # owner-only DACL. That is an NTFS fact the Linux shards skip: they run
+      # only the POSIX branch, so nothing else would notice the DACL breaking.
+      - name: Test managed tool output DACLs
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_tool_output_store.py -q -n 0 --tb=short
+
       # On Windows the Mirasim desktop host is reached over the loopback port
       # and its token file, never a unix socket, and the unit shards run on
       # Linux only -- so the adapter's own road is exercised natively here.

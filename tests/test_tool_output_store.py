@@ -335,6 +335,23 @@ def test_a_symlink_inside_the_workspace_is_also_refused(tmp_path: Path) -> None:
     assert list(target.iterdir()) == []
 
 
+def test_a_junction_tool_output_directory_is_refused(tmp_path: Path) -> None:
+    """A junction is refused like a symlink: Path.is_symlink() is False for one."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    path_type = type(tool_output_dir(workspace))
+    real_is_junction = path_type.is_junction
+    path_type.is_junction = lambda self: True
+    try:
+        bounded = bound_tool_result(wrap_untrusted(LONG_BODY, source="exec"), workspace, limits=BYTES)
+    finally:
+        path_type.is_junction = real_is_junction
+
+    assert is_truncated(bounded)
+    assert "Full output saved to:" not in bounded
+    assert not tool_output_dir(workspace).exists()
+
+
 def test_blank_lines_before_an_over_budget_line_keep_that_line(tmp_path: Path) -> None:
     """With the line limit off, the budget stop can itself be a blank line."""
     body = "\n" * (60 * 1024) + "x" * 100
@@ -406,38 +423,50 @@ def test_windows_branch_uses_owner_only_dacl_helpers_without_os_open(
     ]
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows NTFS DACLs")
-def test_windows_managed_file_and_dir_deny_non_owner_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Real Windows NTFS DACL check: owner reads cleanly while non-owner SIDs are denied."""
-    import ctypes
-    import subprocess
-    from ctypes import wintypes
+def test_a_failed_windows_tighten_is_logged_and_keeps_the_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A directory left wide by a failed tighten is logged, and the file still lands."""
+    from loguru import logger
 
     import raven.session.tool_output as store
 
-    # Widen the parent workspace ACL explicitly so an unprotected file would
-    # inherit Everyone:F; the managed output must ignore that inheritance.
-    subprocess.run(
-        ["icacls", str(tmp_path), "/grant", "*S-1-1-0:(OI)(CI)F"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    real_open = os.open
+    class _WindowsOS:
+        name = "nt"
 
-    def forbid_os_open(*args: object, **kwargs: object) -> int:
-        raise AssertionError("Windows path must create the file via CreateFileW DACL, not os.open")
+        def __getattr__(self, item: str) -> object:
+            return getattr(os, item)
 
-    monkeypatch.setattr(store.os, "open", forbid_os_open)
+    def fake_mkdir(directory: Path) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+
+    def fail_protect(directory: Path) -> None:
+        raise OSError("access denied")
+
+    def fake_create(path: Path) -> int:
+        return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+
+    monkeypatch.setattr(store, "os", _WindowsOS())
+    monkeypatch.setattr(store, "_mkdir_owner_only_windows", fake_mkdir)
+    monkeypatch.setattr(store, "_protect_owner_only_windows", fail_protect)
+    monkeypatch.setattr(store, "_create_owner_only_windows", fake_create)
+
+    messages: list[str] = []
+    handler = logger.add(messages.append, format="{message}", level="WARNING")
     try:
         bounded = bound_tool_result(wrap_untrusted(LONG_BODY, source="exec"), tmp_path, limits=BYTES)
     finally:
-        monkeypatch.setattr(store.os, "open", real_open)
+        logger.remove(handler)
 
     files = _files(tmp_path)
     assert len(files) == 1
     assert str(files[0].resolve()) in bounded
-    assert files[0].read_text(encoding="utf-8") == LONG_BODY
+    directory = str(tool_output_dir(tmp_path))
+    assert any(directory in message and "access denied" in message for message in messages)
+
+
+def _windows_assert_owner_only_dacl(targets: list[Path]) -> None:
+    """Assert every target grants the owner read and denies non-owner SIDs."""
+    import ctypes
+    from ctypes import wintypes
 
     advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -540,7 +569,7 @@ def test_windows_managed_file_and_dir_deny_non_owner_reads(tmp_path: Path, monke
     file_generic_read = 0x00120089
     error_access_denied = 5
     try:
-        for target in (tool_output_dir(tmp_path), files[0]):
+        for target in targets:
             need = wintypes.DWORD(0)
             advapi32.GetFileSecurityW(str(target), 7, None, 0, ctypes.byref(need))
             sd_buf = ctypes.create_string_buffer(need.value)
@@ -580,6 +609,62 @@ def test_windows_managed_file_and_dir_deny_non_owner_reads(tmp_path: Path, monke
                 assert g_other.value == 0 and e_other.value == error_access_denied
     finally:
         authz.AuthzFreeResourceManager(rm)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows NTFS DACLs")
+def test_windows_managed_file_and_dir_deny_non_owner_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real Windows NTFS DACL check: owner reads cleanly while non-owner SIDs are denied."""
+    import subprocess
+
+    import raven.session.tool_output as store
+
+    # Widen the parent workspace ACL explicitly so an unprotected file would
+    # inherit Everyone:F; the managed output must ignore that inheritance.
+    subprocess.run(
+        ["icacls", str(tmp_path), "/grant", "*S-1-1-0:(OI)(CI)F"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    real_open = os.open
+
+    def forbid_os_open(*args: object, **kwargs: object) -> int:
+        raise AssertionError("Windows path must create the file via CreateFileW DACL, not os.open")
+
+    monkeypatch.setattr(store.os, "open", forbid_os_open)
+    try:
+        bounded = bound_tool_result(wrap_untrusted(LONG_BODY, source="exec"), tmp_path, limits=BYTES)
+    finally:
+        monkeypatch.setattr(store.os, "open", real_open)
+
+    files = _files(tmp_path)
+    assert len(files) == 1
+    assert str(files[0].resolve()) in bounded
+    assert files[0].read_text(encoding="utf-8") == LONG_BODY
+
+    _windows_assert_owner_only_dacl([tool_output_dir(tmp_path), files[0]])
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows NTFS DACLs")
+def test_windows_existing_wide_tool_output_directory_is_tightened(tmp_path: Path) -> None:
+    """A directory that already exists wide is tightened by SetNamedSecurityInfoW, not left alone."""
+    import subprocess
+
+    directory = tool_output_dir(tmp_path)
+    directory.mkdir()
+    subprocess.run(
+        ["icacls", str(directory), "/grant", "*S-1-1-0:F"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    bounded = bound_tool_result(wrap_untrusted(LONG_BODY, source="exec"), tmp_path, limits=BYTES)
+
+    files = _files(tmp_path)
+    assert len(files) == 1
+    assert str(files[0].resolve()) in bounded
+    _windows_assert_owner_only_dacl([directory])
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows CreateFileW CREATE_NEW")

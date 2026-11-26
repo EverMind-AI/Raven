@@ -418,26 +418,34 @@ def _create_owner_only_windows(path: Path) -> int:  # pragma: no cover - WinDLL 
 def _file_full_output(workspace: Path, body: str, *, now: datetime | None) -> Path | None:
     directory = tool_output_dir(workspace)
     try:
-        # A pre-existing tool-output symlink would make mkdir, chmod, open and
-        # prune all act on its target. Refuse it, and re-check containment after
-        # mkdir so a path that escaped through any other link is refused too.
-        if directory.is_symlink():
-            raise OSError(f"refusing symlinked tool-output directory: {directory}")
+        # A pre-existing tool-output symlink or junction would make mkdir,
+        # chmod, open and prune all act on its target. Refuse it, and re-check
+        # containment after mkdir so a path that escaped through any other link
+        # is refused too. is_symlink() is False for a junction, so it needs its
+        # own test: only a junction passes the containment check while still
+        # redirecting the directory.
+        if directory.is_symlink() or directory.is_junction():
+            raise OSError(f"refusing a link as the tool-output directory: {directory}")
         is_windows = os.name == "nt"
         if is_windows:
             _mkdir_owner_only_windows(directory)
         else:
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         root = workspace.resolve()
-        if directory.is_symlink() or not directory.resolve().is_relative_to(root):
-            raise OSError(f"tool-output directory escapes the workspace: {directory}")
+        if directory.is_symlink() or directory.is_junction() or not directory.resolve().is_relative_to(root):
+            raise OSError(f"tool-output directory escapes the workspace or is a link: {directory}")
         try:
             if is_windows:
                 _protect_owner_only_windows(directory)
             else:
                 directory.chmod(0o700)
-        except OSError:
-            pass
+        except OSError as exc:
+            if is_windows:
+                logger.warning(
+                    "Could not tighten the tool-output directory {} to owner-only; it keeps its wider ACL: {}",
+                    directory,
+                    exc,
+                )
         path = directory / f"{TOOL_OUTPUT_PREFIX}{uuid.uuid4().hex}.txt"
         # O_EXCL / CREATE_NEW refuses an existing path (including a symlink),
         # and the mode / protected owner-only DACL is applied at creation:
