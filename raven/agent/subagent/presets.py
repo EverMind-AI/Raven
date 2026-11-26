@@ -534,6 +534,13 @@ SIGN_IN_HINTS: dict[str, SignIn] = {
     # Code 2.1.0). Its own installer puts `kimi` on PATH, so the local spelling
     # is the only one.
     "kimi_code": SignIn(exe="kimi", local="kimi login"),
+    # `agy acp --login` is the flag's own help text: "Log in with Google
+    # interactively, then exit (ACP terminal auth)" (measured 2026-11-25,
+    # Antigravity CLI 1.5.17). It prints the URL and waits for the pasted
+    # authorization code, which is the only sign-in a headless host can
+    # complete. The row's command is `agy acp`, so a reader with no `agy`
+    # stops at the absent executable.
+    "antigravity": SignIn(exe="agy", local="agy acp --login"),
     # `copilot login` ("Authenticate with Copilot via OAuth") is what
     # `copilot login --help` prints (measured 2026-09-24, GitHub Copilot CLI
     # 1.0.88). The default on a desktop is the browser flow, so the bare

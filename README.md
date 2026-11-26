@@ -203,10 +203,10 @@ Raven's modular architecture is designed for harness self-evolution and subagent
 
 ## ❯❯ Connect Third-Party Agents
 
-Raven can connect to and orchestrate agents via ACP, CLI, or OpenAI-compatible APIs, with presets for 15 **third-party agents** and nine **Mirasim-routed** presets to simplify setup, task delegation, and coordination across shared workflows. Try these agents in Raven through a unified interface!
+Raven can connect to and orchestrate agents via ACP, CLI, or OpenAI-compatible APIs, with presets for 16 **third-party agents** and nine **Mirasim-routed** presets to simplify setup, task delegation, and coordination across shared workflows. Try these agents in Raven through a unified interface!
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/acd47004-c0b8-4079-87f0-9b77c6731e89" width="80%" alt="Third-party agents in Raven's Agent Hub">
+  <img src="https://github.com/user-attachments/assets/d5c7224a-2b95-4093-8412-a70e3239a0d3" width="80%" alt="Third-party agents in Raven's Agent Hub">
 </p>
 
 The roster also includes **MiniMax Code** over its native ACP server (`mcode acp`), **DSH** (DeepSeek Harness) over the ACP profile it ships (`dsh --profile acp`), and nine **Mirasim-routed** presets such as `Claude Code-Mirasim`, which run the same agents on Mirasim's accounts and model routes.

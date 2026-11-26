@@ -39,6 +39,7 @@ import type { JSX } from 'react'
    as its favicon, rather than DeepSeek's colour one: the harness is a product
    of its own, and that is the mark it gives itself. */
 const MARKS: Record<string, { file: string; tone?: 'mono' | 'hybrid' }> = {
+  antigravity: { file: 'antigravity-color' },
   claude_code: { file: 'claudecode-color' },
   codebuddy: { file: 'codebuddy-color' },
   codex: { file: 'codex-color' },
