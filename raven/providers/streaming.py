@@ -33,6 +33,7 @@ from raven.providers.base import (
     send_max_tokens,
 )
 from raven.providers.reasoning import split_orphan_think
+from raven.providers.tool_arguments import object_arguments
 from raven.providers.tool_names import normalized_tool_name
 from raven.providers.transport_failure import (
     flag_transport_failure,
@@ -864,10 +865,7 @@ def _finalize_tool_calls(slots: list[dict[str, Any]]) -> list[ToolCallRequest]:
             # it is the only evidence of what the model actually emitted.
             args = {RAW_ARGUMENTS_KEY: args_text}
             repaired = True
-        if not isinstance(args, dict):
-            # Valid JSON that is not an object ("bad", a list) is no set of arguments
-            # either; every reader of a call takes them as a mapping.
-            args = {RAW_ARGUMENTS_KEY: args_text}
+        args = object_arguments(args, args_text)
         result.append(
             ToolCallRequest(
                 id=slot["id"] or "",

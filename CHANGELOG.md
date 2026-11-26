@@ -303,10 +303,12 @@ All notable changes to Raven are documented here.
   the block that already streamed to a reader stay shown.
 
 - A tool call whose arguments are valid JSON but not an object, such as
-  `"bad"` or a list, no longer ends the turn. Both parse exits passed such
+  `"bad"` or a list, no longer ends the turn. The parse exits passed such
   arguments on as they were, and the first reader that took them as a mapping
   raised an AttributeError. They are now parked as raw text, as arguments
-  that do not parse are, so the registry quotes them back to the model.
+  that do not parse are, so the registry quotes them back to the model. The
+  LiteLLM, streaming, Azure OpenAI and OpenAI Codex exits share one rule; the
+  Codex exit had parked them under a `raw` key the registry did not know.
 
 - A Raven-Research turn no longer spends its iteration budget revising a report
   file it already wrote. On one run the first draft stood at iteration 15 and

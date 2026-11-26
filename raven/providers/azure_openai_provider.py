@@ -19,6 +19,7 @@ from raven.providers.base import (
     ToolCallRequest,
     format_llm_error,
 )
+from raven.providers.tool_arguments import object_arguments
 from raven.providers.tool_names import normalized_tool_name
 from raven.providers.usage import token_count
 
@@ -224,7 +225,7 @@ class AzureOpenAIProvider(LLMProvider):
                     # repair was needed travels with the call: a cut mid-blob
                     # is closed here silently, and that repair is the one local
                     # signal that the call never finished arriving.
-                    args = tc["function"]["arguments"]
+                    args = sent = tc["function"]["arguments"]
                     repaired = False
                     if isinstance(args, str):
                         try:
@@ -232,6 +233,7 @@ class AzureOpenAIProvider(LLMProvider):
                         except Exception:
                             args = json_repair.loads(args)
                             repaired = True
+                    args = object_arguments(args, sent)
 
                     tool_calls.append(
                         ToolCallRequest(

@@ -13,6 +13,7 @@ from typing import Any
 import json_repair
 
 from raven.providers.base import RunMeta, ToolCallRequest
+from raven.providers.tool_arguments import object_arguments
 from raven.providers.tool_names import normalized_tool_name
 from raven.providers.usage import merge_usage
 
@@ -103,8 +104,7 @@ class _ResponsesStreamState:
                     except Exception:
                         args = json_repair.loads(args_raw)
                         repaired = True
-                    if not isinstance(args, dict):
-                        args, repaired = {"raw": args_raw}, True
+                    args = object_arguments(args, args_raw)
                     self.tool_calls.append(
                         ToolCallRequest(
                             id=f"{call_id}|{buf.get('id') or item.get('id') or 'fc_0'}",

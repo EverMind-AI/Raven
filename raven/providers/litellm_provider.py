@@ -13,7 +13,6 @@ import httpx
 import json_repair
 from loguru import logger
 
-from raven.contracts.tool import RAW_ARGUMENTS_KEY
 from raven.providers import call_record, prompt_cache
 from raven.providers.base import (
     ChatDelta,
@@ -45,6 +44,7 @@ from raven.providers.registry import (
     find_by_keywords,
     find_by_model,
 )
+from raven.providers.tool_arguments import object_arguments
 from raven.providers.tool_names import normalized_tool_name
 from raven.providers.transport_failure import (
     flag_transport_failure,
@@ -908,11 +908,7 @@ class LiteLLMProvider(LiteLLMShape):
                 except Exception:
                     args = json_repair.loads(args)
                     repaired = True
-            if not isinstance(args, dict):
-                # Parsed or repaired into something that is not an object: parked as
-                # text, as the streaming path parks what does not parse, so the
-                # registry quotes it back instead of a reader of the call failing on it.
-                args = {RAW_ARGUMENTS_KEY: sent if isinstance(sent, str) else json.dumps(sent, ensure_ascii=False)}
+            args = object_arguments(args, sent)
 
             provider_specific_fields = getattr(tc, "provider_specific_fields", None) or None
             function_provider_specific_fields = getattr(tc.function, "provider_specific_fields", None) or None

@@ -7,6 +7,8 @@ reader that took the arguments as a mapping ended the turn with an AttributeErro
 
 from __future__ import annotations
 
+import asyncio
+import json
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
@@ -15,7 +17,9 @@ from unittest.mock import patch
 import pytest
 
 from raven.contracts.tool import RAW_ARGUMENTS_KEY
+from raven.providers.azure_openai_provider import AzureOpenAIProvider
 from raven.providers.litellm_provider import LiteLLMProvider
+from raven.providers.openai_codex_provider import _consume_sse
 from raven.providers.streaming import _finalize_tool_calls
 
 
@@ -64,14 +68,44 @@ def _streamed(arguments: str) -> dict[str, Any]:
     return _finalize_tool_calls([slot])[0].arguments
 
 
+def _azure(arguments: Any) -> dict[str, Any]:
+    provider = AzureOpenAIProvider(api_key="k", api_base="https://x.openai.azure.com", default_model="gpt-4o")
+    message = {"tool_calls": [{"id": "c1", "function": {"name": "web_fetch", "arguments": arguments}}]}
+    response = {"choices": [{"message": message, "finish_reason": "tool_calls"}]}
+    return provider._parse_response(response).tool_calls[0].arguments
+
+
+class _Events:
+    def __init__(self, events: list[dict[str, Any]]) -> None:
+        self._lines = [line for event in events for line in (f"data: {json.dumps(event)}", "")]
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+def _codex(arguments: str) -> dict[str, Any]:
+    item = {"type": "function_call", "call_id": "c1", "id": "fc_1", "name": "web_fetch", "arguments": ""}
+    events = [
+        {"type": "response.output_item.added", "item": item},
+        {"type": "response.output_item.done", "item": {**item, "arguments": arguments}},
+        {"type": "response.completed", "response": {"status": "completed"}},
+    ]
+    return asyncio.run(_consume_sse(_Events(events), 5))[1][0].arguments
+
+
 @pytest.mark.parametrize("arguments", ['"bad"', "[1, 2]", "7", "null"])
 def test_json_that_is_not_an_object_is_parked_as_text(arguments):
     assert _parsed(arguments) == {RAW_ARGUMENTS_KEY: arguments}
     assert _streamed(arguments) == {RAW_ARGUMENTS_KEY: arguments}
+    assert _azure(arguments) == {RAW_ARGUMENTS_KEY: arguments}
+    assert _codex(arguments) == {RAW_ARGUMENTS_KEY: arguments}
 
 
 def test_an_object_is_still_the_arguments():
     assert _parsed('{"url": "https://a.example"}') == {"url": "https://a.example"}
+    assert _azure('{"url": "https://a.example"}') == {"url": "https://a.example"}
+    assert _codex('{"url": "https://a.example"}') == {"url": "https://a.example"}
     assert _streamed('{"url": "https://a.example"}') == {"url": "https://a.example"}
     assert _streamed("") == {}
 
