@@ -6107,6 +6107,10 @@
       "en": "Watches long jobs and investigates production issues",
       "zh": "盯住长任务，排查线上问题"
     },
+    "gui.agent.short_antigravity": {
+      "en": "Google's agentic coding tool",
+      "zh": "Google 的智能体编程工具"
+    },
     "gui.agent.short_claude_code": {
       "en": "Anthropic's coding agent",
       "zh": "Anthropic 的编码智能体"
