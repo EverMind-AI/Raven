@@ -36,8 +36,8 @@ import './styles.css'
  * there is something to say), and the one thing to do about it now. Everything
  * else is in the sheet the card opens: what the agent is good at, as the
  * reader words it; a key, where
- * one is needed; how to install one that is absent; and the actions its state
- * calls for, in one bar.
+ * one is needed; how to install one that is absent; and, in a strip at its
+ * top, the state with the presses that change it.
  *
  * Connecting is the server's readiness ping -- one real prompt through the
  * agent, up to a minute -- so the row and the sheet both say "testing" for its
@@ -321,7 +321,11 @@ function ModelPill({
   s: ExtAgentsState
   testing: boolean
 }): JSX.Element | null {
-  const pill = useRef<HTMLButtonElement>(null)
+  /* The picker hangs off the whole row and is drawn beside it, as PickRow's
+     does and for its reasons: from the pill, which now starts past the row's
+     label, `anchorRow` gave it the width left of the pill and model names
+     wrapped; inside the row it would stretch the row it measures. */
+  const rowEl = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   const refreshFailed = s.menusFailed[row.name] || ''
   const refreshing = s.menusBusy.includes(row.name)
@@ -364,7 +368,7 @@ function ModelPill({
   }
   return (
     <>
-      <div className="extAgents-fld">
+      <div className="extAgents-fld" ref={rowEl}>
         <span className="extAgents-k">{t('gui.agent.model_label')}</span>
       <span className={cls}>
         <button
@@ -373,7 +377,6 @@ function ModelPill({
           className="extAgents-pm"
           disabled={menuless || busy}
           onClick={() => void openPicker()}
-          ref={pill}
           type="button"
         >
           {shown ? (
@@ -422,9 +425,10 @@ function ModelPill({
         </button>
       ) : null}
       {refreshFailed ? <div className="extAgents-mnote">{t('gui.agent.model_refresh_failed', { detail: refreshFailed })}</div> : null}
+      </div>
       {open ? (
         <ModelPicker
-          anchor={pill.current}
+          anchor={rowEl.current}
           current={shown ? { model: row.model_source === 'agent' ? value : shown.id, provider: shown.provider } : null}
           emptyNote={t(row.model_source === 'raven' ? 'gui.agent.model_no_provider' : 'gui.agent.model_managed')}
           onClose={() => setOpen(false)}
@@ -440,8 +444,7 @@ function ModelPill({
           allowTyped={false}
           title={t('gui.agent.model_label')}
         />
-        ) : null}
-      </div>
+      ) : null}
       {/* A preset has no row to write an effort to until Connect adds it. The
           model can ride that add (the family drawer's pick); effort cannot, so
           the field appears on the card the add writes, not on the preset. */}
@@ -591,13 +594,13 @@ function remedied(agent: string, remedy: Remedy | null, button: string, raw: str
    language what failed and what to press, and the server's sentence is shown
    as it came: it is the only reason there is, and folding it away made the
    block say nothing. */
-/* The press the sheet's action bar offers after a failed test, which is the
-   one its note has to name: read off the same branches as the bar in
-   `AgentSheet`. A connected row retests; an unauthorized one tests, since that
+/* The press the sheet's status strip offers after a failed test, which is
+   the one its note has to name: read off the same branches as the strip's
+   presses in `AgentSheet`. A connected row retests; an unauthorized one tests, since that
    is how it earns its Connect back; any other row that is not connected offers
    Connect alone -- a key to fill in, or a handshake a test has since cleared --
-   and connecting runs the same test. Empty where the bar offers nothing to
-   press, which is Raven itself, whose rows are never tested. */
+   and connecting runs the same test. Empty where the strip offers nothing
+   to press, which is Raven itself, whose rows are never tested. */
 function testPress(row: ExtAgentRow, shown: Shown): string {
   if (shown === 'on') return canTest(row) ? t('gui.agent.test_again') : ''
   if (shown !== 'off') return ''
@@ -642,8 +645,8 @@ function noteOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown, press: string
      reads as one; anything else names the check and folds its words. */
   if (shown !== 'on' || row.builtin || row.probe_status !== 'attention') return null
   const signIn = !!row.needs_auth
-  /* The bar's own label: with no failed test behind it the press is Test, not
-     Test again (testPress names the press after a failure). */
+  /* The strip's own label: with no failed test behind it the press is Test,
+     not Test again (testPress names the press after a failure). */
   const testLabel = canTest(row) ? t('gui.agent.test_label') : ''
   const warn: NoteSpec = {
     title: signIn ? t('gui.agent.bad_sign_in', { agent }) : t('gui.agent.warn_title', { agent }),
@@ -815,7 +818,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
   const verb = keyTyped ? 'gui.agent.connect' : shown === 'failed' ? 'gui.retry' : 'gui.agent.connect'
   /* A key typed beside a refusal supersedes every retry but a connect's: the
      press will connect with the key, not save the refused change again, so
-     that refusal leaves the head and the note -- both read a state without
+     that refusal leaves the strip and its note -- both read a state without
      it, and say what they would have said otherwise. */
   const failed = s.failed[row.name]
   const refusalStands = !keyTyped || !failed || refusedWrite(failed) === 'connect'

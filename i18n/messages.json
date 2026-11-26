@@ -6113,10 +6113,6 @@
       "en": "What the check found",
       "zh": "检查结果"
     },
-    "gui.agent.hd_missing_by": {
-      "en": "Not installed · {by}",
-      "zh": "本机未安装 · {by}"
-    },
     "gui.agent.fix_sign_in": {
       "en": "Run the command below to sign in, then press {button}.",
       "zh": "运行下面的命令完成登录，然后点「{button}」。"

@@ -267,7 +267,8 @@
 .extAgents-body { flex: 1; overflow-y: auto; padding: 18px 20px 4px; min-height: 0; }
 
 /* What to do about the last thing that went wrong: a block at the top of the
-   body, since the head only says what state the agent is in. The title is
+   body. On a machine's sheet the head says which state and this says why; on
+   an agent's sheet the block stands in for the status strip. The title is
    the one thing in clay; the sentence is in the ordinary text colour; a
    command gets a line of its own; and the agent's own words are folded under
    when the sentence already explains them, or shown as they came -- in a
@@ -356,7 +357,9 @@
    gap the label sits against the sentence's last line. */
 .extAgents-body > .extAgents-probe { margin-bottom: 14px; }
 
-/* The action bar: right-aligned, primary rightmost, the destructive one left of it. */
+/* The machine sheets' action bar: right-aligned, primary rightmost, the
+   destructive one left of it. An agent's sheet keeps its presses in its
+   status strip instead. */
 /* `flex-wrap`: the bar holds up to four presses, and under the fold the sheet
    is the window less a gutter; wrapped, the primary keeps the last row's right
    end. */
@@ -431,7 +434,8 @@
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0;
   min-height: 50px; padding: 7px 8px 7px 14px; box-sizing: border-box;
 }
-.extAgents-grp > .extAgents-fld + .extAgents-fld { margin-top: 0; border-top: 1px solid var(--line-soft); }
+/* `~`, not `+`: the open model picker is drawn between two rows. */
+.extAgents-grp > .extAgents-fld ~ .extAgents-fld { margin-top: 0; border-top: 1px solid var(--line-soft); }
 .extAgents-grp > .extAgents-fld > .extAgents-k { flex: none; width: 76px; margin: 0; font-size: 13px; color: var(--text); }
 .extAgents-grp .extAgents-pill { flex: 1; width: auto; min-width: 0; border-color: transparent; background: none; }
 .extAgents-grp .extAgents-pill:hover { border-color: transparent; background: color-mix(in srgb, var(--text) 4%, transparent); }
@@ -543,8 +547,12 @@
    settings dialog's 720x560 would neither fit below the pill nor above it. */
 /* The panel's box is the placer's now (`lib/popover.ts`'s anchorRow): it runs
    from the field's left edge to inside the card's right edge and gives up
-   height to the shelf below the field, so a fixed size here would fight it. */
-.extAgents-sheet .model-picker { max-width: calc(100vw - 32px); }
+   height to the shelf below the field, so a fixed size here would fight it.
+   Out of the flow from its first layout: `anchorRow` measures the row before
+   it sets `fixed`, and an agent's sheet is as tall as its content -- a picker
+   still in the flow grew the centred panel by its own height, the row rose
+   with it, and the picker was placed against where the row had risen to. */
+.extAgents-sheet .model-picker { position: fixed; max-width: calc(100vw - 32px); }
 
 /* The wizard's agents step opens on what connecting buys, in the page's words. */
 .extAgents-lede { margin: 0 0 18px; color: var(--muted); font-size: 13.5px; line-height: 1.55; }

@@ -2215,6 +2215,10 @@ describe('the model pill', () => {
     await click(pill())
     expect(picker()!.textContent).toContain('Anthropic')
     expect(picker()!.textContent).toContain('OpenAI')
+    /* Beside the model's row, not inside it: placed against the whole row, so
+       it opens as wide as the sheet rather than from the pill's left edge. */
+    expect(picker()!.closest('.extAgents-fld')).toBeNull()
+    expect(picker()!.previousElementSibling!.contains(pill())).toBe(true)
     await click(modelButton('Sonnet'))
     expect(picker()).toBeNull()
     expect(acts).toEqual([['model', 'claude_code', { model: 'v/sonnet' }]])
