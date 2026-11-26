@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from raven.memory_engine.skill_forge import project_skills as project_skills_module
 from raven.memory_engine.skill_forge.project_skills import (
     ProjectRoots,
     ProjectSkillCache,
@@ -385,9 +386,14 @@ def test_an_agents_symlink_into_agent_home_is_skipped_inside_the_boundary(tmp_pa
 
     own = repo / "own"
     _skill(own / ".agents" / "skills", "kept")
-    roots = project_skill_roots(own, agent_home=agent_home, home=home)
+    state_home = tmp_path / "state"
+    roots = project_skill_roots(own, agent_home=agent_home, home=home, state_home=state_home)
     assert roots is not None
-    assert roots.guarded == (home.resolve() / ".agents", agent_home.resolve())
+    assert roots.guarded == (
+        home.resolve() / ".agents",
+        agent_home.resolve(),
+        state_home.resolve(),
+    )
 
     inside = ProjectRoots(
         ((workdir / ".agents" / "skills").resolve(),),
@@ -395,6 +401,52 @@ def test_an_agents_symlink_into_agent_home_is_skipped_inside_the_boundary(tmp_pa
         roots.guarded,
     )
     assert read_project_skills(inside) == []
+
+
+def test_a_skill_symlinked_to_raven_home_config_is_not_read(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    state_home = repo / ".raven"
+    state_home.mkdir()
+    (state_home / "config.json").write_text('{"api_key": "sk-SECRET"}', encoding="utf-8")
+    agent_home = tmp_path / "agent-home"
+    agent_home.mkdir()
+    workdir = repo / "src"
+    skill_dir = workdir / ".agents" / "skills" / "setup"
+    skill_dir.mkdir(parents=True)
+    _symlink_to(skill_dir / "SKILL.md", state_home / "config.json")
+    home = tmp_path / "home"
+
+    roots = project_skill_roots(workdir, agent_home=agent_home, home=home, state_home=state_home)
+    assert roots is not None
+    assert state_home.resolve() in roots.guarded
+    assert read_project_skills(roots) == []
+
+
+def test_the_default_state_home_is_the_raven_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    state_home = repo / ".raven"
+    state_home.mkdir()
+    (state_home / "config.json").write_text('{"api_key": "sk-SECRET"}', encoding="utf-8")
+    agent_home = tmp_path / "agent-home"
+    agent_home.mkdir()
+    workdir = repo / "src"
+    skill_dir = workdir / ".agents" / "skills" / "setup"
+    skill_dir.mkdir(parents=True)
+    _symlink_to(skill_dir / "SKILL.md", state_home / "config.json")
+    home = tmp_path / "home"
+
+    monkeypatch.setattr(project_skills_module, "raven_home", lambda: state_home)
+
+    roots = project_skill_roots(workdir, agent_home=agent_home, home=home)
+    assert roots is not None
+    assert roots.guarded == (
+        home.resolve() / ".agents",
+        agent_home.resolve(),
+        state_home.resolve(),
+    )
+    assert read_project_skills(roots) == []
 
 
 def test_a_checkout_under_home_with_its_own_git_root_is_collected(tmp_path: Path) -> None:

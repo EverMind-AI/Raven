@@ -8,8 +8,11 @@ collecting each ``.agents/skills`` directory on the way, nearest first. Home is
 a ceiling: while the working directory is under it the git root is searched no
 higher than home. Agent home and its ancestors are excluded unconditionally, so
 a checkout that contains agent home is never the boundary. The user-level
-``~/.agents`` tree and agent home are never read as project skills, and a
-symlink counts only when its resolved target stays inside the project boundary.
+``~/.agents`` tree and agent home are never read as project skills, and neither
+is ``RAVEN_HOME``: it holds the runtime's config and provider credentials, so a
+project ``SKILL.md`` symlinked into it would otherwise be served as skill text.
+A symlink counts only when its resolved target stays inside the project
+boundary.
 
 Those directories are then served from a process-wide cache of BM25 indexes
 keyed by the directory tuple and its boundary, so every session in one checkout
@@ -28,6 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from raven.home import raven_home
 from raven.memory_engine.skill_local.local_pool import _format_skill_text
 from raven.memory_engine.skill_local.registry import build_skill_meta
 from raven.memory_engine.skill_local.types import SkillMeta
@@ -54,6 +58,7 @@ def project_skill_roots(
     *,
     agent_home: Path,
     home: Path | None = None,
+    state_home: Path | None = None,
 ) -> ProjectRoots | None:
     """Resolve the project's skill directories for one working directory.
 
@@ -64,13 +69,16 @@ def project_skill_roots(
     skills. Outside home, a shared ancestor is the work directory's own git
     root. Agent home and its ancestors are excluded unconditionally, so a
     checkout containing agent home is never the boundary. A git root at home is
-    never the boundary. Paths resolving into the user-level ``.agents`` tree or
-    agent home are never collected. Returns ``None`` when no directory
-    qualifies.
+    never the boundary. Paths resolving into the user-level ``.agents`` tree,
+    agent home or ``RAVEN_HOME`` are never collected. ``state_home`` names that
+    last root so a caller can pass it explicitly; it defaults to
+    ``raven_home()``, which is what the production caller relies on. Returns
+    ``None`` when no directory qualifies.
     """
     home_r = (home or Path.home()).resolve()
     agent_home_r = agent_home.resolve()
-    guarded = (home_r / ".agents", agent_home_r)
+    state_home_r = (state_home or raven_home()).resolve()
+    guarded = (home_r / ".agents", agent_home_r, state_home_r)
     start = workdir.resolve()
     chain = [start, *start.parents]
     excluded = {home_r, agent_home_r, *agent_home_r.parents}
