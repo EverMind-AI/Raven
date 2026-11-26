@@ -183,7 +183,8 @@ def serve_status(port, progress):
         def do_GET(self):
             # Only the page's own origin: a site the reader has open could
             # otherwise rebind a host name of its own to this port.
-            if self.headers.get("Host") not in allowed:
+            host = self.headers.get("Host") or ""
+            if host.casefold() not in allowed:
                 self.reply(421, b"", "text/plain")
                 return
             if self.path.split("?", 1)[0] == "/upgrade/status":
@@ -1341,7 +1342,7 @@ def editable_checkout() -> Path:
     if not isinstance(source_url, str):
         raise UpgradeError("Editable source checkout URL must be a string")
     url = urlparse(source_url)
-    if url.scheme != "file" or url.netloc not in ("", "localhost"):
+    if url.scheme != "file" or url.netloc.casefold() not in ("", "localhost"):
         raise UpgradeError("Editable source checkout must be a local directory")
     checkout = Path(url2pathname(url.path))
     if not checkout.is_absolute():
