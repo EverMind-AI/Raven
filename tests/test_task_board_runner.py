@@ -626,7 +626,8 @@ def test_a_recalled_group_also_among_the_recent_five_is_shown_once():
     assert "g_1: Matter 1" in record and "g_2: Matter 2" in record
 
 
-def test_five_or_fewer_completed_groups_leave_no_compressed_line():
+@pytest.mark.parametrize("count", [4, 5])
+def test_five_or_fewer_completed_groups_leave_no_compressed_line(count):
     groups = [
         TaskGroup(
             f"g_{i}",
@@ -637,12 +638,12 @@ def test_five_or_fewer_completed_groups_leave_no_compressed_line():
             BASE + i * 1000,
             [ProgressStep(f"s{i}", "T0", None, f"Step {i}", "detail", [])],
         )
-        for i in range(1, 5)
+        for i in range(1, count + 1)
     ]
 
     record = _record_of(build_instruction(Board(groups, []), [], completed_ids=["g_2"]))
 
-    for i in range(1, 5):
+    for i in range(1, count + 1):
         assert f"- g_{i} [completed] Matter {i}" in record
     assert "Completed:" not in record
 
@@ -660,7 +661,8 @@ def test_the_instruction_omits_the_current_time_when_not_given():
 def test_the_instruction_describes_the_retrieved_completed_groups():
     text = build_instruction(Board([], []), [])
 
-    assert "completed groups most related to this turn" in text
+    assert "the completed groups the recall ranked highest for this turn" in text
+    assert "up to five most recently updated completed groups" in text
 
 
 async def test_the_summary_is_used_as_the_recall_query(tmp_path):
