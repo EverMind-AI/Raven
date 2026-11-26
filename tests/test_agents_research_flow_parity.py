@@ -294,6 +294,13 @@ PRODUCT_ONLY_FIELDS: dict[str, str] = {
         "(support/report_page.py), with model-selected highlights the flow checks against "
         "the report. Off as a class default; the product's base slice turns it on"
     ),
+    "digest.provider": (
+        "the fetch digest on a provider of its own (plugin.digest_provider): a served "
+        "reasoning model thought 70 s over a page a small model digested in 9 s. Unset "
+        "keeps the fork's digest on the agent's provider"
+    ),
+    "digest.api_base": "the base URL of that provider, unset with it",
+    "digest.api_key": "the key of that provider, written by the launcher into the rendered slice only",
     "draft_revisions": (
         "a budget on revising a report file the turn already wrote: the reply asked for, "
         "then the file tools withheld (gates/report_length.py). Off as a class default; "

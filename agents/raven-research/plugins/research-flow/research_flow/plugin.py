@@ -138,6 +138,32 @@ class _Shared:
     def provider(self) -> "LLMProvider | None":
         return self._ctx.services.provider
 
+    def digest_provider(self) -> tuple["LLMProvider | None", str | None]:
+        """The provider the fetch digest calls, and the model it pins there (None: the agent's own).
+
+        With ``digest.provider`` set the digest runs on a provider of its own; without its
+        key it falls back to the agent's provider and model, because the configured model
+        is not one the agent's endpoint serves.
+        """
+        digest = self.cfg.digest
+        if not digest.provider:
+            return self.provider, None
+        if not digest.api_key or not digest.model:
+            logger.warning(
+                "research-flow: digest.provider {!r} has no key or no model; the digest runs on the agent's provider",
+                digest.provider,
+            )
+            return self.provider, None
+        from raven.providers.litellm_provider import LiteLLMProvider
+
+        own = LiteLLMProvider(
+            api_key=digest.api_key,
+            api_base=digest.api_base,
+            default_model=digest.model,
+            provider_name=digest.provider,
+        )
+        return own, digest.model
+
     def installable(self) -> bool:
         """Whether this plugin may contribute anything at all.
 
@@ -239,7 +265,7 @@ class _Shared:
             cfg = self.cfg
             kwargs: dict[str, Any] = {"max_chars": cfg.fetch_max_chars}
             if cfg.digest.enabled:
-                provider = self.provider
+                provider, own_model = self.digest_provider()
                 if provider is None:
                     logger.warning(
                         "research-flow: digest is enabled but no provider was lent to the "
@@ -257,13 +283,13 @@ class _Shared:
                     def digest_knobs() -> tuple[str | None, int]:
                         slot = gear.get(current_session())
                         if slot is not None:
-                            return slot.digest_model, slot.digest_verbatim_head_chars
-                        return cfg.digest.model, cfg.digest.verbatim_head_chars
+                            return own_model or slot.digest_model, slot.digest_verbatim_head_chars
+                        return own_model or cfg.digest.model, cfg.digest.verbatim_head_chars
 
                     kwargs.update(
                         digest_fn=_make_digest_fn(
                             provider,
-                            cfg.digest.model,
+                            own_model or cfg.digest.model,
                             verbatim_head_chars=cfg.digest.verbatim_head_chars,
                             resolve=digest_knobs,
                         ),

@@ -393,6 +393,76 @@ def test_the_digest_follows_the_sessions_mode_not_the_base_config(tmp_path):
     assert seen == ["deep/strong", "base/cheap"]
 
 
+def test_a_digest_provider_of_its_own_serves_the_digest_with_its_model(tmp_path, monkeypatch):
+    """digest.provider moves the digest off the agent's provider: the agent's is not
+    called, and the configured model is pinned even on a session whose mode names
+    another, because that model is one only the digest's own provider serves."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from research_flow.flow import SessionGear
+    from research_flow.plugin import _shared_for
+
+    agent_calls: list[str | None] = []
+    own_calls: list[dict] = []
+
+    class _Agent:
+        async def chat_with_retry(self, **kwargs):
+            agent_calls.append(kwargs.get("model"))
+            return SimpleNamespace(content="from the agent")
+
+    class _Own:
+        def __init__(self, **kwargs):
+            own_calls.append({"built": kwargs})
+
+        async def chat_with_retry(self, **kwargs):
+            own_calls.append({"model": kwargs.get("model")})
+            return SimpleNamespace(content="from the digest provider")
+
+    monkeypatch.setattr("raven.providers.litellm_provider.LiteLLMProvider", _Own)
+    slice_ = {
+        "enabled": True,
+        "digest": {
+            "enabled": True,
+            "provider": "deepseek",
+            "model": "deepseek/deepseek-v4-flash",
+            "apiKey": "dk",
+            "verbatimHeadChars": 0,
+        },
+        **_NO_LLM_GATES,
+    }
+    ctx = _ctx(tmp_path, slice_, provider=_Agent())
+    tool = make_web_fetch(ctx)
+    page = "x" * (tool.digest_threshold_chars + 1)
+
+    async def run():
+        set_current_session("s-deep")
+        _shared_for(ctx).session_gear["s-deep"] = SessionGear(digest_model="deep/strong", digest_verbatim_head_chars=0)
+        return (await tool._try_digest(page, "the founding date", "https://a.example/one"))[0]
+
+    assert asyncio.run(run()) == "from the digest provider"
+    assert agent_calls == []
+    built = own_calls[0]["built"]
+    assert (built["provider_name"], built["api_key"], built["default_model"]) == (
+        "deepseek",
+        "dk",
+        "deepseek/deepseek-v4-flash",
+    )
+    assert own_calls[1] == {"model": "deepseek/deepseek-v4-flash"}
+
+
+def test_a_digest_provider_without_a_key_falls_back_to_the_agents(tmp_path):
+    from research_flow.plugin import _shared_for
+
+    class _Agent:
+        pass
+
+    agent = _Agent()
+    slice_ = {"enabled": True, "digest": {"provider": "deepseek", "model": "deepseek/x"}, **_NO_LLM_GATES}
+    ctx = _ctx(tmp_path, slice_, provider=agent)
+    assert _shared_for(ctx).digest_provider() == (agent, None)
+
+
 def test_a_keyless_search_tool_is_not_contributed(tmp_path, monkeypatch):
     """The fork refused to register it rather than advertise a tool whose every
     call is an error string; the contract this flow renders names the model's

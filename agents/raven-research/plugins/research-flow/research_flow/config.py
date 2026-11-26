@@ -83,6 +83,14 @@ class DigestConfig(_Base):
     threshold_chars: int = 8000
     timeout_seconds: float = 120.0
     verbatim_head_chars: int = 800
+    # A provider of its own for the digest (a LiteLLM provider name, e.g. "deepseek"),
+    # with ``model`` naming a model it serves. Unset, the digest runs on the agent's
+    # provider. A reasoning model that thinks at length on every page makes each fetch
+    # wait on it: one served model took 70 s on a page a small model digested in 9 s.
+    # The key is a secret: the launcher writes it into the rendered slice, never here.
+    provider: str | None = None
+    api_base: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
 
 
 class VerifyConfig(_Base):

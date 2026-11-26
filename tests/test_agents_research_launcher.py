@@ -108,6 +108,27 @@ def test_the_render_merges_secrets_and_pins_the_workspace(grounded, tmp_path):
     assert rendered.parent == tmp_path / "state"
 
 
+def test_a_digest_provider_gets_its_key_in_the_rendered_slice_only(grounded, tmp_path, monkeypatch):
+    source = json.loads((RUN_PY.parent / "config.json").read_text())
+    flow = source["plugins"]["config"]["research-flow"]
+    flow["digest"] = {**flow.get("digest", {}), "provider": "deepseek", "model": "deepseek/deepseek-v4-flash"}
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps(source))
+
+    monkeypatch.setenv("RESEARCH_DIGEST_API_KEY", "dk-own")
+    digest = json.loads(grounded.render_config(config).read_text())["plugins"]["config"]["research-flow"]["digest"]
+    assert digest["apiKey"] == "dk-own" and digest["provider"] == "deepseek"
+    assert "apiKey" not in json.loads(config.read_text())["plugins"]["config"]["research-flow"]["digest"]
+
+    # No key of its own: the provider of that name in the host config lends one.
+    monkeypatch.delenv("RESEARCH_DIGEST_API_KEY")
+    host = tmp_path / "home" / "config.json"
+    host.parent.mkdir(parents=True, exist_ok=True)
+    host.write_text(json.dumps({"providers": {"deepseek": {"apiKey": "dk-host"}}}))
+    digest = json.loads(grounded.render_config(config).read_text())["plugins"]["config"]["research-flow"]["digest"]
+    assert digest["apiKey"] == "dk-host"
+
+
 def test_the_render_boards_the_flow_plugin_and_the_modes(grounded, tmp_path):
     rendered = grounded.render_config(RUN_PY.parent / "config.json")
     data = json.loads(rendered.read_text())
