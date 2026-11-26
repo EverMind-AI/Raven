@@ -37,13 +37,14 @@
  * document, so a value it never changes is a value it never writes again.
  */
 
-import { KanbanIcon, LayoutAlignLeftIcon, PlusSignIcon, Search01Icon, Settings02Icon } from '@hugeicons/core-free-icons'
+import { KanbanIcon, LayoutAlignLeftIcon, PlusSignIcon, Search01Icon, Settings02Icon, Wrench01Icon } from '@hugeicons/core-free-icons'
 import { useEffect, useSyncExternalStore } from 'react'
 
 import { AgentsGlyph, CubeGlyph, Icon } from '../components/Icon'
 import { RavenMark } from '../components/RavenMark'
 import { open as openKnowledge } from '../features/knowledge/store'
 import { open as openSettings } from '../features/settings/store'
+import { open as openSkillsTools } from '../features/skillsTools/store'
 import * as boards from '../features/tasks/boards'
 import { t } from '../i18n/t'
 import * as find from '../state/find'
@@ -117,6 +118,12 @@ const NAV_ROWS: ReadonlyArray<{
     key: 'gui.nav.hub',
     open: () => hub.open(),
     icon: <AgentsGlyph />,
+  },
+  {
+    button: 'skillsToolsBtn',
+    key: 'gui.nav.skills_tools',
+    open: () => void openSkillsTools(),
+    icon: <Icon icon={Wrench01Icon} />,
   },
   {
     button: 'knowledgeBtn',

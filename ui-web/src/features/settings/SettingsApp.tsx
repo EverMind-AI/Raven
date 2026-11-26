@@ -3,8 +3,7 @@
    owns the veil, the modal and the two columns; this island renders into them
    and writes the section's name to #setTitle on every draw. */
 import {
-  AiContentGenerator01Icon, BrainIcon, InformationCircleIcon, Plug02Icon, PuzzleIcon, Settings03Icon,
-  Settings05Icon, TimeQuarter02Icon, Wrench01Icon,
+  BrainIcon, InformationCircleIcon, Settings03Icon, Settings05Icon, TimeQuarter02Icon,
 } from '@hugeicons/core-free-icons'
 import { useEffect, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
@@ -16,12 +15,8 @@ import { InlineErr } from './Fields'
 import { About } from './pages/About'
 import { Archive } from './pages/Archive'
 import { General } from './pages/General'
-import { Mcp } from './pages/Mcp'
 import { Model } from './pages/Model'
-import { Plugins } from './pages/Plugins'
 import { Provider } from './pages/Provider'
-import { Skills } from './pages/Skills'
-import { Tools } from './pages/Tools'
 import { Usage } from './pages/Usage'
 import { AddModelLayer } from './providers/AddModelPop'
 import { SectionWait } from './Skeletons'
@@ -40,10 +35,6 @@ const ICON: Record<SectionId, JSX.Element> = {
   usage: <UsageGlyph />,
   provider: <CubeGlyph />,
   model: <Icon icon={Settings05Icon} />,
-  skills: <Icon icon={AiContentGenerator01Icon} />,
-  tools: <Icon icon={Wrench01Icon} />,
-  mcp: <Icon icon={Plug02Icon} />,
-  plugins: <Icon icon={PuzzleIcon} />,
   cron: <Icon icon={TimeQuarter02Icon} />,
   memory: <Icon icon={BrainIcon} />,
   archive: <ArchiveGlyph />,
@@ -56,10 +47,6 @@ const NAV: Record<SectionId, string> = {
   usage: 'gui.settings.nav.usage',
   provider: 'gui.settings.nav.provider',
   model: 'gui.settings.nav.model',
-  skills: 'gui.settings.nav.skills',
-  tools: 'gui.settings.nav.tools',
-  mcp: 'gui.settings.nav.mcp',
-  plugins: 'gui.settings.nav.plugins',
   cron: 'gui.settings.nav.cron',
   memory: 'gui.settings.nav.memory',
   archive: 'gui.settings.nav.archive',
@@ -81,13 +68,12 @@ function Nav({ tab }: { tab: SectionId }): JSX.Element {
   )
 }
 
-/* One component per section this island draws itself. The three another
+/* One component per section this island draws itself. The two another
    domain fills are absent on purpose: HOSTED names the box beside this root
    that each of them is rooted in, and the panel below draws nothing for
    them. */
 const PAGE: Partial<Record<SectionId, () => JSX.Element>> = {
-  general: General, usage: Usage, provider: Provider, model: Model, skills: Skills,
-  tools: Tools, mcp: Mcp, plugins: Plugins, archive: Archive, about: About,
+  general: General, usage: Usage, provider: Provider, model: Model, archive: Archive, about: About,
 }
 
 export function SettingsApp(): JSX.Element {

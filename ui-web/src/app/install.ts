@@ -39,6 +39,8 @@ import { installSessionActions } from '../features/rail/wire'
 import { MemoryStepBody, ModelStepBody, WebStepBody } from '../features/settings/SetupBodies'
 import { bannerSource, memoryStepDone, modelStepDone, settingsSource, webStepDone } from '../features/settings/source'
 import * as settingsStore from '../features/settings/store'
+import { skillsToolsSource, watchMcp } from '../features/skillsTools/source'
+import * as skillsToolsStore from '../features/skillsTools/store'
 import { agentsSource, startAgentHeartbeat } from '../features/subagents/source'
 import { onBoardEvent, refresh as refreshBoards } from '../features/tasks/boards'
 import { tasksSource } from '../features/tasks/source'
@@ -67,6 +69,7 @@ import { refusal as uploadRefusal } from '../lib/upload'
 import { forget as forgetAbsent, servesTrajectory } from '../rpc/capabilities'
 import { gateway } from '../rpc/gateway'
 import { setFault as setMemFault } from '../state/banner'
+import * as detail from '../state/detail'
 import * as page from '../state/page'
 import { onDocument } from '../state/reveal'
 import * as scrollbars from '../state/scrollbars'
@@ -159,6 +162,11 @@ export function installSources(): void {
      ahead of boot() (src/main.tsx). */
   sources.banner = bannerSource
   sources.settings = settingsSource
+  sources.skillsTools = skillsToolsSource
+  /* Keep Skills & Tools in sync when the reader edits providers or models inside Settings. */
+  settingsStore.subscribe(() => {
+    if (page.get() === 'skillsToolsPage') skillsToolsStore.syncSnap(settingsStore.get().snap)
+  })
   sources.tier = tierSource
   sources.effort = effortSource
   sources.model = modelSource
@@ -342,7 +350,13 @@ export function installPushes(): void {
      answer. */
   registerCredentialCard({ open: openCredential, close: closeCredential })
   extAgentsStore.lendAskRaven(startTaskWith)
-  settingsStore.lendAskInChat(askInChat)
+  skillsToolsStore.lendAskInChat(askInChat)
+  skillsToolsStore.lendOpenProvider((slug) => {
+    detail.close()
+    if (slug) void settingsStore.openProviderModels(slug)
+    else void settingsStore.openModels()
+  })
+  watchMcp(skillsToolsStore.refreshSoon)
   lendTaskAnswer(answerInChat)
   lendTaskFocus(focusChat)
   lendBeforeSend({ take: takeMoveOn })
@@ -414,6 +428,7 @@ async function afterReconnect(): Promise<void> {
   /* Re-read, with nothing to repaint: the one surface these rows still reach
      is the settings dialog, which reads them when it opens. */
   void loadExt().catch(() => {})
+  if (page.get() === 'skillsToolsPage') void skillsToolsStore.refresh()
   /* An import that ran on while the socket was down changed its counts, or
      ended, without this page hearing; the row reads them again the way the
      boot did. */

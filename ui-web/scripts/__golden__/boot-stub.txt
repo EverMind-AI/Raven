@@ -45,6 +45,12 @@ div.app[data-rail=on]
             path
             path
         span
+      button#skillsToolsBtn.navi
+        svg
+          path
+          path
+          path
+        span
       button#knowledgeBtn.navi
         svg
           g
@@ -410,6 +416,11 @@ section#connectionsPage.page[data-open=false]
           div.su-one
           div.su-foot-slot
             div.su-foot.su-foot-quiet
+section#skillsToolsPage.page[data-open=false]
+  header
+    h2
+  div.work
+    div#skillsToolsBody.wrap
 section#knowledgePage.page[data-open=false]
   header
     h2

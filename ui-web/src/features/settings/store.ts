@@ -21,20 +21,20 @@ import { statedTags } from '../model/types'
 
 import type { Kind } from '../model/types'
 import type {
-  AgentPluginList, ArchivedSession, ConnectProbe, KeyCheck, ModelCandidate, SettingsSnapshot, SettingsSource, SkillDetail, UsageRange, UsageStats,
+  ArchivedSession, ConnectProbe, KeyCheck, ModelCandidate, SettingsSnapshot, SettingsSource, UsageRange, UsageStats,
 } from './types'
 
 export type SectionId =
-  | 'general' | 'usage' | 'provider' | 'model' | 'skills' | 'tools' | 'mcp' | 'plugins'
+  | 'general' | 'usage' | 'provider' | 'model'
   | 'cron' | 'memory' | 'archive' | 'about'
 
 /* The nav's order, which is also the reading: what the dialog is about first
-   (the page itself, what it cost), then what it is made of (the accounts, the
-   models each role takes, skills, tools, MCP servers, plugins), then the two surfaces a
-   reader sets up once and leaves alone, then the record and the version.
-   Channels were a third and are a page on the rail now (state/pages.ts). */
+   (the page itself, what it cost), then what it is made of (the accounts and
+   the models each role takes), then the two surfaces a reader sets up once and
+   leaves alone, then the record and the version. Channels and Skills & Tools
+   are module pages on the rail (state/pages.ts). */
 export const SECTIONS: SectionId[] = [
-  'general', 'usage', 'provider', 'model', 'skills', 'tools', 'mcp', 'plugins',
+  'general', 'usage', 'provider', 'model',
   'cron', 'memory', 'archive', 'about',
 ]
 
@@ -124,15 +124,6 @@ export interface SettingsState {
   ovlAdd: string | null
   chatCfg: boolean
   oauth: Oauth | null
-  skill: string | null
-  detail: SkillDetail | null
-  skq: string
-  toolOpen: string | null
-  mcpOpen: string | null
-  /* The Agent Plugin packages, asked for by the plugins page itself: null =
-     not asked yet (drawn as loading). */
-  pkgs: AgentPluginList | null
-  pkgOpen: string | null
   /* The provider whose model list is shown in full rather than folded. Here,
      not in the list's own state: a removal redraws the page from a new
      snapshot, and a fold kept in the component snapped shut on every one. */
@@ -167,13 +158,6 @@ const initial = (): SettingsState => ({
   ovlAdd: null,
   chatCfg: false,
   oauth: null,
-  skill: null,
-  detail: null,
-  skq: '',
-  toolOpen: null,
-  mcpOpen: null,
-  pkgs: null,
-  pkgOpen: null,
   modelsAll: null,
   archived: null,
 })
@@ -190,24 +174,6 @@ export function set(patch: Partial<SettingsState>): void {
 }
 
 export const source = (): SettingsSource => ds('settings')
-
-/* Adding a skill or an MCP server is the chat's: use_skill fetches the Skill
-   Hub bundle and the plugin tool connects the PlugHub entry, and no row of the
-   two pages here can do either. So each page's "add" button leads into the
-   chat with the request half written. The verb is the composer's, lent at
-   boot (src/app/install.ts) rather than imported from a sibling domain;
-   unlent, the button does nothing, which is what a case that mounts the
-   dialog alone wants. */
-type AskInChat = (text: string) => void
-let askInChat: AskInChat | null = null
-
-export function lendAskInChat(fn: AskInChat | null): void {
-  askInChat = fn
-}
-
-export function addInChat(text: string): void {
-  askInChat?.(text)
-}
 
 /* ISO day, local time: the range the usage page asks for is the reader's
    calendar, and the server reads the same wall clock. */
@@ -321,7 +287,7 @@ export async function open(): Promise<void> {
      list and its usage totals for the life of the page, and a session archived
      from the rail in between never showed up. Dropping them here is what makes
      each page ask again -- their own lazy loads already key off these. */
-  set({ usage: undefined, archived: null, pkgs: null })
+  set({ usage: undefined, archived: null })
   settingsDialog.open()
   await refresh()
 }
@@ -350,7 +316,7 @@ export function setTab(id: string): void {
   settingsTab.id = id
   set({
     tab: curTab(), err: '', provider: null, provQ: '', provFilt: 'all', provAdd: null, sheet: null, hdrAdd: null, ovlAdd: null, adv: null,
-    skill: null, detail: null, toolOpen: null, mcpOpen: null, pkgOpen: null, modelsAll: null,
+    modelsAll: null,
   })
   if (moved) settingsDialog.enterSection(id)
 }
@@ -406,25 +372,6 @@ export async function archivedLoad(): Promise<void> {
   } catch (e) {
     toast(t('gui.op.load_failed', { detail: (e as Error).message || String(e) }))
     set({ archived: [] })
-  }
-}
-
-export async function pkgsLoad(): Promise<void> {
-  try {
-    set({ pkgs: await source().agentPlugins() })
-  } catch (e) {
-    toast(t('gui.op.load_failed', { detail: (e as Error).message || String(e) }))
-    set({ pkgs: { packages: [], problems: [] } })
-  }
-}
-
-export async function skillOpen(name: string): Promise<void> {
-  set({ skill: name, detail: null })
-  try {
-    const detail = await source().inspectSkill(name)
-    if (get().skill === name) set({ detail })
-  } catch {
-    /* toasted by the source; the detail stays on its loading note */
   }
 }
 
@@ -611,5 +558,4 @@ export function _resetForTests(): void {
   store._resetForTests()
   store.set(initial())
   lazy = false
-  askInChat = null
 }

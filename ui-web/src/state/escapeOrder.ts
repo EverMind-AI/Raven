@@ -70,6 +70,7 @@ const cancels = (id: string) => (): void => { document.getElementById(id)?.click
 const CLOSERS: Record<PageId, () => void> = {
   extAgentsPage: () => extAgents.close(),
   connectionsPage: () => page.show(null),
+  skillsToolsPage: () => page.show(null),
   /* The generic close rather than the domain's own verb. `close()` there IS
      `page.show(null)`, and reaching for it would put an upward edge into this
      file that scripts/gates/import-direction.test.mjs refuses -- rightly: a

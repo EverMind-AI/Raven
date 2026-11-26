@@ -22,7 +22,6 @@
  * screen reader, and the bars inside it carry no text of their own.
  */
 import { t } from '../../i18n/t'
-import GROUPS from './toolGroups.json'
 
 import type { SectionId } from './store'
 import type { JSX, ReactNode } from 'react'
@@ -81,20 +80,6 @@ function WGen({ ctl, below }: { ctl: ReactNode; below?: boolean }): JSX.Element 
       </div>
       <div className="settings-gen-ctl">{ctl}</div>
     </section>
-  )
-}
-
-/** The expandable name/switch rows the tools, MCP and plugins pages list. */
-function WXrows({ n, from = 0 }: { n: number; from?: number }): JSX.Element {
-  return (
-    <>
-      {Array.from({ length: n }, (_, i) => (
-        <div key={i} className="settings-xrow">
-          <span className="settings-xname"><Bar w={width(from + i)} /></span>
-          <div className="settings-ctl"><Bar w="38px" h={22} /></div>
-        </div>
-      ))}
-    </>
   )
 }
 
@@ -173,35 +158,7 @@ export function ArchiveWait(): JSX.Element {
   return <Wait><ArchiveBars /></Wait>
 }
 
-/* ---- the three a drawer or a popover fetches ---------------------------- */
-
-/** A skill's SKILL.md: the identity block and the prose under it. */
-export function SkillDetailWait(): JSX.Element {
-  return (
-    <Wait cls="settings-card">
-      <div className="settings-mdhead settings-wstack">
-        <Bar w="180px" h={16} />
-        <Bar w="72%" />
-        <Bar w="150px" h={20} />
-      </div>
-      <div className="settings-md settings-wstack">
-        {Array.from({ length: 7 }, (_, i) => <Bar key={i} w={width(i + 2)} />)}
-      </div>
-    </Wait>
-  )
-}
-
-/** A plugin's credential fields, which the catalogue answers per server. */
-export function KeyFieldsWait(): JSX.Element {
-  return (
-    <Wait>
-      <div className="settings-row settings-stack">
-        <div className="settings-k"><Bar w="120px" /></div>
-        <div className="settings-ctl settings-wpair"><Bar w="220px" h={30} /><Bar w="64px" h={30} /></div>
-      </div>
-    </Wait>
-  )
-}
+/* ---- the popover fetch -------------------------------------------------- */
 
 /** The vendor's model list, inside the add-model popover. */
 export function ModelListWait(): JSX.Element {
@@ -241,68 +198,6 @@ function ProviderWait(): JSX.Element {
   )
 }
 
-function SkillsWait(): JSX.Element {
-  return (
-    <Wait>
-      <Bar h={32} w="100%" />
-      {[6, 4].map((n, card) => (
-        <div key={card} className="settings-card">
-          <div className="settings-ch"><Bar h={13} w="160px" /></div>
-          {Array.from({ length: n }, (_, i) => (
-            <div key={i} className="settings-skrow">
-              <span className="settings-open"><Bar w="80%" /><Bar w={width(i + card)} /></span>
-              <Bar h={22} w="38px" />
-            </div>
-          ))}
-        </div>
-      ))}
-    </Wait>
-  )
-}
-
-/* The first groups at the sizes the page will draw them, so what arrives below
-   the fold arrives under a scroll position that already fits it. */
-const TOOL_SIZES = Object.values(GROUPS as Record<string, string[]>).slice(0, 4).map((ids) => ids.length)
-
-function ToolsWait(): JSX.Element {
-  let seen = 0
-  return (
-    <Wait>
-      <div className="settings-crumb"><Bar h={13} w="150px" /></div>
-      {TOOL_SIZES.map((n, i) => {
-        const from = seen
-        seen += n
-        return (
-          <div key={i} className="settings-card">
-            <div className="settings-ch"><Bar h={13} w="110px" /></div>
-            <WXrows from={from} n={n} />
-          </div>
-        )
-      })}
-    </Wait>
-  )
-}
-
-function McpWait(): JSX.Element {
-  return (
-    <Wait>
-      <div className="settings-crumb"><Bar h={13} w="120px" /></div>
-      <div className="settings-card"><WXrows n={6} /></div>
-    </Wait>
-  )
-}
-
-/* The plugins page asks for its packages itself once it draws, so the same
-   shape stands both while the dialog loads and while that ask is out. */
-export function PluginsWait(): JSX.Element {
-  return (
-    <Wait>
-      <div className="settings-crumb"><Bar h={13} w="120px" /></div>
-      <div className="settings-card"><WXrows n={3} /></div>
-    </Wait>
-  )
-}
-
 /* Ten roles in one card -- providers/Roles.tsx's ROLES, whose length is the
    number here. */
 const ROLE_ROWS = 10
@@ -338,12 +233,8 @@ const SHAPE: Partial<Record<SectionId, () => JSX.Element>> = {
       </div>
     </Wait>
   ),
-  mcp: McpWait,
   model: () => <Wait><WCard ctl={210} n={ROLE_ROWS} titled /></Wait>,
-  plugins: PluginsWait,
   provider: ProviderWait,
-  skills: SkillsWait,
-  tools: ToolsWait,
   /* The range picker is the reader's own state rather than the gateway's, so
      its card is a shape here and a live control the moment the page draws. */
   usage: () => <Wait><WCard ctl={300} n={1} /><UsageBars /></Wait>,

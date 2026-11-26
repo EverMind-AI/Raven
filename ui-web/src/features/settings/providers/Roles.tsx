@@ -4,54 +4,25 @@
 import { useRef } from 'react'
 
 import { t } from '../../../i18n/t'
+import {
+  MEDIA_PROVIDER, ROLE_KIND, ROLES, disabledTools, everosLocked, followsChat,
+  mediaSelection, providerName, roleProviders, roleValue, rolesUsing, withRole,
+} from '../../../lib/modelRoles'
 import { openPicker } from '../../model/source'
 import { statedTags } from '../../model/types'
 import { Card, Row, Rov, Seg, Stepper } from '../Fields'
 import { dig } from '../source'
 import * as store from '../store'
 
+import type { Role, RoleId, RoleValue } from '../../../lib/modelRoles'
 import type { Kind, Offer } from '../../model/types'
-import type { ProviderRow, SettingsSnapshot } from '../types'
+import type { SettingsSnapshot } from '../types'
 import type { JSX } from 'react'
 
-export type RoleId =
-  | 'chat' | 'title' | 'memllm'
-  | 'embedding' | 'rerank' | 'multimodal' | 'image' | 'speech' | 'video'
-
-/* What each slot may be filled with. The one consumer of a model's kind: an
-   embedding slot listing a chat model is a pick that fails on the next call,
-   and the slot is the only place that knows which it wants.
-   Text for every slot that talks: `kind_of` files a model by what it WRITES, so
-   a model that also reads pictures is text, and the multimodal slot -- which
-   wants exactly that -- takes text too. */
-export const ROLE_KIND: Record<RoleId, Kind> = {
-  chat: 'text', title: 'text', memllm: 'text', multimodal: 'text',
-  embedding: 'embedding', rerank: 'reranker', image: 'image', speech: 'audio', video: 'video',
+export {
+  ROLE_KIND, ROLES, disabledTools, everosLocked, followsChat, roleProviders, roleValue, rolesUsing,
 }
-
-export interface Role {
-  id: RoleId
-  /* settings.set keys for the model and the provider. */
-  keys?: [string, string]
-  /* An EverOS section, written through settings.everosSet. */
-  everos?: string
-  /* tools.media.<kind>, and the tool that exists to run it. */
-  media?: string
-  tool?: string
-  optional?: boolean
-}
-
-export const ROLES: Role[] = [
-  { id: 'chat' },
-  { id: 'title', keys: ['sessionTitle.model', 'sessionTitle.provider'] },
-  { id: 'memllm', everos: 'llm' },
-  { id: 'embedding', everos: 'embedding', optional: true },
-  { id: 'rerank', everos: 'rerank', optional: true },
-  { id: 'multimodal', everos: 'multimodal', optional: true },
-  { id: 'image', media: 'image', tool: 'image_generate', optional: true },
-  { id: 'speech', media: 'speech', tool: 'text_to_speech', optional: true },
-  { id: 'video', media: 'video', tool: 'video_generate', optional: true },
-]
+export type { Role, RoleId, RoleValue }
 
 /* Literal keys, for the i18n gate. */
 const NAME: Record<RoleId, string> = {
@@ -68,140 +39,9 @@ const USE: Record<RoleId, string> = {
 }
 export const roleName = (r: Role): string => t(NAME[r.id])
 
-const MEDIA_PROVIDER = 'openrouter'
 const CTX_MIN = 1024
 const ITER_RANGE: [number, number] = [1, 200]
 const ITER_DEFAULT = 40
-
-export const disabledTools = (raw: Record<string, unknown>): string[] => (dig(raw, 'tools.disabledTools') as string[] | undefined) || []
-
-export interface RoleValue {
-  model: string
-  provider: string
-}
-
-/* The pair a role is set to, or null for "follows the chat model" / not set. */
-export function roleValue(r: Role, snap: SettingsSnapshot): RoleValue | null {
-  if (r.id === 'chat') return snap.model ? { model: snap.model, provider: snap.curProvider } : null
-  if (r.keys) {
-    const model = dig(snap.raw, r.keys[0])
-    if (typeof model !== 'string' || !model) return null
-    const provider = dig(snap.raw, r.keys[1])
-    return { model, provider: typeof provider === 'string' ? provider : '' }
-  }
-  if (r.everos) {
-    const sec = snap.everos?.sections?.[r.everos]
-    if (!sec || !sec.model) return null
-    return { model: sec.model, provider: sec.provider || '' }
-  }
-  if (r.media) {
-    const sel = dig(snap.raw, `tools.media.${r.media}`) as { model?: string; provider?: string } | undefined
-    return sel && sel.model ? { model: sel.model, provider: sel.provider || MEDIA_PROVIDER } : null
-  }
-  return null
-}
-
-/* Which connected providers may serve a role: the image and video roles those
-   their tools can run on (the registry's `image_api` and `video_api`, OpenRouter
-   among them), speech OpenRouter, whose request shapes it speaks; an EverOS role
-   takes whichever vendors can actually serve it, the rest take any.
-
-   Capability, not auth shape. The filter used to ask `kind === 'key'`, which is
-   how the rerank slot came to offer OpenAI -- and, once a self-hosted endpoint
-   became an ordinary vendor here, how every one of them disappeared: they are
-   `local` and `endpoint`, not `key`. Whether a vendor holds a usable credential
-   is a separate question, refused at the save with a sentence naming it. */
-export function roleProviders(r: Role, snap: SettingsSnapshot): ProviderRow[] {
-  const on = snap.providers.filter((p) => p.on)
-  if (r.media === 'image') return on.filter((p) => !!p.imageApi)
-  if (r.media === 'video') return on.filter((p) => !!p.videoApi)
-  if (r.media) return on.filter((p) => p.id === MEDIA_PROVIDER)
-  if (r.everos) {
-    if (snap.everos?.available === false) return []
-    const role = r.everos
-    /* A model the vendor serves is the vendor's to say, and a catalogue is not
-       the last word on it: any connected provider may be picked, with an id
-       typed if its list lacks one. Rerank is different in kind -- EverOS has
-       to build a request in that vendor's own rerank shape, which no typed id
-       supplies -- so it keeps to the vendors whose shape is known. */
-    if (role !== 'rerank') return on
-    const offered = on.filter((p) => (snap.everos?.supports?.[p.id] || []).includes(role))
-    /* Reranking against somebody's own box needs a request shape the vendor
-       table cannot name, and this page has nowhere to ask for one -- a first
-       save of such a provider is refused, so offering it here would be a picker
-       entry whose only outcome is an error. The wizard asks, so one already
-       configured stays pickable and its model stays editable. */
-    const pinned = snap.everos?.sections?.rerank?.provider
-    return offered.filter((p) => !isSelfHost(snap, p.id) || p.id === pinned)
-  }
-  return on
-}
-
-/* A vendor whose rerank request shape nothing but its operator knows: raven
-   carries no table entry naming it, which is exactly the self-hosted case. */
-function isSelfHost(snap: SettingsSnapshot, id: string): boolean {
-  const p = snap.providers.find((x) => x.id === id)
-  return !!p && (p.kind === 'local' || p.id === 'custom')
-}
-
-/* Whether this role's slot can be edited at all. A root the user manages is
-   raven's to read and not to write -- it neither starts nor configures it --
-   and a role set from exported variables outranks anything saved here. */
-export function everosLocked(r: Role, snap: SettingsSnapshot): 'foreign' | 'env' | null {
-  if (!r.everos) return null
-  if (snap.everos?.owned === false) return 'foreign'
-  return snap.everos?.sections?.[r.everos]?.env_managed ? 'env' : null
-}
-
-/* Whether an unset role runs on the chat model. A keyed role always does; the
-   memory LLM does when the server says so -- it cannot when the chat model's
-   provider has no key raven can hand EverOS, and then unset means memory off. */
-export function followsChat(r: Role, snap: SettingsSnapshot): boolean {
-  if (r.keys) return true
-  return !!r.everos && !!snap.everos?.sections?.[r.everos]?.follows_main
-}
-
-/* The roles a provider (and optionally one of its models) serves right now.
-   A role that follows the chat model counts through the chat role. */
-export function rolesUsing(snap: SettingsSnapshot, slug: string, model?: string): Role[] {
-  const chat = roleValue(ROLES[0]!, snap)
-  return ROLES.filter((r) => {
-    const own = roleValue(r, snap)
-    const v = own || (followsChat(r, snap) ? chat : null)
-    return !!v && v.provider === slug && (model === undefined || v.model === model)
-  })
-}
-
-const providerName = (snap: SettingsSnapshot, id: string): string => {
-  const p = snap.providers.find((x) => x.id === id)
-  return p ? p.name : id
-}
-
-/* The write a pick makes, by role. The typed id is added to the provider
-   first, so the role never names a model the provider does not list. */
-const setIn = (raw: Record<string, unknown>, path: string, value: unknown): Record<string, unknown> => {
-  const [head, ...rest] = path.split('.')
-  const cur = raw[head!]
-  return {
-    ...raw,
-    [head!]: rest.length ? setIn(cur && typeof cur === 'object' ? cur as Record<string, unknown> : {}, rest.join('.'), value) : value,
-  }
-}
-
-/* The snapshot as it will read once this pick is stored, drawn at once: the
-   write is a few milliseconds but the reload behind it is a live read of every
-   vendor, and a slot that kept its old model for most of a second read as a
-   click that did nothing. */
-function withRole(r: Role, snap: SettingsSnapshot, model: string, provider: string): SettingsSnapshot {
-  if (r.id === 'chat') return { ...snap, model, curProvider: provider }
-  if (r.keys) return { ...snap, raw: setIn(setIn(snap.raw, r.keys[0], model), r.keys[1], provider) }
-  if (r.everos && snap.everos) {
-    const sections = snap.everos.sections || {}
-    return { ...snap, everos: { ...snap.everos, sections: { ...sections, [r.everos]: { ...sections[r.everos], model, provider } } } }
-  }
-  if (r.media) return { ...snap, raw: setIn(snap.raw, `tools.media.${r.media}`, mediaSelection(r.media, model, provider)) }
-  return snap
-}
 
 async function setRole(r: Role, model: string, provider: string, typed: boolean, kind?: Kind): Promise<SettingsSnapshot | void> {
   const src = store.source()
@@ -216,22 +56,10 @@ async function setRole(r: Role, model: string, provider: string, typed: boolean,
   if (r.keys) { await src.set(r.keys[0], model); return src.set(r.keys[1], provider) }
   if (r.everos) return src.everosSet(r.everos, model, provider)
   if (r.media) {
-    await src.set(`tools.media.${r.media}`, mediaSelection(r.media, model, provider))
+    await src.set(`tools.media.${r.media}`, mediaSelection(store.get().snap.raw, r.media, model, provider))
     return src.set('tools.disabledTools', disabledTools(store.get().snap.raw).filter((x) => x !== r.tool))
   }
   return undefined
-}
-
-/* The whole selection the checker wants -- model and quality, and for an image
-   or video pick the provider it runs on, empty for the OpenRouter default --
-   keeping the quality already chosen. An empty model is how the selection is
-   cleared: the key takes no null, and a clear names no provider, so the one
-   chosen stays. */
-function mediaSelection(kind: string, model: string, provider?: string): { model: string; quality: string; provider?: string } {
-  const cur = (dig(store.get().snap.raw, `tools.media.${kind}`) as { quality?: unknown } | undefined) || {}
-  const sel = { model, quality: typeof cur.quality === 'string' ? cur.quality : '' }
-  const routed = kind === 'image' || kind === 'video'
-  return routed && provider !== undefined ? { ...sel, provider: provider === MEDIA_PROVIDER ? '' : provider } : sel
 }
 
 async function clearRole(r: Role): Promise<SettingsSnapshot | void> {
@@ -239,7 +67,7 @@ async function clearRole(r: Role): Promise<SettingsSnapshot | void> {
   if (r.keys) { await src.set(r.keys[0], null); return src.set(r.keys[1], null) }
   if (r.everos) return src.everosSet(r.everos, null)
   if (r.media) {
-    await src.set(`tools.media.${r.media}`, mediaSelection(r.media, ''))
+    await src.set(`tools.media.${r.media}`, mediaSelection(store.get().snap.raw, r.media, ''))
     const dis = disabledTools(store.get().snap.raw)
     return src.set('tools.disabledTools', r.tool && !dis.includes(r.tool) ? [...dis, r.tool] : dis)
   }

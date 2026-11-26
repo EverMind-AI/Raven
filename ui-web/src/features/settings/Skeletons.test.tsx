@@ -1,16 +1,16 @@
 // @vitest-environment happy-dom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as settingsDialog from '../../state/settings'
 import { resetSources, setSources } from '../../state/sources'
-import { install, modelSource, mount, pkgList, settle, snap, source as settingsSource } from '../../test/settingsHarness'
+import { install, modelSource, mount, settle, snap, source as settingsSource } from '../../test/settingsHarness'
 import { SettingsApp } from './SettingsApp'
 import * as store from './store'
 
 import type { SectionId } from './store'
-import type { AgentPluginList, McpDetail, SettingsSnapshot } from './types'
+import type { SettingsSnapshot } from './types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -45,7 +45,7 @@ const count = (sel: string): number => document.querySelectorAll(sel).length
 const shape = (): string =>
   [count('.settings-card'), count('.settings-row'), count('.settings-xrow'), count('.settings-wbar')].join('/')
 
-const SECTIONS: SectionId[] = ['general', 'usage', 'provider', 'model', 'skills', 'tools', 'mcp', 'plugins', 'archive', 'about']
+const SECTIONS: SectionId[] = ['general', 'usage', 'provider', 'model', 'archive', 'about']
 
 describe('the wait a settings section draws', () => {
   it('announces itself once, with the word the line it replaces used to say', async () => {
@@ -100,22 +100,6 @@ describe('the wait a settings section draws', () => {
     expect(wait!.querySelector('.settings-tp-main')).toBeTruthy()
     expect(count('.settings-card')).toBe(0)
   })
-
-  it('waits on the tool, MCP and plugin pages as their rows', async () => {
-    await waiting('tools')
-    /* The first four groups' worth: files, knowledge bases, execution and the
-       web. The wait draws the cards a reader sees before scrolling, so the
-       number moves when a group is added above them. */
-    expect(count('.settings-xrow')).toBe(21)
-    cleanup()
-    store._resetForTests()
-    await waiting('mcp')
-    expect(count('.settings-xrow')).toBe(6)
-    cleanup()
-    store._resetForTests()
-    await waiting('plugins')
-    expect(count('.settings-xrow')).toBe(3)
-  })
 })
 
 describe('the waits a settings page owns', () => {
@@ -146,29 +130,6 @@ describe('the waits a settings page owns', () => {
     expect(screen.getByText('gui.settings.archive.empty')).toBeTruthy()
   })
 
-  it('draws an MCP server\'s credential fields as a key row until the catalogue answers', async () => {
-    let land: ((d: McpDetail) => void) | null = null
-    install(undefined, { serverDetail: () => new Promise((resolve) => { land = resolve }) })
-    await mount('mcp')
-    await act(async () => { fireEvent.click(screen.getByText('github')) })
-    expect(count('.settings-wait .settings-row.settings-stack')).toBe(1)
-
-    await act(async () => { land!({ known: true, fields: [], tools: [] }); await Promise.resolve() })
-    expect(count('.settings-wbar')).toBe(0)
-    expect(screen.getByText('gui.settings.mcp.no_credential')).toBeTruthy()
-  })
-
-  it('draws the plugin packages as rows until they are read, then the packages', async () => {
-    let land: ((r: AgentPluginList) => void) | null = null
-    install(undefined, { agentPlugins: () => new Promise((resolve) => { land = resolve }) })
-    await mount('plugins')
-    expect(count('.settings-wait .settings-xrow')).toBe(3)
-
-    await act(async () => { land!(pkgList()); await Promise.resolve() })
-    expect(count('.settings-wbar')).toBe(0)
-    expect(screen.getByText('docs-kit')).toBeTruthy()
-  })
-
   it('draws the vendor list as its rows while the vendor is asked, beside the line naming it', async () => {
     let land: ((r: { models: never[]; status: string }) => void) | null = null
     install(undefined, { fetchModels: () => new Promise((resolve) => { land = resolve }) })
@@ -179,18 +140,6 @@ describe('the waits a settings page owns', () => {
     expect(count('.settings-apbody .settings-apm')).toBe(8)
 
     await act(async () => { land!({ models: [], status: 'ok' }); await Promise.resolve() })
-    expect(count('.settings-wbar')).toBe(0)
-  })
-
-  it('draws a skill\'s page as its prose until inspect answers', async () => {
-    let land: ((d: { body: string; description: string; name: string }) => void) | null = null
-    install(undefined, { inspectSkill: () => new Promise((resolve) => { land = resolve }) })
-    await mount('skills')
-    await act(async () => { fireEvent.click(screen.getByText('git-flow')) })
-    expect(document.querySelector('.settings-wait.settings-card')).toBeTruthy()
-    expect(count('.settings-md .settings-wbar')).toBe(7)
-
-    await act(async () => { land!({ name: 'git-flow', description: 'd', body: '# Hi' }); await Promise.resolve() })
     expect(count('.settings-wbar')).toBe(0)
   })
 })

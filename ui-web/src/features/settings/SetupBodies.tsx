@@ -9,12 +9,12 @@ import { useSyncExternalStore } from 'react'
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
 import { Card, Chip, InlineErr, Row, Rov } from './Fields'
-import { KeyRow, VendorSelect, blocker } from './pages/Tools'
 import { Providers } from './providers/Providers'
 import { RoleRows, Roles } from './providers/Roles'
 import { SetupWait } from './Skeletons'
 import { FETCH_KEYLESS, SEARCH_KEYLESS, WEB_VENDOR, WEB_VENDOR_LABEL, WEB_VENDOR_URL, borrowedKey, legacyKey, str, vendorKey, webKeyReady, webVendor } from './source'
 import * as store from './store'
+import { KeyRow, VendorSelect } from './WebFields'
 
 import type { JSX } from 'react'
 
@@ -60,7 +60,7 @@ export function WebStepBody(): JSX.Element {
   const fetchPick = WEB_VENDOR.web_fetch!
   const searchVendor = webVendor('web_search', raw)
   const fetchVendor = webVendor('web_fetch', raw)
-  const searchReady = !blocker('web_search', raw)
+  const searchReady = webKeyReady('web_search', raw)
   const searchOptional = SEARCH_KEYLESS.has(searchVendor)
   const fetchOptional = FETCH_KEYLESS.has(fetchVendor)
   const fetchReady = webKeyReady('web_fetch', raw)
