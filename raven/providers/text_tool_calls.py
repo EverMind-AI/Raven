@@ -17,9 +17,12 @@ behind vLLM does this under a long agent prompt while it answers a short one wit
 proper tool calls: on one research turn its first search came back as this text, a
 report gate took it for a draft, and the turn spent its budget re-sampling it.
 
-This module turns such a reply back into the calls it meant. Only whole blocks are
-read, only names among the tools the step offered become calls, and the arguments
-must be a JSON object; a reply holding anything else is left as it came. The server
+This module turns such a reply back into the calls it meant. A block whose closing
+tag is missing ends where the ``<toolbox>`` wrapper closes, where the next block opens,
+or at the end of the reply: the same model, on another turn, left it out every time
+and the turn ended on the text. Its ``<arguments>`` must still be closed. Only names
+among the tools the step offered become calls, and the arguments must be a JSON
+object; a reply holding anything else is left as it came. The server
 name is dropped: this loop's tools are not grouped by server. Like the reasoning split
 (``raven.providers.reasoning``) this needs the whole text, so it runs once the reply is
 in hand, and words of the block that already streamed to a reader stay shown.
@@ -40,7 +43,9 @@ import json_repair
 from raven.contracts.llm_provider import LLMResponse, RunMeta, ToolCallRequest
 from raven.providers.tool_names import normalized_tool_name
 
-_BLOCK_RE = re.compile(r"<use_mcp_tool>(?P<body>.*?)</use_mcp_tool>", re.DOTALL)
+_BLOCK_RE = re.compile(
+    r"<use_mcp_tool>(?P<body>.*?)(?:</use_mcp_tool>|(?=</toolbox>)|(?=<use_mcp_tool>)|\Z)", re.DOTALL
+)
 _TOOL_RE = re.compile(r"<tool_name>\s*(?P<name>.*?)\s*</tool_name>", re.DOTALL)
 _ARGS_RE = re.compile(r"<arguments>(?P<args>.*?)</arguments>", re.DOTALL)
 _WRAPPER_RE = re.compile(r"</?toolbox>")
@@ -76,6 +81,8 @@ def _call(body: str, offered: set[str]) -> ToolCallRequest | None:
     if name not in offered:
         return None
     args_hit = _ARGS_RE.search(body)
+    if args_hit is None and "<arguments>" in body:
+        return None
     parsed = _arguments(args_hit.group("args") if args_hit else "")
     if parsed is None:
         return None

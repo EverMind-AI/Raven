@@ -49,6 +49,16 @@ def test_every_block_is_a_call_in_order():
     assert len({c.id for c in recovered.tool_calls}) == 2
 
 
+def test_a_block_without_its_closing_tag_ends_at_the_wrapper_or_the_reply():
+    open_block = _BLOCK.removesuffix("</use_mcp_tool>")
+    for content in (f"<toolbox>\n{open_block}\n</toolbox>", open_block, open_block + "\n" + _BLOCK):
+        recovered = recover_text_tool_calls(_reply(content), _OFFERED)
+        assert recovered is not None, content
+        assert recovered.tool_calls[0].arguments["query"] == "personal agent new system July 2026"
+        assert recovered.content is None
+    assert len(recover_text_tool_calls(_reply(open_block + "\n" + _BLOCK), _OFFERED).tool_calls) == 2
+
+
 def test_repaired_arguments_are_flagged_on_the_call():
     broken = _BLOCK.replace('"count": 10}', '"count": 10')
     call = recover_text_tool_calls(_reply(broken), _OFFERED).tool_calls[0]
@@ -60,7 +70,7 @@ def test_repaired_arguments_are_flagged_on_the_call():
 def test_what_cannot_be_read_as_calls_is_left_as_it_came():
     unoffered = _BLOCK.replace("web_search", "exec")
     not_an_object = _BLOCK.replace('{"query": "personal agent new system July 2026", "count": 10}', '["a"]')
-    unclosed = _BLOCK.removesuffix("</use_mcp_tool>")
+    unclosed = _BLOCK.split("</arguments>")[0]
     for content in (unoffered, not_an_object, unclosed, _BLOCK + "\n" + unoffered, "no blocks here", None):
         assert recover_text_tool_calls(_reply(content), _OFFERED) is None, content
     # No tools on offer, a failed call, or a reply that already carries calls.
