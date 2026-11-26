@@ -25,7 +25,11 @@ _DIGEST_SYSTEM = (
     "You extract exactly the requested information from a web page. Return "
     "the relevant facts, quotes and figures verbatim where possible, with "
     "enough surrounding context to be verifiable, and note where on the page "
-    "they appear. If the page does not contain the requested information, "
+    "they appear. A page's header time - a reader's 'Published Time' or "
+    "'Page timestamp', a crawl or render date - is not the date of the work: "
+    "when a date matters, give the work's own date (its submission history, "
+    "the first-version month an arXiv ID carries, its venue's date) and say "
+    "which date you quote. If the page does not contain the requested information, "
     "say so explicitly and list the closest related information it does "
     "contain. Be concise; no preamble."
 )
@@ -246,6 +250,22 @@ _DR_REPORT_STRUCTURE_CLAUSE_READER = _derive(
    the other way, or that only another kind of source reports, belongs in
    the answer, not in an aside; when the report leaves a part out, the
    blockquote names it and says why.
+   When the question pins a time span - two dates, named months, "the last
+   half year" - the report is about work that first appeared inside it. Put
+   the span in the queries, not a bare year: `after:YYYY-MM-DD
+   before:YYYY-MM-DD` at the end of the query, or the months by name. Date
+   each source by when the work first appeared: an arXiv paper by the month
+   its ID carries (2605 is May 2026); a journal or conference paper by its
+   first public version, often a preprint months or a year before the venue,
+   and when the venue's date is all you found, say so; never by a page's
+   crawl or render timestamp or the year a search listing shows. Work from
+   before the span is a baseline: a clause of comparison, never what a
+   section about the span is built on. For a question about recent progress,
+   survey before you dig:
+   a few broad searches across the span - new methods, benchmarks and
+   leaderboards, systems and tools, industry releases - to learn the names
+   that appeared in it, one or two of them in the question's own language,
+   then open the work behind those names.
    Organize it as an argument, not a list of signals: what is the case now,
    with the figures that show it; why it is so; what it leads to; and what
    would break that reading. The blockquote already gives the answer, so no

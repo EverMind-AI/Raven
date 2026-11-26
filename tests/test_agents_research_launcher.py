@@ -477,14 +477,15 @@ def test_the_shipped_label_moves_when_the_shipped_prompt_does():
         report_depth=shape["reportDepth"],
         report_layout=shape["reportLayout"],
         report_page=shipped["reportPage"]["enabled"],
+        report_style=shape.get("reportStyle", "prose"),
     )[1]
     digest = hashlib.sha256(" ".join(segment.split()).encode("utf-8")).hexdigest()[:16]
 
     assert (
         shipped["version"]
-        == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope"
+        == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window"
     )
-    assert digest == "5f210159a3c740ec", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
+    assert digest == "630e021f92a44a18", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
 
 
 def test_every_retirement_this_product_declares_names_a_label_it_can_load():

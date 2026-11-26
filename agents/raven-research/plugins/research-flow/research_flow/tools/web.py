@@ -1494,6 +1494,32 @@ def fetch_result_ok(out: object) -> bool:
 #: nothing" should not be able to disagree.
 _THIN_PAGE_CHARS = 400
 
+# The reader's header carries when it saw or re-rendered the page, which for an arXiv paper
+# is often months after submission (2602.20722 read as 24 Aug 2026), and the model took it
+# as the publication date. An arXiv ID's first four digits are the first version's year
+# and month, so the date is read from the ID instead.
+_PAGE_TIME_RE = re.compile(r"^Published Time:[ \t]*(.+)$", re.M)
+_PAGE_TIME_LABEL = "Page timestamp (when the page was crawled or rendered, not when the work was published): "
+_ARXIV_ID_RE = re.compile(
+    r"^https?://(?:www\.)?(?:arxiv\.org|alphaxiv\.org|huggingface\.co/papers)/"
+    r"(?:(?:abs|pdf|html|overview)/)?(\d{2})(0[1-9]|1[0-2])\.\d{4,5}",
+    re.I,
+)
+
+
+def first_version(url: str) -> str | None:
+    """``YYYY-MM`` of an arXiv paper's first version, read from the ID in ``url``."""
+    m = _ARXIV_ID_RE.match(url)
+    return f"20{m.group(1)}-{m.group(2)}" if m else None
+
+
+def _dated(url: str, text: str) -> tuple[str, dict[str, str]]:
+    """``text`` with the reader's page time named for what it is, and the arXiv month as a result field."""
+    text = _PAGE_TIME_RE.sub(lambda m: _PAGE_TIME_LABEL + m.group(1), text)
+    month = first_version(url)
+    return text, ({"first_version": month} if month else {})
+
+
 #: How many rewrites one fetch may try. The chains below are two deep at most, and a
 #: budget states the cost in the file rather than leaving it to the length of a table.
 _FALLBACK_LIMIT = 2
@@ -1995,6 +2021,7 @@ class WebFetchTool(Tool):
         encoding_lost = _encoding_lost(text)
         source_chars = len(text)
         self._record_source(url, text, self.spec.extractor)
+        text, dated = _dated(url, text)
 
         recovery: dict[str, Any] = {}
         target_status, blocked = self._target_verdict(text)
@@ -2030,6 +2057,7 @@ class WebFetchTool(Tool):
                     "source_chars": source_chars,
                     "length": len(extracted),
                     "text": extracted,
+                    **dated,
                     **recovery,
                     **_ledger_only_field(side),
                 },
@@ -2049,6 +2077,7 @@ class WebFetchTool(Tool):
             "truncated": truncated,
             "length": len(text),
             "text": text,
+            **dated,
             **recovery,
         }
         if encoding_lost:

@@ -161,6 +161,10 @@ def test_the_reader_form_asks_for_the_whole_subject_and_plain_prose():
     for cfg in (_reader_cfg(), _reader_cfg(report_style="outline")):
         contract = " ".join(render_identity_and_contract(cfg)[1].split())
         assert "Cover the whole subject the question names." in contract
+        assert "the report is about work that first appeared inside it" in contract
+        assert "`after:YYYY-MM-DD before:YYYY-MM-DD`" in contract
+        assert "never by a page's crawl or render timestamp" in contract
+        assert "survey before you dig" in contract
         assert "the blockquote names it and says why" in contract
         assert "every sentence parses" in contract
         assert "keep an English word only for a name, a model number, a unit" in contract

@@ -1361,12 +1361,14 @@ def render_page(
     language: str = "en",
     highlights: Highlights | None = None,
     show_limits: bool = True,
+    limits_last: bool = True,
 ) -> str:
     """The reading page of ``report``, markdown in the reader layout.
 
     ``title`` is used when the report has no ``#`` title of its own. Without
     ``show_limits`` the section that closes the body under the fixed limits heading is
-    left off the page; the report file keeps it.
+    left off the page; the report file keeps it. Without ``limits_last`` the report is not
+    in the reader layout, so its last section is body like the rest, never the limits.
     ``day`` is the date the cover shows. ``language`` selects the fixed labels. ``highlights`` come from
     :mod:`~research_flow.support.report_highlights`, already checked.
     """
@@ -1384,6 +1386,7 @@ def render_page(
     # The limits are the last section of the body; the report's lists of sources are not the body.
     quiet = references.quiet if references else frozenset()
     listings, limits_at = _layout(parts)
+    limits_at = limits_at if limits_last else -1
     for index, section in enumerate(parts.sections):
         if not show_limits and index == limits_at and _LIMITS_LABEL_RE.fullmatch(_label(section)):
             continue

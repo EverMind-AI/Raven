@@ -7,7 +7,7 @@ All notable changes to Raven are documented here.
 ### Added
 
 - Raven-Research has an outline style for its report, set with
-  `finalShape.reportStyle: "outline"` (the default stays `"prose"`). The report
+  `finalShape.reportStyle: "outline"` (the class default stays `"prose"`). The report
   then opens with a `#` title above the answer, numbers its sections and the
   subsections inside them, opens each section with its conclusion after a bold label,
   writes three or more parallel items as a list, each item opening with its name
@@ -67,8 +67,16 @@ All notable changes to Raven are documented here.
   search, each one the answer depends on researched, a part left out named
   in the answer - and the prose to read as plain standard writing in the
   question's language: no stray English terms, mainland Chinese terms, and
-  two differing figures for one quantity said apart. Label
-  `...-length-shape-arc-scope`.
+  two differing figures for one quantity said apart.
+- Raven-Research ships the outline style by default (`finalShape.reportStyle:
+  "outline"` in its config). When a question pins a time span, the reader clause
+  has the queries carry it (`after:` / `before:`), dates each source by when the
+  work first appeared - an arXiv paper by its ID's month, a venue paper by its
+  first public version - keeps earlier work to a comparison, and surveys the
+  span's new names before reading in depth. The fetch tool names the reader's
+  `Published Time` header as the page's crawl or render time and returns an arXiv
+  paper's first-version month as `first_version`; the digest is told the same.
+  Label `...-length-shape-arc-scope-window`.
 - Raven-Research can run its draft review (`verify.onDigestProvider`) and its
   page highlights (`reportPage.highlightsOnDigestProvider`) on the fetch digest's
   own provider and model instead of the agent's, so a reasoning agent model no

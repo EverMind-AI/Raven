@@ -1429,3 +1429,42 @@ async def test_research_option_labels_reach_the_broker_as_text(option, expected)
     assert "User answered" in result and expected in result
     assert params == original
     assert not tool._take_round_trip_grant()
+
+
+class _ReaderHeaderTransport(httpx.AsyncBaseTransport):
+    """The reader's envelope: its page time in the header, then the page."""
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        body = "Off-policy RL for LLM post-training. " * 30
+        return httpx.Response(
+            200,
+            text=f"Title: A paper\n\nPublished Time: Mon, 24 Aug 2026 20:01:50 GMT\n\nMarkdown Content:\n{body}",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("url", "month"),
+    [
+        ("https://arxiv.org/html/2602.20722v2", "2026-02"),
+        ("https://arxiv.org/abs/2604.07941", "2026-04"),
+        ("https://arxiv.org/pdf/2611.03698v1", "2026-11"),
+        ("https://huggingface.co/papers/2609.29421", "2026-09"),
+        ("https://example.com/2602.20722", None),
+    ],
+)
+async def test_a_fetched_paper_is_dated_by_its_arxiv_id_not_the_readers_page_time(monkeypatch, url, month):
+    """The reader's header gave a February paper an August date and the report took it."""
+
+    def _no_resolver(*args, **kwargs):
+        raise socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
+
+    monkeypatch.setattr(socket, "getaddrinfo", _no_resolver)
+    _patch_client(monkeypatch, _ReaderHeaderTransport())
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool().execute(url=url))
+
+    assert answer.get("first_version") == month
+    assert "Published Time:" not in answer["text"]
+    assert "not when the work was published): Mon, 24 Aug 2026" in answer["text"]

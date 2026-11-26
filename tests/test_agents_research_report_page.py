@@ -235,6 +235,13 @@ def test_a_last_section_under_another_heading_stays_on_the_page():
     assert "<h2>Outlook</h2>" in render_page(report, show_limits=False)
 
 
+def test_a_report_outside_the_reader_layout_keeps_its_last_section_as_body():
+    report = "> a\n\n## One\nb\n\n## Conclusion\nc\n"
+    assert 'is-limits">' in render_page(report)
+    page = render_page(report, show_limits=False, limits_last=False)
+    assert '<h2>Conclusion</h2><div class="panel">' in page and 'class="panel is-limits"' not in page
+
+
 def test_the_page_shows_the_limits_unless_the_config_turns_them_off():
     from research_flow.config import ReportPageConfig
 

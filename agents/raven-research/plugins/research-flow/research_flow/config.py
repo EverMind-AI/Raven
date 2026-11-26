@@ -520,6 +520,11 @@ PRODUCT_SUPERSEDED_PROFILES: dict[str, str] = {
     # part researched or named as left out, and for plain standard prose in the question's
     # language, so the label moves.
     "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope",
+    # 2026-11-26: the product ships the outline style; the reader clause dates sources by
+    # when the work first appeared and puts a question's time span in its queries, and
+    # the fetch tool labels a reader's page time and reads an arXiv ID's month, so the
+    # label moves.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window",
     # The interim label this branch's 2026-09-07 batches ran under before it rebased onto
     # the cite-rank clause and the dr@3.7 rung; never shipped, retired so those bench
     # configs still load.
