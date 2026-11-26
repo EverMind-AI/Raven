@@ -21,6 +21,7 @@ import { staging } from '../../state/session/staging'
 import { show as toast } from '../../state/toast'
 import * as chip from '../model/chip'
 import { setChipPainter } from '../model/source'
+import { gateway } from '../../rpc/gateway'
 import { checkVersion, savePermMode, setSettingsChrome, watchMcp } from './source'
 import { redraw as redrawSettings, refreshSoon } from './store'
 
@@ -71,6 +72,9 @@ export function install(): void {
     /* Not awaited: the pick repaints synchronously and the persist speaks for
        itself if it fails. */
     setLang: (v: string) => { void langPick(v as 'en' | 'zh', { persist: true }) },
+    setAutonomyMode: (v: string) => {
+      void gateway().call('config.set', { key: 'agents.defaults.autonomyMode', value: v }).then(() => { refreshSoon() })
+    },
   })
 
   /* The pick's write-back. In a conversation it reaches that conversation only

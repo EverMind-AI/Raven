@@ -65,6 +65,7 @@ interface SettingsChrome {
   newerVersion(): string | null
   upgrade(): void
   setLang(v: string): void
+  setAutonomyMode(v: string): void
 }
 
 let chrome: SettingsChrome = {
@@ -73,6 +74,7 @@ let chrome: SettingsChrome = {
   newerVersion: () => null,
   upgrade: () => {},
   setLang: () => {},
+  setAutonomyMode: () => {},
 }
 
 export function setSettingsChrome(next: SettingsChrome): void {
@@ -408,6 +410,7 @@ export const settingsSource: SettingsSource = {
   /* Not awaited: the pick repaints synchronously and the persist speaks for
      itself if it fails. */
   setLang: (v) => chrome.setLang(v),
+  setAutonomyMode: (v) => chrome.setAutonomyMode(v),
 }
 
 /* -- the web tools' vendor tables ---------------------------------------
@@ -601,5 +604,5 @@ export function _resetForTests(): void {
   everosLive = null
   everosCloudLive = null
   cloudProbe = Promise.resolve(null)
-  chrome = { version: () => null, checkUpdate: async () => {}, newerVersion: () => null, upgrade: () => {}, setLang: () => {} }
+  chrome = { version: () => null, checkUpdate: async () => {}, newerVersion: () => null, upgrade: () => {}, setLang: () => {}, setAutonomyMode: () => {} }
 }

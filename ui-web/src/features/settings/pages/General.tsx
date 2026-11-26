@@ -1,6 +1,6 @@
-/* General: language and theme. Language goes through the source (it is config
-   the agent reads too); theme is the browser's own preference and goes to the
-   module that already holds it.
+/* General: language, theme, and autonomy mode. Language and autonomy go
+   through the source (they are config the agent reads); theme is the browser's
+   own preference and goes to the module that already holds it.
 
    Desktop notifications are not offered here, because half of what the row
    promised does not exist. Its line read "when tasks finish or need your
@@ -26,6 +26,23 @@ type Theme = 'system' | 'light' | 'dark'
 const THEMES: Theme[] = ['system', 'light', 'dark']
 
 const SHOT = { light: 'settings-shot', dark: 'settings-shot settings-shot-dark' }
+
+function AutonomySeg(): JSX.Element {
+  const snap = store.get().snap
+  const agents = snap?.raw?.agents as { defaults?: { autonomyMode?: string } } | undefined
+  const val = agents?.defaults?.autonomyMode ?? 'balanced'
+  return (
+    <Seg
+      opts={[
+        ['manual', t('gui.settings.general.autonomy_manual')],
+        ['balanced', t('gui.settings.general.autonomy_balanced')],
+        ['auto', t('gui.settings.general.autonomy_auto')],
+      ]}
+      value={val}
+      onPick={(v) => store.source().setAutonomyMode(v)}
+    />
+  )
+}
 
 /* One setting: its name and a line about it on the left, the control on the
    right, or -- for the theme cards -- under both. No card around the list: the
@@ -75,6 +92,9 @@ export function General(): JSX.Element {
           value={langCode}
           onPick={(v) => store.source().setLang(v)}
         />
+      </Setting>
+      <Setting title={t('gui.settings.general.autonomyMode')} sub={t('gui.settings.general.autonomyMode_sub')}>
+        <AutonomySeg />
       </Setting>
       <Setting title={t('gui.settings.general.theme')} sub={t('gui.settings.general.theme_sub')} below>
         <div className="settings-themes" role="radiogroup" aria-label={t('gui.settings.general.theme')}>

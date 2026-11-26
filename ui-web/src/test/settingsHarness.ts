@@ -229,6 +229,7 @@ export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsS
     newerVersion: () => null,
     upgrade: () => { calls.push(['upgrade', '']) },
     setLang: (lang) => { calls.push(['setLang', lang]) },
+    setAutonomyMode: (mode) => { calls.push(['setAutonomyMode', mode]) },
     ...over,
   }
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))

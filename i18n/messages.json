@@ -8319,6 +8319,26 @@
       "en": "The browser refused notifications",
       "zh": "浏览器拒绝了通知权限"
     },
+    "gui.settings.general.autonomyMode": {
+      "en": "Autonomy mode",
+      "zh": "自主模式"
+    },
+    "gui.settings.general.autonomyMode_sub": {
+      "en": "How far the agent goes before asking you",
+      "zh": "代理在询问你之前能走多远"
+    },
+    "gui.settings.general.autonomy_manual": {
+      "en": "Manual (confirm first)",
+      "zh": "手动（先确认）"
+    },
+    "gui.settings.general.autonomy_balanced": {
+      "en": "Balanced (reversible first)",
+      "zh": "平衡（可逆先做）"
+    },
+    "gui.settings.general.autonomy_auto": {
+      "en": "Auto (end to end)",
+      "zh": "自动（端到端）"
+    },
     "gui.settings.about.version": {
       "en": "Version",
       "zh": "版本"

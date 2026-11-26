@@ -57,6 +57,7 @@ _DEFAULTS: dict[str, Any] = {
     # What config.get reports as the default and what config.unset restores,
     # so it has to be the value PermissionsConfig.mode carries.
     "permissions.mode": "smart",
+    "agents.defaults.autonomyMode": "balanced",
 }
 
 
@@ -128,6 +129,15 @@ def _validate_language(value: Any) -> str:
     return value
 
 
+def _validate_autonomy_mode(value: Any) -> str:
+    if value not in ("manual", "balanced", "auto"):
+        raise ConfigValidationError(
+            "agents.defaults.autonomyMode must be 'manual', 'balanced' or 'auto'",
+            data={"field": "agents.defaults.autonomyMode", "got": repr(value)},
+        )
+    return value
+
+
 def _apply_language(value: Any) -> None:
     """Move the process language with the file.
 
@@ -153,6 +163,7 @@ _VALIDATORS: dict[str, Callable[[Any], Any]] = {
     # Read live by the permission gate, so a switch takes effect on the next
     # tool call rather than the next restart.
     "permissions.mode": _validate_permission_mode,
+    "agents.defaults.autonomyMode": _validate_autonomy_mode,
 }
 
 # Public: the canonical writable-key set; consumers can iterate to enumerate
@@ -173,6 +184,7 @@ _STORAGE_PATHS: dict[str, str] = {
     "tui.show_token_usage": "tui.show_token_usage",
     "language": "language",
     "permissions.mode": "permissions.mode",
+    "agents.defaults.autonomyMode": "agents.defaults.autonomyMode",
 }
 
 

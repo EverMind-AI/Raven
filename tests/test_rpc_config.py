@@ -1421,3 +1421,18 @@ async def test_a_switch_on_a_running_process_never_asks_for_an_assembly(fake_hom
 
     assert result["applied"] is True
     assert asked is False
+
+
+async def test_config_set_autonomy_mode_persists_and_validates(fake_home: Path) -> None:
+    for mode in ("manual", "balanced", "auto"):
+        result = await config_set({"key": "agents.defaults.autonomyMode", "value": mode})
+        assert result["applied"] is True
+    cfg_path = fake_home / ".raven" / "config.json"
+    payload = json.loads(cfg_path.read_text())
+    assert payload["agents"]["defaults"]["autonomyMode"] == "auto"
+
+    got = await config_get({"keys": ["agents.defaults.autonomyMode"]})
+    assert got["config"]["agents.defaults.autonomyMode"] == "auto"
+
+    with pytest.raises(ConfigValidationError):
+        await config_set({"key": "agents.defaults.autonomyMode", "value": "yolo"})
