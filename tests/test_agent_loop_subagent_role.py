@@ -88,6 +88,31 @@ def _equipped_loop(workspace: Path) -> AgentLoop:
     )
 
 
+def test_the_loop_hands_its_iteration_cap_to_the_subagent_manager(workspace) -> None:
+    """An in-process sub-agent runs under its dispatcher's cap, not a second default.
+
+    ``SubagentManager`` resolves a built-in agent's budget from a callable the loop
+    hands it at construction, and nothing asserted the loop hands the right one:
+    deleting the argument left the loop and subagent suites green, because the
+    loop's default (40) equals the schema default the manager then falls back to.
+    Only a non-default policy makes the two distinguishable, so the policy here
+    carries a cap the schema default cannot stand in for.
+
+    Asserted against the literal the policy was built with rather than against
+    ``loop._default_max_iterations`` alone, or a wrong assignment would compare
+    equal to itself and pass.
+    """
+    from raven.config.schema import AgentDefaults
+
+    assert AgentDefaults.model_fields["max_tool_iterations"].default != 25, (
+        "the cap must differ from the schema default, or an unwired manager is indistinguishable"
+    )
+    loop = _loop(workspace, max_iterations=25)
+
+    assert loop._default_max_iterations == 25, "the loop keeps the cap its policy was built with"
+    assert loop.subagents._builtin_max_iterations() == 25, "and the manager resolves an absent key to it"
+
+
 def test_subagent_mode_withholds_spawn(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
     # Unregistered rather than schema-hidden: ``_visible`` reads ``_tools``, so a
     # hidden tool is still reachable through ``tool_call`` -- which is how
