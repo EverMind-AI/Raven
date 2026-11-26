@@ -1499,10 +1499,15 @@ class TestPromptContent:
         assert "file://otherbox/etc/passwd" in params["content"]
 
     async def test_a_localhost_file_uri_names_a_local_path(self, rig):
-        """Host names are case-insensitive, so ``LOCALHOST`` is this machine."""
+        """Host names are case-insensitive, so ``LOCALHOST`` is this machine.
+
+        The whole block, not a substring of it: ``/etc/hostname`` also appears
+        in the URI a refused link passes through, so a substring assertion
+        cannot tell a resolved path from an unresolved one.
+        """
         params = await self._send(rig, [{"type": "resource_link", "uri": "file://LOCALHOST/etc/hostname", "name": "h"}])
 
-        assert "/etc/hostname" in params["content"]
+        assert params["content"] == "[h: /etc/hostname]"
 
     async def test_a_resource_link_without_a_uri_still_names_itself(self, rig):
         params = await self._send(rig, [{"type": "resource_link", "name": "notes"}])
@@ -1674,6 +1679,22 @@ class TestFileUriToPath:
         self._as_windows(monkeypatch)
 
         assert _file_uri_to_path("file:///C::/a.md") is None
+
+    @pytest.mark.parametrize("authority", ["", "localhost", "LOCALHOST"])
+    def test_a_localhost_authority_names_a_local_path_whatever_its_case(self, authority: str):
+        """Host names are case-insensitive, so every spelling of ``localhost``
+        is this machine -- and only these spellings are. Pinned against the
+        converter itself rather than the prompt text it feeds: the substring
+        ``/etc/hostname`` survives a refusal that passes the URI through, so a
+        casefold regression would leave that one green."""
+        from raven.acp.methods import _file_uri_to_path
+
+        assert _file_uri_to_path(f"file://{authority}/etc/hostname") == "/etc/hostname"
+
+    def test_an_authority_that_is_not_localhost_names_no_path(self):
+        from raven.acp.methods import _file_uri_to_path
+
+        assert _file_uri_to_path("file://otherbox/etc/passwd") is None
 
 
 class TestCancel:
