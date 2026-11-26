@@ -29,8 +29,8 @@ from raven.providers.openai_codex_provider import (
     _convert_tool_choice,
     _convert_tools,
     _iter_sse,
-    _ResponsesStreamState,
 )
+from raven.providers.responses_stream import _ResponsesStreamState
 from raven.providers.usage import responses_usage
 
 _GPT_VERSION = re.compile(r"(?:^|/)gpt-(\d+)\.(\d+)(?:$|[-/])", re.IGNORECASE)

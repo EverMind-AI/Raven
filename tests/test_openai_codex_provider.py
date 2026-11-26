@@ -25,8 +25,8 @@ from raven.providers.openai_codex_provider import (
     _convert_tool_output,
     _friendly_error,
     _iter_sse,
-    _map_finish_reason,
 )
+from raven.providers.responses_stream import _map_finish_reason
 from tests._tls import https_endpoint, private_ca
 
 
