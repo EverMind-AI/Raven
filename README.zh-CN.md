@@ -375,6 +375,25 @@ raven web
 <td>从纵向维度评估 Agent 的自进化、迁移效率、错误规避与技能使用。</td>
 </tr>
 <tr>
+<th colspan="2">开发工具与 SDK</th>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/everos-cloud-sdk-python">EverOS SDK</a></strong></td>
+<td>EverOS Cloud 的官方 Python SDK，提供 v2 Memory API 的类型化客户端。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EverOS-Tools">EverOS Tools</a></strong></td>
+<td>面向 AI 编程助手的官方开发工具，提供 v1 到 v2 的迁移扫描与影响报告。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EverOS-MCP">EverOS MCP</a></strong></td>
+<td>基于 EverOS Cloud Memory API 的 MCP 服务器，为 AI Agent 提供长期记忆。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EverOS-Convex">EverOS for Convex</a></strong></td>
+<td>为 Convex 应用提供长期记忆的原生组件，可与 @convex-dev/agent 一行集成。</td>
+</tr>
+<tr>
 <th colspan="2"><a href="https://github.com/EverMind-AI/plugins">集成</a></th>
 </tr>
 <tr>
@@ -392,6 +411,10 @@ raven web
 <tr>
 <td><strong><a href="https://dify.ai">Dify</a></strong></td>
 <td>提供<a href="https://github.com/EverMind-AI/plugins/tree/main/dify">自托管</a>与<a href="https://github.com/EverMind-AI/plugins/tree/main/dify_cloud">云端</a>工具，在工作流和 Agent 中显式搜索与存储记忆。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/raven-use-cases">Raven 用例</a></strong></td>
+<td>真实的 Raven 集成、可复用工作流与社区案例。</td>
 </tr>
 </table>
 

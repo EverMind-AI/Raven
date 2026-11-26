@@ -392,6 +392,25 @@ integrations into one open-source ecosystem.
 <td>Longitudinal evaluation of agent self-evolution, transfer efficiency, error avoidance, and skill use.</td>
 </tr>
 <tr>
+<th colspan="2">Developer Tools &amp; SDKs</th>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/everos-cloud-sdk-python">EverOS SDK</a></strong></td>
+<td>Official Python SDK for EverOS Cloud, a typed client for the v2 Memory API.</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EverOS-Tools">EverOS Tools</a></strong></td>
+<td>Official developer tools for AI coding assistants, including a v1-to-v2 migration scan and impact report.</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EverOS-MCP">EverOS MCP</a></strong></td>
+<td>MCP server that gives AI agents long-term memory through the EverOS Cloud Memory API.</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EverOS-Convex">EverOS for Convex</a></strong></td>
+<td>Native Convex component for long-term memory, with one-line @convex-dev/agent integration.</td>
+</tr>
+<tr>
 <th colspan="2"><a href="https://github.com/EverMind-AI/plugins">Integrations</a></th>
 </tr>
 <tr>
@@ -409,6 +428,10 @@ integrations into one open-source ecosystem.
 <tr>
 <td><strong><a href="https://dify.ai">Dify</a></strong></td>
 <td><a href="https://github.com/EverMind-AI/plugins/tree/main/dify">Self-hosted</a> and <a href="https://github.com/EverMind-AI/plugins/tree/main/dify_cloud">cloud</a> tools for explicit memory search and storage in workflows and agents.</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/raven-use-cases">Raven Use Cases</a></strong></td>
+<td>Real-world Raven integrations, reusable workflows, and community showcases.</td>
 </tr>
 </table>
 
