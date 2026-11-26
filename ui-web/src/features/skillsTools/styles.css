@@ -116,16 +116,22 @@
 .skillsTools-root { display: flex; flex-direction: column; gap: 18px; }
 .skillsTools-panel { display: flex; flex-direction: column; }
 .skillsTools-pane { display: flex; flex-direction: column; gap: 18px; }
+.skillsTools-root .page-bar-end { min-width: 0; max-width: 100%; }
 
 .skillsTools-segtabs {
-  display: inline-flex; align-items: center; gap: 3px; padding: 4px;
+  display: flex; align-items: center; gap: 3px; padding: 4px;
+  max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain;
+  scroll-padding-inline: 4px; scroll-snap-type: inline proximity;
+  scrollbar-width: none;
   border-radius: 12px; background: var(--st-seg-bg);
   border: 1px solid var(--line);
 }
+.skillsTools-segtabs::-webkit-scrollbar { display: none; }
 .skillsTools-segtab {
   height: 30px; padding: 0 12px; border: 0; border-radius: 8px;
   background: transparent; color: var(--muted); font: inherit; font-size: 13px; font-weight: 500;
   cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  flex: none; scroll-snap-align: start;
   transition: background .14s ease, color .14s ease, box-shadow .14s ease;
 }
 .skillsTools-segtab svg { width: 14px; height: 14px; flex: none; opacity: .78; }

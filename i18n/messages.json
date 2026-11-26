@@ -14633,6 +14633,10 @@
       "en": "Skills & Tools sections",
       "zh": "技能与工具分类"
     },
+    "gui.skillsTools.tabs.attention": {
+      "en": "Needs attention",
+      "zh": "需要处理"
+    },
     "gui.skillsTools.tabs.mcp": {
       "en": "MCP",
       "zh": "MCP"

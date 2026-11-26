@@ -10,7 +10,7 @@ import {
   PuzzleIcon,
   Wrench01Icon,
 } from '@hugeicons/core-free-icons'
-import { useRef, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useSyncExternalStore } from 'react'
 
 import { Icon } from '../../components/Icon'
 import { PageBar } from '../../components/PageBar'
@@ -50,6 +50,10 @@ function SegmentedTabs({ active, attention }: {
 }): JSX.Element {
   const refs = useRef<Partial<Record<SkillsToolsTab, HTMLButtonElement | null>>>({})
 
+  useEffect(() => {
+    refs.current[active]?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+  }, [active])
+
   const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>, idx: number): void => {
     let next = -1
     if (e.key === 'ArrowRight') next = (idx + 1) % TABS.length
@@ -67,9 +71,11 @@ function SegmentedTabs({ active, attention }: {
     <div className="skillsTools-segtabs" role="tablist" aria-label={t('gui.skillsTools.tabs.aria')}>
       {TABS.map((id, idx) => {
         const selected = id === active
+        const label = t(TAB_LABEL[id])
         const dot = (id === 'tools' && attention.tools)
           || (id === 'mcp' && attention.mcp)
           || (id === 'plugins' && attention.plugins)
+        const attentionLabel = dot ? t('gui.skillsTools.tabs.attention') : ''
         return (
           <button
             key={id}
@@ -79,13 +85,15 @@ function SegmentedTabs({ active, attention }: {
             id={`skillsTools-tab-${id}`}
             aria-selected={selected}
             aria-controls={`skillsTools-panel-${id}`}
+            aria-label={dot ? `${label}, ${attentionLabel}` : undefined}
+            title={dot ? attentionLabel : undefined}
             tabIndex={selected ? 0 : -1}
             className="skillsTools-segtab"
             onClick={() => store.setTab(id)}
             onKeyDown={(e) => onKeyDown(e, idx)}
           >
             {TAB_ICON[id]}
-            <span>{t(TAB_LABEL[id])}</span>
+            <span>{label}</span>
             {dot ? <span className="skillsTools-tab-dot" aria-hidden="true" /> : null}
           </button>
         )

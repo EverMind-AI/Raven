@@ -3,7 +3,6 @@
  * buttons, MCP server status, and the per-package MCP permission switch.
  */
 import { Alert02Icon, ArrowRight01Icon, PuzzleIcon } from '@hugeicons/core-free-icons'
-import { useEffect } from 'react'
 
 import { Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
@@ -41,7 +40,7 @@ function PluginCard({ p }: { p: AgentPluginRow }): JSX.Element {
 
   const flip = (on: boolean): void => {
     void store.run(busyKey(p.name), async () => {
-      store.set({ pkgs: await store.source().setPackageMcp(p.name, on) })
+      store.syncPkgs(await store.source().setPackageMcp(p.name, on))
     }, { remount: false })
   }
 
@@ -121,9 +120,6 @@ function PluginCard({ p }: { p: AgentPluginRow }): JSX.Element {
 
 export function PluginsTab(): JSX.Element {
   const s = store.get()
-  useEffect(() => {
-    if (s.pkgs === null) void store.pkgsLoad()
-  }, [s.pkgs])
 
   if (!s.pkgs) return <WaitView tab="plugins" />
 

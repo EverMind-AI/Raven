@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /* Component and modal interaction tests for the Skills & Tools module page. */
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -106,6 +106,23 @@ afterEach(() => {
 })
 
 describe('SkillsToolsApp', () => {
+  it('loads plugin packages once on page open and announces their attention', async () => {
+    const data = pkgList()
+    data.packages[0]!.problems = ['Package is broken.']
+    const agentPlugins = vi.fn(async () => data)
+    setup(snap(), { agentPlugins })
+
+    await mountPage('skills')
+    await waitFor(() => { expect(agentPlugins).toHaveBeenCalledTimes(1) })
+
+    const plugins = document.getElementById('skillsTools-tab-plugins')!
+    expect(plugins.querySelector('.skillsTools-tab-dot')).toBeTruthy()
+    expect(plugins.getAttribute('aria-label')).toContain('gui.skillsTools.tabs.attention')
+
+    await act(async () => { fireEvent.click(plugins) })
+    expect(agentPlugins).toHaveBeenCalledTimes(1)
+  })
+
   it('renders header tabs with keyboard switching across all four sections', async () => {
     setup()
     await mountPage('skills')

@@ -154,9 +154,7 @@ export function refreshSoon(): void {
 export async function open(tab?: SkillsToolsTab): Promise<void> {
   if (tab) set({ tab, err: '' })
   page.show('skillsToolsPage')
-  set({ pkgs: null })
-  await refresh()
-  if (get().tab === 'plugins') void pkgsLoad()
+  await Promise.all([refresh(), pkgsLoad()])
 }
 
 export function close(): void {
@@ -192,7 +190,7 @@ export function openTool(id: string): void {
 
 export async function openMcp(name: string): Promise<void> {
   set({ modal: { kind: 'mcp', name }, mcpDetail: null, err: '' })
-  detail.open('skillsTools')
+  detail.open('skillsTools', { fill: true })
   try {
     const info = await source().serverDetail(name)
     const cur = get().modal
@@ -251,19 +249,42 @@ export function refuse(msg: string): void {
   set({ err: msg })
 }
 
-export async function pkgsLoad(): Promise<void> {
-  try {
-    set({ pkgs: await source().agentPlugins() })
-  } catch (e) {
-    toast(t('gui.op.load_failed', { detail: (e as Error).message || String(e) }))
-    set({ pkgs: { packages: [], problems: [] } })
-  }
+let pkgsLoading: Promise<void> | null = null
+let pkgsEpoch = 0
+
+/* A write's answer is newer than any package read already in flight. */
+export function syncPkgs(pkgs: AgentPluginList): void {
+  pkgsEpoch += 1
+  set({ pkgs })
+}
+
+export function pkgsLoad(): Promise<void> {
+  if (pkgsLoading) return pkgsLoading
+  const epoch = ++pkgsEpoch
+  const loading = (async () => {
+    try {
+      const pkgs = await source().agentPlugins()
+      if (epoch === pkgsEpoch) set({ pkgs })
+    } catch (e) {
+      if (epoch === pkgsEpoch) {
+        toast(t('gui.op.load_failed', { detail: (e as Error).message || String(e) }))
+        set({ pkgs: { packages: [], problems: [] } })
+      }
+    }
+  })()
+  pkgsLoading = loading
+  void loading.then(() => {
+    if (pkgsLoading === loading) pkgsLoading = null
+  })
+  return loading
 }
 
 export function _resetForTests(): void {
   if (refreshTimer) clearTimeout(refreshTimer)
   refreshTimer = null
   loading = null
+  pkgsLoading = null
+  pkgsEpoch += 1
   askInChat = null
   openProviderFn = null
   store._resetForTests()

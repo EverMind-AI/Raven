@@ -129,4 +129,33 @@ describe('skillsTools store', () => {
     expect(detail.get().fill).toBe(true)
     expect(store.get().skillDetail?.name).toBe('git-flow')
   })
+
+  it('opens an MCP modal in the settled detail fill while its body loads', async () => {
+    document.body.innerHTML = PAGE_SHELL
+    setSources({ skillsTools: sourceOf() })
+
+    await store.openMcp('github')
+
+    expect(detail.get().owner).toBe('skillsTools')
+    expect(detail.get().fill).toBe(true)
+    expect(store.get().mcpDetail).not.toBeNull()
+  })
+
+  it('coalesces package loads and ignores one superseded by a package write', async () => {
+    document.body.innerHTML = PAGE_SHELL
+    let finish!: (value: ReturnType<typeof pkgList>) => void
+    const agentPlugins = vi.fn(() => new Promise<ReturnType<typeof pkgList>>((resolve) => { finish = resolve }))
+    setSources({ skillsTools: sourceOf({ agentPlugins }) })
+
+    const first = store.pkgsLoad()
+    const second = store.pkgsLoad()
+    expect(agentPlugins).toHaveBeenCalledTimes(1)
+
+    const fresh = pkgList({ packages: [] })
+    store.syncPkgs(fresh)
+    finish(pkgList())
+    await Promise.all([first, second])
+
+    expect(store.get().pkgs).toBe(fresh)
+  })
 })

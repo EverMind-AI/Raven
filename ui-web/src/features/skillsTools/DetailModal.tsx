@@ -722,7 +722,7 @@ function PluginModal({ name }: { name: string }): JSX.Element {
 
   const flip = (on: boolean): void => {
     void store.run(`pkg:${p.name}`, async () => {
-      store.set({ pkgs: await store.source().setPackageMcp(p.name, on) })
+      store.syncPkgs(await store.source().setPackageMcp(p.name, on))
     }, { remount: false })
   }
 
