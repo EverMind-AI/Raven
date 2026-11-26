@@ -389,9 +389,10 @@ class TestAnAcpRowCanReplaceTheSeed:
 
         assert merged[0].env["RAVEN_HOME"] == str(home)
 
-    def test_a_declared_command_description_and_env_are_kept(self) -> None:
+    def test_the_command_is_fixed_while_description_and_env_stay_configurable(self, monkeypatch) -> None:
         from raven.config.schema import ThirdPartyAcpSubagentConfig
 
+        monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
         row = ThirdPartyAcpSubagentConfig.model_validate(
             {
                 "name": GENERIC_AGENT,
@@ -404,7 +405,7 @@ class TestAnAcpRowCanReplaceTheSeed:
 
         merged = merge_builtin_seeds([row])
 
-        assert merged[0].command == "custom acp"
+        assert commands.command_argv(merged[0].command) == GENERATED_ARGV
         assert merged[0].description == "mine"
         assert merged[0].env == {"RAVEN_HOME": "/elsewhere"}
 
@@ -435,20 +436,25 @@ class TestAnAcpRowCanReplaceTheSeed:
 
         assert commands.command_argv(merged[0].command) == GENERATED_ARGV
 
-    def test_a_declared_command_is_never_given_arguments(self, monkeypatch, tmp_path) -> None:
-        """A row that brought its own command line chose it. Injecting the host's
-        config path into someone else's argv is not this function's business."""
+    def test_a_declared_command_cannot_replace_the_generated_launcher(self, monkeypatch) -> None:
+        """Raven-General over acp is this raven, not an arbitrary ACP server.
+
+        Letting a row choose the command would let it occupy the mandatory seed
+        slot with another process, so the transport is selectable and the
+        launcher is not.
+        """
         from raven.config.schema import ThirdPartyAcpSubagentConfig
 
         monkeypatch.setenv("RAVEN_HOME", "/srv/raven")
-        monkeypatch.setattr("raven.home._current_config_path", tmp_path / "config.json")
+        monkeypatch.setattr("raven.home._current_config_path", None)
+        monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
         row = ThirdPartyAcpSubagentConfig.model_validate(
             {"name": GENERIC_AGENT, "kind": "acp", "command": "custom acp"}
         )
 
         merged = merge_builtin_seeds([row])
 
-        assert merged[0].command == "custom acp", "neither the host's config nor the row's name is injected"
+        assert commands.command_argv(merged[0].command) == GENERATED_ARGV
 
     def test_a_row_that_named_its_own_home_is_left_alone(self, monkeypatch, tmp_path) -> None:
         """An explicit ``env.RAVEN_HOME`` is the row asking for a different

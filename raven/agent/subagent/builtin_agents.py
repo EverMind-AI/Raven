@@ -278,14 +278,16 @@ _ACP_HOST_DESCRIPTION = (
 
 
 def _acp_host_override(cfg: Any, *, name: str) -> Any:
-    """An acp row that takes a seed's slot, with the host defaults filled in.
+    """An acp row that takes a seed's slot, with the host command fixed.
 
-    The config row brings the transport choice and nothing else: ``command``
-    defaults to this install's own ``raven acp --as-subagent <name>``, ``env``
-    carries the host's ``RAVEN_HOME`` (unless the row sets one) so the child
-    engine reads the same config and provider the host does, and a blank
-    ``description`` gets the acp line rather than leaving the roster entry with
-    the in-process description that no longer applies.
+    The config row brings the transport choice, not a launcher. ``command`` is
+    always this install's own ``raven acp --as-subagent <name>``; a row value is
+    ignored because a different command would either be Raven itself or an
+    unrelated server occupying the seed's slot. ``env`` carries the host's
+    ``RAVEN_HOME`` (unless the row sets one) so the child engine reads the same
+    config and provider the host does, and a blank ``description`` gets the acp
+    line rather than leaving the roster entry with the in-process description
+    that no longer applies.
 
     ``--as-subagent`` is what keeps the child from being Raven. A bare ``raven
     acp`` renders the host's identity, so the generic row's child introduced
@@ -298,13 +300,10 @@ def _acp_host_override(cfg: Any, *, name: str) -> Any:
     child derived its config from a home the host was not using and came up on a
     different model and provider than the row promises.
 
-    Two things stop either flag from overriding a choice somebody made. Both are
-    appended only to a command this function generated -- a row that brought its
-    own command line chose it, and is not somewhere to inject arguments -- and
-    ``--config`` only when the row named no ``RAVEN_HOME`` of its own. An explicit
-    one is the row asking for a different instance, and ``--config`` outranks
-    ``RAVEN_HOME`` in the child, so propagating regardless would serve that row
-    the host's model and provider under its own name.
+    ``--config`` is appended only when the row named no ``RAVEN_HOME`` of its own.
+    An explicit one is the row asking for a different instance, and ``--config``
+    outranks ``RAVEN_HOME`` in the child, so propagating regardless would serve
+    that row the host's model and provider under its own name.
     """
     from raven.contracts.path_policy import CONFIG_FILENAME, HOME_ENV_VAR
     from raven.home import raven_home
@@ -313,19 +312,23 @@ def _acp_host_override(cfg: Any, *, name: str) -> Any:
     env = dict(getattr(cfg, "env", None) or {})
     row_named_its_own_home = HOME_ENV_VAR in env
     env.setdefault(HOME_ENV_VAR, str(home))
-    command = str(getattr(cfg, "command", "") or "").strip()
+    if str(getattr(cfg, "command", "") or "").strip():
+        logger.warning(
+            "sub-agent {!r}: the acp command is fixed by this raven and cannot be configured; "
+            "the configured command is ignored",
+            name,
+        )
+    command = host_raven_acp_command()
     if not command:
-        command = host_raven_acp_command()
-        if not command:
-            logger.warning(
-                "sub-agent {!r}: acp redeclaration has no command and this install's own `raven` "
-                "could not be resolved; the row will fail at dispatch",
-                name,
-            )
-        else:
-            command = f"{command} --as-subagent {command_quote(name)}"
-            if not row_named_its_own_home and (config_path := get_config_path()) != home / CONFIG_FILENAME:
-                command = f"{command} --config {command_quote(str(config_path))}"
+        logger.warning(
+            "sub-agent {!r}: acp redeclaration needs this install's own `raven`, which could not be "
+            "resolved; the row will fail at dispatch",
+            name,
+        )
+    else:
+        command = f"{command} --as-subagent {command_quote(name)}"
+        if not row_named_its_own_home and (config_path := get_config_path()) != home / CONFIG_FILENAME:
+            command = f"{command} --config {command_quote(str(config_path))}"
     description = str(getattr(cfg, "description", "") or "").strip()
     if not description:
         description = _ACP_HOST_DESCRIPTION

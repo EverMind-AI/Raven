@@ -436,8 +436,9 @@ agent is handed back a full registry.
 A role may carry a **sub-agent name** (`RAVEN_SUBAGENT_NAME`, read by `subagent_name()` in
 `raven/home.py`): the roster row the process serves as, written by
 `raven acp --as-subagent <name>`, which also forces the role on so a named child can never
-hold `spawn`. Only a package seed name is accepted; the acp redeclaration of `Raven-General`
-gets the flag on the command it generates. The name changes the identity line to
+hold `spawn`. Only a package seed name is accepted. The acp redeclaration of `Raven-General`
+does not accept a configured command: it always runs this raven's generated
+`raven acp --as-subagent Raven-General`. The name changes the identity line to
 "You are <name>, a sub-agent working for Raven." and answers `agentInfo.title` with it;
 `agentInfo.name` stays `raven`, the family marker raven's client reads. The host never adds
 the name to `subagent_role_env()`: the products under `agents/` run with the role and no
