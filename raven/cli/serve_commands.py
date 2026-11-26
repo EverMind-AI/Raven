@@ -1152,7 +1152,7 @@ def _supervise(port: int) -> None:
         # see it -- leaving behind the very stale `web.json` this function
         # exists to prevent. `raven web` followed straight away by `--stop` is
         # exactly that timing.
-        argv, surface = _gateway_launch(port)
+        _, surface = _gateway_launch(port)
         # Before the first state write: a refused launch must not leave a
         # web.json behind for the parent to attach to.
         if surface == "serve":

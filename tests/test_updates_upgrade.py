@@ -892,12 +892,13 @@ REINSTALL = ["--reinstall-package", "raven"]
 FORCE = ["--force"]
 
 
-def _load_upgrade_helper_namespace() -> dict[str, object]:
+def _load_upgrade_helper_namespace(restart_probe_s: int | None = 0) -> dict[str, object]:
     namespace: dict[str, object] = {"__name__": "raven_upgrade_helper_test"}
     exec(upgrade_commands._UPGRADE_HELPER_SOURCE, namespace)
     # The watch after a relaunch is wall-clock time no test is about; the
-    # tests that are about it set their own bound.
-    namespace["RESTART_PROBE_S"] = 0
+    # tests that are about it keep the helper's own bound.
+    if restart_probe_s is not None:
+        namespace["RESTART_PROBE_S"] = restart_probe_s
     return namespace
 
 
@@ -1850,6 +1851,27 @@ def test_upgrade_helper_calls_a_restart_that_stays_up_good(
     assert status == 0
     assert "Raven restarted." in out.out
     assert "while restarting" not in out.err
+
+
+def test_upgrade_helper_probes_the_relaunch_for_the_shipped_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A relaunch that stays up is called good only after the probe window, and
+    this is the only place the shipped length of that window is asserted. The
+    timeout literal is deliberate: reading it back from the helper would let the
+    value change without a test noticing, which is what this test exists to
+    prevent."""
+    monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=0)))
+    serving = Mock()
+    serving.wait.side_effect = subprocess.TimeoutExpired("raven", 1)
+    monkeypatch.setattr(subprocess, "Popen", Mock(return_value=serving))
+    helper_main = _load_upgrade_helper_namespace(restart_probe_s=None)["main"]
+    helper_main.__globals__["wait_for_parent"] = Mock(return_value=0)
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH])
+
+    assert status == 0
+    serving.wait.assert_called_once_with(timeout=4)
 
 
 def test_parent_wait_outlasts_a_slow_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
