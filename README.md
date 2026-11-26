@@ -334,10 +334,10 @@ The command opens the WebUI in your browser and keeps Raven running in the backg
 <p align="center"><em>Task Board page: every conversation's Task Groups in one place, in four columns: Needs you, Running, Idle and Completed.</em></p>
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/6b48e038-e761-4aa2-b62a-d63472c45139"><img src="https://github.com/user-attachments/assets/6b48e038-e761-4aa2-b62a-d63472c45139" alt="Raven WebUI subagents page" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/ad07b9b8-a592-46bb-af41-c74e3cb246e1"><img src="https://github.com/user-attachments/assets/ad07b9b8-a592-46bb-af41-c74e3cb246e1" alt="Raven WebUI Connectors page, Agents tab" width="90%"></a>
 </p>
 
-<p align="center"><em>Subagents: every connected agent in one roster, built-in and third-party alike.</em></p>
+<p align="center"><em>Connectors: every agent Raven can delegate to, built-in and third-party alike, with whether it is connected.</em></p>
 
 ## ❯❯ EverMind Ecosystem
 

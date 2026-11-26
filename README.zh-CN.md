@@ -318,10 +318,10 @@ raven web
 <p align="center"><em>任务看板页：所有会话的任务汇总在一处，按需要你回答、运行中、闲置、已完成分栏。</em></p>
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/88791886-59db-41e9-a8b6-563cc39e627e"><img src="https://github.com/user-attachments/assets/88791886-59db-41e9-a8b6-563cc39e627e" alt="Raven WebUI subagents page" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/802524d7-6aec-43b0-b6b6-d93d8b456694"><img src="https://github.com/user-attachments/assets/802524d7-6aec-43b0-b6b6-d93d8b456694" alt="Raven WebUI Connectors page, Agents tab" width="90%"></a>
 </p>
 
-<p align="center"><em>子 Agent：所有已接入的 Agent，无论内置还是第三方，都汇集在同一份名册中。</em></p>
+<p align="center"><em>连接：Raven 能委派的所有智能体，内置与第三方一视同仁，并标明是否已接入。</em></p>
 
 ## ❯❯ EverMind 生态
 
