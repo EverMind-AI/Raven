@@ -220,10 +220,10 @@ SECTIONS: tuple[Section, ...] = (
             ),
             Setting(
                 "agents.defaults.autonomyMode",
-                "How far the agent goes before asking you: lite confirms first, standard asks only for irreversible or external actions, max runs end to end",
+                "How far the agent goes before asking you: manual confirms first, balanced asks only for irreversible or external actions, auto runs end to end",
                 "enum",
                 _E.NEXT_TURN,
-                choices=("lite", "standard", "max"),
+                choices=("manual", "balanced", "auto"),
             ),
             # The words are ``REASONING_EFFORTS``, the one list the console's
             # checker and the session's pick read too; null hands the choice

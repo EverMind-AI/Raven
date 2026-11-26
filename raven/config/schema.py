@@ -217,10 +217,10 @@ class AgentDefaults(Base):
     compaction: CompactionConfig = Field(default_factory=CompactionConfig)
     task_board: TaskBoardConfig = Field(default_factory=TaskBoardConfig)
     temperature: float = 0.1
-    # How far the agent goes before asking the user: lite (confirm first),
-    # standard (reversible-first, ask only for irreversible/external), max
+    # How far the agent goes before asking the user: manual (confirm first),
+    # balanced (reversible-first, ask only for irreversible/external), auto
     # (end-to-end). Read live by the prompt renderers (config.live.autonomy_mode).
-    autonomy_mode: Literal["lite", "standard", "max"] = "standard"
+    autonomy_mode: Literal["manual", "balanced", "auto"] = "balanced"
     # Per-call wall-clock cap (seconds) for every LLM request (main loop and
     # sub-agents). Bounds a stalled backend that trickles bytes without ever
     # finishing, which an httpx per-read timeout never catches.

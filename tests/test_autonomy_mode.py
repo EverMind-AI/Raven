@@ -12,9 +12,9 @@ from raven.context_engine.segments import render
 
 
 def test_autonomy_schema_default_and_validation():
-    assert AgentDefaults().autonomy_mode == "standard"
-    assert AgentDefaults.model_validate({"autonomyMode": "max"}).autonomy_mode == "max"
-    for ok in ("lite", "standard", "max"):
+    assert AgentDefaults().autonomy_mode == "balanced"
+    assert AgentDefaults.model_validate({"autonomyMode": "auto"}).autonomy_mode == "auto"
+    for ok in ("manual", "balanced", "auto"):
         assert AgentDefaults(autonomy_mode=ok).autonomy_mode == ok
     with pytest.raises(ValueError):
         AgentDefaults(autonomy_mode="reckless")
@@ -23,15 +23,15 @@ def test_autonomy_schema_default_and_validation():
 def test_live_autonomy_mode_follows_file(tmp_path, monkeypatch):
     cfg = tmp_path / "config.json"
     live = LiveConfig(cfg)
-    cfg.write_text(json.dumps({"agents": {"defaults": {"autonomyMode": "lite"}}}), encoding="utf-8")
-    assert autonomy_mode(live) == "lite"
-    cfg.write_text(json.dumps({"agents": {"defaults": {"autonomyMode": "max"}}}), encoding="utf-8")
-    assert autonomy_mode(live) == "max"
+    cfg.write_text(json.dumps({"agents": {"defaults": {"autonomyMode": "manual"}}}), encoding="utf-8")
+    assert autonomy_mode(live) == "manual"
+    cfg.write_text(json.dumps({"agents": {"defaults": {"autonomyMode": "auto"}}}), encoding="utf-8")
+    assert autonomy_mode(live) == "auto"
     cfg.write_text(json.dumps({"agents": {"defaults": {"autonomyMode": "bogus"}}}), encoding="utf-8")
-    assert autonomy_mode(live) == "standard"
+    assert autonomy_mode(live) == "balanced"
 
 
-@pytest.mark.parametrize("mode,marker", [("lite", "confirm-first"), ("standard", "escalation ladder"), ("max", "end-to-end")])
+@pytest.mark.parametrize("mode,marker", [("manual", "confirm-first"), ("balanced", "escalation ladder"), ("auto", "end-to-end")])
 def test_render_guideline_differs_per_mode(monkeypatch, mode, marker):
     monkeypatch.setattr(render, "_autonomy_mode", lambda: mode)
     assert marker in render.autonomy_guideline()
@@ -39,7 +39,7 @@ def test_render_guideline_differs_per_mode(monkeypatch, mode, marker):
     assert all(render.AUTONOMY_GUIDELINES[o] != render.autonomy_guideline() for o in others)
 
 
-@pytest.mark.parametrize("mode,marker", [("lite", "confirm-first"), ("standard", "escalation ladder"), ("max", "end-to-end")])
+@pytest.mark.parametrize("mode,marker", [("manual", "confirm-first"), ("balanced", "escalation ladder"), ("auto", "end-to-end")])
 async def test_manager_tail_uses_mode(tmp_path, monkeypatch, mode, marker):
     from raven.agent.subagent.manager import SubagentManager
 
@@ -72,10 +72,10 @@ def test_self_surface_exposes_autonomy_mode():
     setting_auto, bound_auto = autonomy
     assert bound_auto == []
     assert setting_auto.kind == "enum"
-    assert setting_auto.choices == ("lite", "standard", "max")
+    assert setting_auto.choices == ("manual", "balanced", "auto")
     assert setting_auto.effect is surface.Effect.NEXT_TURN
-    assert surface.default_of("agents.defaults.autonomyMode") == "standard"
-    for ok in ("lite", "standard", "max"):
+    assert surface.default_of("agents.defaults.autonomyMode") == "balanced"
+    for ok in ("manual", "balanced", "auto"):
         assert surface.check_value(setting_auto, ok) == ok
     with pytest.raises(ValueError):
         surface.check_value(setting_auto, "reckless")

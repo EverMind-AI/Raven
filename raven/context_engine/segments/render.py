@@ -92,11 +92,11 @@ def _autonomy_mode() -> str:
 
 
 AUTONOMY_GUIDELINES = {
-    "lite": (
+    "manual": (
         "Autonomy (confirm-first): before editing files, running a multi-step plan, or retrying an "
         "ambiguous failure, call the `ask_user` tool and wait for the answer. Do not guess."
     ),
-    "standard": (
+    "balanced": (
         "Autonomy escalation ladder: (1) inspect or diagnose first, delegating to a subagent when useful; "
         "(2) try a safe fallback; (3) run reversible local steps and companion syncs yourself; "
         "(4) call the `ask_user` tool ONLY for irreversible or external actions (publish, send, deploy, delete, spend), "
@@ -104,7 +104,7 @@ AUTONOMY_GUIDELINES = {
         "When a subagent fails in a recoverable way, dispatch a follow-up diagnostic or recovery subagent "
         "before returning to the user."
     ),
-    "max": (
+    "auto": (
         "Autonomy (end-to-end): run the full diagnose, fix, verify loop yourself and pick sensible defaults "
         "for reversible product ambiguities. Call the `ask_user` tool ONLY for destructive or irreversible "
         "actions, spending, or a hard authentication wall."
@@ -114,7 +114,7 @@ AUTONOMY_GUIDELINES = {
 
 def autonomy_guideline(mode: str | None = None) -> str:
     """The ask-vs-act guideline for ``mode`` (default: the live ``agents.defaults.autonomyMode``)."""
-    return AUTONOMY_GUIDELINES.get(mode or _autonomy_mode(), AUTONOMY_GUIDELINES["standard"])
+    return AUTONOMY_GUIDELINES.get(mode or _autonomy_mode(), AUTONOMY_GUIDELINES["balanced"])
 
 
 def dispatch_language_line(task: str) -> str:
