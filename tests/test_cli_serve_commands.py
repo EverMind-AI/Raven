@@ -1750,6 +1750,66 @@ class TestTheChosenSurface:
         assert "gateway already running" not in out
         assert opened == ["http://127.0.0.1:18999/auth#z"]
 
+    def test_a_schema_invalid_config_falls_back_instead_of_failing_the_start(self, home: Path, monkeypatch) -> None:
+        """``load_config`` runs the config migrations -- which rewrite the file --
+        and raises a bare schema ``ValueError``. A launch-directory check must do
+        neither: a malformed ``agents.defaults`` falls back to the default home
+        and the check still runs to its own answer."""
+        from raven.config.loader import get_config_path, load_config
+
+        home.mkdir(parents=True, exist_ok=True)
+        config_path = get_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps({"agents": {"defaults": "not-a-dict"}}), encoding="utf-8")
+        before = config_path.read_text(encoding="utf-8")
+        project = home.parent / "project"
+        project.mkdir()
+        monkeypatch.chdir(project)
+
+        # The old check's failure mode, pinned: this file is exactly what made
+        # `load_config` raise from outside the directory check's own try.
+        with pytest.raises(ValueError):
+            load_config()
+
+        serve_commands._refuse_unusable_launch_dir()
+
+        assert serve_commands._configured_agent_home() == home / "workspace"
+        assert config_path.read_text(encoding="utf-8") == before, "the launch check ran config migrations"
+
+    def test_the_refusal_names_a_directory_the_session_could_use(self, home: Path, monkeypatch, capsys) -> None:
+        """A refusal that only says "elsewhere" leaves the user to guess. The
+        per-channel root beside agent home is where the session would otherwise
+        live, so that is what the message offers."""
+        home.mkdir(parents=True, exist_ok=True)
+        monkeypatch.chdir(home.parent)
+
+        with pytest.raises(typer.Exit) as exit_info:
+            serve_commands._refuse_unusable_launch_dir()
+
+        assert exit_info.value.exit_code == 1
+        err = capsys.readouterr().err
+        assert "start it from a project directory" in err
+        assert str(home / "tmp") in err
+
+    def test_the_serve_line_names_the_lock_holder_and_the_directory(self, home: Path, monkeypatch) -> None:
+        """The fallback is not self-explanatory: the name says "serve" but not
+        that a gateway forced it, nor where sessions land. Both belong in the
+        line, because neither is visible from the engine's name."""
+        project = home.parent / "project"
+        project.mkdir(parents=True)
+        monkeypatch.chdir(project)
+        monkeypatch.setattr(serve_commands, "_live_gateway_pid", lambda: 4321)
+
+        line = serve_commands._surface_line("serve")
+
+        assert "a gateway (pid 4321)" in line
+        assert "already holds the instance lock" in line
+        assert "no IM channel adapters" in line
+        assert str(project.resolve()) in line
+        assert serve_commands._surface_line("gateway") == (
+            "raven web: raven gateway -- IM channel adapters run; sessions group by channel"
+        )
+
 
 @pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX")
 class TestStopping:
