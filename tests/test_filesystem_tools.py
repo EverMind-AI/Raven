@@ -6,6 +6,7 @@ previous content is gone the moment it lands -- so the tool has to hand it over.
 
 import nturl2path
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -545,9 +546,8 @@ async def test_read_file_pages_a_file_without_holding_all_of_it(tmp_path: Path, 
 
 
 _NOTE = (
-    "(Line {n} is {length} characters long; the first {room} are shown. offset moves by lines and cannot reach "
-    "the rest of it: grep tells whether a piece is in it, and a shell command that cuts by bytes, such as "
-    "cut -c, shows another stretch.)"
+    "(Line {n} is {length} characters long; the first {room} are shown. "
+    "Use offset={n} char_offset={room} to read the next stretch of it.)"
 )
 
 
@@ -571,7 +571,7 @@ async def test_a_line_longer_than_a_page_shows_its_head_and_says_how_to_see_the_
     body, note, footer = got.split("\n\n")
     assert body == "1| " + "x" * room
     assert note == _NOTE.format(n=1, length=200_000, room=room)
-    assert footer == "(End of file — 1 lines total)"
+    assert footer == "(Showing lines 1-1 of 1.)"
 
 
 @pytest.mark.asyncio
@@ -588,11 +588,7 @@ async def test_paging_moves_past_a_line_longer_than_a_page_instead_of_going_roun
     assert first == "1| header\n\n(Showing lines 1-1 of 3. Use offset=2 to continue.)"
     room = ReadFileTool._MAX_CHARS - len("2| ")
     assert second == (
-        "2| "
-        + "y" * room
-        + "\n\n"
-        + _NOTE.format(n=2, length=200_000, room=room)
-        + "\n\n(Showing lines 2-2 of 3. Use offset=3 to continue.)"
+        "2| " + "y" * room + "\n\n" + _NOTE.format(n=2, length=200_000, room=room) + "\n\n(Showing lines 2-2 of 3.)"
     )
     assert third == "3| last\n\n(End of file — 3 lines total)"
 
@@ -625,6 +621,236 @@ async def test_a_first_line_that_just_fills_the_page_is_shown_whole_and_the_page
     got = await read.execute(path=str(target))
 
     assert got == "1| " + "z" * room + "\n\n(Showing lines 1-1 of 2. Use offset=2 to continue.)"
+
+
+# --- a character offset inside a line ---------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_one_line_file_is_read_from_a_character_offset_inside_it(tmp_path: Path):
+    """A one-line file over the tool-output budget: the line number cannot move within it, so the character offset does.
+
+    A minified bundle, a one-line JSON, a CSV row of a few hundred thousand
+    characters: the file has one line, so paging by lines never reaches the
+    tail of it. The character offset does, and says where it stopped.
+    """
+    target = tmp_path / "bundle.min.js"
+    target.write_text("x" * 200_000, encoding="utf-8")
+    read = ReadFileTool(workspace=tmp_path)
+
+    got = await read.execute(path=str(target), char_offset=150_000)
+
+    body, note, footer = got.split("\n\n")
+    assert body == "1| " + "x" * 50_000
+    assert note == "(Line 1 is 200000 characters long; characters 150000-199999 are shown, the rest of it.)"
+    assert footer == "(End of file — 1 lines total)"
+
+
+@pytest.mark.asyncio
+async def test_a_character_offset_into_a_line_still_over_the_budget_says_where_to_continue(tmp_path: Path):
+    """The stretch read is still over the page's budget: it is cut, and the offset that follows it is named."""
+    target = tmp_path / "bundle.min.js"
+    target.write_text("x" * 200_000, encoding="utf-8")
+    read = ReadFileTool(workspace=tmp_path)
+
+    got = await read.execute(path=str(target), char_offset=50_000)
+
+    room = ReadFileTool._MAX_CHARS - len("1| ")
+    body, note, footer = got.split("\n\n")
+    assert body == "1| " + "x" * room
+    assert note == (
+        "(Line 1 is 200000 characters long; characters 50000-177996 are shown. "
+        "Use offset=1 char_offset=177997 to read the next stretch of it.)"
+    )
+    assert footer == "(Showing lines 1-1 of 1.)"
+
+
+@pytest.mark.asyncio
+async def test_a_character_offset_reads_the_line_the_line_number_names(tmp_path: Path):
+    """The character offset reaches into the line the page starts at, not into the first of the file."""
+    target = tmp_path / "rows.csv"
+    target.write_text("header\n" + "y" * 200_000 + "\nlast\n", encoding="utf-8")
+    read = ReadFileTool(workspace=tmp_path)
+
+    got = await read.execute(path=str(target), offset=2, char_offset=199_000)
+
+    body, note, footer = got.split("\n\n")
+    assert body == "2| " + "y" * 1000
+    assert note == "(Line 2 is 200000 characters long; characters 199000-199999 are shown, the rest of it.)"
+    assert footer == "(Showing lines 2-2 of 3. Use offset=3 to continue.)"
+
+
+@pytest.mark.asyncio
+async def test_a_character_offset_past_the_end_of_the_line_says_so(tmp_path: Path):
+    target = tmp_path / "rows.csv"
+    target.write_text("header\nshort\n", encoding="utf-8")
+    read = ReadFileTool(workspace=tmp_path)
+
+    got = await read.execute(path=str(target), offset=2, char_offset=6)
+
+    assert got == "Error: char_offset 6 is beyond the end of line 2 (5 characters)"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", [-5, "5", None, True])
+async def test_a_character_offset_that_is_not_a_count_reads_the_page_from_its_start(bad, tmp_path: Path):
+    """The registry casts and checks the argument; one that arrives anyway is read as no offset at all."""
+    target = tmp_path / "notes.txt"
+    target.write_text("first\nsecond\n", encoding="utf-8")
+    read = ReadFileTool(workspace=tmp_path)
+
+    got = await read.execute(path=str(target), char_offset=bad)
+
+    assert got == "1| first\n2| second\n\n(End of file — 2 lines total)"
+
+
+@pytest.mark.asyncio
+async def test_a_character_offset_leaves_the_rest_of_the_read_untouched(tmp_path: Path):
+    """A short line, an offset inside it: the page is the same page, with the line cut where the offset says."""
+    target = tmp_path / "notes.txt"
+    target.write_text("first\nsecond\nthird\n", encoding="utf-8")
+    read = ReadFileTool(workspace=tmp_path)
+
+    got = await read.execute(path=str(target), char_offset=3)
+
+    assert got == (
+        "1| st\n\n"
+        "(Line 1 is 5 characters long; characters 3-4 are shown, the rest of it.)\n\n"
+        "(Showing lines 1-1 of 3. Use offset=2 to continue.)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_cut_line_in_the_middle_of_a_file_holds_the_page_on_its_own_line(tmp_path: Path):
+    """A long line that is not the first: the note names the line its cursor continues, and the
+    footer counts the page without handing the next line on, so nothing skips the rest of the line."""
+    target = tmp_path / "rows.csv"
+    target.write_text("header\n" + "y" * 200_000 + "\nlast\n", encoding="utf-8")
+    read = ReadFileTool(workspace=tmp_path)
+
+    got = await read.execute(path=str(target), offset=2, char_offset=10_000)
+
+    room = ReadFileTool._MAX_CHARS - len("2| ")
+    body, note, footer = got.split("\n\n")
+    assert body == "2| " + "y" * room
+    assert note == (
+        f"(Line 2 is 200000 characters long; characters 10000-{10_000 + room - 1} are shown. "
+        f"Use offset=2 char_offset={10_000 + room} to read the next stretch of it.)"
+    )
+    assert footer == "(Showing lines 2-2 of 3.)"
+
+
+@pytest.mark.asyncio
+async def test_the_continuation_hint_can_be_followed_verbatim_to_the_end_of_the_line(tmp_path: Path):
+    """Every hint the read emits names the line and the character cursor together, so following
+    them exactly walks the whole line: no error, no skipped stretch, no going round."""
+    target = tmp_path / "bundle.min.js"
+    target.write_text("x" * 300_000 + "\ntail\n", encoding="utf-8")
+    read = ReadFileTool(workspace=tmp_path)
+
+    seen: list[str] = []
+    offset, char_offset, got = 1, 0, ""
+    for _ in range(40):
+        got = await read.execute(path=str(target), offset=offset, char_offset=char_offset)
+        assert not got.startswith("Error"), got
+        first_line = got.split("\n", 1)[0]
+        seen.append(first_line[len("1| ") :])
+        hint = re.search(r"Use offset=(\d+) char_offset=(\d+)", got)
+        if hint is None:
+            break
+        offset, char_offset = int(hint.group(1)), int(hint.group(2))
+    else:
+        raise AssertionError("the walk never reached the end of the line")
+
+    assert "".join(seen) == "x" * 300_000
+    assert "the rest of it" in got
+    assert "(Showing lines 1-1 of 2. Use offset=2 to continue.)" in got
+    assert await read.execute(path=str(target), offset=2) == "2| tail\n\n(End of file — 2 lines total)"
+
+
+@pytest.mark.asyncio
+async def test_the_hint_from_a_line_the_file_does_not_end_with_walks_that_line_to_its_end(tmp_path: Path):
+    """The reported scenario pinned end to end: a long line in the middle of the file,
+    paged from a character offset inside it, every emitted hint followed verbatim."""
+    target = tmp_path / "rows.csv"
+    target.write_text("header\n" + "y" * 300_000 + "\nlast\n", encoding="utf-8")
+    read = ReadFileTool(workspace=tmp_path)
+
+    seen: list[str] = []
+    offset, char_offset, got = 2, 1_000, ""
+    for _ in range(40):
+        got = await read.execute(path=str(target), offset=offset, char_offset=char_offset)
+        assert not got.startswith("Error"), got
+        first_line = got.split("\n", 1)[0]
+        seen.append(first_line[len("2| ") :])
+        hint = re.search(r"Use offset=(\d+) char_offset=(\d+)", got)
+        if hint is None:
+            break
+        offset, char_offset = int(hint.group(1)), int(hint.group(2))
+    else:
+        raise AssertionError("the walk never reached the end of the line")
+
+    assert "".join(seen) == "y" * (300_000 - 1_000)
+    assert "the rest of it" in got
+    assert "(Showing lines 2-2 of 3. Use offset=3 to continue.)" in got
+    assert await read.execute(path=str(target), offset=3) == "3| last\n\n(End of file — 3 lines total)"
+
+
+@pytest.mark.asyncio
+async def test_a_character_offset_equal_to_the_line_s_length_is_refused_not_read_as_empty(tmp_path: Path):
+    target = tmp_path / "notes.txt"
+    target.write_text("short\n", encoding="utf-8")
+    read = ReadFileTool(workspace=tmp_path)
+
+    got = await read.execute(path=str(target), offset=1, char_offset=5)
+
+    assert got == "Error: char_offset 5 is beyond the end of line 1 (5 characters)"
+
+
+@pytest.mark.asyncio
+async def test_the_last_character_of_a_line_is_reachable(tmp_path: Path):
+    target = tmp_path / "notes.txt"
+    target.write_text("short\n", encoding="utf-8")
+    read = ReadFileTool(workspace=tmp_path)
+
+    got = await read.execute(path=str(target), offset=1, char_offset=4)
+
+    body, note, footer = got.split("\n\n")
+    assert body == "1| t"
+    assert note == "(Line 1 is 5 characters long; characters 4-4 are shown, the rest of it.)"
+    assert footer == "(End of file — 1 lines total)"
+
+
+@pytest.mark.asyncio
+async def test_a_character_offset_counts_code_points_not_bytes(tmp_path: Path):
+    """The offset reaches into text the file carries as UTF-8: it counts the code points the
+    reader sees, and the stretch it shows is cut between characters rather than through one."""
+    wide = "\u6982" * 30
+    rocket = "\U0001f680" * 10
+    tail = "z" * 20
+    target = tmp_path / "wide.txt"
+    target.write_text(wide + rocket + tail + "\n", encoding="utf-8")
+    read = ReadFileTool(workspace=tmp_path)
+
+    got = await read.execute(path=str(target), offset=1, char_offset=35)
+
+    body, note, footer = got.split("\n\n")
+    assert body == "1| " + "\U0001f680" * 5 + tail
+    assert note == "(Line 1 is 60 characters long; characters 35-59 are shown, the rest of it.)"
+    assert footer == "(End of file — 1 lines total)"
+
+
+@pytest.mark.asyncio
+async def test_a_limit_below_one_reads_the_default_page_rather_than_erroring(tmp_path: Path):
+    """The schema asks for at least one line; a caller that names none still gets a page."""
+    target = tmp_path / "notes.txt"
+    target.write_text("first\nsecond\n", encoding="utf-8")
+    read = ReadFileTool(workspace=tmp_path)
+
+    got = await read.execute(path=str(target), limit=0)
+    below = await read.execute(path=str(target), limit=-3)
+
+    assert got == below == "1| first\n2| second\n\n(End of file — 2 lines total)"
 
 
 # ---------------------------------------------------------------------------

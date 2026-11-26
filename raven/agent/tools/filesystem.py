@@ -433,7 +433,8 @@ class ReadFileTool(_FsTool):
     def description(self) -> str:
         return (
             "Read the contents of a file. Text files return numbered lines — use offset and limit to "
-            "paginate through large ones. Image files (PNG, JPEG, GIF, WebP, and other common formats) "
+            "paginate through large ones. A line too long to show whole is read from a character offset "
+            "inside it: char_offset. Image files (PNG, JPEG, GIF, WebP, and other common formats) "
             "return the picture itself, downscaled if needed."
         )
 
@@ -452,6 +453,12 @@ class ReadFileTool(_FsTool):
                     "type": "integer",
                     "description": "Maximum number of lines to read (default 2000)",
                     "minimum": 1,
+                },
+                "char_offset": {
+                    "type": "integer",
+                    "description": "Character offset inside the first line of the page to start reading at "
+                    "(default 0). Use it to read past the head of a line too long to show whole.",
+                    "minimum": 0,
                 },
             },
             "required": ["path"],
@@ -492,7 +499,39 @@ class ReadFileTool(_FsTool):
         """
         return line
 
-    async def execute(self, path: str, offset: int = 1, limit: int | None = None, **kwargs: Any) -> str | ToolResult:
+    def _hook_shows(self, line: str) -> int:
+        """How many characters of a line the cut hook leaves visible.
+
+        Trunk's hook leaves the line whole; a fork whose hook caps a line's own
+        length overrides this with that cap, so the stretch the note names is
+        the one the reader actually saw rather than the whole remainder.
+        """
+        return len(line)
+
+    def _long_line_note(self, line_no: int, length: int, shown_from: int, shown_to: int) -> str:
+        """What the reader is told about a line too long to show whole, and how to reach the rest of it.
+
+        The line number cannot move within a line, so the character offset is
+        what gets the reader further: the note names both, because following
+        the character offset without the line number lands on the file's first
+        line. The stretch is named by the character indexes it covers, both
+        ends included; the cursor it hands on is the one past its end.
+        """
+        where = f"characters {shown_from}-{shown_to - 1} are shown" if shown_from else f"the first {shown_to} are shown"
+        return (
+            f"(Line {line_no} is {length} characters long; {where}. "
+            f"Use offset={line_no} char_offset={shown_to} to read the next stretch of it.)"
+        )
+
+    async def execute(
+        self, path: str, offset: int = 1, limit: int | None = None, char_offset: int = 0, **kwargs: Any
+    ) -> str | ToolResult:
+        if not isinstance(char_offset, int) or isinstance(char_offset, bool) or char_offset < 0:
+            char_offset = 0
+        # The schema asks for at least one line, and a caller that names none
+        # gets the default page rather than an empty one that reads as a bug.
+        if limit is not None and limit < 1:
+            limit = None
         # A file:// URL is refused by scheme, before it is resolved: on a host
         # where the URL's own spelling resolves to a real file (a drive-relative
         # path under Windows), leaving the refusal to the missing-file branch
@@ -508,11 +547,23 @@ class ReadFileTool(_FsTool):
             hint = f" -- try {local}" if local else ""
             return f"Error: {path} is a file:// URL; read_file takes a plain path{hint}"
         # A file on a registered machine is read there, by its Raven node.
-        if (
-            not _is_a_device_spelling(path)
-            and (remote := await remote_files.answer("read_file", path, {"offset": offset, "limit": limit})) is not None
-        ):
-            return remote
+        # ``char_offset`` is this tool's own argument, sent to the node it
+        # belongs to: it names a character inside the page's first line --
+        # the line ``offset`` numbers -- never one inside the file's first.
+        # The node is asked for the page its own read would return: one line
+        # when the offset pages inside one, the page the caller named when it
+        # does not.
+        if not _is_a_device_spelling(path):
+            ask: dict[str, Any] = {"offset": offset}
+            if char_offset:
+                ask["char_offset"] = char_offset
+                if limit is None:
+                    ask["limit"] = 1
+            if limit is not None:
+                ask["limit"] = limit
+            remote = await remote_files.answer("read_file", path, ask)
+            if remote is not None:
+                return remote
         try:
             fp = self._resolve(path)
             if not fp.exists():
@@ -549,6 +600,13 @@ class ReadFileTool(_FsTool):
             if offset < 1:
                 offset = 1
             start = offset - 1
+            # The offset names a character inside the line `offset` numbers,
+            # so the page starts at that line -- always a one-line page, the
+            # same one the remote path's node returns when it honours the
+            # argument. `limit` names the page it replaces, so an explicit one
+            # is honoured before the offset is applied.
+            if char_offset and limit is None:
+                limit = 1
             with fp.open("rb") as fh:
                 raw_page, total = _page_of_lines(fh, start, limit or self._DEFAULT_LIMIT)
             if total == 0:
@@ -558,12 +616,40 @@ class ReadFileTool(_FsTool):
 
             # Strict, as the whole-file decode was: a byte that is not UTF-8
             # on the page refuses the read with the codec's own sentence.
-            lines = [self._cut_line(raw.decode("utf-8")) for raw in raw_page]
+            lines = [raw.decode("utf-8") for raw in raw_page]
+            # The whole length of the line the character offset reaches into:
+            # a line too long to show whole is paged by characters, since the
+            # line number cannot move within it.
+            length = len(lines[0])
+            if char_offset:
+                if char_offset >= length:
+                    return f"Error: char_offset {char_offset} is beyond the end of line {offset} ({length} characters)"
+                lines[0] = lines[0][char_offset:]
+            # Where the first line's visible stretch stops. Read off the cut
+            # hook rather than off the line, so a hook that caps a line's own
+            # length still names the stretch it really showed; the one-line
+            # page the character offset forces leaves the stretch it shows.
+            shown = char_offset + self._hook_shows(lines[0])
+            if char_offset:
+                shown = min(shown, length)
+            lines = [self._cut_line(line) for line in lines]
             end = start + len(lines)
             numbered = [f"{start + i + 1}| {line}" for i, line in enumerate(lines)]
             result = "\n".join(numbered)
 
             note = ""
+            # A line cut mid-way holds the page on its own line: the footer's
+            # next line number would skip the rest of this one, so it counts
+            # the page without handing the next line on. A cut made by the
+            # line hook alone, on a read that was not paging inside the line,
+            # is that hook's own message to give (the fork marks the cut in
+            # the line itself).
+            line_cut = False
+            if char_offset and shown < length:
+                note = self._long_line_note(offset, length, char_offset, shown)
+                line_cut = True
+            elif char_offset:
+                note = f"(Line {offset} is {length} characters long; characters {char_offset}-{length - 1} are shown, the rest of it.)"
             if len(result) > self._MAX_CHARS:
                 trimmed, chars = [], 0
                 for line in numbered:
@@ -578,23 +664,33 @@ class ReadFileTool(_FsTool):
                     # sent the reader back to this very line, for ever
                     # (measured 2026-10-15: "Showing lines 1-0 of 1. Use
                     # offset=1"). Its head is shown instead, and the rest is
-                    # said to be out of offset's reach, since offset moves by
-                    # lines. The break the budget counts makes a line that
-                    # just fits land here too; it is shown whole, unremarked.
+                    # said to be out of the line number's reach, since the
+                    # line number moves by lines. The break the budget counts
+                    # makes a line that just fits land here too; it is shown
+                    # whole, unremarked.
                     prefix = f"{start + 1}| "
                     room = max(self._MAX_CHARS - len(prefix), 0)
                     trimmed = [prefix + lines[0][:room]]
                     if len(lines[0]) > room:
-                        note = (
-                            f"\n\n(Line {start + 1} is {len(lines[0])} characters long; the first {room} are shown. "
-                            "offset moves by lines and cannot reach the rest of it: grep tells whether a piece is "
-                            "in it, and a shell command that cuts by bytes, such as cut -c, shows another stretch.)"
-                        )
+                        shown = min(char_offset + room, shown)
+                        note = self._long_line_note(start + 1, length, char_offset, shown)
+                        line_cut = shown < length
                 end = start + len(trimmed)
-                result = "\n".join(trimmed) + note
+                result = "\n".join(trimmed)
+            if note:
+                result += "\n\n" + note
 
             if end < total:
-                result += f"\n\n(Showing lines {offset}-{end} of {total}. Use offset={end + 1} to continue.)"
+                if line_cut:
+                    result += f"\n\n(Showing lines {offset}-{end} of {total}.)"
+                else:
+                    result += f"\n\n(Showing lines {offset}-{end} of {total}. Use offset={end + 1} to continue.)"
+            elif line_cut:
+                # The cut line is the file's last, but the note's cursor still
+                # has line left to read: an end-of-file footer would contradict
+                # the continuation it offers, so the page names only what it
+                # showed.
+                result += f"\n\n(Showing lines {offset}-{end} of {total}.)"
             else:
                 result += f"\n\n(End of file — {total} lines total)"
             return result

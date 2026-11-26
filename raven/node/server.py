@@ -258,7 +258,14 @@ async def _read(params: dict[str, Any]) -> dict[str, Any]:
 
     tool = _tool(ReadFileTool, params)
     path = _text(params, "path")
-    out = _answer(await tool.execute(path, offset=_number(params, "offset", 1) or 1, limit=_number(params, "limit")))
+    out = _answer(
+        await tool.execute(
+            path,
+            offset=_number(params, "offset", 1) or 1,
+            limit=_number(params, "limit"),
+            char_offset=_number(params, "char_offset", 0) or 0,
+        )
+    )
     # The whole file's digest beside the page read, so a later write of the
     # whole file can say what it expects to replace (``fs/write``, ``expect``).
     try:

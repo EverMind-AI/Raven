@@ -10,6 +10,7 @@ registered after the built-in replaces it in the registry the loop reads.
 import asyncio
 import itertools
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -977,6 +978,34 @@ def test_a_long_line_is_cut_the_way_the_description_promises(registry, tmp_path)
     assert "1| " in body and "2| last" in body
 
 
+def test_the_read_description_names_the_offset_that_continues_a_long_line(registry):
+    """The tool takes a char_offset, and the marker on a cut line names it, so
+    the description has to name it too: a description that says only "use grep"
+    leaves the model with no way to reach the rest of a long line."""
+    assert "char_offset" in registry.get("read_file").description
+
+
+def test_the_read_description_does_not_promise_the_marker_names_a_cursor(registry):
+    """Only a read paging inside a line carries a note naming the char_offset;
+    a first read of a cut line carries the marker alone. The description used
+    to say the marker names the offset, which that first read never does."""
+    description = registry.get("read_file").description
+    assert "the marker names the char_offset" not in description
+    assert "pass char_offset to read the next stretch" in description
+
+
+def test_a_read_from_inside_a_long_line_names_the_stretch_the_cut_actually_showed(registry, tmp_path):
+    """This fork's hook caps a line at 2000 characters, and trunk works out the
+    visible span before the hook runs: the note has to name the 2000 that were
+    shown and the cursor that continues from them, not the rest of the line."""
+    target = tmp_path / "bundle.js"
+    target.write_text("x" * 200_000 + "\nlast\n")
+    body = _text(_run(registry.execute("read_file", {"file_path": str(target), "char_offset": 150_000})))
+    assert "1| " + "x" * 2000 in body
+    assert "(Line 1 is 200000 characters long; characters 150000-151999 are shown. " in body
+    assert "Use offset=1 char_offset=152000 to read the next stretch of it." in body
+
+
 def test_minified_lines_are_cut_before_the_page_is_counted_so_they_share_one_page(registry, tmp_path):
     """Fifty lines of 10k characters: cut after trunk's page, a dozen made a
     page; cut on trunk's hook, before its budget counts them, they all do, each
@@ -1298,6 +1327,9 @@ def test_a_malformed_slice_declines_rather_than_serving_half_a_face(tmp_path):
 
 
 _MARK = "... (line truncated to 2000 chars)"
+# The node numbers a line before this fork cuts it, so the "1| " prefix spends
+# three of the 2000 characters: the marker names the 1997 of content that survive.
+_NODE_MARK = "... (line truncated to 1997 chars)"
 
 
 def test_a_line_whose_own_text_ends_like_the_mark_is_cut_like_any_other(registry, tmp_path):
@@ -1344,5 +1376,235 @@ def test_a_page_a_registered_machine_s_node_answered_is_cut_after_the_read(tmp_p
     got = _run(read.execute(file_path="box:raven-work/t1/bundle.js"))
 
     lines = got.split("\n")
-    assert lines[0] == ("1| " + "y" * 5_000)[:2000] + _MARK and lines[1] == "2| last"
+    assert lines[0] == ("1| " + "y" * 5_000)[:2000] + _NODE_MARK and lines[1] == "2| last"
     assert got.endswith("(End of file — 2 lines total)")
+
+
+def test_a_node_answer_paging_inside_a_line_keeps_its_note_true_after_the_cut(tmp_path, monkeypatch):
+    """The node's note claims the stretch the node sent, and this fork's cut
+    shortens the line after it: the note is rewritten to the stretch that
+    survived, with a cursor to read on from, so the fork's page tells the
+    model what it is really holding."""
+    import json
+
+    from raven.ops import remote_path
+
+    rows = [
+        {"id": "box", "display_name": "Lab box", "host": "203.0.113.7", "port": 58717, "user": "worker", "key": "/k"}
+    ]
+    (tmp_path / "connections.json").write_text(json.dumps({"connections": rows}), encoding="utf-8")
+    monkeypatch.setenv("RAVEN_CONNECTIONS", str(tmp_path / "connections.json"))
+    monkeypatch.setattr(remote_path, "_HOMES", {})
+    monkeypatch.setattr(remote_path, "_NODES", None)
+    monkeypatch.setattr(remote_path, "_READ", {})
+    monkeypatch.setattr(
+        "raven.config.loader.load_config", lambda *a, **k: SimpleNamespace(subagents=SimpleNamespace(agents=[]))
+    )
+
+    class Pool:
+        async def home(self, machine_id: str) -> str:
+            return "/home/worker"
+
+        async def call(self, machine_id: str, method: str, params: dict) -> dict:
+            assert method == "fs/read"
+            return {
+                "text": (
+                    "1| "
+                    + "y" * 50_000
+                    + "\n\n(Line 1 is 200000 characters long; characters 150000-199999 are shown, the rest of it.)"
+                    + "\n\n(Showing lines 1-1 of 1.)"
+                ),
+                "sha256": "ab" * 32,
+            }
+
+    remote_path.use_nodes(Pool)
+    read = ReadFileTool(workspace=tmp_path, allowed_dirs=(tmp_path,), follow_binding=False)
+
+    got = _run(read.execute(file_path="box:raven-work/t1/one-line.min.js", offset=1, char_offset=150_000))
+
+    lines = got.split("\n")
+    assert lines[0] == ("1| " + "y" * 50_000)[:2000] + _NODE_MARK, "the line is cut once, at the fork's budget"
+    assert lines[2] == (
+        "(Line 1 is 200000 characters long; characters 150000-151996 are shown. "
+        "Use offset=1 char_offset=151997 to read the next stretch of it.)"
+    ), "the note names the stretch the cut left, not the one the node sent"
+    assert got.endswith("(Showing lines 1-1 of 1.)")
+
+
+def test_a_node_note_whose_line_survives_the_budget_is_left_as_the_node_wrote_it(tmp_path, monkeypatch):
+    """A page the node already cut to a stretch that fits this fork's budget
+    needs no surgery: the note's claim is true here too, cursor included."""
+    import json
+
+    from raven.ops import remote_path
+
+    rows = [
+        {"id": "box", "display_name": "Lab box", "host": "203.0.113.7", "port": 58717, "user": "worker", "key": "/k"}
+    ]
+    (tmp_path / "connections.json").write_text(json.dumps({"connections": rows}), encoding="utf-8")
+    monkeypatch.setenv("RAVEN_CONNECTIONS", str(tmp_path / "connections.json"))
+    monkeypatch.setattr(remote_path, "_HOMES", {})
+    monkeypatch.setattr(remote_path, "_NODES", None)
+    monkeypatch.setattr(remote_path, "_READ", {})
+    monkeypatch.setattr(
+        "raven.config.loader.load_config", lambda *a, **k: SimpleNamespace(subagents=SimpleNamespace(agents=[]))
+    )
+
+    class Pool:
+        async def home(self, machine_id: str) -> str:
+            return "/home/worker"
+
+        async def call(self, machine_id: str, method: str, params: dict) -> dict:
+            assert method == "fs/read"
+            return {
+                "text": (
+                    "1| " + "y" * 1_000 + "\n\n(Line 1 is 200000 characters long; characters 150000-150999 are shown. "
+                    "Use offset=1 char_offset=151000 to read the next stretch of it.)" + "\n\n(Showing lines 1-1 of 1.)"
+                ),
+                "sha256": "ab" * 32,
+            }
+
+    remote_path.use_nodes(Pool)
+    read = ReadFileTool(workspace=tmp_path, allowed_dirs=(tmp_path,), follow_binding=False)
+
+    got = _run(read.execute(file_path="box:raven-work/t1/one-line.min.js", offset=1, char_offset=150_000))
+
+    assert got == (
+        "1| " + "y" * 1_000 + "\n\n(Line 1 is 200000 characters long; characters 150000-150999 are shown. "
+        "Use offset=1 char_offset=151000 to read the next stretch of it.)" + "\n\n(Showing lines 1-1 of 1.)"
+    )
+
+
+def _node_reads(tmp_path: Path, monkeypatch, files: dict[str, str]) -> None:
+    """Register a machine whose node answers with trunk's own read of ``files``.
+
+    The node's note and footer are the ones the real node writes, so a wording
+    this fork has not learned yet fails here rather than on a real machine.
+    """
+    import json
+
+    from raven.ops import remote_path
+
+    rows = [
+        {"id": "box", "display_name": "Lab box", "host": "203.0.113.7", "port": 58717, "user": "worker", "key": "/k"}
+    ]
+    (tmp_path / "connections.json").write_text(json.dumps({"connections": rows}), encoding="utf-8")
+    monkeypatch.setenv("RAVEN_CONNECTIONS", str(tmp_path / "connections.json"))
+    monkeypatch.setattr(remote_path, "_HOMES", {})
+    monkeypatch.setattr(remote_path, "_NODES", None)
+    monkeypatch.setattr(remote_path, "_READ", {})
+    monkeypatch.setattr(
+        "raven.config.loader.load_config", lambda *a, **k: SimpleNamespace(subagents=SimpleNamespace(agents=[]))
+    )
+    root = tmp_path / "node"
+    root.mkdir()
+    for name, text in files.items():
+        (root / name).write_text(text, encoding="utf-8")
+
+    class Pool:
+        async def home(self, machine_id: str) -> str:
+            return str(root)
+
+        async def call(self, machine_id: str, method: str, params: dict) -> dict:
+            assert method == "fs/read"
+            text = await TrunkReadFileTool(workspace=root).execute(
+                path=params["path"],
+                offset=params.get("offset", 1),
+                limit=params.get("limit"),
+                char_offset=params.get("char_offset", 0),
+            )
+            return {"text": text, "sha256": "ab" * 32}
+
+    remote_path.use_nodes(Pool)
+
+
+def test_a_node_s_first_read_names_the_stretch_its_cut_showed_and_walks_the_whole_line(tmp_path, monkeypatch):
+    """A page that starts at the file's first character words its note "the
+    first N are shown", and the fork's cut matched only the other wording: the
+    note claimed 127997 characters over a line cut to 1997, and the cursor it
+    handed on stepped over 126000 unread ones. Both forms name a stretch by
+    its character indexes now, and following the cursor covers every character
+    once, with no gap and no repeat."""
+    _node_reads(tmp_path, monkeypatch, {"bundle.min.js": "x" * 200_000 + "\nlast\n"})
+    read = ReadFileTool(workspace=tmp_path, allowed_dirs=(tmp_path,), follow_binding=False)
+
+    got = _run(read.execute(file_path="box:bundle.min.js", offset=1))
+    body, note, footer = got.split("\n\n")
+
+    claimed = re.search(r"characters (\d+)-(\d+) are shown", note)
+    assert claimed is not None, "the note names the stretch by its character indexes, whatever the node's wording"
+    visible = body.removeprefix("1| ").removesuffix(_NODE_MARK)
+    assert len(visible) == int(claimed[2]) - int(claimed[1]) + 1, "the note claims the stretch the line really shows"
+    assert note.endswith(f"Use offset=1 char_offset={len(visible)} to read the next stretch of it.)")
+    assert footer == "(Showing lines 1-1 of 2.)"
+
+    covered: set[int] = set()
+    offset, cursor = 1, 0
+    for _ in range(200):
+        text = _run(read.execute(file_path="box:bundle.min.js", offset=offset, char_offset=cursor))
+        head, rest = text.split("\n\n", 1)
+        content = head.split("| ", 1)[1]
+        if content.endswith(_NODE_MARK):
+            content = content[: -len(_NODE_MARK)]
+        covered.update(range(cursor, cursor + len(content)))
+        step = re.search(r"Use offset=(\d+) char_offset=(\d+)", rest)
+        if step is None:
+            break
+        offset, cursor = int(step[1]), int(step[2])
+
+    assert covered == set(range(200_000)), "the cursor walks the whole line, with no gap and no repeat"
+
+
+def test_a_cut_numbered_line_marker_counts_the_content_it_kept(tmp_path, monkeypatch):
+    """A node's first read of a long line carries no note, so the marker is the
+    only number a model can follow there. The line this fork cuts carries the
+    "N| " prefix; a marker naming the whole 2000 sent the model to
+    char_offset=2000 and stepped over the three characters past the 1997 it
+    had seen."""
+    _node_reads(tmp_path, monkeypatch, {"bundle.min.js": "x" * 5_000 + "\nlast\n"})
+    read = ReadFileTool(workspace=tmp_path, allowed_dirs=(tmp_path,), follow_binding=False)
+
+    got = _run(read.execute(file_path="box:bundle.min.js", offset=1))
+    first = got.split("\n")[0]
+    marker = re.search(r"\.\.\. \(line truncated to (\d+) chars\)$", first)
+    assert marker is not None, "a first read of a cut line carries the marker"
+    content = first.removeprefix("1| ").removesuffix(marker[0])
+    assert int(marker[1]) == len(content) == 1997, "the marker names the content kept, not the whole budget"
+    assert "char_offset" not in got, "the scenario is the first read, which carries no note"
+
+
+def test_a_cut_last_line_a_node_paged_inside_never_keeps_an_end_of_file_footer(tmp_path, monkeypatch):
+    """The node's note hands a cursor into the last line and its footer says the
+    file ends; after the cut shortens that line the two contradict each other,
+    and the footer yields: it counts the page instead of promising an end."""
+    _node_reads(tmp_path, monkeypatch, {"rows.csv": "header\n" + "y" * 200_000 + "\n"})
+    read = ReadFileTool(workspace=tmp_path, allowed_dirs=(tmp_path,), follow_binding=False)
+
+    got = _run(read.execute(file_path="box:rows.csv", offset=2, char_offset=150_000))
+    body, note, footer = got.split("\n\n")
+
+    assert body == "2| " + "y" * 1997 + _NODE_MARK
+    assert note == (
+        "(Line 2 is 200000 characters long; characters 150000-151996 are shown. "
+        "Use offset=2 char_offset=151997 to read the next stretch of it.)"
+    )
+    assert footer == "(Showing lines 2-2 of 2.)"
+    assert "End of file" not in got
+
+
+def test_a_cut_one_line_file_a_node_paged_inside_never_keeps_an_end_of_file_footer(tmp_path, monkeypatch):
+    """The one-line file is the same contradiction with nothing after the line to
+    explain it away: the footer counts the page it showed, not the file's end."""
+    _node_reads(tmp_path, monkeypatch, {"one-line.min.js": "z" * 200_000})
+    read = ReadFileTool(workspace=tmp_path, allowed_dirs=(tmp_path,), follow_binding=False)
+
+    got = _run(read.execute(file_path="box:one-line.min.js", offset=1, char_offset=150_000))
+    body, note, footer = got.split("\n\n")
+
+    assert body == "1| " + "z" * 1997 + _NODE_MARK
+    assert note == (
+        "(Line 1 is 200000 characters long; characters 150000-151996 are shown. "
+        "Use offset=1 char_offset=151997 to read the next stretch of it.)"
+    )
+    assert footer == "(Showing lines 1-1 of 1.)"
+    assert "End of file" not in got
