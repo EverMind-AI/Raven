@@ -156,6 +156,49 @@ is not a download link, and a successful model answer is not proof of successful
 file upload. Platform permissions, formats, size limits, and transient transport
 errors still apply to file-capable adapters.
 
+## Matrix: a federated channel with an opt-in SDK
+
+Matrix is an open protocol for decentralized messaging: accounts live on
+homeservers, rooms can span servers, and end-to-end encryption is built in.
+Raven supports it because it is the only channel in the table that is both
+open-source and end-to-end encrypted by design, which makes it a natural fit for
+self-hosted or privacy-conscious deployments where Slack or Discord is not an
+option.
+
+The adapter is built on matrix-nio and ships as an optional extra
+(`channel-matrix`). It is unavailable on Windows, and the reason is Raven's
+own extra rather than the SDK: matrix-nio publishes a `py3-none-any` wheel
+and installs anywhere, but the extra declares `sys_platform != 'win32'`, so
+the dependency is never pulled in there. It authenticates with a homeserver
+URL, a user id, and an access token — no bot approval flow is needed, but
+the account must already exist on the homeserver.
+
+End-to-end encryption is on by default (`e2eeEnabled: true`), and it does
+not work out of the box: the extra installs matrix-nio without its `e2e`
+extra, so `python-olm` is absent, and `MatrixChannel.start()` then raises
+`ImportWarning: Encryption is enabled in the client configuration but
+dependencies for E2E encryption aren't installed`. Install `matrix-nio[e2e]`
+yourself before enabling the channel, or set `e2eeEnabled: false`. Even with
+olm installed, the crypto store loads only when `deviceId` is set; without
+it a restart may replay recent messages. Turning E2EE off is a deliberate
+config change — it exposes message bodies and attachments to anyone who can
+read them in transit, while the access token reaches the homeserver either
+way.
+
+Room behavior follows `allowFrom`, and Matrix adds its own group rules:
+`groupPolicy` defaults to `open` here, where Telegram, Discord, Feishu and
+Slack default to `mention`, and the `allowlist` option reads
+`groupAllowFrom`, which holds room ids rather than sender ids. A direct
+room — two members or fewer — is still gated by `allowFrom`; being direct
+is not a bypass. The adapter sends a typing notice while a turn runs and
+supports file attachments up to the homeserver's advertised limit (or
+`maxMediaBytes`, whichever is lower).
+
+One operational note: because Matrix is federated, the `homeserver` field is
+sensitive — it decides which server receives credentials and messages. The
+default `https://matrix.org` is a public homeserver; a private deployment should
+point at its own.
+
 ## QR login and lifecycle
 
 Only adapters declaring interactive login use `channels login`. Today that is
