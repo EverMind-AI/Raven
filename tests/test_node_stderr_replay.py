@@ -351,8 +351,6 @@ async def test_a_reason_written_on_stderr_while_the_link_was_down_reaches_the_ru
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
     box.nodes._heartbeat_s = 0.1
     box.nodes._lost_after_s = 1.0
-    # Long enough that the line is written well before the link is back.
-    box.nodes._backoff_s = (1.0,)
     command = "sh -c 'echo $$ > pid.txt; while [ ! -f go ]; do sleep 0.05; done; echo token expired >&2; exit 3'"
     turn = asyncio.ensure_future(_run(cli_config(command), "hi", tmp_path, instance="down"))
     workdir = box.home / "raven-work" / "down"
@@ -364,22 +362,39 @@ async def test_a_reason_written_on_stderr_while_the_link_was_down_reaches_the_ru
     # dies with the link takes its endpoint out of the pool instead of parking
     # it: nothing is detached, and the next link has nothing to bring the
     # agent back on.
-    await _until(lambda: endpoint.pid is not None)
+    await _until(lambda: endpoint.pid is not None, timeout=protocol.AGENT_LAUNCH_TIMEOUT_S)
     # The detach is recorded rather than read off the endpoint, which carries
     # it only until the next link brings the endpoint back.
     detached: list[str] = []
-    detach = type(endpoint).detach
+    detach = endpoint.detach
 
-    def record_detach(self, reason: str) -> None:
+    def record_detach(reason: str) -> None:
         detached.append(reason)
-        detach(self, reason)
+        detach(reason)
 
-    monkeypatch.setattr(type(endpoint), "detach", record_detach)
+    monkeypatch.setattr(endpoint, "detach", record_detach)
 
-    os.kill(node.client._proc.pid, signal.SIGKILL)
-    await _until(lambda: detached)
-    (workdir / "go").touch()
+    # The next link is held at the door: the attach waits until the daemon has
+    # the line and the agent is gone, so the write cannot land after the link
+    # is back and take the live path while the stderr count says the same.
+    link_back = asyncio.Event()
+    reattach = box.nodes._reattach
+
+    async def hold_reattach(machine_id: str) -> None:
+        await link_back.wait()
+        await reattach(machine_id)
+
+    monkeypatch.setattr(box.nodes, "_reattach", hold_reattach)
+    record = server.task_record_dir(box.home / ".raven-node", endpoint.task)
+    try:
+        os.kill(node.client._proc.pid, signal.SIGKILL)
+        await _until(lambda: detached)
+        (workdir / "go").touch()
+        await _until(lambda: json.loads((record / "task.json").read_text(encoding="utf-8"))["state"] == "exited")
+        assert endpoint.stderr_received == 0, "no line was read off a link before the attach"
+    finally:
+        link_back.set()
 
     with pytest.raises(RuntimeError, match=r"CLI agent 'where@box' exited 3: token expired$"):
         await asyncio.wait_for(turn, timeout=30)
-    assert endpoint.stderr_received == 1
+    assert endpoint.stderr_received == 1, "the attach replayed the line"
