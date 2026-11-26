@@ -130,7 +130,7 @@ def looks_like_raven(pid: int) -> bool:
     Two spellings the installs this code runs under:
 
     - ``python -m raven ...`` -- what the supervisor spawns for its gateway
-      (``_spawn_supervisor``, ``_gateway_argv``);
+      (``_spawn_supervisor``, ``_gateway_launch``);
     - ``raven <serve|web|gateway> ...`` -- the console-script entry point,
       with or without its ``.exe`` suffix on Windows.
 

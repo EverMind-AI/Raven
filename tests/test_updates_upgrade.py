@@ -895,6 +895,9 @@ FORCE = ["--force"]
 def _load_upgrade_helper_namespace() -> dict[str, object]:
     namespace: dict[str, object] = {"__name__": "raven_upgrade_helper_test"}
     exec(upgrade_commands._UPGRADE_HELPER_SOURCE, namespace)
+    # The watch after a relaunch is wall-clock time no test is about; the
+    # tests that are about it set their own bound.
+    namespace["RESTART_PROBE_S"] = 0
     return namespace
 
 
@@ -1281,7 +1284,12 @@ class TestTheHelperAnswersOnThePagePort:
 
         monkeypatch.setattr(subprocess, "run", run)
         free_at_relaunch: list[bool] = []
-        monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: free_at_relaunch.append(_port_is_free(port)))
+
+        def popen(*_args, **_kwargs):
+            free_at_relaunch.append(_port_is_free(port))
+            return Mock()
+
+        monkeypatch.setattr(subprocess, "Popen", popen)
 
         assert self._helper()(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4242", self.RELAUNCH]) == 0
 
@@ -1799,6 +1807,49 @@ def test_upgrade_helper_reports_a_failed_restart_after_a_good_install(
 
     assert status == 1
     assert "spawn denied" in capsys.readouterr().err
+
+
+def test_upgrade_helper_reports_a_restart_that_exits_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The process it brings back is detached, so an exit here is the only
+    account anyone gets: a launch refused for its working directory -- a
+    launchd job in `/`, a systemd unit in the home directory -- is gone before
+    the page could reconnect, and the terminal running the upgrade is the
+    last reader."""
+    monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=0)))
+    dropped = Mock()
+    dropped.wait.return_value = 1
+    monkeypatch.setattr(subprocess, "Popen", Mock(return_value=dropped))
+    helper_main = _load_upgrade_helper()
+    helper_main.__globals__["wait_for_parent"] = Mock(return_value=0)
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH])
+
+    assert status == 1
+    err = capsys.readouterr().err
+    assert "exited with status 1 while restarting" in err
+    assert "project directory" in err
+
+
+def test_upgrade_helper_calls_a_restart_that_stays_up_good(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=0)))
+    serving = Mock()
+    serving.wait.side_effect = subprocess.TimeoutExpired("raven", 1)
+    monkeypatch.setattr(subprocess, "Popen", Mock(return_value=serving))
+    helper_main = _load_upgrade_helper()
+    helper_main.__globals__["wait_for_parent"] = Mock(return_value=0)
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH])
+
+    out = capsys.readouterr()
+    assert status == 0
+    assert "Raven restarted." in out.out
+    assert "while restarting" not in out.err
 
 
 def test_parent_wait_outlasts_a_slow_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2897,7 +2948,12 @@ class TestTheHelperFallsBackToAMirror:
         monkeypatch.setattr(subprocess, "run", run)
         helper_main, popen = _helper_with_relaunch(monkeypatch)
         helper_main.__globals__["use_system_ca"] = lambda: None
-        popen.side_effect = lambda *_a, **_kw: relaunched.append(dict(os.environ))
+
+        def relaunch(*_argv, **_kwargs):
+            relaunched.append(dict(os.environ))
+            return Mock()
+
+        popen.side_effect = relaunch
 
         assert helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH]) == 0
         return uv, relaunched
@@ -3316,7 +3372,12 @@ class TestTheHelperVerifiesAgainstTheSystemStore:
         helper_main, popen = _helper_with_relaunch(monkeypatch)
         # This process's ssl module is not the helper's to change.
         helper_main.__globals__["use_system_ca"] = lambda: None
-        popen.side_effect = lambda *_a, **_kw: relaunched.append(dict(os.environ))
+
+        def relaunch(*_argv, **_kwargs):
+            relaunched.append(dict(os.environ))
+            return Mock()
+
+        popen.side_effect = relaunch
 
         assert helper_main([uv_path, WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH]) == 0
         return uv, relaunched

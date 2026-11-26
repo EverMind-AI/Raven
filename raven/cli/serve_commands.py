@@ -598,8 +598,11 @@ def _refuse_incomplete_install(label: str = "raven serve") -> None:
 def _refuse_unusable_launch_dir(label: str = "raven serve") -> None:
     """Refuse a launch directory ``validate_override`` would reject.
 
-    ``serve`` roots sessions at ``Path.cwd()``; deciding it now names the
-    directory, instead of every sub-agent dispatch failing in its own panel.
+    ``serve`` roots sessions at ``Path.cwd()``, so the workdir contract's
+    answer for that directory is the answer to whether it may serve at all.
+    The message is the validation's own reason: a turn in a refused directory
+    would not necessarily fail on its first dispatch, and promising that would
+    be a consequence this check cannot keep.
     """
     from raven.agent.workdir import validate_override
     from raven.config.loader import load_config
@@ -609,8 +612,7 @@ def _refuse_unusable_launch_dir(label: str = "raven serve") -> None:
         validate_override(Path.cwd(), workspace)
     except ValueError as exc:
         typer.echo(
-            f"{label}: {exc}. Sessions started here would fail on their first sub-agent "
-            "dispatch; start it from a project directory instead.",
+            f"{label}: {exc}; start it from a project directory instead.",
             err=True,
         )
         raise typer.Exit(1) from None
@@ -808,7 +810,7 @@ def _gateway_hosted_page() -> Optional[tuple[int, str]]:
 #     raven web  ->  detached `raven web --supervise`  ->  `raven gateway` (child)
 #
 # ...or `raven serve` as the child where a gateway already holds the lock; see
-# `_gateway_argv`, which decides that per launch.
+# `_gateway_launch`, which decides that per launch.
 #
 # The supervisor exists for one reason a plain detached gateway cannot cover: a
 # gateway that dies takes the page with it while the page still looks live, and
@@ -972,8 +974,8 @@ def _gateway_holds_the_lock() -> bool:
         return True
 
 
-def _gateway_argv(port: int) -> list[str]:
-    """The command that serves the page, and what the supervisor re-runs.
+def _gateway_launch(port: int) -> tuple[list[str], str]:
+    """The command that serves the page, and the engine it names.
 
     ``gateway`` rather than ``serve`` where it can be. Both serve the page -- the
     gateway hosts it on its own loop (see ``_gateway_page.mount_page``) -- but
@@ -995,8 +997,12 @@ def _gateway_argv(port: int) -> list[str]:
     incumbent through the same lock. So this is not a downgrade: it is the shape
     that configuration asked for.
 
-    Re-read on every launch rather than decided once, so a child that lost a race
-    for the lock comes back the other way instead of retrying into the same wall.
+    The engine travels beside the argv because the caller has to know which one
+    it is about to run: the launch-directory check applies to ``serve`` only,
+    and both the supervisor messages and the parent's pre-flight check need the
+    answer before a child exists. Re-read on every launch rather than decided
+    once, so a child that lost a race for the lock comes back the other way
+    instead of retrying into the same wall.
 
     Through ``-m raven`` rather than ``sys.argv[0]``: the console script may have
     been invoked by a name that is a shim, a symlink or a relative path that only
@@ -1013,19 +1019,14 @@ def _gateway_argv(port: int) -> list[str]:
     import sys
 
     if _gateway_holds_the_lock():
-        return [sys.executable, "-P", "-m", "raven", "serve", "--port", str(port)]
-    return [sys.executable, "-P", "-m", "raven", "gateway", "--page-port", str(port)]
+        return [sys.executable, "-P", "-m", "raven", "serve", "--port", str(port)], "serve"
+    return [sys.executable, "-P", "-m", "raven", "gateway", "--page-port", str(port)], "gateway"
 
 
 _SURFACE_COST = {
     "gateway": "IM channel adapters run; sessions group by channel",
     "serve": "no IM channel adapters; sessions use this directory",
 }
-
-
-def _surface_of(argv: list[str]) -> str:
-    """The engine an argv launches: ``serve`` carries the word, ``gateway`` does not."""
-    return "serve" if "serve" in argv else "gateway"
 
 
 def _surface_line(surface: str) -> str:
@@ -1040,7 +1041,7 @@ def _spawn_supervisor(port: int) -> None:
     supervisor stays in the terminal's process group and takes the same SIGHUP
     the shell does when the window closes -- taking the page's engine with it.
 
-    ``-P`` for the reason ``_gateway_argv`` gives: this is the process that
+    ``-P`` for the reason ``_gateway_launch`` gives: this is the process that
     keeps the working directory it was started from.
     """
     import subprocess
@@ -1115,7 +1116,7 @@ def _bound_port_of(proc: object, timeout_s: float = 15.0) -> Optional[int]:
 
 
 def _supervise(port: int) -> None:
-    """Run the gateway, and keep running it, until it exits cleanly or is stopped.
+    """Run the page's engine, and keep running it, until it exits cleanly or is stopped.
 
     A zero exit is a decision, not a fault: ``system.upgrade`` shuts the gateway
     down on purpose after spawning its replacement, and ``--stop`` and a plain
@@ -1151,18 +1152,22 @@ def _supervise(port: int) -> None:
         # see it -- leaving behind the very stale `web.json` this function
         # exists to prevent. `raven web` followed straight away by `--stop` is
         # exactly that timing.
-        _write_web_state(port)
+        argv, surface = _gateway_launch(port)
+        # Before the first state write: a refused launch must not leave a
+        # web.json behind for the parent to attach to.
+        if surface == "serve":
+            _refuse_unusable_launch_dir("raven web")
+        _write_web_state(port, surface)
         print(f"raven web: supervising the page's engine on port {port} (pid {os.getpid()})", flush=True)
         while True:
             started = time.monotonic()
-            argv = _gateway_argv(target)
-            surface = _surface_of(argv)
+            argv, surface = _gateway_launch(target)
             if surface == "serve":
                 _refuse_unusable_launch_dir("raven web")
             _write_web_state(target, surface)
             print(_surface_line(surface), flush=True)
             try:
-                proc = subprocess.Popen(  # noqa: S603 - see _gateway_argv
+                proc = subprocess.Popen(  # noqa: S603 - see _gateway_launch
                     argv,
                     # A session of its own, so the tree is the gateway's to keep
                     # and this supervisor's to end. Sharing one group, the only
@@ -1173,7 +1178,7 @@ def _supervise(port: int) -> None:
                     start_new_session=(sys.platform != "win32"),
                 )
             except OSError as exc:
-                print(f"raven web: could not start the gateway: {exc}", flush=True)
+                print(f"raven web: could not start {surface}: {exc}", flush=True)
                 return
             group = _owned_group(proc)
             # The port it asked for is not always the port it got: the first
@@ -1182,7 +1187,7 @@ def _supervise(port: int) -> None:
             # tab's, so the port it actually bound is what the restart aims at.
             bound = _bound_port_of(proc)
             if bound is not None and bound != target:
-                print(f"raven web: the gateway bound port {bound}", flush=True)
+                print(f"raven web: the {surface} bound port {bound}", flush=True)
                 target = bound
             try:
                 code = proc.wait()
@@ -1190,7 +1195,7 @@ def _supervise(port: int) -> None:
                 return
             ran = time.monotonic() - started
             if code == 0:
-                print("raven web: the gateway exited cleanly; not restarting it", flush=True)
+                print(f"raven web: the {surface} exited cleanly; not restarting it", flush=True)
                 return
             if ran >= _HEALTHY_RUN_S:
                 delay, fast_failures = 1.0, 0
@@ -1199,8 +1204,8 @@ def _supervise(port: int) -> None:
                 delay = min(delay * 2, _RESTART_CEILING_S)
             if fast_failures >= _CRASH_LOOP_GIVE_UP:
                 print(
-                    f"raven web: the gateway failed {fast_failures} times without staying up "
-                    f"(last exit {code}); giving up. Run `raven gateway` to see why.",
+                    f"raven web: the {surface} failed {fast_failures} times without staying up "
+                    f"(last exit {code}); giving up. Run `raven {surface}` to see why.",
                     flush=True,
                 )
                 return
@@ -1208,7 +1213,10 @@ def _supervise(port: int) -> None:
             # port, and coming back on a different one strands the open tab just
             # as surely as not coming back at all.
             os.environ["RAVEN_SERVE_PORT_STRICT"] = "1"
-            print(f"raven web: the gateway exited {code} after {ran:.1f}s; restarting in {delay:.0f}s", flush=True)
+            print(
+                f"raven web: the {surface} exited {code} after {ran:.1f}s; restarting in {delay:.0f}s",
+                flush=True,
+            )
             try:
                 time.sleep(delay)
             except KeyboardInterrupt:
@@ -1439,7 +1447,7 @@ def _stop_resident() -> bool:
     Each signal is then waited out rather than fired and forgotten, because a
     signal delivered is not a process gone and the difference is visible to the
     very next command. The gateway's lock is an ``flock`` the kernel holds until
-    that process exits, and ``_gateway_argv`` reads that lock to choose between
+    that process exits, and ``_gateway_launch`` reads that lock to choose between
     ``gateway`` and ``serve``. A caller that stops and relaunches back to back --
     ``raven web --stop && raven web --foreground``, which is what install.sh
     runs -- would otherwise read the lock of the process it just signalled, come
@@ -1688,7 +1696,7 @@ def _web(
         if print_url:
             typer.echo(url)
             return
-        say(f"attaching to the gateway already running: {url.split('/auth#')[0]}")
+        say(f"attaching to the engine already running: {url.split('/auth#')[0]}")
         _open(url)
         return
 
@@ -1727,6 +1735,15 @@ def _web(
                 "run `raven web --stop`, then `raven web`"
             )
             raise typer.Exit(1)
+        # The same directory check the supervisor will make, made here first.
+        # The supervisor's refusal is written and then removed inside the few
+        # milliseconds before the first poll, so the wait below would otherwise
+        # sit out its whole patience on a decision already taken -- and the
+        # reason would be on disk only. Anything other than serve is not this
+        # check's business: the gateway runs on the channel's directories.
+        _, surface = _gateway_launch(port)
+        if surface == "serve":
+            _refuse_unusable_launch_dir("raven web")
         _spawn_supervisor(port)
     try:
         url = _await_attach(err=True) if print_url else _await_attach()
@@ -1758,13 +1775,12 @@ def _run_foreground(port: int) -> None:
     import subprocess
 
     _refuse_incomplete_install()
-    argv = _gateway_argv(port)
-    surface = _surface_of(argv)
+    argv, surface = _gateway_launch(port)
     if surface == "serve":
         _refuse_unusable_launch_dir("raven web")
     typer.echo(_surface_line(surface))
     try:
-        proc = subprocess.Popen(argv)  # noqa: S603 - see _gateway_argv
+        proc = subprocess.Popen(argv)  # noqa: S603 - see _gateway_launch
     except OSError as exc:
         typer.echo(f"could not start the engine: {exc}")
         raise typer.Exit(1) from None

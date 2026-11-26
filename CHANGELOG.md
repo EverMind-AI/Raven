@@ -172,6 +172,18 @@ All notable changes to Raven are documented here.
   `list --json` also carries `disabled`, why its MCP configuration is off,
   so an empty server list says which kind of empty it is.
 
+- `raven serve` and the engine `raven web` starts refuse a launch directory
+  that cannot be a session's working directory -- the agent home, a directory
+  above it, or a path inside it such as the sessions store -- and say why
+  before anything starts. A launchd job begins in `/` and a systemd user unit
+  in the home directory, so a hosted setup now needs a project directory as
+  its `WorkingDirectory`.
+
+- The upgrade helper watches the Raven it relaunches for a few seconds. One
+  that exits at once -- the launch-directory refusal above is the usual cause
+  -- now reads as a failed upgrade, with its exit status and the directory to
+  start from, instead of `Raven restarted.` over a process already gone.
+
 ### Fixed
 
 - A model that refuses a forced tool choice is asked again with the tool on

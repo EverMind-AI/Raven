@@ -1132,6 +1132,29 @@ class TestTheSupervisor:
         assert len(argv) == 3
         assert instant[:2] == [2.0, 4.0], f"backoff did not climb: {instant}"
 
+    def test_a_restart_checks_the_launch_directory_again(self, home: Path, instant, monkeypatch, capsys) -> None:
+        """The engine can change between launches: one that lost the gateway
+        lock comes back as serve, and serve cannot root sessions in this
+        directory. A check made once, before the loop, would leave that second
+        launch unguarded."""
+        from types import SimpleNamespace
+
+        home.mkdir(parents=True, exist_ok=True)
+        monkeypatch.chdir(home.parent)
+        monkeypatch.setattr(
+            "raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=home / "workspace")
+        )
+        launches = iter([(["engine"], "gateway"), (["engine"], "gateway"), (["engine"], "serve")])
+        monkeypatch.setattr(serve_commands, "_gateway_launch", lambda _port: next(launches))
+        argv = self._run(monkeypatch, [1])
+
+        with pytest.raises(typer.Exit) as exit_info:
+            serve_commands._supervise(18999)
+
+        assert exit_info.value.exit_code == 1
+        assert len(argv) == 1, "it restarted on an engine whose directory it had refused"
+        assert "must not contain the agent home directory" in capsys.readouterr().err
+
     def test_a_gateway_that_never_stays_up_is_given_up_on(self, home: Path, instant, monkeypatch) -> None:
         """A port it cannot bind or a config it cannot load is not fixed by trying
         again, and a process respawning forever is worse than one that said why."""
@@ -1269,7 +1292,7 @@ class TestTheSupervisor:
         keeps a source checkout there from shadowing the installed raven."""
         import sys
 
-        argv = serve_commands._gateway_argv(18999)
+        argv, _surface = serve_commands._gateway_launch(18999)
 
         assert argv[:4] == [sys.executable, "-P", "-m", "raven"]
 
@@ -1288,7 +1311,7 @@ class TestTheSupervisor:
         (tmp_path / "raven" / "__init__.py").write_text("", encoding="utf-8")
         probe = "import raven; print(raven.__file__)"
         env = {**os.environ, "PYTHONSAFEPATH": ""}
-        argv = serve_commands._gateway_argv(18999)
+        argv, _surface = serve_commands._gateway_launch(18999)
         flags = argv[1 : argv.index("-m")]
 
         def imported_with(*options: str) -> Path:
@@ -1332,9 +1355,9 @@ class TestTheSupervisor:
         assert "--dev" not in launched[0]
 
     @pytest.mark.parametrize("held", [True, False])
-    def test_the_gateway_argv_never_carries_dev(self, monkeypatch, held: bool) -> None:
+    def test_the_child_argv_never_carries_dev(self, monkeypatch, held: bool) -> None:
         monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: held)
-        assert "--dev" not in serve_commands._gateway_argv(18999)
+        assert "--dev" not in serve_commands._gateway_launch(18999)[0]
 
     def test_it_supervises_the_engine_that_has_the_channel_adapters(self) -> None:
         """`serve` builds no ChannelManager, so a page behind it can never start an
@@ -1358,7 +1381,7 @@ class TestTheSupervisor:
         from unittest.mock import patch
 
         with patch.object(serve_commands, "_gateway_holds_the_lock", lambda: holder is not None):
-            return serve_commands._gateway_argv(port)
+            return serve_commands._gateway_launch(port)[0]
 
     def test_the_foreground_run_launches_that_same_child(self, monkeypatch, home: Path, opened: list[str]) -> None:
         """And it keeps foreground semantics while doing it: the child's output is
@@ -1380,7 +1403,7 @@ class TestTheSupervisor:
 
         monkeypatch.setattr(subprocess, "Popen", _fake_popen)
         monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda: None)
-        monkeypatch.setattr(serve_commands, "_gateway_argv", lambda port: ["engine", str(port)])
+        monkeypatch.setattr(serve_commands, "_gateway_launch", lambda port: (["engine", str(port)], "gateway"))
         monkeypatch.setattr(serve_commands, "_await_attach", lambda *_a, **_k: "http://127.0.0.1:18999/auth#z")
 
         serve_commands._run_foreground(18999)
@@ -1429,7 +1452,7 @@ class TestTheSupervisor:
         said: list[str] = []
         monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _DeadChild())
         monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda: None)
-        monkeypatch.setattr(serve_commands, "_gateway_argv", lambda port: ["engine", str(port)])
+        monkeypatch.setattr(serve_commands, "_gateway_launch", lambda port: (["engine", str(port)], "gateway"))
         monkeypatch.setattr(serve_commands, "_read_serve_state", lambda: None)
         monkeypatch.setattr(serve_commands.typer, "echo", lambda message="", **_k: said.append(str(message)))
 
@@ -1510,6 +1533,9 @@ class TestTheSupervisor:
         err = capsys.readouterr().err
         assert "must not contain the agent home directory" in err
         assert "start it from a project directory" in err
+        # The reason is the validation's; what a turn would do beyond it is not
+        # something this check can promise.
+        assert "first sub-agent dispatch" not in err
 
 
 class TestTheChosenSurface:
@@ -1591,6 +1617,138 @@ class TestTheChosenSurface:
         else:
             assert "raven serve" in captured.out and "no IM channel adapters" in captured.out
             assert opened == ["http://127.0.0.1:18999/auth#z"]
+
+    def test_the_detached_parent_refuses_before_spawning_the_supervisor(
+        self, home: Path, a_built_page, monkeypatch, capsys
+    ) -> None:
+        """The issue's repro: a detached run from an unusable directory while a
+        gateway holds the lock. The supervisor's refusal is written and removed
+        inside the first poll's blind window -- about ten milliseconds -- so the
+        parent waited out the whole attach patience, and the reason only ever
+        reached web.log. The parent makes the same decision first, before
+        anything is spawned."""
+        import time
+        from types import SimpleNamespace
+
+        home.mkdir(parents=True, exist_ok=True)
+        monkeypatch.chdir(home.parent)
+        monkeypatch.setattr(
+            "raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=home / "workspace")
+        )
+        monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: True)
+        monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
+        monkeypatch.setattr(serve_commands, "_read_web_state", lambda: None)
+        monkeypatch.setattr(serve_commands, "_read_serve_pid", lambda: None)
+        spawned: list[int] = []
+        monkeypatch.setattr(serve_commands, "_spawn_supervisor", lambda port: spawned.append(port))
+        monkeypatch.setattr(
+            serve_commands,
+            "_await_attach",
+            lambda *_a, **_k: pytest.fail("waited on a supervisor it refused to spawn"),
+        )
+
+        began = time.monotonic()
+        with pytest.raises(typer.Exit) as exit_info:
+            serve_commands._web(port=18999)
+        took = time.monotonic() - began
+
+        assert exit_info.value.exit_code == 1
+        assert spawned == []
+        assert took < 2.0, f"it waited {took:.1f}s for a refusal it could make itself"
+        assert "must not contain the agent home directory" in capsys.readouterr().err
+
+    def test_the_detached_parent_does_not_refuse_a_gateway_launch(self, home: Path, a_built_page, monkeypatch) -> None:
+        """The launch-directory rule is serve's, not the parent's. A gateway
+        groups sessions by channel and may run from anywhere; refusing it here
+        would take the page away from the only engine with the adapters."""
+        from types import SimpleNamespace
+
+        home.mkdir(parents=True, exist_ok=True)
+        monkeypatch.chdir(home.parent)
+        monkeypatch.setattr(
+            "raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=home / "workspace")
+        )
+        monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: False)
+        monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
+        monkeypatch.setattr(serve_commands, "_read_web_state", lambda: None)
+        spawned: list[int] = []
+        monkeypatch.setattr(serve_commands, "_spawn_supervisor", lambda port: spawned.append(port))
+        monkeypatch.setattr(serve_commands, "_await_attach", lambda *_a, **_k: "http://127.0.0.1:18999/auth#z")
+        monkeypatch.setattr(serve_commands, "_open", lambda _url: None)
+
+        serve_commands._web(port=18999)
+
+        assert spawned == [18999]
+
+    def test_the_supervisor_records_the_engine_before_it_launches_it(self, home: Path, monkeypatch) -> None:
+        """The parent reads this field back to name the engine in its own line,
+        so a supervisor that stopped writing it would silently stop saying
+        which one the page is on."""
+        import subprocess
+        from types import SimpleNamespace
+
+        home.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(
+            "raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=home / "workspace")
+        )
+        monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: True)
+        seen: list[str] = []
+
+        class _Proc:
+            returncode = 0
+
+            def poll(self):
+                return 0
+
+            def wait(self):
+                return 0
+
+        def _popen(_argv, **_kwargs):
+            seen.append(json.loads((home / "web.json").read_text(encoding="utf-8"))["surface"])
+            return _Proc()
+
+        monkeypatch.setattr(subprocess, "Popen", _popen)
+
+        serve_commands._supervise(18999)
+
+        assert seen == ["serve"]
+
+    def test_the_sessions_store_is_a_refused_launch_directory(self, home: Path, monkeypatch, capsys) -> None:
+        """The page's own session store is ``<workspace>/sessions`` -- the tree
+        sub-agent history lives in. Rooting serve there would put the working
+        directory inside the store the dispatch writes to, which is the case
+        this check exists for."""
+        import subprocess
+        from types import SimpleNamespace
+
+        workspace = home / "workspace"
+        (workspace / "sessions" / "project" / "chat").mkdir(parents=True)
+        monkeypatch.chdir(workspace / "sessions" / "project" / "chat")
+        monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda *_a, **_k: None)
+        monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: True)
+        monkeypatch.setattr("raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=workspace))
+        monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: pytest.fail("spawned from the sessions store"))
+
+        with pytest.raises(typer.Exit) as exit_info:
+            serve_commands._run_foreground(18999)
+
+        assert exit_info.value.exit_code == 1
+        assert "sessions tree" in capsys.readouterr().err
+
+    def test_a_second_invocation_names_the_engine_not_a_gateway(
+        self, home: Path, a_built_page, opened: list[str], monkeypatch, capsys
+    ) -> None:
+        """When the recorded engine is serve, saying "the gateway already
+        running" describes a process that is not there."""
+        home.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(serve_commands, "_attached_url", lambda: "http://127.0.0.1:18999/auth#z")
+
+        serve_commands._web(port=18999)
+
+        out = capsys.readouterr().out
+        assert "attaching to the engine already running" in out
+        assert "gateway already running" not in out
+        assert opened == ["http://127.0.0.1:18999/auth#z"]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX")
@@ -2414,7 +2572,7 @@ class TestTheSupervisorCleansUpOnTheSignalThatStopsIt:
         state = home / "web.json"
         script = (
             "from raven.cli import serve_commands as s\n"
-            "s._gateway_argv = lambda p: ['sleep', '600']\n"
+            "s._gateway_launch = lambda p: (['sleep', '600'], 'gateway')\n"
             "s._bound_port_of = lambda p: None\n"
             "s._supervise(18999)\n"
         )
@@ -2459,11 +2617,11 @@ class TestTheSupervisorCleansUpOnTheSignalThatStopsIt:
         script = (
             "import time\n"
             "from raven.cli import serve_commands as s\n"
-            "s._gateway_argv = lambda p: ['sleep', '600']\n"
+            "s._gateway_launch = lambda p: (['sleep', '600'], 'gateway')\n"
             "s._bound_port_of = lambda p: None\n"
             "_recorded = s._write_web_state\n"
-            "def _linger(port):\n"
-            "    _recorded(port)\n"
+            "def _linger(port, surface=None):\n"
+            "    _recorded(port, surface)\n"
             "    time.sleep(3)\n"
             "s._write_web_state = _linger\n"
             "s._supervise(18999)\n"
@@ -3100,7 +3258,7 @@ class TestStoppingARealTree:
         script = (
             "import sys\n"
             "from raven.cli import serve_commands as sc\n"
-            f"sc._gateway_argv = lambda port: [sys.executable, '-c', {_STUBBORN!r}, {str(home)!r}]\n"
+            f"sc._gateway_launch = lambda port: ([sys.executable, '-c', {_STUBBORN!r}, {str(home)!r}], 'gateway')\n"
             "sc._CHILD_STOP_S = 2.0\n"
             "sc._supervise(18999)\n"
         )
@@ -3130,7 +3288,7 @@ class TestStoppingARealTree:
         script = (
             "import sys\n"
             "from raven.cli import serve_commands as sc\n"
-            f"sc._gateway_argv = lambda port: [sys.executable, '-c', {_STUBBORN!r}, {str(home)!r}]\n"
+            f"sc._gateway_launch = lambda port: ([sys.executable, '-c', {_STUBBORN!r}, {str(home)!r}], 'gateway')\n"
             "sc._CHILD_STOP_S = 0.5\n"
             "sc._supervise(18999)\n"
         )
@@ -3169,7 +3327,7 @@ class TestStoppingARealTree:
         script = (
             "import sys\n"
             "from raven.cli import serve_commands as sc\n"
-            f"sc._gateway_argv = lambda port: [sys.executable, '-c', {_STUBBORN_WITH_CHILD!r}, {str(home)!r}, {gateway!r}]\n"
+            f"sc._gateway_launch = lambda port: ([sys.executable, '-c', {_STUBBORN_WITH_CHILD!r}, {str(home)!r}, {gateway!r}], 'gateway')\n"
             "sc._CHILD_STOP_S = 0.5\n"
             "sc._supervise(18999)\n"
         )
@@ -3497,9 +3655,9 @@ class TestTrajectoryViewByDefault:
 
     def test_the_child_argv_carries_no_flag_in_either_shape(self, monkeypatch) -> None:
         monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: False)
-        assert serve_commands._gateway_argv(18999)[-2:] == ["--page-port", "18999"]
+        assert serve_commands._gateway_launch(18999)[0][-2:] == ["--page-port", "18999"]
         monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: True)
-        assert serve_commands._gateway_argv(18999)[-2:] == ["--port", "18999"]
+        assert serve_commands._gateway_launch(18999)[0][-2:] == ["--port", "18999"]
 
     def test_the_supervisor_and_the_foreground_child_carry_no_flag(self, home: Path, monkeypatch) -> None:
         import subprocess
