@@ -42,6 +42,7 @@ from research_flow.gates.ask_user import (
     is_reply_to,
     render_brief,
     reply_overlap,
+    scaffold_language,
     set_chain_round,
     set_clarify_verdict,
     set_first_turn,
@@ -125,11 +126,13 @@ def _turn_cargo(cfg: FlowConfig, text: str, *, sources: bool = False) -> dict[st
     }
     if cfg.final_shape.report_structure:
         layout = cfg.final_shape.effective_layout
+        titled = layout == READER_LAYOUT and cfg.final_shape.report_style == "outline"
         repair, fallback = interrupted_report_rewrite_prompt, interrupted_report_fallback
         if layout == READER_LAYOUT:
-            repair, fallback = partial(repair, layout=layout), partial(fallback, layout=layout)
+            repair = partial(repair, layout=layout, sources=sources, titled=titled)
+            fallback = partial(fallback, layout=layout, language=scaffold_language(text))
         cargo[TURN_SYNTHESIS_KEY] = TurnSynthesisPolicy(
-            guidance=interrupted_report_guidance(text, layout, sources),
+            guidance=interrupted_report_guidance(text, layout, sources, titled),
             repair_prompt=repair if cfg.final_shape.report_bounce else None,
             format_fallback=fallback,
         )
@@ -270,6 +273,7 @@ class TurnFrame(Gate):
         self._page = page if self._report_file else None
         # With the page, the report closes with its list of sources (the page clause of the contract).
         self._sources = self._page is not None
+        self._titled = self._layout == READER_LAYOUT and cfg.final_shape.report_style == "outline"
 
     @property
     def name(self) -> str:
@@ -328,7 +332,7 @@ class TurnFrame(Gate):
         if self._report_reminder:
             # The turn's own text, not the assembled content: the checklist reads the
             # request, and the memo and brief prefixed above are ours, not the user's.
-            content = f"{content}\n\n{render_reminder(text, self._layout, self._sources)}"
+            content = f"{content}\n\n{render_reminder(text, self._layout, self._sources, self._titled)}"
         if content != text:
             return HookDecision(modified_content=content)
         return HookDecision()
@@ -608,6 +612,7 @@ def build_chain(
     store: SessionStore,
     evidence_round: EvidenceRound | None = None,
     mode: str = "",
+    side: "tuple[LLMProvider | None, str | None] | None" = None,
 ) -> list[Gate]:
     """The fork's ``build_dr_flow`` observer assembly, as one hook chain.
 
@@ -620,7 +625,9 @@ def build_chain(
     hook builds it with :func:`saturation_for` straight into the session gear.
     An LLM-backed gate whose provider is absent is skipped with a warning,
     never built to crash. ``mode`` names the session profile this chain was
-    resolved for; the chain records it, it does not read it.
+    resolved for; the chain records it, it does not read it. ``side`` is the
+    digest's own provider and model, which the review and the page highlights
+    run on when their config asks for it.
     """
     effective_iterations = cfg.max_iterations or max_iterations
     effective_window = cfg.context_window_tokens or context_window_tokens
@@ -802,12 +809,13 @@ def build_chain(
             floor = ClarifyExemptHook(floor, layout)
         observers.append(floor)
     if cfg.verify.enabled:
-        if provider is None:
+        review_on, review_model = _on_side(provider, cfg.verify.model, cfg.verify.on_digest_provider, side)
+        if review_on is None:
             _skip("verify")
         else:
             reviewer: Gate = DraftReviewerGate(
-                provider,
-                model=cfg.verify.model,
+                review_on,
+                model=review_model,
                 timeout_seconds=cfg.verify.timeout_seconds,
                 attempt_timeout_seconds=cfg.verify.attempt_timeout_seconds,
                 attempt_http_timeout_seconds=cfg.verify.attempt_http_timeout_seconds,
@@ -820,6 +828,7 @@ def build_chain(
                 fail_open_on_elided_evidence=cfg.verify.fail_open_on_elided_evidence,
                 evidence_round=evidence_round,
                 closing_tag_required=cfg.think_closing_tag_required,
+                capture_requests=cfg.verify.capture_requests,
             )
             # An accepted plain answer carries no evidence for this reviewer to
             # check and the judge has already read it; the scoped wrapper ships it
@@ -849,6 +858,7 @@ def build_chain(
             closing_tag_required=cfg.think_closing_tag_required,
             layout=layout,
             sources=cfg.report_page.enabled and layout == READER_LAYOUT,
+            titled=layout == READER_LAYOUT and cfg.final_shape.report_style == "outline",
         )
         # Same exemption as the reviewer's: a clarify has no report sections to
         # be missing, and demanding them turns the one turn that must not
@@ -883,8 +893,23 @@ def build_chain(
                 "research-flow: reportPage.highlights is on but no provider was lent to the plugin; "
                 "the page is written without highlights"
             )
-        page = ReportPage(cfg.report_page, provider)
+        on, model = _on_side(
+            provider, cfg.report_page.highlights_model, cfg.report_page.highlights_on_digest_provider, side
+        )
+        page = ReportPage(cfg.report_page, on, model)
     return [TurnFrame(cfg, store, gate, mode, page), *observers]
+
+
+def _on_side(
+    provider: "LLMProvider | None",
+    model: str | None,
+    asked: bool,
+    side: "tuple[LLMProvider | None, str | None] | None",
+) -> "tuple[LLMProvider | None, str | None]":
+    """The provider and model a side call runs on: the digest's own when asked and there is one."""
+    if asked and side is not None and side[0] is not None and side[1]:
+        return side[0], side[1]
+    return provider, model
 
 
 @dataclass
@@ -923,9 +948,11 @@ class ResearchFlow:
         max_iterations: int = 40,
         context_window_tokens: int = 0,
         session_gear: dict[str, SessionGear] | None = None,
+        side: "tuple[LLMProvider | None, str | None] | None" = None,
     ) -> None:
         self.cfg = cfg
         self.provider = provider
+        self.side = side
         self.tools = tools
         self.store = store
         self.max_iterations = max_iterations
@@ -993,6 +1020,7 @@ class ResearchFlow:
                 store=self.store,
                 evidence_round=er,
                 mode=mode,
+                side=self.side,
             )
             slot = _ChainSlot(
                 mode=mode,
@@ -1036,6 +1064,7 @@ class ResearchFlow:
                         context_window_tokens=self.context_window_tokens,
                         tools=self.tools,
                         store=self.store,
+                        side=self.side,
                     )
                 ),
                 opens_ledger=(
@@ -1200,6 +1229,7 @@ class ResearchFlowHook(ParticipantHook):
         max_iterations: int = 40,
         context_window_tokens: int = 0,
         session_gear: dict[str, SessionGear] | None = None,
+        side: "tuple[LLMProvider | None, str | None] | None" = None,
     ) -> None:
         self.flow = ResearchFlow(
             cfg,
@@ -1209,6 +1239,7 @@ class ResearchFlowHook(ParticipantHook):
             max_iterations=max_iterations,
             context_window_tokens=context_window_tokens,
             session_gear=session_gear,
+            side=side,
         )
         super().__init__("research_flow", lambda: ResearchFlowParticipant(self.flow))
 

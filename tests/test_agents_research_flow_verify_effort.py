@@ -12,6 +12,7 @@ either way.
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -118,3 +119,56 @@ def test_the_knob_travels_from_config_to_the_gate(tmp_path):
     gate = next(o for o in chain if isinstance(o, DraftReviewerGate))
     assert gate._reasoning_effort is None
     assert gate._attempt_http_timeout_seconds is None
+
+
+def test_the_review_and_the_highlights_move_to_the_digest_provider_only_when_asked(tmp_path):
+    from research_flow.config import FlowConfig
+    from research_flow.flow import ToolHandles, TurnFrame, build_chain
+    from research_flow.state import SessionStore
+
+    agent, digest = _Reviewer(), _Reviewer()
+
+    def _build(config, side):
+        return build_chain(
+            config,
+            agent,
+            max_iterations=40,
+            context_window_tokens=65_536,
+            tools=ToolHandles(),
+            store=SessionStore(tmp_path),
+            side=side,
+        )
+
+    def _parts(chain):
+        gate = next(o for o in chain if isinstance(o, DraftReviewerGate))
+        page = next(o for o in chain if isinstance(o, TurnFrame))._page
+        return gate._provider, gate._model, page._provider, page._model
+
+    config = FlowConfig(enabled=True)
+    config.final_shape.report_structure = True
+    config.final_shape.report_depth = True
+    config.final_shape.report_layout = "reader"
+    config.report_page.enabled = True
+    config.report_page.highlights = True
+    assert _parts(_build(config, (digest, "flash"))) == (agent, None, agent, None)
+
+    config.verify.on_digest_provider = True
+    config.report_page.highlights_on_digest_provider = True
+    assert _parts(_build(config, (digest, "flash"))) == (digest, "flash", digest, "flash")
+    # No digest provider of its own: both stay on the agent's.
+    assert _parts(_build(config, None)) == (agent, None, agent, None)
+
+
+def test_a_captured_review_request_lands_beside_the_turns_work_and_only_when_asked(tmp_path):
+    from raven.agent import workdir
+
+    with workdir.bind(tmp_path):
+        _review(DraftReviewerGate(_Reviewer()))
+        assert not (tmp_path / ".review-requests").exists()
+        _review(DraftReviewerGate(_Reviewer(), capture_requests=True))
+    (saved,) = (tmp_path / ".review-requests").glob("review-*.json")
+    request = json.loads(saved.read_text(encoding="utf-8"))
+    assert "Draft answer:" in request["user"] and request["system"] and request["tools"]
+    # The request carries the evidence the turn read: owner-only, like the state the flow keeps.
+    assert saved.stat().st_mode & 0o777 == 0o600
+    assert (tmp_path / ".review-requests").stat().st_mode & 0o777 == 0o700

@@ -30,7 +30,7 @@ from research_flow.gates.conversation import _RESEARCH_TURN  # noqa: E402
 from research_flow.gates.report_shape import LIMITS_HEADINGS  # noqa: E402
 from research_flow.prompts import render_identity_and_contract, render_parts  # noqa: E402
 from research_flow.state import SessionStore  # noqa: E402
-from research_flow.support.report_highlights import check_highlights, select_highlights  # noqa: E402
+from research_flow.support.report_highlights import _SYSTEM, check_highlights, select_highlights  # noqa: E402
 from research_flow.support.report_html import (  # noqa: E402
     GENERATOR,
     STYLE,
@@ -189,6 +189,45 @@ def test_without_the_limits_the_page_leaves_that_section_out():
     report = f"> a\n\n## One\nb https://a.example/x\n\n## {zh_limits}\nc\n\n## Sources\n- https://a.example/x\n"
     page = render_page(report, language="zh", show_limits=False)
     assert zh_limits not in page and "<h2>One</h2>" in page and 'class="sources"' in page
+
+
+def test_sources_written_one_per_line_are_the_pages_list_and_the_limits_still_go():
+    """A sources section of bare lines, no list marker: one list on the page, and the limits before it go."""
+    zh_limits = "\u672a\u6838\u9a8c\u9879"
+    report = (
+        "> a\n\n## One\nb\n\n"
+        f"## {zh_limits}\nc\n\n"
+        "## Sources\n"
+        "Example, Title A, https://a.example/x\n"
+        "Example, Title B, https://b.example/y\n"
+    )
+    page = render_page(report, language="zh", show_limits=False)
+    # The report's own list is the page's: no second list under the page's own heading.
+    assert 'id="sources"' not in page and page.count('class="sources"') == 1 and page.count('id="source-') == 2
+    assert zh_limits not in page and "<h2>One</h2>" in page
+    assert close_with_sources(report, "zh") == (report, {})
+
+
+@pytest.mark.parametrize("path", ["/data/notes.md", "/notes.md", "C:\\notes\\a.md", "[notes](/data/notes.md)"])
+def test_sources_one_per_line_may_name_a_local_file_beside_the_addresses(path):
+    """A line that cites the user's file, not a page, is still a line of the list: one sources
+    heading on the page, and the limits before it go."""
+    report = (
+        "> a\n\n## One\nb\n\n## Limitations\nc\n\n## Sources\n"
+        f"Example, Title A, https://a.example/x\nLocal notes, {path}\n"
+    )
+    page = render_page(report, show_limits=False)
+    assert page.count("<h2>Sources</h2>") <= 1 and page.count('class="sources"') == 1, page
+    assert "<h2>Limitations</h2>" not in page and "<h2>One</h2>" in page
+
+
+def test_body_lines_that_each_end_in_a_link_are_not_a_source_list():
+    report = (
+        "> a\n\n## Findings\nRevenue rose, https://a.example/x\nMargins fell, https://b.example/y\n\n"
+        "## Limitations\nc\n"
+    )
+    page = render_page(report)
+    assert "<h2>Findings</h2>" in page and 'id="sources"' in page and "Sources: 2" in page
 
 
 def test_a_last_section_under_another_heading_stays_on_the_page():
@@ -582,7 +621,8 @@ def test_only_text_the_report_holds_is_kept():
             "Vite is always the better choice for every team",
         ],
     )
-    highlights, counters = check_highlights(offered, _REPORT)
+    report = "> Vite starts in 1.2 s; webpack takes 8.4 s.\n\n" + _REPORT.split("\n\n", 1)[1]
+    highlights, counters = check_highlights(offered, report)
     assert highlights.figures == (Figure("1.2 s", "Vite starts in"), Figure("8.4 s", "webpack"))
     assert highlights.findings == ("No shared benchmark on one machine was found.", "Vite starts in 1.2 s")
     assert (counters["figures_offered"], counters["figures_kept"]) == (4, 2)
@@ -618,7 +658,7 @@ def test_a_figure_and_its_label_must_share_a_sentence_or_a_row():
 
 def test_a_fragment_or_a_repeated_caption_is_not_a_figure():
     """What a real model returned: one sentence cut into two captions, and one caption under two numbers."""
-    report = "> a\n\n## One\nLinear went from 46s to 6s, a drop of 87%.\n\n## Limitations\nc\n"
+    report = "> Linear went from 46s to 6s, a drop of 87%.\n\n## One\nb\n\n## Limitations\nc\n"
     offered = _offer(
         figures=[
             {"value": "46s", "label": "Linear went from 46s to 6s"},
@@ -637,9 +677,89 @@ def test_a_fragment_or_a_repeated_caption_is_not_a_figure():
 def test_a_two_character_chinese_label_names_a_figure():
     """A two-character label is a name, not a fragment; the CJK threshold counts it as one."""
     price, last = "\u4ef7\u683c", "\u4e0a\u4e00\u4ee3\u4ef7\u683c"
-    report = f"> a\n\n## {price}\n{price} 299 {last} 399\n\n## \u672a\u6838\u9a8c\u9879\n\u65e0\n"
+    report = f"> {price} 299 {last} 399\n\n## {price}\nb\n\n## \u672a\u6838\u9a8c\u9879\n\u65e0\n"
     offered = _offer(figures=[{"value": "299", "label": price}, {"value": "399", "label": last}])
     assert [figure.label for figure in check_highlights(offered, report)[0].figures] == [price, last]
+
+
+def test_a_short_label_opening_a_body_paragraph_is_set_in_bold():
+    """``Scope: ...`` and a Chinese twin read as labels; a sentence with a colon in it does not."""
+    risk = "\u95ee\u9898"
+    page = render_page(
+        f"> Use Vite: it starts fast.\n\n## One\nScope: the numbers are old.\n\n{risk}\uff1aold numbers.\n\n"
+        "Use Vite: it starts fast.\n\n## Limitations\nc\n"
+    )
+    assert "<p><strong>Scope</strong>: the numbers are old.</p>" in page
+    assert f"<p><strong>{risk}</strong>\uff1aold numbers.</p>" in page
+    assert "<p>Use Vite: it starts fast.</p>" in page
+    assert '<div class="answer"><p>Use Vite: it starts fast.</p></div>' in page
+
+
+def test_a_table_keyed_by_short_names_sets_its_first_column_in_bold():
+    keyed = render_page("> a\n\n## One\n| Bank | Target |\n|--|--|\n| UBS | $75 |\n| HSBC | $55 |\n")
+    assert '<table class="keyed">' in keyed and ".keyed td:first-child{" in STYLE
+    long = "a first cell far too long to be the name of the row it opens"
+    loose = render_page(f"> a\n\n## One\n| What | Target |\n|--|--|\n| {long} | $75 |\n| UBS | $55 |\n")
+    assert '<table class="keyed">' not in loose
+
+
+def test_paragraphs_opening_with_bold_sentences_stay_paragraphs():
+    """A real outline report opened 23 paragraphs with a bold sentence; set as numbered points, it lost its prose."""
+    body = "\n\n".join(f"**Rates rose in month {n}.** The data show it." for n in range(3))
+    page = render_page(f"> a\n\n## One\n{body}\n\n## Limitations\nc\n")
+    assert '<p class="step-name">' not in page and "<dt>" not in page
+    assert "<p><strong>Rates rose in month 0.</strong> The data show it.</p>" in page
+
+
+def test_a_conclusion_label_neither_joins_nor_vetoes_the_named_points():
+    """The outline clause opens each section with ``**Conclusion**:``; it is not the first of the points."""
+    points = "**Safety**: audit logs.\n\n**Isolation**: per tenant.\n\n**Approval**: two people."
+    for between in ("", "Evidence for it.\n\n"):
+        page = render_page(
+            f"> a\n\n## One\n**Conclusion**: rates **rise**.\n\n{between}{points}\n\n## Limitations\nc\n"
+        )
+        assert re.findall(r'<p class="step-name">([^<]*)</p>', page) == ["Safety", "Isolation", "Approval"]
+        assert "<p><strong>Conclusion</strong>: rates <strong>rise</strong>.</p>" in page
+
+
+def test_a_link_check_section_is_outside_the_length_and_a_body_section_is_not():
+    from research_flow.support.report_file import body_length
+
+    counts = {"sections": [("Findings", 0, 10), ("Link check", 0, 5), ("LinkedIn verification", 0, 7)]}
+    assert body_length(counts) == 17
+    # Read whole, and in either word order.
+    from research_flow.support.report_file import measure_report
+
+    report = "## Findings\none two three\n\n## Section 4: External Link Check\na b c d e\n\n## \u6838\u9a8c\u94fe\u63a5\nf g\n"
+    assert body_length(measure_report(report)) == 4  # the heading word and three
+
+
+def test_a_sources_list_that_mixes_addresses_and_local_files_is_the_one_list():
+    report = (
+        "> See [a](https://a.com/x).\n\n## One\nAs [b](https://b.com/y) and /data/notes.md say.\n\n"
+        "## Limitations\nnone\n\n## Sources\n\n- A https://a.com/x\n- B https://b.com/y\n"
+        "- /data/notes.md\n- /data/more.csv\n"
+    )
+    page = render_page(report)
+    assert page.count("<h2>Sources</h2>") == 1 and '<li id="source-4">' in page
+    assert close_with_sources(report) == (report, {})
+    # Under a heading that names no sources, a list of paths stays a list of files.
+    files = "> a\n\n## One\nb\n\n## Files\n\n- /data/notes.md\n- /data/more.csv\n"
+    assert 'class="sources"' not in render_page(files)
+
+
+def test_a_key_figure_comes_from_the_answer_alone():
+    """The numbers the answer rests on are the tiles; one the body gives alone is not."""
+    report = "> Vite starts in 1.2 s; webpack takes 8.4 s.\n\n## One\nRspack starts in 0.4 s and Parcel in 3.1 s.\n"
+    offered = _offer(
+        figures=[
+            {"value": "0.4 s", "label": "Rspack starts in"},
+            {"value": "3.1 s", "label": "Parcel"},
+            {"value": "1.2 s", "label": "Vite starts in"},
+            {"value": "8.4 s", "label": "webpack"},
+        ]
+    )
+    assert [figure.value for figure in check_highlights(offered, report)[0].figures] == ["1.2 s", "8.4 s"]
 
 
 def test_a_date_stands_once_in_the_timeline():
@@ -672,7 +792,7 @@ def test_a_kind_with_too_few_entries_is_dropped_whole_and_a_long_one_is_cut():
 def test_copied_text_matches_whatever_spacing_the_model_gave_it():
     # Chinese for "hot update takes 50 milliseconds"; the model drops and adds spaces between scripts.
     second = "\u70ed\u66f4\u65b0\u8017\u65f6 50 \u6beb\u79d2"
-    report = _ZH_REPORT.replace("\n\n## \u672a", f"\n\n{second}\n\n## \u672a", 1)
+    report = _ZH_REPORT.replace(f"> {_ZH_SENTENCE}\n", f"> {_ZH_SENTENCE}\n> {second}\n", 1)
     offered = _offer(
         figures=[
             {"value": "1.2\u79d2", "label": "\u51b7\u542f\u52a8 \u8017\u65f6"},
@@ -731,8 +851,6 @@ async def test_the_selection_is_one_call_over_the_whole_report():
         "findings_kept": 0,
         "timeline_offered": 3,
         "timeline_kept": 3,
-        "notes_offered": 0,
-        "notes_kept": 0,
     }
     (call,) = provider.calls
     assert call["model"] == "judge" and call["messages"][1] == {"role": "user", "content": _REPORT}
@@ -1361,7 +1479,7 @@ def test_a_run_of_paragraphs_that_open_with_a_name_is_set_as_terms():
     ) in run
     # One such paragraph alone opens a passage: no paragraph of that section is set as a term.
     for body in (
-        "**Note:** the cache is shared.\n\nThen decide.",
+        "**Cache:** it is shared.\n\nThen decide.",
         "**Cache.** It is shared.\n\n**Pool.** It forks.\n\nMore on the pool.\n\n**Watch.** It reruns.\n\nMore.",
     ):
         alone = _section(body)
@@ -1443,50 +1561,46 @@ def test_subsections_that_are_no_run_of_steps_stay_subsections(body):
 
 
 _NOTED = (
-    "> a\n\n## Speed\nVite starts in 1.2 s.\n\nThe gap holds only with the cache on; turn it off and the two tie.\n\n"
-    "- The gap holds in a list too.\n\n## Cost\n**Before you move:** pin the old runner, or CI breaks.\n\n"
-    "## Limitations\nNo benchmark on one machine was found.\n"
+    "> a\n\n## Speed\nVite starts in 1.2 s.\n\n**Risk**: the gap holds only with the cache on.\n\n"
+    "**Conclusion**: Vite is **quicker**.\n\n- Note: in a list it stays an item.\n\n"
+    "## Cost\nNote: pin the old runner, or CI breaks.\n\n\u98ce\u9669\uff1a\u7f13\u5b58\u5173\u95ed\u540e\u6301\u5e73\u3002\n\n"
+    "## Limitations\n**Note**: no benchmark on one machine was found.\n"
 )
 
 
-def test_a_paragraph_the_highlights_name_is_set_as_a_note_where_it_stands():
-    highlights, counters = check_highlights(
-        _offer(
-            notes=[
-                "pin the old runner, or CI breaks.",
-                "The gap holds only with the cache on",
-                "Vite starts in 1.2 s.",
-                "No benchmark on one machine was found.",
-                "The gap holds in a list too.",
-                "a sentence the report does not hold",
-            ]
-        ),
-        _NOTED,
-    )
-    # In the report's order; one to a section; none from the limits, a list or text the report lacks.
-    assert highlights.notes == ("The gap holds only with the cache on", "pin the old runner, or CI breaks.")
-    assert (counters["notes_offered"], counters["notes_kept"]) == (6, 2) and bool(highlights)
-    page = render_page(_NOTED, highlights=highlights)
+def test_a_paragraph_that_opens_with_a_risk_or_note_label_is_a_note_under_it():
+    page = render_page(_NOTED)
     assert (
-        '<p>Vite starts in 1.2 s.</p><aside class="note"><p class="note-name">Note</p>'
-        "<p>The gap holds only with the cache on; turn it off and the two tie.</p></aside>" in page
+        '<p>Vite starts in 1.2 s.</p><aside class="note"><p class="note-name">Risk</p>'
+        "<p>the gap holds only with the cache on.</p></aside>" in page
     )
-    # A paragraph that names itself keeps its name as the label.
-    assert (
-        '<aside class="note"><p class="note-name">Before you move</p><p>pin the old runner, or CI breaks.</p></aside>'
-        in page
+    # Bold or not, in either language; the label is the report's own.
+    assert '<aside class="note"><p class="note-name">Note</p><p>pin the old runner, or CI breaks.</p></aside>' in page
+    assert '<p class="note-name">\u98ce\u9669</p><p>\u7f13\u5b58\u5173\u95ed\u540e\u6301\u5e73\u3002</p>' in page
+    # A verdict is no note, nor a list item or the limits.
+    assert "<p><strong>Conclusion</strong>: Vite is <strong>quicker</strong>.</p>" in page
+    assert page.count('class="note"') == 3 and "no benchmark on one machine was found." in page
+
+
+def test_a_card_is_never_boxed_as_a_note():
+    report = (
+        "> a\n\n## Memory\nTwo markets.\n\n### DRAM\n**Risk**: HBM takes the wafers.\n\n"
+        "### NAND\nEnterprise demand leads.\n\n## Limitations\nnone\n"
     )
-    assert page.count('class="note"') == 2 and "<li>The gap holds in a list too.</li>" in page
-    zh = render_page(_NOTED, language="zh", highlights=highlights)
-    assert f'<p class="note-name">{t_in("zh", "Note")}</p>' in zh and t_in("zh", "Note") != "Note"
-    assert 'class="note"' not in render_page(_NOTED)
+    page = render_page(report)
+    assert 'class="cards"' in page and 'class="note"' not in page
+    assert "<p><strong>Risk</strong>: HBM takes the wafers.</p>" in page
 
 
 def test_a_paragraph_too_long_for_a_box_is_no_note():
-    long = "The gap holds only with the cache on. " * 30
-    report = f"> a\n\n## Speed\n{long}\n\n## Limitations\nnone\n"
-    highlights, counters = check_highlights(_offer(notes=["The gap holds only with the cache on."]), report)
-    assert highlights.notes == () and counters["notes_kept"] == 0 and not highlights
+    long = "the gap holds only with the cache on. " * 30
+    page = render_page(f"> a\n\n## Speed\n**Risk**: {long}\n\n## Limitations\nnone\n")
+    assert 'class="note"' not in page
+
+
+def test_the_highlights_pick_no_notes():
+    highlights, counters = check_highlights(_offer(notes=["Vite starts in 1.2 s."]), _NOTED)
+    assert not highlights and "notes_kept" not in counters and "notes" not in _SYSTEM
 
 
 def test_the_chain_builds_the_page_writer_from_the_flows_configuration(tmp_path):
@@ -1604,3 +1718,32 @@ async def test_the_report_file_and_the_page_close_with_the_same_list(tmp_path, _
     assert 'id="sources"' not in html and html.count('<li id="source-2">') == 1
     # The reply the conversation shows is the model's own text: the list is the file's and the page's.
     assert "## Sources" not in reply
+
+
+def test_a_bold_subsection_number_opening_a_paragraph_is_read_as_that_subheading():
+    # "**(1) Demand: totals fell.** text" in Chinese parentheses and numerals, the way a model
+    # writes the ``###`` subheadings it was asked for; a bold lead with no number stays a lead.
+    report = (
+        "> The answer.\n\n## Supply and demand\n\n"
+        "**\uff08\u4e00\uff09Demand: totals fell.** Industrial use held up.\n\n"
+        "**\uff08\u4e8c\uff09Supply**\n\nMine output was flat.\n\n"
+        "**(3) Stocks** Vaults kept filling.\n\n"
+        "**Outlook.** Rates decide the next leg.\n"
+    )
+    body = render_page(report).split("<main>", 1)[1]
+    assert re.findall(r"<h3>(.*?)</h3>", body) == [
+        "\uff08\u4e00\uff09Demand: totals fell",
+        "\uff08\u4e8c\uff09Supply",
+        "(3) Stocks",
+    ]
+    assert "<p>Industrial use held up.</p>" in body and "<p>Vaults kept filling.</p>" in body
+    assert "<strong>Outlook.</strong>" in body
+
+
+def test_three_paragraphs_opening_with_names_are_numbered_points_and_two_stay_terms():
+    three = "**Rates.** Real yields fell.\n\n**Gold.** The ratio narrowed.\n\n**Industry.** Solar demand grew.\n"
+    page = render_page("> The answer.\n\n## Drivers\n\n" + three)
+    assert page.count('<p class="step-name">') == 3 and '<ol class="steps">' in page and "<dt>" not in page
+    two = "**Rates.** Real yields fell.\n\n**Gold.** The ratio narrowed.\n"
+    page = render_page("> The answer.\n\n## Drivers\n\n" + two)
+    assert page.count("<dt>") == 2 and '<p class="step-name">' not in page

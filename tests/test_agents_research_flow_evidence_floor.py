@@ -95,6 +95,14 @@ def test_too_few_pages_bounces_the_draft_and_keeps_it_in_history():
     assert meta["evidence_floor"]["rollbacks"] == 1 and "met" not in meta["evidence_floor"]
 
 
+def test_the_bounce_keeps_the_floor_out_of_the_notes_before_searches():
+    # The notes a model writes before its searches stream to the reader, who never saw this request.
+    _meta, decision = _run(EvidenceFloorGate(min_pages=3, min_domains=2), _pages(2))
+    note = decision.rollback_inject[1]["content"]
+    assert "the short notes before your searches included" in note
+    assert note.index("do not mention it") > note.index("produce the final answer")
+
+
 def test_enough_pages_from_too_few_sites_bounces_too():
     meta, decision = _run(EvidenceFloorGate(min_pages=3, min_domains=3), _pages(4, sites=2))
     assert decision.rollback is True

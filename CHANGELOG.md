@@ -6,14 +6,104 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- Raven-Research has an outline style for its report, set with
+  `finalShape.reportStyle: "outline"` (the default stays `"prose"`). The report
+  then opens with a `#` title above the answer, numbers its sections and the
+  subsections inside them, opens each section with its conclusion after a bold label,
+  writes three or more parallel items as a list, each item opening with its name
+  in bold, and bolds the one or two facts a paragraph rests on (a number, a date,
+  a model, a person, an organization or a place). Its paragraphs and tables follow the same rules as the prose style,
+  and the limits and the list of sources keep their fixed headings unnumbered.
+  The per-turn reminder and the shape rewrite ask for the title too. The clause
+  shows the shape as a short skeleton, numbers a list of the points a section
+  counts (the page sets it as numbered points) and keeps the subsections of
+  peer aspects short (the page sets two to four of them as cards). The skeleton
+  also shows a key figure in bold, the answer blockquote's included.
+- The Raven-Research reading page reads a paragraph that opens with a bold
+  subsection number (`**(1) Name.** text` with Chinese parentheses and numerals,
+  `(1)` or `1.1`) as that `###` subheading and its text, so such subsections get
+  the subsection layout, cards included. Three or more paragraphs in a row that
+  each open with a bold name are set as numbered points; two stay a list of
+  terms. A paragraph that opens with a bold sentence rather than a short name
+  stays a paragraph, its bold kept, and so does one that opens with a label
+  (`**Conclusion**:`, `**Risk**:`, `**Note**:` or their Chinese twins).
+- The Raven-Research reading page sets in bold a short label a body paragraph
+  opens with (`Risk:`, or two to six Chinese characters and a colon), and the
+  first column of a table whose first cells are all short names. The outline
+  style asks for such labels on a risk or a caveat. The
+  page's key figures now come from the answer at the top alone: a number the
+  body gives but the answer does not is no longer a tile.
+- Raven-Research's report clause now says it sets the reply's shape over the
+  identity's short reply form, has the answer blockquote give the numbers the
+  answer rests on, cites a local file by its absolute path, and asks for "no
+  bold label" rather than "no bold lead-in" before the answer. The outline
+  style asks for its short labels in bold, ends its Chinese skeleton with the
+  limits (and, with the page, the sources) under their fixed headings, and
+  says nothing about the page when the flow writes none. The late-turn
+  nudges (sufficiency, spin breaker, finalize) ask for the reply in its
+  required shape instead of the old answer-first short form, and a reviewer's
+  rejection says the draft is the reply, not a file. An interrupted turn's
+  rewrite keeps the title and the list of sources, and its fallback reply
+  takes the headings of the task's language. The outline style opens each section with
+  its conclusion after a bold label (`**Conclusion**:` or its Chinese twin)
+  and bolds the phrase that carries the verdict, never a whole sentence. A task's length now leaves out a
+  link-check section, as the clause already said, its heading read whole
+  and in either word order ("链接核验", "核验链接"). A list of sources that
+  mixes addresses and local file paths under its fixed heading is now read
+  as the report's list: the page no longer adds a second "Sources" section
+  after it. The reader body's argument now starts from where things stand,
+  with the figures that show it, then why, what it leads to and what would
+  break that reading; no section restates the answer the blockquote gives.
+  The outline style puts forecasts of one quantity, from several sources or
+  for several periods, in one table with the source, the period and the
+  figure; its Chinese skeleton walks that argument (where things stand, why,
+  what it leads to with a table of source, period and figure, what would
+  break it under a risk label). A report whose limits share a heading with
+  another topic (advice, then the fixed limits heading) is missing its
+  limits and gets the one shape rewrite, and the page leaves off only a
+  section under the fixed limits heading alone, so such a section's other
+  content stays on the page. The reader clause asks the research to cover
+  the whole subject the question names - its parts listed before the first
+  search, each one the answer depends on researched, a part left out named
+  in the answer - and the prose to read as plain standard writing in the
+  question's language: no stray English terms, mainland Chinese terms, and
+  two differing figures for one quantity said apart. Label
+  `...-length-shape-arc-scope`.
+- Raven-Research can run its draft review (`verify.onDigestProvider`) and its
+  page highlights (`reportPage.highlightsOnDigestProvider`) on the fetch digest's
+  own provider and model instead of the agent's, so a reasoning agent model no
+  longer thinks its way past the call's `max_tokens`. Both are off by default
+  and fall back to the agent's provider when the digest has none.
+  `verify.captureRequests` saves each review request under the turn's working
+  directory (`.review-requests/`, owner-only) to compare reviewer models
+  offline. A revision that still talks about the review or an earlier draft
+  is sent back once for a clean copy before it is reviewed; that bounce stays
+  out of the persisted turn, and the loop's cap on hook rollbacks per turn
+  rises from 8 to 9 so the max mode's worst case still fits. Words the task
+  itself uses (a report on peer review) and web addresses do not count as
+  such talk, and a turn that ends on that bounce carries the unreviewed
+  banner. The reviewer's and the evidence floor's bounces also tell the model
+  that the short notes it writes before its searches reach the reader, so
+  those notes no longer say which claims were questioned or how many pages
+  were missing.
+- When a Raven-Research task sets a length the flow can read ("5k-7.5k" in
+  characters, "1500 to 2000 words", at least or at most a count), the
+  `[report length]` line on each report write also says whether the body,
+  counted as CJK characters plus other words without the list of sources, meets
+  it, a twentieth either side counted as meeting it. The report clause calls a
+  body inside the bound done: no lengthening for depth and no trimming for the
+  count, and the report states its own length or source count only when the
+  task asks. The product label moves to `...-reader-page-drafts-length`.
 - Raven-Research writes each report as an HTML reading page. When a turn's reply
   is a report in the reader layout, the flow renders the report into one HTML
   file: a cover with the answer, a table of contents, one panel for each
   section, and numbered citations with a source list. When the report closes
   with a list or a table of its sources, that list is the page's source list:
   the page numbers its entries, links the citations to them and adds no second
-  list. The report can write that list as one table, as one or more lists, or
-  as paragraphs in which each source opens with its link. Another list of the
+  list. The report can write that list as one table, as one or more lists, as
+  paragraphs in which each source opens with its link, or, under a heading that
+  names the sources, as lines that each carry one source and its address.
+  Another list of the
   same addresses, such as a link-check table, stays as the report wrote it.
   The page and the markdown report file hold the same text. When the turn has a
   report file, the page shows the text of that file at the end of the turn. If
@@ -92,17 +182,14 @@ All notable changes to Raven are documented here.
   Three or more `###` parts in a row whose headings each name a step
   ("Step 1: ...", numbered from 0 or 1 with no gap) are stages on one line.
   Each stage keeps its heading and all the text below the heading.
-  With `reportPage.highlights` on, the model that selects the highlights also
-  selects a maximum of three sentences that the reader must know before the
-  reader acts: a condition, an exception, a step that the reader must not skip.
-  The page sets the paragraph that holds such a sentence as a note, in its
-  place and with all its words. A note has the label "Note" ("注意" in
-  Chinese), or the bold name that opens the paragraph. A section gets one
-  note at most. The limits, the lists, the tables and a paragraph of more
-  than 320 Chinese characters or 640 Latin characters get none
-  (`notes_offered` and `notes_kept` in the record). The report clause does
-  not name these blocks: when it named them, two reports used none that the
-  reports before them did not use.
+  A body paragraph that opens with a risk or note label (`**Risk**:`,
+  `Note:`, or "风险" / "注意" and a colon, bold or not) is set as a note under
+  that label, in its place and with all its words. Paragraphs inside cards
+  are not, since one boxed card among plain peers reads as a different
+  part, and neither are the limits, the lists of sources or a paragraph of
+  more than 320 Chinese characters or 640 Latin characters. The outline
+  style asks for these labels; the prose style asks for none, so its pages
+  have no such notes.
   The page uses the EverMe palette and type: a warm neutral canvas, one yellow
   accent, links in the text colour, and each section heading above its panel.
   The page still loads no font.
@@ -316,20 +403,6 @@ All notable changes to Raven are documented here.
   blocks, not the blocks, once, and without the thinking, on an unstreamed
   resend too; otherwise words of the block that already streamed stay shown.
 
-- A tool call that a model writes into its reply as an MCP `<use_mcp_tool>`
-  block now runs as a tool call. MiroThinker-1.7-mini behind vLLM wrote its
-  first search that way under a long agent prompt. The server's tool parser
-  passed the block on as text, a report gate read it as a draft, and the turn
-  spent its budget re-sampling it. The loop now reads such a reply as the
-  calls it holds when every block names a tool the step offered and carries a
-  JSON object as its arguments. Any other reply is left as it came. Blocks
-  are read only outside the model's thinking (a `<think>` block, or the text
-  before an orphan closing tag), so a thought that names the form calls
-  nothing and does not hide the real call after it. Where the loop holds a
-  draft (a hook may send it back), the reader gets the words around the
-  blocks, not the blocks, once, and without the thinking, on an unstreamed
-  resend too; otherwise words of the block that already streamed stay shown.
-
 - A tool call whose arguments are valid JSON but not an object, such as
   `"bad"` or a list, no longer ends the turn. The parse exits passed such
   arguments on as they were, and the first reader that took them as a mapping
@@ -346,7 +419,7 @@ All notable changes to Raven are documented here.
   the model puts the heading back instead of rewriting the whole file. With
   `draftRevisions` on, which the product config sets, the flow counts the
   iterations that change a report file the turn already wrote. After 8 it asks
-  for the reply. After 12 it withholds `write_file` and `edit_file` for the
+  for the reply, with its length only when the task asks for one. After 12 it withholds `write_file` and `edit_file` for the
   rest of the turn. The report clause takes a length within a twentieth of the
   brief's bound as met and asks for trimming in one or two passes. The product
   label is now

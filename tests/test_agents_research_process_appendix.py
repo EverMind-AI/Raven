@@ -885,6 +885,7 @@ TWIN_LEADS_ADDED: frozenset[str] = frozenset(
 TWIN_LEADS_CHANGED: frozenset[str] = frozenset(
     {"_norm", "build_trail"}  # the tracking drop, and the refused pages
     | {"ResearchTrail._page_split", "ResearchTrail.counters", "ResearchTrail.render"}
+    | {"_UNREVIEWED_OUTCOMES"}  # a turn that ends on a review-talk bounce shipped unreviewed
 )
 
 
@@ -1035,6 +1036,13 @@ def test_a_fail_open_review_banners_too():
     rows = [r for r in LEDGER if r["op"] != "verify"] + [{"op": "verify", "outcome": "unavailable"}]
     out = build_trail(rows, "x").render()
     assert "shipped unreviewed" in out and "unavailable" in out
+
+
+def test_a_turn_ending_on_a_review_talk_bounce_banners_as_unreviewed():
+    """The bounce asked for a clean copy and ran no review: a turn that ends there shipped unreviewed."""
+    rows = [r for r in LEDGER if r["op"] != "verify"] + [{"op": "verify", "outcome": "review_talk", "reviewed": False}]
+    out = build_trail(rows, "x").render()
+    assert "shipped unreviewed" in out and "talking about the review" in out
 
 
 def test_a_salvaged_answer_banners_as_unreviewed():

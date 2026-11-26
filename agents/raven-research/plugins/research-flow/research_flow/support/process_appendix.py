@@ -165,6 +165,8 @@ _TRAILING = ".,;:!?`*"
 _UNREVIEWED_OUTCOMES = {
     "budget_spent": "the revision budget was spent before any review ran",
     "unavailable": "the reviewer was unavailable and the gate failed open",
+    # Last when the turn ends before the clean copy it asked for: no review ran on that draft.
+    "review_talk": "the last draft was sent back for talking about the review, and no review followed",
 }
 
 _MAX_LISTED = 40

@@ -1,8 +1,8 @@
 """Highlights for the report's reading page: selected by a model, checked against the report.
 
-The page can show key figures, key findings and a timeline above the report's body, and
-set a few paragraphs of the body as notes. A
-model picks them, because picking needs a reading of the report. A model may not word
+The page can show key figures, key findings and a timeline above the report's body. A
+model picks them, because picking needs a reading of the report. Key figures come from
+the answer at the top alone: the numbers the answer rests on are the ones worth a tile. A model may not word
 them: a figure with the wrong label, or a finding restated a shade stronger, would put a
 claim on the page that no reviewer saw.
 
@@ -10,10 +10,6 @@ So the model only selects, and this module checks. Every string the model return
 be text the report holds, and the two halves of a figure or of a dated event must stand
 in the same sentence, list item or table row. A string that fails is dropped. A kind
 with too few entries left is dropped whole. The page then shows the report without it.
-
-A note is not copied onto the page: the string only names the paragraph, and the page
-sets that paragraph as a note where it stands (``report_html.placed_notes``). So a note
-picked badly boxes a paragraph of the report, and puts no claim on the page.
 """
 
 from __future__ import annotations
@@ -26,8 +22,8 @@ from loguru import logger
 
 from research_flow.support._verdict import json_objects
 from research_flow.support.answer_text import visible_answer
-from research_flow.support.report_html import Figure, Highlights, Moment, placed_notes
-from research_flow.support.report_markdown import parse_blocks, plain_units
+from research_flow.support.report_html import Figure, Highlights, Moment, answer_blocks
+from research_flow.support.report_markdown import Block, parse_blocks, plain_units
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
@@ -36,7 +32,6 @@ if TYPE_CHECKING:
 _FIGURES = (2, 4)
 _FINDINGS = (2, 5)
 _TIMELINE = (3, 6)
-_NOTES = (1, 3)
 
 _VALUE_CHARS = 24
 _LABEL_CHARS = 60
@@ -59,12 +54,12 @@ report, character for character, without markdown marks. Never write, shorten, t
 rephrase: a string that is not in the report is discarded.
 
 Return one JSON object and nothing else:
-{"figures": [{"value": "...", "label": "..."}], "findings": ["..."], "timeline": [{"when": "...", "what": "..."}],
- "notes": ["..."]}
+{"figures": [{"value": "...", "label": "..."}], "findings": ["..."], "timeline": [{"when": "...", "what": "..."}]}
 
-- figures: at most 4 numbers the report's answer rests on. "value" is the number with its unit,
-  as the report writes it. "label" is the words that say what the number measures, taken from
-  the same sentence, list item or table row as the value. A label must make sense when read
+- figures: at most 4 numbers the report's answer rests on, taken from the answer at the top of
+  the report alone - its opening blockquote, or its first paragraph when it has none - never from
+  the body. "value" is the number with its unit, as the answer writes it. "label" is the words
+  that say what the number measures, taken from the same line of the answer as the value. A label must make sense when read
   alone beside its number: a name for the quantity, not a fragment that stops mid-phrase. Give
   each figure a label of its own; never the same label twice.
 - findings: at most 5 sentences or clauses, each one stating a conclusion of the report.
@@ -72,14 +67,8 @@ Return one JSON object and nothing else:
   sequence of at least 3. "when" is the date as the report writes it. "what" is the words that
   say what happened, taken from the same sentence, list item or table row as the date. The
   dates the report gives for its own work (when it was retrieved or written) are not events.
-- notes: at most 3 sentences from paragraphs of the report's body, each from a different `##`
-  section. Each one states something the reader must know before acting on that section: the
-  condition a result holds under, an exception to it, a step that breaks things when it is
-  skipped. Take none from the answer at the top, from the closing section on limits, from a
-  list or from a table. A sentence that only states a result is a finding, not a note.
 
-Leave a list empty when the report has nothing of that kind. Most reports have no timeline,
-and some have no note."""
+Leave a list empty when the report has nothing of that kind. Most reports have no timeline."""
 
 
 def _squeeze(text: str) -> str:
@@ -101,10 +90,10 @@ def _clean(value: object, limit: int) -> str:
 
 
 class _Report:
-    """The report as a reader sees it, in units a pair of strings must share."""
+    """The report, or a part of it, as a reader sees it, in units a pair of strings must share."""
 
-    def __init__(self, report: str) -> None:
-        self._units = [_squeeze(unit) for unit in plain_units(parse_blocks(report))]
+    def __init__(self, blocks: tuple[Block, ...]) -> None:
+        self._units = [_squeeze(unit) for unit in plain_units(blocks)]
 
     def holds(self, *texts: str) -> bool:
         """Whether one unit of the report holds every one of ``texts``."""
@@ -119,7 +108,7 @@ def _entries(data: dict, key: str) -> list:
 
 def check_highlights(data: dict, report: str) -> tuple[Highlights, dict[str, Any]]:
     """The highlights of ``data`` that the report holds, and how many of each kind were offered and kept."""
-    held = _Report(report)
+    held, answer = _Report(parse_blocks(report)), _Report(answer_blocks(report))
     figures: list[Figure] = []
     for entry in _entries(data, "figures"):
         if not isinstance(entry, dict):
@@ -130,7 +119,7 @@ def check_highlights(data: dict, report: str) -> tuple[Highlights, dict[str, Any
             _squeeze(value) == _squeeze(kept.value) or _squeeze(label) == _squeeze(kept.label) for kept in figures
         )
         named = _names(label) and _squeeze(label) != _squeeze(value)
-        if value and named and not taken and _DIGIT_RE.search(value) and held.holds(value, label):
+        if value and named and not taken and _DIGIT_RE.search(value) and answer.holds(value, label):
             figures.append(Figure(value, label))
     findings: list[str] = []
     for entry in _entries(data, "findings"):
@@ -152,11 +141,7 @@ def check_highlights(data: dict, report: str) -> tuple[Highlights, dict[str, Any
         fewest, most = bounds
         return tuple(entries[:most]) if len(entries) >= fewest else ()
 
-    offered = [note for entry in _entries(data, "notes") if (note := _clean(entry, _FINDING_CHARS[1]))]
-    notes = placed_notes(report, [note for note in offered if len(note) >= _FINDING_CHARS[0]], _NOTES[1])
-    highlights = Highlights(
-        band(figures, _FIGURES), band(findings, _FINDINGS), band(timeline, _TIMELINE), band(notes, _NOTES)
-    )
+    highlights = Highlights(band(figures, _FIGURES), band(findings, _FINDINGS), band(timeline, _TIMELINE))
     counters = {
         "figures_offered": len(_entries(data, "figures")),
         "figures_kept": len(highlights.figures),
@@ -164,8 +149,6 @@ def check_highlights(data: dict, report: str) -> tuple[Highlights, dict[str, Any
         "findings_kept": len(highlights.findings),
         "timeline_offered": len(_entries(data, "timeline")),
         "timeline_kept": len(highlights.timeline),
-        "notes_offered": len(_entries(data, "notes")),
-        "notes_kept": len(highlights.notes),
     }
     return highlights, counters
 

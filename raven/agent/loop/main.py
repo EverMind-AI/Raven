@@ -139,7 +139,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
     # able to spin the loop forever. Past the cap the decision degrades to
     # pass-through and the refusal is counted, so the books never read a
     # bounce that did not happen.
-    _MAX_HOOK_ROLLBACKS = 8
+    _MAX_HOOK_ROLLBACKS = 9
     # Generation parameters a rollback may override on the re-sample call.
     # Anything else is dropped: these feed the provider call directly, and an
     # unknown key from a hook must not TypeError the whole turn.

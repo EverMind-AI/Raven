@@ -463,6 +463,28 @@ def test_a_digest_provider_without_a_key_falls_back_to_the_agents(tmp_path):
     assert _shared_for(ctx).digest_provider() == (agent, None)
 
 
+def test_the_digest_provider_is_built_once_for_the_fetch_tool_and_the_hook(tmp_path, monkeypatch):
+    from research_flow.plugin import _shared_for
+
+    built = []
+
+    class _Own:
+        def __init__(self, **kwargs):
+            built.append(kwargs)
+
+    monkeypatch.setattr("raven.providers.litellm_provider.LiteLLMProvider", _Own)
+    slice_ = {
+        "enabled": True,
+        "digest": {"provider": "deepseek", "model": "deepseek/x", "apiKey": "dk"},
+        **_NO_LLM_GATES,
+    }
+    shared = _shared_for(_ctx(tmp_path, slice_, provider=object()))
+
+    first, second = shared.digest_provider(), shared.digest_provider()
+    assert first[0] is second[0] and first[1] == "deepseek/x"
+    assert len(built) == 1
+
+
 def test_a_keyless_search_tool_is_not_contributed(tmp_path, monkeypatch):
     """The fork refused to register it rather than advertise a tool whose every
     call is an error string; the contract this flow renders names the model's

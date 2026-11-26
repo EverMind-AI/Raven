@@ -133,6 +133,7 @@ class _Shared:
         self._ask_user: DRAskUserTool | None = None
         self._hook: ResearchFlowHook | None = None
         self._installable: bool | None = None
+        self._digest: tuple["LLMProvider | None", str | None] | None = None
 
     @property
     def provider(self) -> "LLMProvider | None":
@@ -148,12 +149,19 @@ class _Shared:
         digest = self.cfg.digest
         if not digest.provider:
             return self.provider, None
+        if self._digest is None:
+            self._digest = self._own_digest_provider()
+        return self._digest if self._digest[0] is not None else (self.provider, None)
+
+    def _own_digest_provider(self) -> tuple["LLMProvider | None", str | None]:
+        """Built once: the fetch tool and the hook share one client, and a missing key warns once."""
+        digest = self.cfg.digest
         if not digest.api_key or not digest.model:
             logger.warning(
                 "research-flow: digest.provider {!r} has no key or no model; the digest runs on the agent's provider",
                 digest.provider,
             )
-            return self.provider, None
+            return None, None
         from raven.providers.litellm_provider import LiteLLMProvider
 
         own = LiteLLMProvider(
@@ -365,6 +373,7 @@ class _Shared:
                 max_iterations=cfg.max_iterations or _DEFAULT_MAX_ITERATIONS,
                 context_window_tokens=cfg.context_window_tokens or 0,
                 session_gear=self.session_gear,
+                side=self.digest_provider() if cfg.digest.provider else None,
             )
         return self._hook
 

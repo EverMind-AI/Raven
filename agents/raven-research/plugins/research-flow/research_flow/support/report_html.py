@@ -16,9 +16,11 @@ and its text is not printed: the layout sets the two apart. Any other list, quot
 subsection stays as it is.
 
 Two more blocks come from what the report already writes. Three or more ``###`` parts in
-a row whose headings name a step each ("Step 2: ...") are stages on one line. A
-paragraph the checked highlights name as a note (:func:`placed_notes`) is set as one,
-where it stands and with every word it has.
+a row whose headings name a step each ("Step 2: ...") are stages on one line. A body
+paragraph that opens with a risk or note label (``**Risk**:``, ``Note:`` or their
+Chinese twins) is set as a note under that label, where it stands and with every word
+it has - except inside cards, where one boxed card among plain peers reads as a
+different kind of part.
 
 The report's text closes the same way before it reaches the page or the report file
 (:func:`close_with_sources`): the limits, then the list of sources. So the file holds
@@ -91,7 +93,13 @@ _RUN_LABEL_CHARS = 40
 #: The heading the flow gives a list of sources it writes itself, in each language it has.
 _SOURCE_LABELS = frozenset(t_in(language, "Sources") for language in ("en", "zh"))
 #: The fixed heading of the limits, as the report clause names it (gates/report_shape.py).
-_LIMITS_LABEL_RE = re.compile(r"^limitations?(?![a-z])|\u672a\u6838\u9a8c\u9879", re.I)
+#: The fixed limits heading alone, numbered or not: a section that shares it with other
+#: content ("Advice and limitations") keeps that content, so the page never leaves it off.
+_LIMITS_LABEL_RE = re.compile(
+    r"(?:\(?\d{1,2}[.)\u3001]|[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341]{1,3}\u3001)?"
+    r"\s*(?:limitations?|\u672a\u6838\u9a8c\u9879)\s*",
+    re.I,
+)
 #: A heading that carries its own number: ``3.``, ``3)``, ``(3)``, a Chinese numeral and its comma.
 _NUMBERED_HEADING_RE = re.compile(
     r"\(?\d{1,2}[.)\u3001]|[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341]{1,3}\u3001"
@@ -102,10 +110,43 @@ _FIGURE_WIDER = 13
 
 #: A bold lead longer than this is a paragraph in bold, not a name or a lead sentence.
 _NAME_CHARS = 80
+#: A paragraph that opens with a bold subsection number - "(1)" in Chinese parentheses with a
+#: Chinese numeral, "(1)", "1.1" - is that subsection's heading written as a bold lead.
+_SUBHEAD_LEAD_RE = re.compile(
+    r"\*\*(?P<name>(?:\uff08[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341]{1,3}\uff09"
+    r"|\([0-9]{1,2}\)|[0-9]{1,2}\.[0-9]{1,2}\.?)[^*\n]{1,78}?)\*\*"
+    r"[ \t]*(?:[:\uff1a][ \t]*)?(?P<rest>.*)\Z",
+    re.DOTALL,
+)
+_SUBHEAD_END_RE = re.compile(r"[ \t]*[.:\u3002\uff1a]+\Z")
+#: A run of paragraphs that each open with a name is set as numbered points from this many on.
+_POINTS_FROM = 3
 #: A bold lead that is a whole sentence: it ends where the sentence does, a closing quote or bracket allowed after.
 _NAME_STOP_RE = re.compile(r"[.!?\u3002\uff01\uff1f][\"'\u201d\u300d\u300f)\uff09]*\Z")
 # What separates a name from its text: a colon, a dash, or a hyphen with a space after it.
 _NAME_END_RE = re.compile(r"[ \t]*[:\uff1a][ \t]*\Z")
+#: A short label a body paragraph opens with, set in bold: one word (``Risk:``), or two to six CJK characters.
+_LABEL_RE = re.compile(r"(?P<label>[\u4e00-\u9fff]{2,6}|[A-Z][a-z]{2,11})(?P<colon>[:\uff1a])(?=[ \t]*[^ \t:\uff1a])")
+#: A table whose first column is all names this short reads by row: the first cell of a row is set in bold.
+_KEY_WIDTH = 24
+#: The widest bold that opens a paragraph and still names it (a CJK character counts 2).
+_NAME_WIDTH = 32
+#: Bold this short is a name even when it ends as a sentence does: ``**Industry.** text``.
+#: The labels the outline clause asks a paragraph to open with (``prompts._OUTLINE_STYLE_EDITS``):
+#: a paragraph that opens with one is a verdict or a caveat, not a named point.
+_LABEL_WORDS = frozenset({"\u7ed3\u8bba", "\u98ce\u9669", "\u6ce8\u610f", "conclusion", "risk", "note"})
+#: The labels that set a paragraph as a note: a risk or a caveat, not a verdict.
+_NOTE_WORDS = _LABEL_WORDS - {"\u7ed3\u8bba", "conclusion"}
+#: An absolute local path, which a report may cite in its list of sources in place of an address:
+#: ``/data/notes.md``, a file at the root (``/notes.md``, its extension telling it from a
+#: fraction such as ``a /b``), or a Windows path (``C:\notes\a.md``).
+_LOCAL_PATH_RE = re.compile(
+    r"(?<![\w/:.~\\])"
+    r"(?:~?/(?:[^\s/()\[\]<>`]+/)+[^\s/()\[\]<>`]+"
+    r"|~?/[^\s/()\[\]<>`.]+\.\w+"
+    r"|[A-Za-z]:[\\/](?:[^\s\\/()\[\]<>`]+[\\/])*[^\s\\/()\[\]<>`]+)"
+)
+_SHORT_NAME_WIDTH = 20
 _TEXT_START_RE = re.compile(r"[ \t]*(?:[:\uff1a]|\u2014{1,2}|\u2013|-(?=[ \t]))[ \t]*")
 #: The last line of a quotation that names who said it: it opens with a dash.
 _ATTRIBUTION_RE = re.compile(r"(?:\u2014{1,2}|\u2013|--)[ \t]*\S")
@@ -191,6 +232,7 @@ font-variant-numeric:tabular-nums}
 th,td{padding:11px 14px;text-align:left;vertical-align:top;border-bottom:1px solid var(--hair)}
 th{background:var(--shade);color:var(--ink-3);font-size:13px;font-weight:600;white-space:nowrap}
 tr:last-child>td{border-bottom:0}
+.keyed td:first-child{color:var(--ink);font-weight:600}
 .cite{font-size:.66em;line-height:0;margin:0 1px 0 2px;letter-spacing:0}
 .cite a{padding:1px 5px;border-radius:999px;background:var(--chip);color:var(--ink-3);font-weight:600;
 text-decoration:none}
@@ -300,15 +342,14 @@ class Moment:
 
 @dataclass(frozen=True)
 class Highlights:
-    """What the page shows above the body, and the paragraphs it sets as notes. Each string is the report's text."""
+    """What the page shows above the body. Each string is the report's text."""
 
     figures: tuple[Figure, ...] = ()
     findings: tuple[str, ...] = ()
     timeline: tuple[Moment, ...] = ()
-    notes: tuple[str, ...] = ()
 
     def __bool__(self) -> bool:
-        return bool(self.figures or self.findings or self.timeline or self.notes)
+        return bool(self.figures or self.findings or self.timeline)
 
 
 class _Sources:
@@ -483,6 +524,22 @@ def _named_text(rest: tuple[Span, ...], more: tuple[Block, ...], sources: _Sourc
     return (f"<p>{text}</p>" if text and more else text) + _blocks(more, sources, True)
 
 
+def _a_name(spans: tuple[Span, ...]) -> bool:
+    """Whether bold that opens a paragraph is a name, not a lead sentence: short, and not ended as a sentence.
+
+    A report that opens paragraph after paragraph with a bold sentence is prose with
+    its points marked; set as terms or numbered points, it loses its paragraphs.
+    """
+    text = span_text(spans).strip()
+    width = _width(text)
+    return 0 < width <= _NAME_WIDTH and (width <= _SHORT_NAME_WIDTH or _NAME_STOP_RE.search(text) is None)
+
+
+def _a_label(spans: tuple[Span, ...], words: frozenset[str] = _LABEL_WORDS) -> bool:
+    """Whether bold that opens a paragraph is one of the clause's labels (``**Risk**:``)."""
+    return span_text(spans).strip().rstrip(":\uff1a").strip().lower() in words
+
+
 def _term_rows(blocks: list[Block], sources: _Sources | None) -> dict[int, str]:
     """The paragraphs of a section that stand in a run of two or more, each opening with a name: a row of terms each.
 
@@ -491,17 +548,31 @@ def _term_rows(blocks: list[Block], sources: _Sources | None) -> dict[int, str]:
     set one section in two ways.
     """
     named = [_named(block.text) if block.kind == "paragraph" else None for block in blocks]
-    named = [pair if pair is not None and pair[1] else None for pair in named]
+    named = [
+        pair if pair is not None and pair[1] and _a_name(pair[0]) and not _a_label(pair[0]) else None for pair in named
+    ]
     rows: dict[int, str] = {}
-    for at, pair in enumerate(named):
-        before = at > 0 and named[at - 1] is not None
-        after = at + 1 < len(named) and named[at + 1] is not None
-        if pair is None:
+    at = 0
+    while at < len(named):
+        if named[at] is None:
+            at += 1
             continue
-        if not (before or after):
+        end = at
+        while end + 1 < len(named) and named[end + 1] is not None:
+            end += 1
+        if end == at:
             return {}
-        row = f"<div><dt>{_inline(pair[0], sources)}</dt><dd>{_inline(pair[1], sources)}</dd></div>"
-        rows[at] = ("" if before else '<dl class="terms">') + row + ("" if after else "</dl>")
+        points = end - at + 1 >= _POINTS_FROM
+        for place in range(at, end + 1):
+            name, rest = named[place]  # type: ignore[misc]
+            if points:
+                row = f'<li><p class="step-name">{_inline(name, sources)}</p>{_inline(rest, sources)}</li>'
+                opening, closing = '<ol class="steps">', "</ol>"
+            else:
+                row = f"<div><dt>{_inline(name, sources)}</dt><dd>{_inline(rest, sources)}</dd></div>"
+                opening, closing = '<dl class="terms">', "</dl>"
+            rows[place] = (opening if place == at else "") + row + (closing if place == end else "")
+        at = end + 1
     return rows
 
 
@@ -552,23 +623,31 @@ def _width(text: str) -> int:
     return sum(2 if unicodedata.east_asian_width(char) in "WF" else 1 for char in text)
 
 
-def _carded(blocks: list[Block], rendered: list[str]) -> str:
-    """A section's rendered blocks, its ``###`` parts set as cards when they are few and short.
+def _card_parts(blocks: list[Block]) -> list[tuple[int, int]]:
+    """The ``###`` parts of a section the page sets as cards, each as its first block and the one past it.
 
-    Every ``###`` part of the section has to qualify, and no ``####`` may divide one: a
+    Every ``###`` part of the section has to be short, and no ``####`` may divide one: a
     section that is half cards and half subsections reads as two layouts.
     """
     heads = [at for at, block in enumerate(blocks) if block.kind == "heading"]
-    plain = "".join(rendered)
     if not _CARDS_FROM <= len(heads) <= _CARDS_TO or any(blocks[at].level != 3 for at in heads):
-        return plain
+        return []
     parts = [(at, end) for at, end in zip(heads, [*heads[1:], len(blocks)])]
     for at, end in parts:
         inside = blocks[at + 1 : end]
         if not inside or any(block.kind not in ("paragraph", "list") for block in inside):
-            return plain
+            return []
         if _width(" ".join(plain_units(tuple(inside)))) > _CARD_WIDTH:
-            return plain
+            return []
+    return parts
+
+
+def _carded(blocks: list[Block], rendered: list[str]) -> str:
+    """A section's rendered blocks, its ``###`` parts set as cards when they are few and short."""
+    parts = _card_parts(blocks)
+    if not parts:
+        return "".join(rendered)
+    heads = [at for at, _ in parts]
     cards = "".join(f'<article class="card">{"".join(rendered[at:end])}</article>' for at, end in parts)
     size = " is-3" if len(parts) == 3 else ""
     return "".join(rendered[: heads[0]]) + f'<div class="cards{size}">{cards}</div>'
@@ -602,7 +681,7 @@ def _block(block: Block, sources: _Sources | None, forms: bool = False) -> str:
     if forms and block.kind == "quote":
         return _aside(block, sources)
     if block.kind == "paragraph":
-        return f"<p>{_text(block.text, sources)}</p>"
+        return f"<p>{_labelled(block.text, sources) if forms else _text(block.text, sources)}</p>"
     if block.kind == "heading":
         tag = "h3" if block.level <= 3 else "h4"
         return f"<{tag}>{_text(block.text, sources)}</{tag}>"
@@ -618,6 +697,15 @@ def _block(block: Block, sources: _Sources | None, forms: bool = False) -> str:
     if block.kind == "table":
         return _table(block, sources)
     return "<hr>"
+
+
+def _labelled(markdown: str, sources: _Sources | None) -> str:
+    """A paragraph's text, the short label it opens with in bold: ``Risk: ...``."""
+    hit = _LABEL_RE.match(markdown)
+    if hit is None:
+        return _text(markdown, sources)
+    label = escape(hit["label"], quote=False)
+    return f"<strong>{label}</strong>{hit['colon']}{_text(markdown[hit.end() :], sources)}"
 
 
 def _item(item: tuple[Block, ...], sources: _Sources | None, forms: bool = False) -> str:
@@ -639,15 +727,20 @@ def _table(block: Block, sources: _Sources | None, numbers: tuple[int, ...] = ()
         return "".join(out)
 
     head = ("<th></th>" if numbered else "") + cells(block.rows[0], "th")
+    keyed = (
+        not numbers
+        and len(block.rows) > 1
+        and len(block.rows[0]) >= 2
+        and all(row and 0 < _width(span_text(parse_inline(row[0]))) <= _KEY_WIDTH for row in block.rows[1:])
+    )
+    kind = ' class="keyed"' if keyed else ""
     body = []
     for index, row in enumerate(block.rows[1:]):
         number = numbers[index] if index < len(numbers) else None
         anchor = f' id="source-{number}"' if number is not None else ""
         lead = f'<td class="source-number">{number}</td>' if numbered and number is not None else ""
         body.append(f"<tr{anchor}>{lead}{cells(row, 'td')}</tr>")
-    return (
-        f'<div class="table-scroll"><table><thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table></div>'
-    )
+    return f'<div class="table-scroll"><table{kind}><thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table></div>'
 
 
 @dataclass
@@ -789,10 +882,17 @@ def _whole(block: Block) -> int:
     return len(block.items) if block.kind == "list" else len(block.rows) - 1 if block.kind == "table" else 0
 
 
-def _lists_sources(block: Block, entries: list[tuple[int, str]]) -> bool:
-    """Whether ``entries`` are all of ``block`` and nearly each carries an address."""
+def _cites_file(markdown: str) -> bool:
+    """Whether ``markdown`` names a local file, in its text or as a link's target."""
+    return _LOCAL_PATH_RE.search(span_text(parse_inline(markdown))) is not None or (
+        _LOCAL_PATH_RE.search(markdown) is not None
+    )
+
+
+def _lists_sources(block: Block, entries: list[tuple[int, str]], files: bool = False) -> bool:
+    """Whether ``entries`` are all of ``block`` and nearly each carries an address, or with ``files`` a local path."""
     whole = _whole(block) or len(entries)
-    addressed = sum(1 for _, text in entries if _first_address(text))
+    addressed = sum(1 for _, text in entries if _first_address(text) or (files and _cites_file(text)))
     return len(entries) >= 2 and len(entries) == whole and addressed >= whole * _REFERENCE_SHARE
 
 
@@ -821,14 +921,33 @@ def _source_run(text: str) -> tuple[str, list[str]] | None:
     return label, entries
 
 
-def _listing(blocks: list[Block]) -> tuple[dict[int, list[tuple[int, str]]], bool] | None:
+def _source_lines(text: str) -> list[str] | None:
+    """A paragraph that lists one source per line, each line carrying its address or a file's path; else None.
+
+    ``Publisher, Title, https://...`` on each line, with no list marker, is how a model
+    sometimes writes the list under the sources heading.
+    """
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if len(lines) < 2 or not all((_addresses(line) and _names_source(line)) or _cites_file(line) for line in lines):
+        return None
+    return lines
+
+
+def _listing(blocks: list[Block], lines: bool = False) -> tuple[dict[int, list[tuple[int, str]]], bool] | None:
     """A section's blocks as a list of sources: per block its entries, and whether the numbers are its own.
 
     The section holds one table, or lists and runs of sources (:func:`_source_run`),
     beside headings and paragraphs. Each entry is about an address
     (:func:`_names_source`). Several blocks, as under one label per kind of source,
-    are numbered through in the order they stand.
+    are numbered through in the order they stand. With ``lines``, which a heading that
+    names the sources grants, a paragraph of one source per line counts too
+    (:func:`_source_lines`), and so does an entry that cites a local file by its path;
+    elsewhere such a paragraph is body text that cites, and a list of paths is files.
     """
+
+    def names(text: str) -> bool:
+        return _names_source(text) or (lines and _cites_file(text))
+
     if any(block.kind not in ("paragraph", "heading", "list", "table") for block in blocks):
         return None
     held = [at for at, block in enumerate(blocks) if block.kind in ("list", "table")]
@@ -836,8 +955,8 @@ def _listing(blocks: list[Block]) -> tuple[dict[int, list[tuple[int, str]]], boo
         block = blocks[held[0]]
         own = _entries(block)
         entries = own or _rows(block)
-        named = sum(1 for _, text in entries if _names_source(text))
-        if not _lists_sources(block, entries) or named < len(entries) * _REFERENCE_SHARE:
+        named = sum(1 for _, text in entries if names(text))
+        if not _lists_sources(block, entries, lines) or named < len(entries) * _REFERENCE_SHARE:
             return None
         if own or block.kind == "table":
             return {held[0]: entries}, bool(own)
@@ -851,10 +970,12 @@ def _listing(blocks: list[Block]) -> tuple[dict[int, list[tuple[int, str]]], boo
                 return None
         elif block.kind == "paragraph" and (run := _source_run(block.text)) is not None:
             texts[at] = run[1]
+        elif block.kind == "paragraph" and lines and (listed := _source_lines(block.text)) is not None:
+            texts[at] = listed
         elif block.kind == "paragraph" and not held and _addresses(block.text):
             return None
     every = [text for at in texts for text in texts[at]]
-    named = sum(1 for text in every if _names_source(text))
+    named = sum(1 for text in every if names(text))
     if len(every) < 2 or named < len(every) * _REFERENCE_SHARE:
         return None
     parts: dict[int, list[tuple[int, str]]] = {}
@@ -893,7 +1014,8 @@ def _closing_lists(sections: list[_Section]) -> list[_References]:
     """
     found: list[_References] = []
     for index in range(len(sections) - 1, -1, -1):
-        listing = _listing(sections[index].blocks) or _sole_source(sections[index])
+        section = sections[index]
+        listing = _listing(section.blocks, lines=names_sources(_label(section))) or _sole_source(section)
         if listing is not None:
             found.append(_References(index, listing[0], listing[1]))
         elif index != len(sections) - 1:
@@ -972,7 +1094,7 @@ def _references(sections: list[_Section], opening: Iterable[Block] = ()) -> _Ref
         for at, block in enumerate(sections[index].blocks):
             # Not a table here: a ranking numbers its rows too, and it is no list of sources.
             entries = _entries(block) if block.kind != "table" else []
-            if not _lists_sources(block, entries):
+            if not _lists_sources(block, entries, files=True):
                 continue
             elsewhere = _marked(
                 [
@@ -1011,6 +1133,28 @@ def _answer_lines(blocks: tuple[Block, ...]) -> tuple[Block, ...]:
     return tuple(out)
 
 
+def _subheaded(block: Block) -> list[Block]:
+    """A paragraph that opens with a numbered subsection's name in bold, as that ``###`` heading and its text.
+
+    A model asked for ``### (1) ...`` subheadings writes ``**(1) Name.** Text`` about as often;
+    read as the heading it stands for, the subsection gets the subsection's layout.
+    """
+    hit = _SUBHEAD_LEAD_RE.match(block.text) if block.kind == "paragraph" else None
+    if hit is None:
+        return [block]
+    name = _SUBHEAD_END_RE.sub("", hit.group("name").strip())
+    rest = hit.group("rest").strip()
+    return [Block("heading", name, level=3)] + ([Block("paragraph", rest)] if rest else [])
+
+
+def answer_blocks(report: str) -> tuple[Block, ...]:
+    """The report's answer, one line to a paragraph; its first paragraph when it opens with no blockquote."""
+    parts = _read(report)
+    if parts.answer:
+        return parts.answer
+    return next(((block,) for block in [*parts.preface, *parts.lead] if block.kind == "paragraph"), ())
+
+
 def _read(report: str) -> _Report:
     """The reader layout's parts: an optional title, the answer blockquote, then the ``##`` sections.
 
@@ -1042,7 +1186,7 @@ def _read(report: str) -> _Report:
         if block.kind == "heading" and block.level <= 2:
             sections.append(_Section(block.text, []))
         elif sections:
-            sections[-1].blocks.append(block)
+            sections[-1].blocks.extend(_subheaded(block))
         else:
             lead.append(block)
     return _Report(title, answer, preface, lead, sections, _references(sections, [*answer, *preface, *lead]))
@@ -1149,49 +1293,18 @@ def _layout(parts: _Report) -> tuple[set[int], int]:
     return listings, bodies[-1] if len(bodies) >= 2 else -1
 
 
-def _placed(parts: _Report, notes: Iterable[str], most: int | None = None) -> dict[tuple[int, int], str]:
-    """Where each of ``notes`` stands: the section and block of the paragraph that holds it, in the report's order.
-
-    A note is set on a paragraph of the body: not in the limits, which are all caveats,
-    not in a list of sources, not on a row of terms and not on a paragraph too long for a
-    box. One note to a section, the earlier of ``notes`` first, and ``most`` of them at most.
-    """
-    listings, limits_at = _layout(parts)
-    open_to: dict[tuple[int, int], str] = {}
-    for index, section in enumerate(parts.sections):
-        if index in listings or index == limits_at:
-            continue
-        rows = _term_rows(section.blocks, None)
-        for at, block in enumerate(section.blocks):
-            text = span_text(parse_inline(block.text)) if block.kind == "paragraph" and at not in rows else ""
-            if text and _width(text) <= _NOTE_WIDTH:
-                open_to[(index, at)] = "".join(text.split())
-    places: dict[tuple[int, int], str] = {}
-    for note in ("".join(note.split()) for note in notes):
-        if most is not None and len(places) >= most:
-            break
-        taken = {index for index, _ in places}
-        place = next((place for place, text in open_to.items() if note in text and place[0] not in taken), None)
-        if note and place is not None:
-            places[place] = note
-    return dict(sorted(places.items()))
-
-
-def placed_notes(report: str, notes: Iterable[str], most: int | None = None) -> list[str]:
-    """Those of ``notes`` the page sets, in the report's order: each names a paragraph a note can stand on."""
-    offered = list(notes)
-    by_text = {"".join(note.split()): note for note in reversed(offered)}
-    return [by_text[held] for held in _placed(_read(report), offered, most).values()]
-
-
-def _note(block: Block, sources: _Sources | None, language: str) -> str:
-    """A paragraph as a note. Its own bold name labels it; without one, the fixed label does."""
+def _note(block: Block, sources: _Sources | None) -> str | None:
+    """A body paragraph that opens with a risk or note label, as a note under that label; else None."""
+    if block.kind != "paragraph" or _width(span_text(parse_inline(block.text))) > _NOTE_WIDTH:
+        return None
     named = _named(block.text)
-    if named is not None and named[1]:
-        name, text = _inline(named[0], sources), _inline(named[1], sources)
+    if named is not None and named[1] and _a_label(named[0], _NOTE_WORDS):
+        label, text = span_text(named[0]).strip().rstrip(":\uff1a").strip(), _inline(named[1], sources)
+    elif named is None and (hit := _LABEL_RE.match(block.text)) and hit["label"].lower() in _NOTE_WORDS:
+        label, text = hit["label"], _text(block.text[hit.end() :].lstrip(), sources)
     else:
-        name, text = escape(t_in(language, "Note"), quote=False), _text(block.text, sources)
-    return f'<aside class="note"><p class="note-name">{name}</p><p>{text}</p></aside>'
+        return None
+    return f'<aside class="note"><p class="note-name">{escape(label, quote=False)}</p><p>{text}</p></aside>'
 
 
 def _clip(text: str, limit: int) -> str:
@@ -1271,21 +1384,22 @@ def render_page(
     # The limits are the last section of the body; the report's lists of sources are not the body.
     quiet = references.quiet if references else frozenset()
     listings, limits_at = _layout(parts)
-    notes = _placed(parts, highlights.notes) if highlights is not None and highlights.notes else {}
     for index, section in enumerate(parts.sections):
-        if not show_limits and index == limits_at and _LIMITS_LABEL_RE.search(_label(section)):
+        if not show_limits and index == limits_at and _LIMITS_LABEL_RE.fullmatch(_label(section)):
             continue
         anchor = f"section-{index + 1}"
         limits = " is-limits" if index == limits_at else ""
         entries.append((anchor, span_text(parse_inline(section.heading))))
         rows = {} if index in listings else _term_rows(section.blocks, sources)
+        boxed = index not in listings and index != limits_at
+        carded = {at for first, end in _card_parts(section.blocks) for at in range(first, end)}
         rendered = [
             rows[at]
             if at in rows
             else _source_list(block, references.parts[at], references.own)
             if references is not None and index == references.section and at in references.parts
-            else _note(block, sources, language)
-            if (index, at) in notes
+            else note
+            if boxed and at not in carded and (note := _note(block, sources)) is not None
             else _block(block, None if (index, at) in quiet else sources, index not in listings)
             for at, block in enumerate(section.blocks)
         ]
@@ -1354,4 +1468,13 @@ def render_page(
     )
 
 
-__all__ = ["GENERATOR", "STYLE", "Figure", "Highlights", "Moment", "close_with_sources", "placed_notes", "render_page"]
+__all__ = [
+    "GENERATOR",
+    "STYLE",
+    "Figure",
+    "Highlights",
+    "Moment",
+    "answer_blocks",
+    "close_with_sources",
+    "render_page",
+]

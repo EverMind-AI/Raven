@@ -546,9 +546,13 @@ MESSAGES: dict[str, str] = {
     "Contents": "目录",
     "Sources": "来源",
     "Key figures": "关键数字",
+    # An interrupted research turn's fallback reply (research_flow.gates.report_shape)
+    "Partial result": "部分结果",
+    "The available record could not be summarized into a reliable partial result.": "已有记录不足以整理出可靠的部分结果。",
+    "Limitations": "未核验项",
+    "The research turn ended before the task was complete.": "研究在任务完成前中断了。",
     "Key findings": "要点",
     "Timeline": "时间线",
     "{minutes} min read": "约 {minutes} 分钟阅读",
     "Sources: {count}": "来源 {count} 个",
-    "Note": "注意",
 }

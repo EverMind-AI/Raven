@@ -36,6 +36,8 @@ from research_flow.state import SessionStore  # noqa: E402
 from research_flow.support.report_file import (  # noqa: E402
     file_digest,
     file_text,
+    length_bound,
+    length_verdict,
     measure_report,
     still_held,
     sync_report_file,
@@ -128,7 +130,10 @@ def test_the_prompt_asks_for_the_reader_form():
     contract = render_identity_and_contract(_reader_cfg())[1]
     assert "opening blockquote" in contract
     assert "no label comes before the answer" in contract
-    assert "no bold lead-in" in contract
+    assert "no bold label" in contract
+    assert "the blockquote gives the\n   deciding ones" in contract
+    assert "over the short form the identity" in contract and "limits are\n   present every time" in contract
+    assert "cites the file's absolute path instead" in contract
     assert "Conclusion" not in contract
     assert "write no fetch status, HTTP code" in contract
     assert "listing every URL the report cites, none left out" in contract
@@ -149,6 +154,21 @@ def test_the_prompt_asks_for_the_reader_form():
     assert "last `##` section" in contract
     assert "## Answer" not in contract
     assert "## Findings" not in contract
+
+
+def test_the_reader_form_asks_for_the_whole_subject_and_plain_prose():
+    """A report on one segment of a market, worded half in English, read as the whole answer."""
+    for cfg in (_reader_cfg(), _reader_cfg(report_style="outline")):
+        contract = " ".join(render_identity_and_contract(cfg)[1].split())
+        assert "Cover the whole subject the question names." in contract
+        assert "the blockquote names it and says why" in contract
+        assert "every sentence parses" in contract
+        assert "keep an English word only for a name, a model number, a unit" in contract
+        assert "use the mainland terms, never a Taiwan or Hong Kong variant" in contract
+        assert "say in the same sentence what each one measures" in contract
+    sections = " ".join(render_parts(report_depth=True)[1].split())
+    assert "Cover the whole subject" not in sections
+    assert "every sentence parses" not in sections
 
 
 def test_the_reader_clause_keeps_every_evidence_rule_of_the_deep_clause():
@@ -191,6 +211,119 @@ def test_the_reminder_checklist_points_at_the_reader_limits():
     reminder = render_reminder("Give me 3 to 5 options", READER_LAYOUT)
     assert "name it in the closing section on what could not be verified" in reminder
     assert "`## Limitations` and say why" in render_reminder("Give me 3 to 5 options")
+
+
+# --------------------------------------------------------------------------- #
+# The outline style                                                            #
+# --------------------------------------------------------------------------- #
+
+# An outline report: title, numbered sections and subsections, labelled conclusions, a list
+# of parallel items, a table, the fixed limits and a sources list one per line.
+_OUTLINE = (
+    "# Personal agents in 2026\n\n"
+    "> Agents move from answering to acting; memory and permissions decide who wins.\n\n"
+    "## 1. What a personal agent is\n\n"
+    "**Conclusion**: it acts for **one person**, across sessions.\n\n"
+    "Planning sets it apart ([IBM](https://www.ibm.com/a)).\n\n"
+    "### 1.1 Against assistants\n\nAssistants answer; agents act ([Baidu](https://intl.cloud.baidu.com/b)).\n\n"
+    "### 1.2 Against enterprise agents\n\nThe data boundary differs ([Deloitte](https://www.deloitte.com/c)).\n\n"
+    "## 2. Who builds them\n\n**Conclusion**: **platforms** lead. Three groups:\n\n"
+    "- **Platforms**: agents ship in the OS ([Wired](https://www.wired.com/d)).\n"
+    "- **Model labs**: agents ship with models ([Simular](https://www.simular.ai/e)).\n"
+    "- **Vertical apps**: one task end to end ([Timeless](https://www.timeless.ai/f)).\n\n"
+    "| Vendor | Memory | Source |\n|---|---|---|\n| A | yes | https://www.wired.com/d |\n\n"
+    "## Limitations\n\nMarket sizes were not checked.\n\n"
+    "## Sources\n\n"
+    "IBM, agents vs assistants, https://www.ibm.com/a\n"
+    "Baidu, architecture, https://intl.cloud.baidu.com/b\n"
+    "Deloitte, workplace agents, https://www.deloitte.com/c\n"
+    "Wired, agent test, https://www.wired.com/d\n"
+    "Simular, best agents, https://www.simular.ai/e\n"
+    "Timeless, statistics, https://www.timeless.ai/f\n"
+)
+
+
+def test_the_outline_style_asks_for_a_title_numbers_bold_conclusions_and_lists():
+    reader = {"report_depth": True, "report_layout": READER_LAYOUT, "report_page": True}
+    prose = render_parts(**reader)[1]
+    outline = render_parts(**reader, report_style="outline")[1]
+    assert "one `#` line that names the topic and its scope" in outline
+    assert "## \u4e00\u3001..." in outline and "### \uff08\u4e00\uff09..." in outline
+    assert "keep their\n   fixed headings, unnumbered" in outline
+    assert "conclusion in one\n   sentence after a bold label" in outline and "never the whole sentence" in outline
+    assert "opening with the item's name in bold" in outline
+    assert "never split into a list" in outline and "No paragraph opens with a bold\n   sentence" in outline
+    assert "never `1\u3001`" in outline and "the page sets two to four" in outline
+    assert "Number the list when its items are the points a section counts" in outline
+    assert "1. **<point>**\uff1a" in outline and "a section without any is prose" in outline
+    # The skeleton walks the argument the body clause names, a forecast table in its third step.
+    for step in ("<where things stand now>", "<why it is so>", "<what it leads to>", "<what would break that reading>"):
+        assert step in outline, step
+    assert "| <source> | <period> | <figure> |" in outline and "**\u98ce\u9669**\uff1a<the risk" in outline
+    assert "bold the one or two facts its point\n   rests on" in outline and "never a whole clause" in outline
+    assert "the opening blockquote's included" in outline and "its deciding figure in **bold**" in outline
+    for kept in (
+        "A number you did not read on a page you opened",
+        "Keep each\n   paragraph to one point",
+        "no bold label",
+    ):
+        assert kept in outline, kept
+    assert "`**\u98ce\u9669**\uff1a`" in outline and "**\u7ed3\u8bba**\uff1a<the section's conclusion" in outline
+    assert "## \u672a\u6838\u9a8c\u9879\n" in outline and "## \u6765\u6e90\n" in outline
+    # Without the page, the outline names no page and closes with no list of sources.
+    bare = render_parts(report_depth=True, report_layout=READER_LAYOUT, report_page=False, report_style="outline")[1]
+    assert "the page sets" not in bare and "## \u6765\u6e90" not in bare and "## \u672a\u6838\u9a8c\u9879\n" in bare
+    assert "no heading stands above the body as a\n   whole" in prose and "#` line" not in prose
+    assert render_parts(**reader, report_style="prose") == render_parts(**reader)
+
+
+def test_the_outline_style_touches_only_the_reader_layout():
+    assert render_parts(report_style="outline") == render_parts()
+    assert render_parts(report_depth=True, report_style="outline") == render_parts(report_depth=True)
+    cfg = _reader_cfg(report_style="outline")
+    assert (
+        render_identity_and_contract(cfg)[1]
+        == render_parts(
+            report_depth=True, report_layout=READER_LAYOUT, report_style="outline", require_answer_marker=True
+        )[1]
+    )
+    assert FlowConfig.model_validate({"finalShape": {"reportStyle": "outline"}}).final_shape.report_style == "outline"
+
+
+def test_the_titled_reminder_and_rewrite_start_at_the_title():
+    titled = render_reminder("", READER_LAYOUT, True, True)
+    assert "the report's `#` title line, then the report in its three parts" in titled
+    assert "`#` title" not in render_reminder("", READER_LAYOUT, True)
+    ask = rewrite_prompt(("Answer",), READER_LAYOUT, True, True)
+    assert "begin it at the `#` title line" in ask and "begin it at the blockquote directly" not in ask
+    assert "begin it at the blockquote directly" in rewrite_prompt(("Answer",), READER_LAYOUT, True)
+
+
+@pytest.mark.asyncio
+async def test_the_turn_reminder_and_the_bar_know_the_outline_style(tmp_path):
+    cfg = _reader_cfg(report_bounce=True, report_style="outline")
+    ctx = AgentHookContext(session_key="cli:t", inbound_content="report on personal agents")
+    decision = await TurnFrame(cfg, SessionStore(tmp_path), None).before_user_inbound(ctx)
+    assert "the report's `#` title line" in decision.modified_content
+    ctx = AgentHookContext(session_key="cli:t", inbound_content="report on personal agents")
+    decision = await TurnFrame(_reader_cfg(), SessionStore(tmp_path), None).before_user_inbound(ctx)
+    assert "`#` title" not in decision.modified_content
+    chain = build_chain(
+        cfg, None, max_iterations=40, context_window_tokens=65536, tools=ToolHandles(), store=SessionStore(tmp_path)
+    )
+    assert next(o for o in chain if o.name == "ReportShapeGate")._titled is True
+
+
+def test_an_outline_report_passes_the_bar_and_reads_on_the_page():
+    from research_flow.support.report_html import close_with_sources, render_page
+
+    assert ReportShape(_OUTLINE, READER_LAYOUT, True).well_formed
+    page = render_page(_OUTLINE, show_limits=False)
+    assert "<h1" in page and "Personal agents in 2026" in page
+    assert "<h2>1. What a personal agent is</h2>" in page and page.count("<h3") == 2
+    assert "Market sizes were not checked" not in page
+    assert page.count('class="sources"') == 1 and 'id="sources"' not in page
+    assert close_with_sources(_OUTLINE) == (_OUTLINE, {})
 
 
 @pytest.mark.asyncio
@@ -739,6 +872,69 @@ async def test_the_iteration_that_wrote_a_report_is_told_its_length(tmp_path):
     assert (await ReportLengthNote().after_iteration(ctx)).append_note is None
 
 
+@pytest.mark.parametrize(
+    ("task", "bound"),
+    [
+        ("a report of 5k-7.5k\u5b57", (5000, 7500)),
+        ("5000-7500\u5b57", (5000, 7500)),
+        ("5-7.5k\u5b57", (5000, 7500)),
+        ("5000-7.5k\u5b57", (5000, 7500)),
+        ("1500 to 2000 words", (1500, 2000)),
+        ("\u4e0d\u5c11\u4e8e3000\u5b57", (3000, None)),
+        ("3000\u5b57\u4ee5\u5185", (None, 3000)),
+        ("at most 800 words", (None, 800)),
+        ("compare 3 to 5 vendors", None),
+        ("a detailed report", None),
+    ],
+)
+def test_the_length_a_task_sets_is_read(task, bound):
+    assert length_bound(task) == bound
+
+
+def test_the_verdict_counts_a_twentieth_either_side_as_meeting_the_bound():
+    assert "within it" in length_verdict(7600, (5000, 7500)) and "do not lengthen or trim" in length_verdict(
+        4800, (5000, 7500)
+    )
+    assert "400 over its ceiling" in length_verdict(7900, (5000, 7500))
+    assert "400 under its floor" in length_verdict(4600, (5000, 7500))
+    assert "within it" in length_verdict(9000, (3000, None)) and "within it" in length_verdict(10, (None, 3000))
+
+
+@pytest.mark.asyncio
+async def test_the_length_line_says_whether_the_body_meets_the_tasks_bound(tmp_path):
+    report = tmp_path / "r.md"
+    body = "\u5b57" * 600
+    report.write_text(
+        f"> a\n\n## One\n{body}\n\n## Sources\n- {'\u5b57' * 300} https://a.example/x\n", encoding="utf-8"
+    )
+    called = _Response("")
+    called.has_tool_calls = True
+
+    def ctx(task):
+        messages = [
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c"}]},
+            _tool("write_file", f"Successfully wrote 9 bytes to {report}"),
+        ]
+        gate_ctx = GateCtx(session_key="s", messages=messages, response=called)
+        gate_ctx.turn_question = task
+        return gate_ctx
+
+    note = (await ReportLengthNote().after_iteration(ctx("about 600-700\u5b57"))).append_note
+    # The sources list is not part of the body the task's length counts; the answer and headings are.
+    assert "sources list and link-check section left out: 602 against the task's 600-700: within it" in note
+    assert note.endswith("so the length is done - do not lengthen or trim the report for it]")
+    note = (await ReportLengthNote().after_iteration(ctx("a short note"))).append_note
+    assert "against the task's" not in note and note.endswith("distinct URLs cited]")
+
+
+def test_the_prompt_says_a_body_inside_the_bound_is_done():
+    contract = render_identity_and_contract(_reader_cfg())[1]
+    assert "a body that\n   meets it is done as far as length goes" in contract
+    assert "do not lengthen it for depth or\n   trim it for the count" in contract
+    assert "State the report's own length or its number of\n   sources only when the task asks for them" in contract
+    assert "the line also says whether the body\n   meets it, and that verdict stands" in contract
+
+
 def test_only_the_reader_layout_measures(tmp_path):
     def names(final_shape):
         cfg = FlowConfig(enabled=True, final_shape=final_shape)
@@ -807,6 +1003,8 @@ async def test_the_revision_budget_asks_for_the_reply_then_withholds_the_file_to
     assert metadata["report_drafts"]["revisions"] == 3
     assert "[report revisions:" not in notes[0] and "[report revisions:" not in notes[1]
     assert "changed in 2 iterations" in notes[2] and "send the reply" in notes[2]
+    # The contract states a length only when the task asks for one, and so does the note.
+    assert "only when the task asks for it" in notes[2]
     assert "withdrawn" in notes[3]
     offered = (await gate.before_iteration(_called(messages, metadata, tools))).modified_tools
     assert [t["function"]["name"] for t in offered] == ["web_search", "read_file"]
@@ -897,3 +1095,25 @@ async def test_the_reply_keeps_the_delivery_line_and_the_file_does_not(tmp_path,
     assert str(report) not in report.read_text(encoding="utf-8")
     assert report.read_text(encoding="utf-8").startswith("> yes, because.")
     assert facts["observers"]["report_file"]["reply_only_lines"] == 2
+
+
+def test_limits_sharing_their_heading_are_missing_and_stay_on_the_page():
+    """A report wrote its advice and its limits under one heading; the page left both off."""
+    from research_flow.gates.report_shape import rewrite_prompt
+    from research_flow.support.report_html import render_page
+
+    shared = (
+        "> The answer.\n\n## \u4e00\u3001Methods\nSLERP and soups.\n\n"
+        "## \u5341\u3001Advice \u4e0e \u672a\u6838\u9a8c\u9879\nPick SLERP for twins. The scores were not rerun.\n\n"
+        "## Sources\n\n- A https://a.com/x\n- B https://b.com/y\n"
+    )
+    assert ReportShape(shared, READER_LAYOUT, True).missing == ("Limitations",)
+    assert "under its fixed heading and no other" in rewrite_prompt(("Limitations",), READER_LAYOUT, True)
+    assert "Pick SLERP for twins" in render_page(shared, show_limits=False)
+    alone = shared.replace(
+        "## \u5341\u3001Advice \u4e0e \u672a\u6838\u9a8c\u9879\nPick SLERP for twins. ", "## \u672a\u6838\u9a8c\u9879\n"
+    )
+    assert ReportShape(alone, READER_LAYOUT, True).well_formed
+    assert "The scores were not rerun" not in render_page(alone, show_limits=False)
+    numbered = alone.replace("## \u672a\u6838\u9a8c\u9879", "## \u4e8c\u3001\u672a\u6838\u9a8c\u9879")
+    assert ReportShape(numbered, READER_LAYOUT, True).well_formed

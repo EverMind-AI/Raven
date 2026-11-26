@@ -25,7 +25,8 @@ from collections import Counter
 
 from raven.contracts.loop_hooks import HookDecision
 from research_flow.gates.base import Gate, GateCtx
-from research_flow.support.report_file import WRITE_TOOL, length_note, read_text, touched_markdown
+from research_flow.support.report_file import WRITE_TOOL, length_bound, length_note, read_text, touched_markdown
+from research_flow.support.turn_task import task_for
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +43,8 @@ _LOST_NOTE = (
 _ASK_NOTE = (
     "[report revisions: {path} has been changed in {count} iterations since it was "
     "first written. Stop revising it: make one more change only if a section or a "
-    "heading is missing, then send the reply, stating the length the last "
-    "[report length] line measured.]"
+    "heading is missing, then send the reply. State its length, as the last "
+    "[report length] line measured it, only when the task asks for it.]"
 )
 _STOP_NOTE = (
     "[report revisions: {path} has been changed in {count} iterations since it was "
@@ -115,8 +116,9 @@ class ReportLengthNote(Gate):
         seen: dict[str, list[str]] = state["headings"]
         notes: list[str] = []
         revised: str | None = None
+        bound = length_bound(task_for(ctx))
         for path in touched:
-            if note := length_note(path):
+            if note := length_note(path, bound):
                 notes.append(note)
             text = read_text(path)
             now = headings(text) if text is not None else None

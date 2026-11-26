@@ -176,9 +176,10 @@ def _named(report: str) -> str:
 class ReportPage:
     """Writes the reading page of one flow configuration's reports."""
 
-    def __init__(self, cfg: ReportPageConfig, provider: LLMProvider | None = None) -> None:
+    def __init__(self, cfg: ReportPageConfig, provider: LLMProvider | None = None, model: str | None = None) -> None:
         self._cfg = cfg
         self._provider = provider
+        self._model = model or cfg.highlights_model
 
     @property
     def removes_file(self) -> bool:
@@ -239,7 +240,7 @@ class ReportPage:
                 highlights, record["highlights"] = await select_highlights(
                     self._provider,
                     report,
-                    model=self._cfg.highlights_model,
+                    model=self._model,
                     max_tokens=self._cfg.highlights_max_tokens,
                     reasoning_effort=self._cfg.highlights_reasoning_effort,
                     timeout_seconds=self._cfg.highlights_timeout_seconds,

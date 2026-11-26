@@ -98,6 +98,15 @@ class VerifyConfig(_Base):
 
     enabled: bool = True
     model: str | None = None
+    # Review on the digest's own provider and model (``digest.provider``) instead of the
+    # agent's. A reasoning agent model reviewing at length ran into ``max_tokens`` on 7 of
+    # 18 comparison runs and shipped those drafts unreviewed. Without a digest provider the
+    # review stays on the agent's.
+    on_digest_provider: bool = False
+    # Save each review request (the draft and the evidence the reviewer reads) under the
+    # turn's working directory, in ``.review-requests/``, so two reviewer models can be
+    # compared offline on the same input. Off: nothing is written.
+    capture_requests: bool = False
     timeout_seconds: float = 360.0
     attempt_timeout_seconds: float = 120.0
     attempt_http_timeout_seconds: float | None = None
@@ -255,6 +264,11 @@ class FinalShapeConfig(_Base):
     # section - and the reviewed reply is also written over the markdown report file
     # the turn wrote, so the chat reply and the file are one text.
     report_layout: Literal["sections", "reader"] = "sections"
+    # The reader layout's style. "prose": sections of paragraphs, lists and tables only for
+    # side-by-side items. "outline": the same prose and tables, plus a `#` title, numbered
+    # sections and subsections, a bold conclusion opening each section and lists for
+    # parallel items.
+    report_style: Literal["prose", "outline"] = "prose"
     report_reminder: bool = True
     report_bounce: bool = False
     process_appendix: bool = True
@@ -295,6 +309,8 @@ class ReportPageConfig(_Base):
     highlights_max_tokens: int = 8192
     highlights_reasoning_effort: str | None = "low"
     highlights_timeout_seconds: float = 60.0
+    # Select the highlights on the digest's own provider and model, as ``verify`` can.
+    highlights_on_digest_provider: bool = False
     # The page then is the one report file the turn leaves: the markdown report file it
     # was written from is removed, and the reply names the page where it named that file.
     remove_markdown: bool = False
@@ -487,6 +503,23 @@ PRODUCT_SUPERSEDED_PROFILES: dict[str, str] = {
     # within a twentieth of the bound as met. A report the turn used to keep editing to
     # the iteration cap now ends earlier, so the label moves.
     "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts",
+    # 2026-11-26: the length clause calls a body inside the task's bound done - no
+    # lengthening for depth, no trimming for the count - and keeps the report from
+    # stating its own length or source count unasked; the length line says whether the
+    # body meets a bound it can read from the task. Fewer revising iterations, so the
+    # label moves.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length",
+    # 2026-11-26: the report clause sets the reply's shape over the identity's short form,
+    # asks the answer for its deciding numbers, and the late-turn nudges ask for the
+    # required shape rather than the answer-first short form, so the label moves.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape",
+    # 2026-11-26: the reader body's argument starts from where things stand, no section
+    # restates the answer, and forecasts of one quantity go in one table, so the label moves.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc",
+    # 2026-11-26: the reader clause asks for the whole subject the question names, each
+    # part researched or named as left out, and for plain standard prose in the question's
+    # language, so the label moves.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope",
     # The interim label this branch's 2026-09-07 batches ran under before it rebased onto
     # the cite-rank clause and the dr@3.7 rung; never shipped, retired so those bench
     # configs still load.

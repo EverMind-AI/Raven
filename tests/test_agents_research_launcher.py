@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from raven.config import product_render as render
+
 #: The vendored twin's visible tool face -- its config disables everything
 #: else its fork registers. The B side must show exactly this face: trunk
 #: grew tools the fork never had, and every one of them must be disabled by
@@ -69,6 +71,8 @@ def grounded(launcher, tmp_path, monkeypatch):
     monkeypatch.setenv("RESEARCH_SERPER_API_KEY", "serper-key")
     monkeypatch.delenv("SERPER_API_KEY", raising=False)
     monkeypatch.delenv("RESEARCH_JINA_API_KEY", raising=False)
+    # An operator's own .env beside the launcher is not this test's settings.
+    monkeypatch.setattr(launcher, "env_value", lambda name: render.env_value(name, env_file=tmp_path / ".env"))
     return launcher
 
 
@@ -476,8 +480,11 @@ def test_the_shipped_label_moves_when_the_shipped_prompt_does():
     )[1]
     digest = hashlib.sha256(" ".join(segment.split()).encode("utf-8")).hexdigest()[:16]
 
-    assert shipped["version"] == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts"
-    assert digest == "c69988ccc4ce6edf", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
+    assert (
+        shipped["version"]
+        == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope"
+    )
+    assert digest == "5f210159a3c740ec", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
 
 
 def test_every_retirement_this_product_declares_names_a_label_it_can_load():

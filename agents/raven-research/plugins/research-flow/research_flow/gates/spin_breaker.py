@@ -80,8 +80,8 @@ _FORCE_REPORT_NOTE = (
     "[research checkpoint] You are restarting research that was already "
     "done. Do not start over. Using only the evidence already gathered "
     "above, commit to the best-supported answer and write the final answer "
-    "now: the answer first, then the key evidence with source URLs, then "
-    "any remaining uncertainty."
+    "now, in the shape the reply is required to take, with the source URLs of the key "
+    "evidence and what remains uncertain."
 )
 
 _QUOTED_RE = re.compile(r"\"([^\"\n]{2,60})\"|“([^”\n]{2,60})”")

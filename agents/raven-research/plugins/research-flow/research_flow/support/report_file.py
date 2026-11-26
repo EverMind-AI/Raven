@@ -33,6 +33,7 @@ from typing import Any
 from raven.security.trust import unwrap_untrusted
 from research_flow.support.process_appendix import _URL_RE as _CITED_URL_RE
 from research_flow.support.process_appendix import _clean as _clean_url
+from research_flow.support.report_markdown import names_sources
 
 WRITE_TOOL = "write_file"
 _EDIT_TOOL = "edit_file"
@@ -186,7 +187,7 @@ def measure_report(text: str) -> dict[str, Any]:
     sections: list[list[Any]] = [["(opening)", 0, 0]]
     for raw in text.splitlines():
         if raw.startswith("## "):
-            sections.append([raw[3:].strip()[:24], 0, 0])
+            sections.append([raw[3:].strip(), 0, 0])
         line = _BARE_URL_RE.sub("", _LINK_TARGET_RE.sub("]", raw))
         cjk = len(_CJK_RE.findall(line))
         words = len(_WORD_RE.findall(_CJK_RE.sub(" ", line)))
@@ -202,19 +203,102 @@ def measure_report(text: str) -> dict[str, Any]:
     return counts
 
 
-def length_note(path: str) -> str | None:
-    """The ``[report length: ...]`` line for one file as it now stands, or None if unreadable."""
+# A length the task sets: "5000-7500 \u5b57", "5k-7.5k\u5b57", "1500 to 2000 words",
+# "\u4e0d\u5c11\u4e8e3000\u5b57" (at least), "3000\u5b57\u4ee5\u5185" (at most). One unit
+# of length is one CJK character or one other word, the way the count below reads a
+# mixed Chinese report. A length the parse cannot place gets no verdict.
+_NUMBER = r"(\d+(?:\.\d+)?)\s*([kK\u5343wW\u4e07])?"
+_UNIT = r"(?:\u5b57\u7b26|\u5b57|\u8bcd|characters?|chars?|words?)"
+_RANGE_RE = re.compile(
+    _NUMBER + r"\s*(?:-|~|\uff5e|\u2013|\u2014|to|\u5230|\u81f3)\s*" + _NUMBER + r"\s*" + _UNIT, re.I
+)
+_AT_LEAST_RE = re.compile(
+    r"(?:\u4e0d\u5c11\u4e8e|\u81f3\u5c11|\u4e0d\u4f4e\u4e8e|at least|no fewer than)\s*" + _NUMBER + r"\s*" + _UNIT, re.I
+)
+_AT_MOST_RE = re.compile(
+    r"(?:\u4e0d\u8d85\u8fc7|\u4e0d\u591a\u4e8e|\u6700\u591a|at most|no more than|up to)\s*" + _NUMBER + r"\s*" + _UNIT,
+    re.I,
+)
+_WITHIN_RE = re.compile(_NUMBER + r"\s*" + _UNIT + r"\s*(?:\u4ee5\u5185|\u4ee5\u4e0b|\u5185)", re.I)
+_SCALE = {"k": 1000, "\u5343": 1000, "w": 10000, "\u4e07": 10000}
+#: The share of a bound that still meets it, as the report clause states it.
+LENGTH_TOLERANCE = 0.05
+
+
+def _amount(number: str, scale: str | None) -> int:
+    return round(float(number) * _SCALE.get((scale or "").lower(), 1))
+
+
+def length_bound(task: str) -> tuple[int | None, int | None] | None:
+    """The (floor, ceiling) of length the task sets, either side None when open; None when it sets none."""
+    if hit := _RANGE_RE.search(task or ""):
+        high = _amount(hit.group(3), hit.group(4))
+        low = _amount(hit.group(1), hit.group(2))
+        # "5-7.5k": the scale written once, after the second number, covers both.
+        if hit.group(2) is None and hit.group(4) and _amount(hit.group(1), hit.group(4)) <= high:
+            low = _amount(hit.group(1), hit.group(4))
+        return (low, high) if 0 < low <= high else None
+    if hit := _AT_LEAST_RE.search(task or ""):
+        return _amount(hit.group(1), hit.group(2)), None
+    if hit := _AT_MOST_RE.search(task or "") or _WITHIN_RE.search(task or ""):
+        return None, _amount(hit.group(1), hit.group(2))
+    return None
+
+
+#: The heading of a section that shows the links were checked. The report clause leaves
+#: it out of the task's length, as it does the list of sources.
+_LINK_CHECK_RE = re.compile(
+    r"(?:\b(?:links?|urls?)\b|(?<!\u4f9b\u5e94)\u94fe\u63a5(?!\u53e3)).{0,8}(?:check|verif|status|\u6838\u9a8c|\u9a8c\u8bc1|\u68c0\u67e5|\u6821\u9a8c|\u72b6\u6001)"
+    r"|(?:\u6838\u9a8c|\u9a8c\u8bc1|\u68c0\u67e5|\u6821\u9a8c)\u7684?\u94fe\u63a5(?!\u53e3)",
+    re.I,
+)
+
+
+def body_length(counts: Mapping[str, Any]) -> int:
+    """CJK characters plus other words, the list of sources and a link-check section left out."""
+    return sum(
+        cjk + words
+        for name, cjk, words in counts["sections"]
+        if not names_sources(name) and not _LINK_CHECK_RE.search(name)
+    )
+
+
+def length_verdict(total: int, bound: tuple[int | None, int | None]) -> str:
+    """Where ``total`` stands against the task's bound, a twentieth either side counted as meeting it."""
+    low, high = bound
+    asked = f"{low}-{high}" if low and high else f"at least {low}" if low else f"at most {high}"
+    if low and total < low * (1 - LENGTH_TOLERANCE):
+        return f"{total} against the task's {asked}: {low - total} under its floor, so the body needs more"
+    if high and total > high * (1 + LENGTH_TOLERANCE):
+        return f"{total} against the task's {asked}: {total - high} over its ceiling, so trim that much"
+    return (
+        f"{total} against the task's {asked}: within it (a twentieth either side counts), so the "
+        "length is done - do not lengthen or trim the report for it"
+    )
+
+
+def length_note(path: str, bound: tuple[int | None, int | None] | None = None) -> str | None:
+    """The ``[report length: ...]`` line for one file as it now stands, or None if unreadable.
+
+    With the task's ``bound`` it also says whether the body, counted as CJK characters
+    plus other words without the list of sources or a link-check section, meets it.
+    """
     text = read_text(path)
     if text is None:
         return None
     c = measure_report(text)
-    parts = "; ".join(f"{name} {cjk}/{words}" for name, cjk, words in c["sections"])
+    parts = "; ".join(f"{name[:24]} {cjk}/{words}" for name, cjk, words in c["sections"])
+    verdict = (
+        f"; length, CJK characters plus other words, sources list and link-check section left out: {length_verdict(body_length(c), bound)}"
+        if bound
+        else ""
+    )
     return (
         f"[report length: {path} - total {c['prose_cjk'] + c['table_cjk']} CJK characters and "
         f"{c['prose_words'] + c['table_words']} other words (prose {c['prose_cjk']}/{c['prose_words']}, "
         f"tables {c['table_cjk']}/{c['table_words']}); "
         f"by section, prose and tables, CJK/words: {parts}; link targets not counted above; "
-        f"{c['urls']} distinct URLs cited]"
+        f"{c['urls']} distinct URLs cited{verdict}]"
     )
 
 

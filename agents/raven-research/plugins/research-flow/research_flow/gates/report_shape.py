@@ -78,6 +78,7 @@ import logging
 import re
 
 from raven.contracts.loop_hooks import HookDecision
+from raven.i18n import t_in
 from research_flow.gates.base import Gate, GateCtx
 from research_flow.support.answer_text import closing_tag_bar, visible_answer
 from research_flow.support.brief_checklist import render_checklist
@@ -142,6 +143,11 @@ _REMINDER_READER = (
     "word - that shape goes inside the body, not in place of the report."
 )
 _REMINDER_BODY_READER = _REMINDER_READER.format(limits=_READER_LIMITS)
+# The outline style puts the report's `#` title above the answer.
+_UNTITLED_OPENING = "Reply with the report in its three parts:"
+_TITLED_OPENING = "Reply with the report's `#` title line, then the report in its three parts:"
+_UNTITLED_START = "begin it at the blockquote directly"
+_TITLED_START = "begin it at the `#` title line, the blockquote right under it"
 _REMINDER_BODY_READER_SOURCED = _REMINDER_READER.format(limits=_READER_LIMITS_SOURCED)
 
 # Any heading level, any decoration around the name. Every one of these
@@ -192,6 +198,14 @@ _SECTION_RE = {
 # the limits. No list of other words stands beside it: a word list reads a body heading
 # that holds one of its words as the limits, and never names every wording.
 _FIXED_LIMITS_RE = re.compile(rf"^limitations?(?![a-z])|{LIMITS_HEADINGS['zh']}", re.I)
+# The fixed heading opening the label, after a Chinese numeral if one numbers it. Limits
+# under a heading that opens with another topic (advice, then the Chinese heading) share their
+# section with it, so that report is missing them and gets the one rewrite.
+_FIXED_LIMITS_FIRST_RE = re.compile(
+    rf"(?:[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341]{{1,3}}\u3001)?\s*"
+    rf"(?:limitations?(?![a-z])|{LIMITS_HEADINGS['zh']})",
+    re.I,
+)
 
 # The reader layout's answer: an optional ``#`` title, then the blockquote that opens
 # the reply.
@@ -233,6 +247,9 @@ def _reader_sections(text: str, sources: bool = False) -> tuple[dict[str, tuple[
     above = range((len(heads) if closing is None else closing) - 1, -1, -1)
     limits_at = next((i for i in above if limits_re.search(labels[i])), None)
     named = limits_at is not None
+    shared = sources and named and not _FIXED_LIMITS_FIRST_RE.match(labels[limits_at])
+    if shared:
+        limits_at = None
     # The contract puts the limits in the last ``##`` section, in the reply's own
     # language, so no word list names every heading it allows: with a section above
     # it, the last ``##`` heading is the limits. A listed word in the first heading
@@ -240,7 +257,7 @@ def _reader_sections(text: str, sources: bool = False) -> tuple[dict[str, tuple[
     # labour shortfall), since the body comes before the limits.
     body_above = quote_end is not None and bool(heads) and bool(text[quote_end : heads[0][0]].strip())
     if sources:
-        if limits_at is None and level_two and (len(level_two) >= 2 or body_above):
+        if limits_at is None and not shared and level_two and (len(level_two) >= 2 or body_above):
             limits_at = level_two[-1]
     elif (limits_at is None or (limits_at == 0 and not body_above)) and len(level_two) >= 2:
         limits_at = level_two[-1]
@@ -267,7 +284,7 @@ def _reader_sections(text: str, sources: bool = False) -> tuple[dict[str, tuple[
     return found, trailing
 
 
-def render_reminder(task: str = "", layout: str = "sections", sources: bool = False) -> str:
+def render_reminder(task: str = "", layout: str = "sections", sources: bool = False, titled: bool = False) -> str:
     """The per-turn reminder block, delimiters included.
 
     ``task`` is this turn's user message. When it carries constraints a parser can settle -
@@ -281,7 +298,8 @@ def render_reminder(task: str = "", layout: str = "sections", sources: bool = Fa
     injected and ``strip_reminder`` needs no second case. Empty task, or a task with no
     machine-readable constraints, renders exactly the bytes this function always rendered.
 
-    ``sources`` is the reader layout whose report closes with its list of sources.
+    ``sources`` is the reader layout whose report closes with its list of sources, and
+    ``titled`` the outline style, whose report opens with a ``#`` title line.
     """
     if layout == READER_LAYOUT and sources:
         body = _REMINDER_BODY_READER_SOURCED + render_checklist(task, limits=_SOURCED_LIMITS_NAME)
@@ -289,6 +307,8 @@ def render_reminder(task: str = "", layout: str = "sections", sources: bool = Fa
         body = _REMINDER_BODY_READER + render_checklist(task, limits=_READER_PART_NAMES["Limitations"])
     else:
         body = _REMINDER_BODY + render_checklist(task)
+    if titled and layout == READER_LAYOUT:
+        body = body.replace(_UNTITLED_OPENING, _TITLED_OPENING, 1)
     return f"{REMINDER_OPEN} {body} {REMINDER_CLOSE}"
 
 
@@ -405,40 +425,58 @@ _REWRITE_PROMPT_READER = (
 )
 
 
-def rewrite_prompt(missing: tuple[str, ...], layout: str = "sections", sources: bool = False) -> str:
+def rewrite_prompt(
+    missing: tuple[str, ...], layout: str = "sections", sources: bool = False, titled: bool = False
+) -> str:
     if layout == READER_LAYOUT:
-        names = {**_READER_PART_NAMES, "Limitations": _SOURCED_LIMITS_NAME} if sources else _READER_PART_NAMES
-        return _REWRITE_PROMPT_READER.format(
+        sourced = {"Limitations": f"{_SOURCED_LIMITS_NAME}, under its fixed heading and no other"}
+        names = {**_READER_PART_NAMES, **sourced} if sources else _READER_PART_NAMES
+        text = _REWRITE_PROMPT_READER.format(
             missing=", ".join(names[n] for n in missing),
             limits=_READER_LIMITS_SOURCED if sources else _READER_LIMITS,
         )
+        return text.replace(_UNTITLED_START, _TITLED_START, 1) if titled else text
     return _REWRITE_PROMPT.format(missing=", ".join(missing))
 
 
-def interrupted_report_guidance(task: str, layout: str = "sections", sources: bool = False) -> str:
+def interrupted_report_guidance(
+    task: str, layout: str = "sections", sources: bool = False, titled: bool = False
+) -> str:
     return (
         "This research turn was interrupted before completion. Give the best-supported "
         "partial answer, preserve source URLs and uncertainty, and state what remains "
         "unfinished. Do not present the partial result as a completed investigation. "
         "Reply in the same language as the user's request.\n\n"
-        f"{render_reminder(task, layout, sources)}"
+        f"{render_reminder(task, layout, sources, titled)}"
     )
 
 
-def interrupted_report_rewrite_prompt(draft: str, layout: str = "sections") -> str | None:
-    missing = ReportShape(draft, layout).missing
+def interrupted_report_rewrite_prompt(
+    draft: str, layout: str = "sections", sources: bool = False, titled: bool = False
+) -> str | None:
+    missing = ReportShape(draft, layout, sources).missing
     if not missing:
         return None
-    where = _READER_PART_NAMES["Limitations"] if layout == READER_LAYOUT else "Limitations"
-    return rewrite_prompt(missing, layout) + f" Keep the interruption and unfinished work explicit under {where}."
+    where = (
+        (_SOURCED_LIMITS_NAME if sources else _READER_PART_NAMES["Limitations"])
+        if layout == READER_LAYOUT
+        else "Limitations"
+    )
+    return (
+        rewrite_prompt(missing, layout, sources, titled)
+        + f" Keep the interruption and unfinished work explicit under {where}."
+    )
 
 
-def interrupted_report_fallback(reason: str, layout: str = "sections") -> str:
+def interrupted_report_fallback(reason: str, layout: str = "sections", language: str = "en") -> str:
+    """The reply when nothing better survives. The reader layout's headings are in ``language``."""
     if layout == READER_LAYOUT:
         return (
             f"> {reason}\n\n"
-            "## Partial result\nThe available record could not be summarized into a reliable partial result.\n\n"
-            "## Limitations\nThe research turn ended before the task was complete."
+            f"## {t_in(language, 'Partial result')}\n"
+            f"{t_in(language, 'The available record could not be summarized into a reliable partial result.')}\n\n"
+            f"## {t_in(language, 'Limitations')}\n"
+            f"{t_in(language, 'The research turn ended before the task was complete.')}"
         )
     return (
         f"## Answer\n{reason}\n\n"
@@ -463,10 +501,18 @@ class ReportShapeGate(Gate):
     already going to be replaced.
     """
 
-    def __init__(self, *, closing_tag_required: bool = False, layout: str = "sections", sources: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        closing_tag_required: bool = False,
+        layout: str = "sections",
+        sources: bool = False,
+        titled: bool = False,
+    ) -> None:
         self._closing_tag_required = closing_tag_required
         self._layout = layout
         self._sources = sources
+        self._titled = titled
 
     @property
     def name(self) -> str:
@@ -547,7 +593,7 @@ class ReportShapeGate(Gate):
                 {"role": "assistant", "content": draft, "_recovery_synthetic": True},
                 {
                     "role": "user",
-                    "content": rewrite_prompt(shape.missing, self._layout, self._sources),
+                    "content": rewrite_prompt(shape.missing, self._layout, self._sources, self._titled),
                     "_recovery_synthetic": True,
                 },
             ],

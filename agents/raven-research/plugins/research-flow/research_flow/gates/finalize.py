@@ -51,8 +51,8 @@ _COMMIT_NUDGE_TAIL = (
     "Do not restart the research. Commit to the best-supported answer from the "
     "evidence still readable above - some older tool results may have been "
     "replaced by a placeholder to fit the context window, so rely on what you "
-    "can still see: state the answer first, then the key evidence with source "
-    "URLs, then any remaining uncertainty."
+    "can still see: write the answer now, in the shape the reply is required to take, with the source URLs of "
+    "the key evidence and what remains uncertain."
 )
 
 _COMMIT_NUDGE_OPENERS = {

@@ -289,6 +289,20 @@ PRODUCT_ONLY_FIELDS: dict[str, str] = {
         "written over the report file the turn saved. Sections as a class default, so the "
         "fork's layout is what a profile gets unless it opts in; the product ships reader"
     ),
+    "final_shape.report_style": (
+        "the reader layout's style: prose, or an outline with a title, numbered sections, "
+        "bold section conclusions and lists for parallel items. Prose as a class default, "
+        "which is the only form the fork's reader-less layout has"
+    ),
+    "verify.on_digest_provider": (
+        "the review run on the digest's own provider and model instead of the agent's, "
+        "so a reasoning agent model does not think its way past max_tokens and ship the "
+        "draft unreviewed. Off as a class default: the fork has no second provider"
+    ),
+    "verify.capture_requests": (
+        "each review request saved under the turn's working directory so two reviewer "
+        "models can be compared offline on the same input. Off as a class default"
+    ),
     "report_page": (
         "the delivered report written as one HTML reading page beside the reply "
         "(support/report_page.py), with model-selected highlights the flow checks against "
