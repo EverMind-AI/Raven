@@ -17,10 +17,12 @@ rewriting the user's message on that guess is worse than missing a drop.
 from __future__ import annotations
 
 import asyncio
+import os
 import shlex
 from pathlib import Path
 from typing import TYPE_CHECKING
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from raven.input_history import MAX_ENTRIES, read_entries
 from raven.input_history import append as append_history
@@ -35,6 +37,39 @@ if TYPE_CHECKING:
 _HEADER_BYTES = 4096
 
 _NO_MATCH: dict = {"matched": False}
+
+_WINDOWS = os.name == "nt"
+
+
+def _file_uri_path(uri: str) -> str | None:
+    """The local path a ``file://`` URI names, or ``None`` when it names another machine.
+
+    ``url2pathname`` is the platform-aware inverse of ``Path.as_uri()``: it
+    percent-decodes the path, and on Windows it turns ``file:///C:/work/a.md``
+    into ``C:\\work\\a.md``, where ``unquote`` alone leaves ``/C:/work/a.md`` --
+    a path Windows cannot open. Any host other than an empty or ``localhost``
+    authority names somebody else's machine, so it is not a path on this one.
+    """
+    try:
+        parsed = urlparse(uri)
+    except ValueError:
+        # urlparse raises on a bracketed host that is not a valid IPv6 literal.
+        return None
+    if parsed.netloc and parsed.netloc.casefold() != "localhost":
+        return None
+    if not parsed.path:
+        return None
+    try:
+        local = url2pathname(parsed.path)
+    except OSError:
+        # A malformed Windows spelling raises inside url2pathname; a URI that
+        # cannot be converted names no path.
+        return None
+    if _WINDOWS and parsed.netloc and local.startswith("\\") and not local.startswith("\\\\"):
+        # url2pathname folds the localhost authority away; a root-relative
+        # result is the share it named, so the authority stays as the UNC host.
+        local = f"\\\\{parsed.netloc}{local}"
+    return local
 
 
 def _candidates(text: str) -> list[str]:
@@ -51,11 +86,9 @@ def _candidates(text: str) -> list[str]:
     forms = [stripped]
 
     if stripped.startswith("file://"):
-        parsed = urlparse(stripped)
-        # Any host component is a UNC share we cannot resolve locally; only the
-        # empty/localhost form names a path on this machine.
-        if parsed.netloc in ("", "localhost"):
-            forms.append(unquote(parsed.path))
+        local = _file_uri_path(stripped)
+        if local is not None:
+            forms.append(local)
 
     # Quoted or backslash-escaped: shlex understands both, and returning a
     # single token is itself the evidence that the whole line was one path.

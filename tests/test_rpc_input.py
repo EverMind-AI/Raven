@@ -14,14 +14,19 @@ and registration are pinned.
 from __future__ import annotations
 
 import asyncio
+import nturl2path
+import os
 import struct
 import time
 import zlib
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 
 from raven import input_history
+
+posix_only = pytest.mark.skipif(os.name == "nt", reason="a backslash-escaped space is a POSIX drop form")
 from raven.rpc.dispatcher import Dispatcher
 from raven.rpc.methods import input as input_methods
 from raven.rpc.methods.input import (
@@ -80,6 +85,7 @@ async def test_a_quoted_path_matches_and_comes_back_unquoted(tmp_path: Path) -> 
     assert result["text"] == str(target.resolve())
 
 
+@posix_only
 async def test_a_backslash_escaped_path_matches(tmp_path: Path) -> None:
     target = tmp_path / "my report.pdf"
     target.write_bytes(b"%PDF")
@@ -90,12 +96,75 @@ async def test_a_backslash_escaped_path_matches(tmp_path: Path) -> None:
 
 
 async def test_a_file_uri_matches(tmp_path: Path) -> None:
+    """as_uri(), not "file://" + str(target): on Windows the str() is a
+    backslash drive path, so concatenation leaves the backslashes in the
+    authority and the URI names no path anywhere."""
     target = tmp_path / "dropped file.txt"
     target.write_text("x")
-    uri = "file://" + str(target).replace(" ", "%20")
+    uri = target.as_uri()
     result = await input_detect_drop({"text": uri})
     assert result["matched"] is True
     assert result["text"] == str(target.resolve())
+
+
+async def test_a_file_uri_with_a_mixed_case_localhost_matches(tmp_path: Path) -> None:
+    """Host names are case-insensitive, so ``LOCALHOST`` is this machine."""
+    target = tmp_path / "dropped file.txt"
+    target.write_text("x")
+    uri = target.as_uri().replace("://", "://LOCALHOST", 1)
+    result = await input_detect_drop({"text": uri})
+    assert result["matched"] is True
+    assert result["text"] == str(target.resolve())
+
+
+async def test_a_file_uri_from_another_machine_is_not_a_drop(tmp_path: Path) -> None:
+    """The guard, not the existence check, must reject a foreign authority.
+
+    ``file://fileserver/share/dropped.txt`` names a path that is absent here
+    anyway, so ``matched: False`` holds with the guard deleted. The direct
+    assertions are what pin it: the helper names no path, and no second
+    candidate is added for the local-looking part of the URI.
+    """
+    uri = "file://fileserver/share/dropped.txt"
+    assert input_methods._file_uri_path(uri) is None
+    assert input_methods._candidates(uri) == [uri]
+    assert await input_detect_drop({"text": uri}) == {"matched": False}
+
+
+def test_a_windows_file_uri_keeps_its_drive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``unquote`` alone leaves ``/C:/...``, a path Windows cannot open. The
+    platform and the converter are substituted, as Windows' own converter is
+    the same pure string conversion."""
+    monkeypatch.setattr(input_methods, "_WINDOWS", True)
+    monkeypatch.setattr(input_methods, "url2pathname", nturl2path.url2pathname)
+    assert input_methods._file_uri_path("file:///C:/work/a.md") == "C:\\work\\a.md"
+
+
+def test_a_windows_localhost_authority_keeps_the_unc_share(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A localhost authority names this machine, but a share stays a UNC share."""
+    monkeypatch.setattr(input_methods, "_WINDOWS", True)
+    monkeypatch.setattr(input_methods, "url2pathname", nturl2path.url2pathname)
+    assert input_methods._file_uri_path("file://localhost/share/a.md") == "\\\\localhost\\share\\a.md"
+
+
+def test_an_unconvertible_windows_file_uri_names_no_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``nturl2path.url2pathname`` raises ``OSError`` for a doubled drive colon."""
+    monkeypatch.setattr(input_methods, "_WINDOWS", True)
+    monkeypatch.setattr(input_methods, "url2pathname", nturl2path.url2pathname)
+    assert input_methods._file_uri_path("file:///C::/a.md") is None
+
+
+def test_a_file_uri_with_an_invalid_bracketed_host_names_no_path() -> None:
+    """urlparse raises on a bracketed host that is not a valid IPv6 literal."""
+    with pytest.raises(ValueError):
+        urlparse("file://[bad/a.md")
+    assert input_methods._file_uri_path("file://[bad/a.md") is None
+
+
+def test_a_file_uri_carrying_no_path_names_no_path() -> None:
+    """``file://`` and a bare authority have nothing to convert."""
+    assert input_methods._file_uri_path("file://") is None
+    assert input_methods._file_uri_path("file://localhost") is None
 
 
 async def test_a_directory_is_not_a_file_drop(tmp_path: Path) -> None:
