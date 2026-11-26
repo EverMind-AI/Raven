@@ -646,7 +646,10 @@ def _refuse_unusable_launch_dir(label: str = "raven serve") -> None:
     try:
         validate_override(Path.cwd(), agent_home)
     except ValueError as exc:
-        suggested = default_channel_root(agent_home)
+        home = Path(agent_home).expanduser()
+        if not home.is_absolute():
+            home = home.resolve()
+        suggested = default_channel_root(home)
         typer.echo(
             f"{label}: {exc}; start it from a project directory instead (for example, {suggested}).",
             err=True,

@@ -1754,8 +1754,11 @@ class TestTheChosenSurface:
         and raises a bare schema ``ValueError``. A launch-directory check must do
         neither: a malformed ``agents.defaults`` falls back to the default home
         and the check still runs to its own answer. The start itself still fails
-        later, in ``build_agent_loop``; what is pinned here is only that this
-        check neither raises the schema error nor touches the file."""
+        later, but not in ``build_agent_loop``: that layer catches this same
+        ``ValueError`` and builds a stack with no agent loop, and the uncaught
+        one comes from ``build_app``'s ``load_config()``
+        (``raven/rpc/transports/ws.py:873``). What is pinned here is only that
+        this check neither raises the schema error nor touches the file."""
         from raven.config.loader import get_config_path, load_config
 
         home.mkdir(parents=True, exist_ok=True)
@@ -1879,6 +1882,63 @@ class TestTheChosenSurface:
         err = capsys.readouterr().err
         assert "start it from a project directory" in err
         assert str(home / "tmp") in err
+
+    @pytest.mark.parametrize("workspace", ["", "   "])
+    def test_a_blank_workspace_suggests_an_absolute_usable_directory(
+        self, home: Path, monkeypatch, capsys, workspace: str
+    ) -> None:
+        """A blank workspace leaves the agent home relative, and a suggestion
+        derived straight from it was relative too ("raven-tmp", "   -tmp"):
+        not the absolute directory the refusal promises, and not one
+        ``validate_override`` accepts as a working directory. Resolving the
+        home first makes the suggestion absolute and acceptable for the same
+        configured home."""
+        from raven.agent.workdir import validate_override
+        from raven.config.loader import get_config_path
+
+        home.mkdir(parents=True, exist_ok=True)
+        config_path = get_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps({"agents": {"defaults": {"workspace": workspace}}}), encoding="utf-8")
+        project = home.parent / "project"
+        project.mkdir()
+        monkeypatch.chdir(project)
+        agent_home = serve_commands._configured_agent_home()
+
+        with pytest.raises(typer.Exit) as exit_info:
+            serve_commands._refuse_unusable_launch_dir()
+
+        assert exit_info.value.exit_code == 1
+        err = capsys.readouterr().err
+        match = re.search(r"\(for example, (.+?)\)\.", err)
+        assert match is not None, err
+        suggested = Path(match.group(1))
+        assert suggested.is_absolute(), f"the suggestion is a relative path: {suggested}"
+        # The suggestion is one this config's own validation accepts: not the
+        # agent home, not inside it, and not one of its ancestors.
+        validate_override(suggested, agent_home)
+
+    def test_a_directory_the_refusal_names_can_itself_start_serve(self, home: Path, monkeypatch, capsys) -> None:
+        """The suggestion has to be a real place to start from, not just a
+        plausible string: changing into it makes the same check pass on the
+        same config. A blank workspace is excluded here because that config
+        re-derives the agent home from wherever it runs, so no directory can
+        satisfy it -- the blank case is pinned above instead."""
+        home.mkdir(parents=True, exist_ok=True)
+        monkeypatch.chdir(home.parent)
+
+        with pytest.raises(typer.Exit):
+            serve_commands._refuse_unusable_launch_dir()
+
+        err = capsys.readouterr().err
+        match = re.search(r"\(for example, (.+?)\)\.", err)
+        assert match is not None, err
+        suggested = Path(match.group(1))
+        assert suggested == home / "tmp"
+        suggested.mkdir(parents=True, exist_ok=True)
+
+        monkeypatch.chdir(suggested)
+        serve_commands._refuse_unusable_launch_dir()
 
     def test_the_serve_line_names_the_lock_holder_and_the_directory(self, home: Path, monkeypatch) -> None:
         """The fallback is not self-explanatory: the name says "serve" but not
