@@ -1930,8 +1930,8 @@
       "zh": "共 {max} tokens"
     },
     "gui.ctx.part.conversation": {
-      "en": "Session",
-      "zh": "会话"
+      "en": "Messages",
+      "zh": "消息"
     },
     "gui.ctx.part.files": {
       "en": "Files",

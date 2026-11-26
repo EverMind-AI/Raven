@@ -93,7 +93,7 @@ describe('the context panel', () => {
     expect(rows.map((r) => r.querySelector('.chrome-ctx-name')?.textContent)).toEqual([
       'System prompt',
       'Tools',
-      'Session',
+      'Messages',
       'Files',
       'Memory',
       'Skills',
