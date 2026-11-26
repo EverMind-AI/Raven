@@ -303,8 +303,9 @@ export class StylePool {
   }
 
   /**
-   * Selection overlay: REPLACE the cell's background with a solid color
-   * while preserving its foreground (color, bold, italic, dim, underline).
+   * Selection overlay: REPLACE the cell's background with a solid color.
+   * The foreground (color, bold, italic, dim, underline) is preserved by
+   * default, but is replaced too when a selection foreground is set.
    * Matches native terminal selection — a dedicated bg color, not SGR-7
    * inverse. Inverse swaps fg/bg per-cell, which fragments visually over
    * syntax-highlighted text (every fg color becomes a different bg stripe).
