@@ -10,6 +10,8 @@ itself.
 
 from __future__ import annotations
 
+import pytest
+
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.contracts.llm_provider import LLMResponse
@@ -476,10 +478,18 @@ def test_a_runtime_that_cannot_build_leaves_the_feature_off(tmp_path, monkeypatc
     assert loop.dag_tools() == [loop.tools.get("run_subagent_dag")], "only the registered one is left"
 
 
-async def test_a_broken_capability_catalogue_latches_generation_off(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b"{", id="not-json"),
+        pytest.param(b'{"harnessGeneration": {"memory": "\xff\xfe"}}', id="not-text"),
+    ],
+)
+async def test_a_broken_capability_catalogue_latches_generation_off(tmp_path, monkeypatch, body) -> None:
     """A broken catalogue is a setup fault, said once at build as an error --
-    not a warning repaid by a model call and a resolution failure on every
-    turn the install stays broken."""
+    not a warning repaid by a resolution failure on every turn the install
+    stays broken. A catalogue that is not text at all is a broken catalogue:
+    the agent still starts, and the fault is still a named one."""
     from types import SimpleNamespace
 
     from loguru import logger
@@ -488,7 +498,7 @@ async def test_a_broken_capability_catalogue_latches_generation_off(tmp_path, mo
     from raven.config.schema import PlaybookConfig
 
     bad = tmp_path / "harness_generation.json"
-    bad.write_text("{", encoding="utf-8")
+    bad.write_bytes(body)
     monkeypatch.setattr(harness_capabilities, "_PATH", bad)
 
     said: list[str] = []
