@@ -492,7 +492,7 @@ def test_the_shipped_label_moves_when_the_shipped_prompt_does():
         shipped["version"]
         == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window-close-skim"
     )
-    assert digest == "133b14461ac5e61f", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
+    assert digest == "75e3a5a7fa4a2944", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
 
 
 def test_every_retirement_this_product_declares_names_a_label_it_can_load():

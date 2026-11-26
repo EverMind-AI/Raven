@@ -266,6 +266,10 @@ def test_the_outline_style_asks_for_a_title_numbers_a_lead_table_and_bold_to_ski
     assert "by\n   what a paragraph holds, not by where it stands" in outline
     assert "never a whole\n   sentence, the opening one included" in outline
     assert "paragraph may open with its point as one bold sentence" not in outline
+    # The argument's last step is a part on what is still open, under a heading that says so.
+    assert "`Open questions and next steps`" in outline and "break that reading" not in outline
+    assert "\u5f00\u653e\u95ee\u9898\u4e0e\u540e\u7eed\u65b9\u5411" in outline
+    assert "break that reading" in prose
     for gone in (
         "<where things stand now>",
         "not\n   every name the paragraph mentions",

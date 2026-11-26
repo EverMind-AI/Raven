@@ -90,7 +90,9 @@ All notable changes to Raven are documented here.
   side in one table when the question surveys several, a table, list or prose
   as the content has that form, and bold chosen by what a paragraph holds - the
   names a reader scans for, the deciding figures, at most one short verdict -
-  never a whole sentence, in place of its paragraph-level rules and template. The
+  never a whole sentence, in place of its paragraph-level rules and template; its
+  last section asks what is still open, under a heading such as `Open questions
+  and next steps`, rather than what would break the reading. The
   page's report drops its section on what could not be verified
   (`finalShape.limits: false`): the rule asks for none, the shape bar requires
   none, and one written anyway is left out of the file and the page, whose

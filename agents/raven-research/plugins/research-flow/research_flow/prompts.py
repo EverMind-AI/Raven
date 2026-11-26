@@ -443,6 +443,17 @@ _DR_REPORT_STRUCTURE_CLAUSE_READER_PAGE = _derive(
 # bar find them by name.
 _OUTLINE_STYLE_EDITS = (
     (
+        """   with the figures that show it; why it is so; what it leads to; and what
+   would break that reading. The blockquote already gives the answer, so no""",
+        """   with the figures that show it; why it is so; what it leads to; and what is
+   still open - the questions the evidence leaves unsettled, the signals that
+   would change this reading, the work worth following next - under a heading
+   such as `Open questions and next steps`
+   (`\u5f00\u653e\u95ee\u9898\u4e0e\u540e\u7eed\u65b9\u5411` in Chinese), numbered like the rest; no
+   heading names "the reading" or what would break it. The blockquote already
+   gives the answer, so no""",
+    ),
+    (
         """   and is left out of the saved file. Nothing comes before the blockquote.""",
         """   and is left out of the saved file. Nothing comes before the blockquote
    but the report's title: one `#` line that names the topic and its scope,
