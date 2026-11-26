@@ -110,6 +110,8 @@ EXTENSION_KEYS = (
     "evalEngine",
     "eval_engine",
     "translate",
+    "decisionModel",
+    "decision_model",
     # The model that reads a picture (raven.knowledge describes figures with
     # it). Same consequence as sessionTitle above if omitted: a config carrying
     # the block would fail base Config validation instead of being read.

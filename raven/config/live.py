@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 from loguru import logger
+from pydantic.alias_generators import to_camel
 
 if TYPE_CHECKING:
     from raven.config.schema import SubagentRuntimeConfig
@@ -50,6 +51,9 @@ __all__ = [
     "held",
     "context_window_tokens",
     "cron_default_timezone",
+    "decision_for_skills",
+    "decision_for_specialists",
+    "decision_pin",
     "default_live",
     "default_model",
     "exec_timeout",
@@ -660,6 +664,56 @@ def web_providers(live: LiveConfig) -> tuple[str | None, str | None]:
         one("tools.web.search.provider"),
         one("tools.web.fetch.provider"),
     )
+
+
+def _block_pin(live: LiveConfig, blocks: tuple[str, ...], model_field: str, provider_field: str):
+    """One block's ``(model, provider)`` pin, under either spelling of both.
+
+    Both spellings because ``settings.set`` writes whichever one the file
+    already uses (see ``console._as_written``) and a hand-written config may
+    hold either; the config models accept both by alias, so a reader that knew
+    only one would answer None for half the configs on disk.
+    """
+    node: dict[str, Any] = {}
+    for name in blocks:
+        candidate = live.raw().get(name)
+        if isinstance(candidate, dict):
+            node = candidate
+            break
+
+    def field(name: str) -> str | None:
+        value = node.get(to_camel(name), node.get(name))
+        return value if isinstance(value, str) and value else None
+
+    return field(model_field), field(provider_field)
+
+
+def decision_pin(live: LiveConfig) -> tuple[str | None, str | None]:
+    """``decisionModel.model`` and the provider serving it, read live."""
+    return _block_pin(live, ("decisionModel", "decision_model"), "model", "provider")
+
+
+def _decision_flag(live: LiveConfig, field_name: str) -> bool:
+    camel = to_camel(field_name)
+    for block_name in ("decisionModel", "decision_model"):
+        node = live.raw().get(block_name)
+        if not isinstance(node, dict):
+            continue
+        if camel in node and isinstance(node[camel], bool):
+            return node[camel]
+        if field_name in node and isinstance(node[field_name], bool):
+            return node[field_name]
+    return False
+
+
+def decision_for_skills(live: LiveConfig) -> bool:
+    """Whether ``decisionModel.useForSkills`` is enabled, read live."""
+    return _decision_flag(live, "use_for_skills")
+
+
+def decision_for_specialists(live: LiveConfig) -> bool:
+    """Whether ``decisionModel.useForSpecialists`` is enabled, read live."""
+    return _decision_flag(live, "use_for_specialists")
 
 
 def disabled_tool_names(live: LiveConfig) -> frozenset[str]:

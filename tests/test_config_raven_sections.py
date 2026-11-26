@@ -532,3 +532,67 @@ def test_subagent_questions_reads_camel_case(tmp_path):
     assert cfg.subagent_questions.autofill_enabled is False
     # The other field keeps its default rather than being reset by a partial block.
     assert cfg.subagent_questions.autofill_timeout_seconds == 20.0
+
+
+class TestDecisionModelSection:
+    def test_in_extension_keys(self) -> None:
+        assert "decisionModel" in EXTENSION_KEYS
+        assert "decision_model" in EXTENSION_KEYS
+
+    def test_defaults(self, tmp_path: Path) -> None:
+        cfg = load_raven_config(_write_config(tmp_path, {}))
+
+        assert cfg.decision_model.model is None
+        assert cfg.decision_model.provider is None
+        assert cfg.decision_model.use_for_skills is False
+        assert cfg.decision_model.use_for_specialists is False
+
+    def test_camel_case_block_reaches_the_model(self, tmp_path: Path) -> None:
+        path = _write_config(
+            tmp_path,
+            {
+                "decisionModel": {
+                    "model": "openai/gpt-5-mini",
+                    "provider": "openai",
+                    "useForSkills": True,
+                    "useForSpecialists": True,
+                }
+            },
+        )
+
+        dm = load_raven_config(path).decision_model
+
+        assert dm.model == "openai/gpt-5-mini"
+        assert dm.provider == "openai"
+        assert dm.use_for_skills is True
+        assert dm.use_for_specialists is True
+
+    def test_snake_case_block_reaches_the_model(self, tmp_path: Path) -> None:
+        path = _write_config(
+            tmp_path,
+            {
+                "decision_model": {
+                    "model": "anthropic/claude-haiku-4-5",
+                    "provider": "anthropic",
+                    "use_for_skills": True,
+                    "use_for_specialists": False,
+                }
+            },
+        )
+
+        dm = load_raven_config(path).decision_model
+
+        assert dm.model == "anthropic/claude-haiku-4-5"
+        assert dm.provider == "anthropic"
+        assert dm.use_for_skills is True
+        assert dm.use_for_specialists is False
+
+    def test_base_loader_accepts_decision_model_block(self, tmp_path: Path) -> None:
+        from raven.config.loader import load_config
+
+        path = _write_config(
+            tmp_path,
+            {"decisionModel": {"model": "openai/gpt-5-mini", "provider": "openai", "useForSkills": True}},
+        )
+
+        load_config(path)

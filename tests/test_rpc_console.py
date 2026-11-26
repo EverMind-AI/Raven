@@ -99,6 +99,10 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         "sessionTitle.provider",
         "translate.model",
         "translate.provider",
+        "decisionModel.model",
+        "decisionModel.provider",
+        "decisionModel.useForSkills",
+        "decisionModel.useForSpecialists",
         "embedding.model",
         "embedding.provider",
         "vision.model",
@@ -109,6 +113,7 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         # writes so a pin cannot be persisted half-applied.
         "sessionTitle",
         "translate",
+        "decisionModel",
         "embedding",
         "vision",
         # No new reach: the same key has been writable through config.set (the

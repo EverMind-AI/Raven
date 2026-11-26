@@ -41,6 +41,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from raven.agent.decision_model import select_skills_with_decision_model
 from raven.contracts.tool import Tool
 from raven.skill_hub.audit import record_install, write_install_meta
 from raven.skill_hub.policy import SkillPolicy, is_blocked, lint_external_paths, refuses_low_safety
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from raven.memory_engine import ProjectSkills, SkillRegistry
+    from raven.providers.binding import ModelBinding
     from raven.skill_hub import SkillHubClient
 
 logger = logging.getLogger(__name__)
@@ -571,11 +573,13 @@ class FindSkillTool(Tool):
         min_safety: float = 0.7,
         blocklist: "Iterable[str] | None" = None,
         blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
+        decision_binding: "Callable[[], ModelBinding | None] | None" = None,
     ) -> None:
         self._get_router = get_router
         self._hub_wired = hub_wired
         self._enabled_reader = enabled_reader
         self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist, blocklist_reader=blocklist_reader)
+        self._decision_binding = decision_binding
 
     @property
     def name(self) -> str:
@@ -640,7 +644,7 @@ class FindSkillTool(Tool):
             hits = await router.select(query.strip(), history=[], k=8)
         except Exception as exc:  # noqa: BLE001 - a search failure must not kill the turn
             return f"Error: skill search failed ({exc})."
-        lines = []
+        entries: list[tuple[str, str]] = []
         for h in hits:
             # Same advertising-time screen as the scent menu: blocklisted
             # skills are never named, and a catalog hit already carrying a
@@ -652,7 +656,20 @@ class FindSkillTool(Tool):
             if refuses_low_safety(meta.get("score_safety"), self._policy.min_safety):
                 continue
             desc = ((meta.get("description") or h.content or "").strip().splitlines() or [""])[0][:120]
-            lines.append(f"- {h.qualified_id}: {desc}")
+            entries.append((h.qualified_id, desc))
+        if entries and self._decision_binding is not None:
+            binding = self._decision_binding()
+            if binding is not None:
+                chosen = await select_skills_with_decision_model(
+                    binding,
+                    query.strip(),
+                    entries,
+                    max_skills=len(entries),
+                )
+                if chosen:
+                    by_id = dict(entries)
+                    entries = [(skill_id, by_id[skill_id]) for skill_id in chosen if skill_id in by_id]
+        lines = [f"- {skill_id}: {desc}" for skill_id, desc in entries]
         if not lines:
             return "No matching skills found. Try different wording, or proceed without one."
         return "Matching skills (read one with read_skill(id)):\n" + "\n".join(lines)

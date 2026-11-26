@@ -14,6 +14,10 @@ from loguru import logger
 from raven.acp_client import remote_runs
 from raven.agent import workdir
 from raven.agent.context.silence import SILENCE_INSTRUCTION
+from raven.agent.decision_model import (
+    resolve_decision_binding,
+    select_specialist_with_decision_model,
+)
 from raven.agent.subagent import activity
 from raven.agent.subagent.attachments import retarget_note, with_attachment_note, with_undeliverable_note
 from raven.agent.subagent.backends import (
@@ -51,6 +55,7 @@ from raven.agent.subagent_memory import (
     trace_session_id,
 )
 from raven.config.agent_names import canonical_agent_name
+from raven.config.live import decision_for_specialists, default_live
 from raven.config.schema import DEFAULT_LONG_RUN_NOTICE_SECONDS, TIER_LADDER, ExecToolConfig
 from raven.context_engine.segments.render import (
     RESULT_REPORT_RULE,
@@ -272,6 +277,7 @@ class SubagentManager:
         task_board: bool = False,
         long_run_notice_seconds: float = DEFAULT_LONG_RUN_NOTICE_SECONDS,
         control_reachable: Callable[[], bool] | None = None,
+        live_config: "LiveConfig | None" = None,
     ):
         from raven.config.schema import LLM_ERROR_RETRY_DELAYS_DEFAULT, ExecToolConfig
 
@@ -341,7 +347,7 @@ class SubagentManager:
         self.restrict_to_workspace = restrict_to_workspace
         self._sandbox_config = sandbox_config
         # Read live by every run's network source; built on first use.
-        self._live_config: "LiveConfig | None" = None
+        self._live_config: "LiveConfig | None" = live_config
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
         # Why a run is being cancelled, by task id: written by the cancel
@@ -614,6 +620,21 @@ class SubagentManager:
         pull work toward it -- is not in the menu.
         """
         lines = "\n".join(f"- {name}: {description}" for name, description in menu)
+        live = self._live_config if self._live_config is not None else default_live()
+        if decision_for_specialists(live):
+            binding = resolve_decision_binding(live, self.provider_pool)
+            if binding is not None:
+                valid_names = [name for name, _ in menu]
+                if default and default not in valid_names:
+                    valid_names.append(default)
+                choice = await select_specialist_with_decision_model(
+                    binding,
+                    task,
+                    lines,
+                    valid_names,
+                )
+                if choice is not None:
+                    return choice
         messages = [
             {
                 "role": "system",

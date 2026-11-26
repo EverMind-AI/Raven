@@ -45,7 +45,8 @@ from typing import TYPE_CHECKING, Callable
 
 from raven.agent import workdir
 from raven.agent.context import ContextBuilder
-from raven.config.live import LiveConfig, project_skills_enabled, skill_hub_enabled
+from raven.agent.decision_model import resolve_decision_binding
+from raven.config.live import LiveConfig, decision_for_skills, project_skills_enabled, skill_hub_enabled
 from raven.context_engine import history as history_strategies
 from raven.context_engine.assembler import ContextAssembler
 from raven.context_engine.scent import ScentMenu
@@ -69,6 +70,7 @@ if TYPE_CHECKING:
     )
     from raven.contracts.memory import MemoryBackend
     from raven.memory_engine import SkillForgeRouter
+    from raven.providers.pool import ProviderPool
     from raven.skill_hub import SkillHubClient
 
 
@@ -90,8 +92,10 @@ def build_context_engine(
     skill_forge_router_config: "SkillForgeRouterConfig | None" = None,
     skill_forge_config: "SkillForgeConfig | None" = None,
     skill_hub_client: "SkillHubClient | None" = None,
+    provider_pool: "ProviderPool | None" = None,
     blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
     task_board: bool = False,
+    live_config: LiveConfig | None = None,
 ) -> ContextEngine:
     """Build the one :class:`ContextAssembler` from a flat SegmentBuilder list.
 
@@ -115,7 +119,7 @@ def build_context_engine(
     # One reader for the live switches the router answers per call: the file is
     # re-parsed only when its bytes change, so the subsystems asking cost one
     # read between them.
-    live = LiveConfig()
+    live = live_config if live_config is not None else LiveConfig()
 
     # The master switch is read once, where the router is built: a deployment
     # that throws it off restarts into a host that mounts no source at all, so
@@ -179,6 +183,9 @@ def build_context_engine(
                 min_safety=skill_forge_router_config.hub.min_safety,
                 blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
                 blocklist_reader=blocklist_reader,
+            ),
+            decision_binding=lambda: (
+                resolve_decision_binding(live, provider_pool) if decision_for_skills(live) else None
             ),
         )
     dropped = frozenset(getattr(config, "drop_segments", None) or ())

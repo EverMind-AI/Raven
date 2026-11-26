@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from raven.agent import workdir
+from raven.agent.decision_model import select_specialist_with_decision_model
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.dag_graph import check_node_refs
 from raven.agent.subagent.dag_store import (
@@ -20,7 +21,7 @@ from raven.agent.subagent.dag_store import (
 )
 from raven.agent.subagent.delegate import current_delegate, dispatch_charter
 from raven.agent.subagent.history import NODE_ID_PATTERN, nodes_root, session_history_root
-from raven.agent.subagent.instances import mint_handle
+from raven.agent.subagent.instances import get_registry, mint_handle
 from raven.agent.subagent.manager import SPAWN_REFUSED_PREFIX
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_capabilities import check_path_placeholders
@@ -32,6 +33,7 @@ from raven.contracts.tool import Tool
 if TYPE_CHECKING:
     from raven.agent.subagent import SubagentManager
     from raven.agent.subagent.backends import AgentMeta
+    from raven.providers.binding import ModelBinding
 
 
 @dataclass(frozen=True)
@@ -65,9 +67,16 @@ class SpawnTool(Tool):
     # words -- those arrive separately, as the announcement the manager injects.
     # Declaring it here is what put the receipt's own text beyond the scrub.
 
-    def __init__(self, manager: "SubagentManager", *, control_advert: Callable[[], str | None] | None = None):
+    def __init__(
+        self,
+        manager: "SubagentManager",
+        *,
+        control_advert: Callable[[], str | None] | None = None,
+        decision_binding: "Callable[[], ModelBinding | None] | None" = None,
+    ):
         self._manager = manager
         self._control_advert = control_advert
+        self._decision_binding = decision_binding
         self._default = _SpawnOrigin(channel="cli", chat_id="direct", session_key="cli:direct")
         self._origin: ContextVar[_SpawnOrigin] = ContextVar("spawn_origin")
         self._tool_call_id: ContextVar[str | None] = ContextVar("spawn_tool_call_id", default=None)
@@ -227,6 +236,7 @@ class SpawnTool(Tool):
         agents = self._agents()
         names = sorted(a.name for a in agents)
         labels, worker_lines = self._workers()
+        auto_routing = not labels and self._active_decision_binding() is not None
         if labels:
             # This turn's playbook named the workers, so they are what the model
             # picks between: each carries a brief the task written here has to
@@ -243,8 +253,12 @@ class SpawnTool(Tool):
         elif names:
             props["subagent"] = {
                 "type": "string",
-                "enum": names,
-                "description": "Which agent runs this task. Required: pick one from the list.",
+                "enum": ["auto", *names] if auto_routing else names,
+                "description": (
+                    "Which agent runs this task. Optional: pick one from the list, or pass 'auto' (or omit) to auto-select."
+                    if auto_routing
+                    else "Which agent runs this task. Required: pick one from the list."
+                ),
             }
         stateful_names = sorted(a.name for a in agents if a.stateful)
         instance_targets = (
@@ -272,7 +286,7 @@ class SpawnTool(Tool):
             "properties": props,
             "required": (
                 ["task_summary", "node_id", "prompt_template", "subagent"]
-                if (labels or names)
+                if (labels or (names and not auto_routing))
                 else ["task_summary", "node_id", "prompt_template"]
             ),
         }
@@ -332,6 +346,52 @@ class SpawnTool(Tool):
             return None
         worker = table.get(subagent)
         return worker.payload if worker is not None else None
+
+    def _active_decision_binding(self) -> "ModelBinding | None":
+        if self._decision_binding is None or current_delegate():
+            return None
+        return self._decision_binding()
+
+    def _pinned_instance_agent(self, session_key: str, instance: str | None) -> str | None:
+        if not instance:
+            return None
+        try:
+            records = get_registry().list_instances(session_key)
+        except Exception:  # noqa: BLE001
+            return None
+        enabled = {a.name for a in self._agents()}
+        for rec in records:
+            if rec.get("handle") == instance and rec.get("kind") != "dag-node":
+                agent = rec.get("agent")
+                if isinstance(agent, str) and (not enabled or agent in enabled):
+                    return agent
+        return None
+
+    async def _auto_select_subagent(
+        self,
+        binding: "ModelBinding",
+        task_text: str,
+        agents: "list[AgentMeta]",
+    ) -> tuple[str | None, str | None]:
+        enabled_names = [a.name for a in agents if a.name]
+        if not enabled_names:
+            return None, None
+        from raven.agent.subagent.backends import format_agent_listing
+
+        roster_text = format_agent_listing(agents)
+        chosen = await select_specialist_with_decision_model(
+            binding,
+            task_text,
+            roster_text,
+            enabled_names,
+        )
+        if chosen is not None and chosen in enabled_names:
+            return chosen, None
+        if GENERIC_AGENT in enabled_names:
+            return GENERIC_AGENT, None
+        return None, (
+            f"Error: could not auto-select a subagent. Pass `subagent` explicitly from: {sorted(enabled_names)}."
+        )
 
     def _resolve_worker(self, subagent: str | None) -> tuple[str | None, str]:
         """Map a label onto its roster agent, and hand back its charter.
@@ -484,14 +544,28 @@ class SpawnTool(Tool):
         # whether this call goes on to dispatch or is refused at any step below.
         self._pending.pop(org.session_key, None)
         subagent = subagent or kwargs.pop("agent", None)
+        if isinstance(subagent, str):
+            subagent = subagent.strip() or None
+        template = prompt_template or kwargs.pop("task", None)
+        if not template:
+            return "Error: `prompt_template` is required -- it is the task the subagent runs."
+        if subagent is None or subagent == "auto":
+            binding = self._active_decision_binding()
+            if binding is not None:
+                pinned = self._pinned_instance_agent(org.session_key, instance)
+                if pinned is not None:
+                    subagent = pinned
+                else:
+                    task_text = f"{task_summary}\n\n{template}" if task_summary else template
+                    picked, err = await self._auto_select_subagent(binding, task_text, self._agents())
+                    if err is not None:
+                        return err
+                    subagent = picked
         # A label is this turn's name for a worker; everything below dispatches
         # on the roster agent behind it. Resolved before the roster check so a
         # label is never reported back as an unknown agent.
         payload = self._resolve_payload(subagent)
         subagent, charter = self._resolve_worker(subagent)
-        template = prompt_template or kwargs.pop("task", None)
-        if not template:
-            return "Error: `prompt_template` is required -- it is the task the subagent runs."
         node_id = (node_id or kwargs.pop("call_id", None) or "").strip()
         if not node_id:
             return (

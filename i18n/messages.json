@@ -8959,6 +8959,34 @@
       "en": "The default model configuration a new session starts on",
       "zh": "新开会话时的默认模型配置"
     },
+    "gui.settings.roles.decision": {
+      "en": "Decision model",
+      "zh": "决策模型"
+    },
+    "gui.settings.roles.decision_use": {
+      "en": "Dedicated decision model (e.g. microsoft-decision-1, gemini-decision-1) for routing skills and specialists; when unset, the chat model decides",
+      "zh": "用于路由技能和专家分派的专用决策模型（如 microsoft-decision-1、gemini-decision-1）；未设置时由主对话模型决定"
+    },
+    "gui.settings.roles.decision_skills": {
+      "en": "Use for skills",
+      "zh": "用于技能路由"
+    },
+    "gui.settings.roles.decision_skills_use": {
+      "en": "Find and pick relevant skills during a session",
+      "zh": "在会话中查找并选用相关技能"
+    },
+    "gui.settings.roles.decision_specialists": {
+      "en": "Use for specialists",
+      "zh": "用于专家分派"
+    },
+    "gui.settings.roles.decision_specialists_use": {
+      "en": "Assign delegated tasks to specialist agents",
+      "zh": "将委派任务分配给合适的专家代理"
+    },
+    "gui.settings.roles.decision_pick_first": {
+      "en": "Select a dedicated decision model (e.g. microsoft-decision-1) above to enable these toggles",
+      "zh": "请先在上方选择专用决策模型（如 microsoft-decision-1），再启用这些开关"
+    },
     "gui.settings.roles.title": {
       "en": "Session naming",
       "zh": "会话命名"

@@ -1810,6 +1810,15 @@ class TranslateConfig(_Base):
     stated on every pin: an id alone does not name a credential."""
 
 
+class DecisionModelConfig(_Base):
+    """Dedicated model pin for lightweight routing decisions, as a pair."""
+
+    model: str | None = None
+    provider: str | None = None
+    use_for_skills: bool = False
+    use_for_specialists: bool = False
+
+
 class VisionConfig(_Base):
     """The model that reads a picture, as a pair.
 
@@ -2049,6 +2058,7 @@ class RavenConfig(_Base):
     session_title: SessionTitleConfig = Field(default_factory=SessionTitleConfig)
     sessions: SessionsConfig = Field(default_factory=SessionsConfig)
     translate: TranslateConfig = Field(default_factory=TranslateConfig)
+    decision_model: DecisionModelConfig = Field(default_factory=DecisionModelConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     subagent_dag: SubagentDagConfig = Field(default_factory=SubagentDagConfig)

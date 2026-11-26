@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetSources, setSources } from '../../../state/sources'
 import { install, modelSource, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
-import { ROLES, everosLocked, followsChat, roleProviders, roleValue, rolesUsing } from './Roles'
+import { ROLES, isSystem1DecisionModel, everosLocked, followsChat, roleProviders, roleValue, rolesUsing } from './Roles'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -643,5 +643,164 @@ describe('another memory backend', () => {
       expect(screen.getAllByText(new RegExp(`gui\\.settings\\.roles\\.${id}$`)).length).toBeGreaterThan(0)
     }
     expect(screen.getAllByText('gui.settings.roles.everos_missing').length).toBe(4)
+  })
+})
+
+const withDecision = (): ReturnType<typeof snap> => {
+  const data = snap()
+  data.providers = data.providers.map((p) => (p.id === 'anthropic'
+    ? { ...p, models: [...p.models, 'microsoft-decision-1', 'claude-haiku-4-5', 'gpt-4o-mini', 'gemini-2.5-flash'], configured: [...(p.configured ?? []), 'microsoft-decision-1', 'claude-haiku-4-5', 'gpt-4o-mini', 'gemini-2.5-flash'] }
+    : p))
+  return data
+}
+
+describe('decision model role and toggles', () => {
+  it('renders decision model role picker and both routing switches', async () => {
+    install(withDecision())
+    await mount('model')
+
+    const pickerBtn = pill('gui.settings.roles.decision')
+    expect(pickerBtn.textContent).toContain('gui.settings.roles.unset')
+
+    const skillsSwitch = screen.getByRole('switch', { name: 'gui.settings.roles.decision_skills' })
+    const specialistsSwitch = screen.getByRole('switch', { name: 'gui.settings.roles.decision_specialists' })
+    expect(skillsSwitch.getAttribute('aria-checked')).toBe('false')
+    expect(specialistsSwitch.getAttribute('aria-checked')).toBe('false')
+    expect((skillsSwitch as HTMLButtonElement).disabled).toBe(true)
+    expect((specialistsSwitch as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText('gui.settings.roles.decision_pick_first')).toBeTruthy()
+  })
+
+  it('does not call settings.set when a disabled switch is clicked without a decision model', async () => {
+    const { calls } = install(withDecision())
+    await mount('model')
+    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'gui.settings.roles.decision_skills' })) })
+    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'gui.settings.roles.decision_specialists' })) })
+    expect(sets(calls)).toEqual([])
+  })
+
+  it('offers only System 1 models in the decision picker', async () => {
+    install(withDecision())
+    await mount('model')
+    await act(async () => { fireEvent.click(pill('gui.settings.roles.decision')) })
+    const scope = within(picker())
+    expect(scope.getAllByText('microsoft-decision-1').length).toBeGreaterThan(0)
+    for (const m of ['gpt-4o-mini', 'claude-haiku-4-5', 'gemini-2.5-flash', 'custom/lite']) expect(scope.queryByText(m)).toBe(null)
+    expect(scope.queryByText('claude-sonnet-4-5')).toBe(null)
+    expect(scope.queryByText('claude-opus-4-5')).toBe(null)
+  })
+
+  it('picks and clears decisionModel atomically through decisionModel pair key', async () => {
+    const data = withDecision()
+    const { calls } = install(data, {
+      set: async (key, value) => {
+        calls.push(['set', { key, value }])
+        if (key === 'decisionModel') {
+          const pair = value as { model: string | null; provider: string | null }
+          data.raw.decisionModel = {
+            ...(data.raw.decisionModel as Record<string, unknown> | undefined),
+            model: pair.model,
+            provider: pair.provider,
+          }
+        }
+        return { ...data, raw: { ...data.raw } }
+      },
+    })
+    await mount('model')
+
+    await pick('gui.settings.roles.decision', 'microsoft-decision-1')
+    expect(sets(calls)).toEqual([
+      { key: 'decisionModel', value: { model: 'microsoft-decision-1', provider: 'anthropic' } },
+    ])
+
+    calls.length = 0
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('gui.settings.roles.clear {"role":"gui.settings.roles.decision"}'))
+    })
+    expect(sets(calls)).toEqual([
+      { key: 'decisionModel', value: { model: null, provider: null } },
+    ])
+  })
+
+  it('writes decisionModel.useForSkills and decisionModel.useForSpecialists when toggled and hides warning when model is set', async () => {
+    const data = withDecision()
+    data.raw.decisionModel = { model: 'microsoft-decision-1', provider: 'anthropic', useForSkills: false, useForSpecialists: true }
+    const { calls } = install(data)
+    await mount('model')
+
+    const skillsSwitch = screen.getByRole('switch', { name: 'gui.settings.roles.decision_skills' })
+    const specialistsSwitch = screen.getByRole('switch', { name: 'gui.settings.roles.decision_specialists' })
+    expect(skillsSwitch.getAttribute('aria-checked')).toBe('false')
+    expect(specialistsSwitch.getAttribute('aria-checked')).toBe('true')
+    expect(screen.queryByText('gui.settings.roles.decision_pick_first')).toBe(null)
+
+    await act(async () => { fireEvent.click(skillsSwitch) })
+    await act(async () => { fireEvent.click(specialistsSwitch) })
+    expect(sets(calls)).toEqual([
+      { key: 'decisionModel.useForSkills', value: true },
+      { key: 'decisionModel.useForSpecialists', value: false },
+    ])
+  })
+
+  it('shows helper hint when a routing toggle is enabled without a decision model selected, and clears it once picked', async () => {
+    const data = withDecision()
+    data.raw.decision_model = { use_for_skills: true, use_for_specialists: false }
+    const { calls } = install(data, {
+      set: async (key, value) => {
+        calls.push(['set', { key, value }])
+        if (key === 'decisionModel') {
+          const pair = value as { model: string | null; provider: string | null }
+          data.raw.decision_model = {
+            ...(data.raw.decision_model as Record<string, unknown>),
+            model: pair.model,
+            provider: pair.provider,
+          }
+        }
+        return { ...data, raw: { ...data.raw } }
+      },
+    })
+    await mount('model')
+
+    expect(screen.getByRole('switch', { name: 'gui.settings.roles.decision_skills' }).getAttribute('aria-checked')).toBe('true')
+    expect((screen.getByRole('switch', { name: 'gui.settings.roles.decision_skills' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText('gui.settings.roles.decision_pick_first')).toBeTruthy()
+
+    await pick('gui.settings.roles.decision', 'microsoft-decision-1')
+    expect(screen.queryByText('gui.settings.roles.decision_pick_first')).toBe(null)
+  })
+
+  it('excludes a System-1-named model flagged with the reasoning capability from the picker', async () => {
+    const data = withDecision()
+    data.providers = data.providers.map((p) => (p.id === 'anthropic'
+      ? { ...p, labels: { ...(p.labels ?? {}), 'microsoft-decision-1': { label: 'microsoft-decision-1', capabilities: ['reasoning'] } } }
+      : p))
+    install(data)
+    await mount('model')
+    await act(async () => { fireEvent.click(pill('gui.settings.roles.decision')) })
+    expect(within(picker()).queryByText('microsoft-decision-1')).toBe(null)
+  })
+
+  it('keeps both switches disabled and shows the hint when the saved model is not System 1', async () => {
+    const data = withDecision()
+    data.raw.decisionModel = { model: 'claude-haiku-4-5', provider: 'anthropic', useForSkills: true, useForSpecialists: true }
+    const { calls } = install(data)
+    await mount('model')
+    const skills = screen.getByRole('switch', { name: 'gui.settings.roles.decision_skills' }) as HTMLButtonElement
+    const specs = screen.getByRole('switch', { name: 'gui.settings.roles.decision_specialists' }) as HTMLButtonElement
+    expect(skills.disabled).toBe(true)
+    expect(specs.disabled).toBe(true)
+    expect(screen.getByText('gui.settings.roles.decision_pick_first')).toBeTruthy()
+    await act(async () => { fireEvent.click(skills) })
+    expect(sets(calls)).toEqual([])
+  })
+})
+
+describe('isSystem1DecisionModel', () => {
+  it.each(['microsoft-decision-1', 'Gemini-decision-1', 'ghe-copilot/microsoft-decision-1-1', 'gpt-6-luna-decisions', 'github-copilot/gpt-6-luna-decisions', 'custom/decisions', 'decisions', 'e2e-decision-1'])(
+    'accepts %s', (m) => { expect(isSystem1DecisionModel(m)).toBe(true) })
+  it.each(['o1', 'o1-mini', 'o3-mini', 'o4-mini', 'deepseek-r1', 'gemini-2.5-flash-thinking', 'claude-sonnet-4-6', 'claude-opus-4-6', 'gpt-4o', 'gpt-4o-mini', 'ghe-copilot/gpt-4o-mini', 'claude-haiku-4-5', 'gemini-2.5-flash', 'custom/lite', '', '   '])(
+    'rejects %j', (m) => { expect(isSystem1DecisionModel(m)).toBe(false) })
+  it('rejects when reasoning is true', () => {
+    expect(isSystem1DecisionModel('microsoft-decision-1', true)).toBe(false)
   })
 })

@@ -1600,3 +1600,86 @@ class TestLiveVendorKeyFollowsTheCanonicalOrder:
 
         _write(path, {"tools": {"web": {"search": {"apiKey": "x"}}}})
         assert web_jina_key(live) is None, "no leaf is no answer"
+
+
+class TestDecisionModelLiveReaders:
+    def test_defaults_when_absent(self, tmp_path: Path) -> None:
+        from raven.config.live import decision_for_skills, decision_for_specialists, decision_pin
+
+        path = tmp_path / "config.json"
+        _write(path, {})
+        live = LiveConfig(path)
+
+        assert decision_pin(live) == (None, None)
+        assert decision_for_skills(live) is False
+        assert decision_for_specialists(live) is False
+
+    def test_camel_case_pin_and_flags_read_live(self, tmp_path: Path) -> None:
+        from raven.config.live import decision_for_skills, decision_for_specialists, decision_pin
+
+        path = tmp_path / "config.json"
+        _write(
+            path,
+            {
+                "decisionModel": {
+                    "model": "openai/gpt-5-mini",
+                    "provider": "openai",
+                    "useForSkills": True,
+                    "useForSpecialists": False,
+                }
+            },
+        )
+        live = LiveConfig(path)
+
+        assert decision_pin(live) == ("openai/gpt-5-mini", "openai")
+        assert decision_for_skills(live) is True
+        assert decision_for_specialists(live) is False
+
+        _write(
+            path,
+            {
+                "decisionModel": {
+                    "model": "anthropic/claude-haiku-4-5",
+                    "provider": "anthropic",
+                    "useForSkills": False,
+                    "useForSpecialists": True,
+                }
+            },
+        )
+        assert decision_pin(live) == ("anthropic/claude-haiku-4-5", "anthropic")
+        assert decision_for_skills(live) is False
+        assert decision_for_specialists(live) is True
+
+    def test_snake_case_pin_and_flags_read_live(self, tmp_path: Path) -> None:
+        from raven.config.live import decision_for_skills, decision_for_specialists, decision_pin
+
+        path = tmp_path / "config.json"
+        _write(
+            path,
+            {
+                "decision_model": {
+                    "model": "deepseek-chat",
+                    "provider": "deepseek",
+                    "use_for_skills": True,
+                    "use_for_specialists": True,
+                }
+            },
+        )
+        live = LiveConfig(path)
+
+        assert decision_pin(live) == ("deepseek-chat", "deepseek")
+        assert decision_for_skills(live) is True
+        assert decision_for_specialists(live) is True
+
+    def test_non_bool_flags_default_to_false(self, tmp_path: Path) -> None:
+        from raven.config.live import decision_for_skills, decision_for_specialists
+
+        path = tmp_path / "config.json"
+        _write(
+            path,
+            {"decisionModel": {"useForSkills": "yes", "useForSpecialists": 1}},
+        )
+        live = LiveConfig(path)
+
+        assert decision_for_skills(live) is False
+        assert decision_for_specialists(live) is False

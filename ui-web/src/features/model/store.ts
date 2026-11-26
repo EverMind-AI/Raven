@@ -187,7 +187,8 @@ export const column = (p: Provider, offer: Offer = at.offer): string[] => {
      domain's public surface -- the agents page draws its own rows from the
      same one, and a column that differed between the two put a model on one
      picker and not on the other. What this adds is the pin below. */
-  const rows = offered(p, offer.kind)
+  const rawRows = offered(p, offer.kind)
+  const rows = offer.filter ? rawRows.filter((m) => offer.filter!(m, p)) : rawRows
   /* Whose model to pin. A slot states its own pair or holds none -- an unset
      slot has nothing to pin, and borrowing the conversation's model would put
      a chat model at the top of the embedding column. Only the composer falls
@@ -202,10 +203,11 @@ export const column = (p: Provider, offer: Offer = at.offer): string[] => {
          the wrong column when a second account listed it. */
       : selectedAt ? (selectedAt === p.id ? selected : null)
         : (p.current && !carried(selected) ? selected : null)
+  const pinned = cur && (!offer.filter || offer.filter(cur, p)) ? cur : null
   /* By the backend's identity, not by string: a role stores the spelling it was
      handed while `model.add_model` stores the one it derived, so comparing the
      strings put the same model in the column twice, under one visible name. */
-  return withCurrent(p, rows, cur)
+  return withCurrent(p, rows, pinned)
 }
 
 /* Whether any connected account lists this model as its own. The wire's

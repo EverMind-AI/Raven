@@ -82,6 +82,8 @@ export interface Offer {
   kind: Kind
   /* Provider ids this opening may list; absent means every connected one. */
   providers?: string[]
+  /* Optional per-model filter applied on top of `kind`. */
+  filter?(model: string, provider: Provider): boolean
   /* The slot's name, drawn in the header; absent for the composer, which also
      selects the below-the-anchor placement and the settings footer's absence. */
   title?: string
