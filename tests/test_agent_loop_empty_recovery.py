@@ -32,6 +32,7 @@ from raven.agent.loop._shared import _MAX_ITER_STATIC_FALLBACK
 from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
 from raven.agent.loop.recovery import (
     EMPTY_REPLY_FAILURE,
+    LOOP_REDIRECT_NOTE,
     MAX_CONTINUATIONS,
     NETWORK_CUT_CONTINUATION,
     OUTPUT_LIMIT_CONTINUATION,
@@ -379,6 +380,25 @@ _DECIDE_TABLE = [
     _row("thinking-prefills", _K.THINKING_ONLY, _A.PREFILL, next_rung="high"),
     _row("thinking-prefills-twice", _K.THINKING_ONLY, _A.PREFILL, state=_state(prefills=1), next_rung="high"),
     _row("thinking-steps-down", _K.THINKING_ONLY, _A.STEP_DOWN, state=_state(prefills=2), **_ROOM),
+    # A thought the stream stopped as a loop is dropped, never re-fed: a prefill continues the loop.
+    _row("thinking-loop-redirects", _K.THINKING_ONLY, _A.REDIRECT, looping=True, **_ROOM),
+    _row(
+        "thinking-loop-again-steps-down",
+        _K.THINKING_ONLY,
+        _A.STEP_DOWN,
+        state=_state(redirects=1),
+        looping=True,
+        **_ROOM,
+    ),
+    _row("thinking-loop-again-fails", _K.THINKING_ONLY, _A.FAIL, state=_state(redirects=1), looping=True),
+    _row(
+        "thinking-loop-on-fallback-moves-on",
+        _K.THINKING_ONLY,
+        _A.FALLBACK,
+        state=_state(fallbacks_used=1),
+        looping=True,
+        **_ROOM,
+    ),
     _row("thinking-no-prefill-steps-down", _K.THINKING_ONLY, _A.STEP_DOWN, prefill_supported=False, next_rung="high"),
     _row(
         "thinking-no-prefill-budget-steps-down",
@@ -1648,6 +1668,37 @@ class _Sink:
         self.notices.append((kind, detail))
         if self._timeline is not None:
             self._timeline.append(("notice", detail))
+
+
+def _thought_chunk(text):
+    delta = SimpleNamespace(content=None, tool_calls=None, reasoning_content=text)
+    return SimpleNamespace(choices=[SimpleNamespace(delta=delta, finish_reason=None)], usage=None)
+
+
+@pytest.mark.asyncio
+async def test_a_looping_thought_is_dropped_and_the_step_asked_again_with_a_note(workspace, monkeypatch):
+    """Measured on one turn: a thought repeating one line ran to the 32768-token ceiling four times, twice
+    re-fed and continued. The stream stops it, and the loop asks the step again without it."""
+    loop = "".join(f'Need maybe mention "section {i}" from shattered.io. Good.\n' for i in range(1600))
+    looping = _Stream(
+        [*(_thought_chunk(loop[i : i + 200]) for i in range(0, len(loop), 200)), _chunk(finish_reason="length")],
+        received_finish_reason="length",
+    )
+    calls = _served(monkeypatch, [looping, _finished_stream("the answer")])
+    _recorded_sleeps(monkeypatch)
+    sink = _Sink()
+
+    final, _used, _messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta
+    )
+
+    assert final == "the answer" and outcome.status == "completed"
+    assert next(looping._chunks, None) is not None, "the looping stream was read to its end"
+    assert len(calls) == 2
+    placeholder, note = calls[1]["messages"][-2:]
+    assert (placeholder["role"], placeholder["content"]) == ("assistant", "(empty)")
+    assert (note["role"], note["content"]) == ("user", LOOP_REDIRECT_NOTE)
+    assert "shattered.io" not in str(calls[1]["messages"]), "the looping thought was carried into the re-ask"
 
 
 def _streamed(calls: list[dict]) -> list[bool]:

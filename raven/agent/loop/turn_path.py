@@ -97,7 +97,9 @@ from raven.agent.loop.recovery import (
     CONTEXT_WINDOW_CONTINUATION,
     CONTEXT_WINDOW_FAILURE,
     EMPTY_REPLY_FAILURE,
+    LOOP_REDIRECT_NOTE,
     MAX_CONTINUATIONS,
+    MAX_LOOP_REDIRECTS,
     NETWORK_CUT_CONTINUATION,
     OUTPUT_LIMIT_CONTINUATION,
     PARTIAL_STREAM_NOTE,
@@ -119,6 +121,7 @@ from raven.agent.loop.recovery import (
     empty_retry_delay,
     has_thinking_to_refeed,
     leaves_think_block_open,
+    looped,
     next_step_down,
     reasoning_excerpt,
     reply_kind,
@@ -514,6 +517,7 @@ _GIVEN_UP_ONCE_ANSWERED = frozenset(
 # The moves that ask the model again about the reply in hand, counted per step and kind for the failure texts.
 _ASKS_AGAIN = frozenset(
     {
+        RecoveryAction.REDIRECT,
         RecoveryAction.PREFILL,
         RecoveryAction.NUDGE,
         RecoveryAction.RETRY,
@@ -2753,6 +2757,7 @@ class TurnPathMixin:
                     next_rung=next_rung,
                     fallback_left=bool(fallbacks_left),
                     resend_budget=resends_allowed,
+                    looping=looped(response),
                 )
                 answered_by_tool = False
                 if action in _GIVEN_UP_ONCE_ANSWERED:
@@ -2773,6 +2778,23 @@ class TurnPathMixin:
                     action = RecoveryAction.COMPLETE
                 if action in _ASKS_AGAIN:
                     recovery.step_asks[kind] += 1
+                if action is RecoveryAction.REDIRECT:
+                    recovery.redirects += 1
+                    logger.warning(
+                        "empty-recovery: reasoning went in circles; dropping it and asking for the next step {}/{}",
+                        recovery.redirects,
+                        MAX_LOOP_REDIRECTS,
+                    )
+                    # The looping thought is not carried: re-fed, it is continued. The
+                    # (empty) assistant keeps the note from following a tool result.
+                    _drop_trailing_prefills(messages)
+                    messages = self.context.add_assistant_message(messages, "(empty)")
+                    messages[-1]["_recovery_synthetic"] = True
+                    messages.append({"role": "user", "content": LOOP_REDIRECT_NOTE, "_recovery_synthetic": True})
+                    prev_had_tool_calls = False
+                    await _announce_wait("thinking_only")
+                    iteration -= 1
+                    continue
                 if action is RecoveryAction.PREFILL:
                     recovery.prefills += 1
                     logger.warning(

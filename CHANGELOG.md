@@ -293,6 +293,29 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A streamed call whose reasoning starts repeating itself, before any answer or
+  tool call, is now stopped there instead of running to the output ceiling. One
+  MiroThinker-2.0 turn spent four calls of 182-200 s each writing one templated
+  line until 32768 tokens; the last 8000 characters of such a thought compress
+  to under 0.15 of their size, against 0.34 or more for ordinary thought and
+  reports. The loop then asks the same step again without that thought and with
+  a note to take the next step, rather than re-feeding the thought, which the
+  same turn had continued twice. A second loop in the turn goes on to the lower
+  reasoning effort as before.
+- A tool call that a model writes into its reply as an MCP `<use_mcp_tool>`
+  block now runs as a tool call. MiroThinker-1.7-mini behind vLLM wrote its
+  first search that way under a long agent prompt. The server's tool parser
+  passed the block on as text, a report gate read it as a draft, and the turn
+  spent its budget re-sampling it. The loop now reads such a reply as the
+  calls it holds when every block names a tool the step offered and carries a
+  JSON object as its arguments. Any other reply is left as it came. Blocks
+  are read only outside the model's thinking (a `<think>` block, or the text
+  before an orphan closing tag), so a thought that names the form calls
+  nothing and does not hide the real call after it. Where the loop holds a
+  draft (a hook may send it back), the reader gets the words around the
+  blocks, not the blocks, once, and without the thinking, on an unstreamed
+  resend too; otherwise words of the block that already streamed stay shown.
+
 - A tool call that a model writes into its reply as an MCP `<use_mcp_tool>`
   block now runs as a tool call. MiroThinker-1.7-mini behind vLLM wrote its
   first search that way under a long agent prompt. The server's tool parser

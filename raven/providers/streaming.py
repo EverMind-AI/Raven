@@ -33,6 +33,7 @@ from raven.providers.base import (
     send_max_tokens,
 )
 from raven.providers.reasoning import split_orphan_think
+from raven.providers.reasoning_loop import stop_looping_thought
 from raven.providers.tool_arguments import object_arguments
 from raven.providers.tool_names import normalized_tool_name
 from raven.providers.transport_failure import (
@@ -485,7 +486,7 @@ async def stream_llm_call(
         # the connection - and a reconnect starts from a closed socket.
         try:
             async with aclosing(
-                provider.chat_stream(messages=messages, tools=tools, model=model, **stream_kwargs)
+                stop_looping_thought(provider.chat_stream(messages=messages, tools=tools, model=model, **stream_kwargs))
             ) as stream:
                 async for delta in stream:
                     if delta.finish_reason == "error":

@@ -15,7 +15,8 @@ matches wins:
   refusal              the upstream declined                   FALLBACK once, then FAIL
   text                 a reply to deliver                      COMPLETE
   cut at the window    the context window filled, no text      shrink and CONTINUE, then FAIL
-  thinking only        reasoning and no answer                 PREFILL, STEP_DOWN, FALLBACK, FAIL
+  thinking only        reasoning and no answer                 REDIRECT once if it looped, else PREFILL;
+                                                               then STEP_DOWN, FALLBACK, FAIL
   cut, nothing in it   stopped at the ceiling, empty           CONTINUE with more room, then FAIL
   empty after a tool   nothing right after tool results        NUDGE once, then as an empty reply
   empty                nothing at all                          RETRY, FALLBACK, FAIL
@@ -29,6 +30,12 @@ left alone because nothing in it names the reasoning as the cause. A cut at the 
 window is one whatever it thought: more room for the answer, a re-fed thought or a lower
 effort would each send the same full window back, so the prompt is shrunk and the reply
 continued with no larger ceiling, and a prompt that cannot shrink fails the turn at once.
+
+REDIRECT answers a thought the stream stopped because it was repeating itself
+(``REASONING_LOOP``): the thought is dropped, not re-fed -- a prefill continues the
+loop it carries, measured twice in a row on one turn -- and the step is asked again
+with a note to take the next step instead of reasoning on. A loop is never prefilled;
+a second one goes on to STEP_DOWN.
 
 PREFILL re-feeds the model its own reasoning so it continues into the answer. A
 provider that refuses a trailing assistant message (its
@@ -74,6 +81,7 @@ from enum import Enum, auto
 from raven.agent.context.silence import SILENT_MARKER, is_silence
 from raven.config import schema as config_schema
 from raven.contracts.llm_provider import REASONING_EFFORT_LADDER, LLMResponse
+from raven.providers.reasoning_loop import REASONING_LOOP
 from raven.providers.streaming import DECLINED_FINISH_REASONS, STREAM_CUT
 from raven.providers.usage import reported_cost, token_count
 from raven.spine.turn import Origin
@@ -106,6 +114,12 @@ EMPTY_RETRY_MAX_DELAY_S = 60.0
 # no reasoning and no tool call, so it keeps Hermes' frame but cannot ask the model to go on from where
 # it stopped, nor presume an answer was owed rather than a call. POST_TOOL_NUDGE also allows a final
 # answer: the tool results may be all the task needed.
+LOOP_REDIRECT_NOTE = (
+    "Your last reasoning went in circles and was discarded. Do not reason it through again: take "
+    "the next step now. If what you have gathered answers the task, write the answer; otherwise "
+    "call the one tool you still need."
+)
+MAX_LOOP_REDIRECTS = 1
 POST_TOOL_NUDGE = "You just executed tool calls but returned an empty response. Please process the tool results above and continue with the task, or give your final answer now."
 OUTPUT_LIMIT_CONTINUATION = "[System: Your previous response was cut off by the output length limit before it produced any text or tool call, so nothing from it was kept. Keep this response short: answer briefly, or make the tool call the task needs. If a payload you were writing is too large for one response, send it across several smaller calls.]"
 CONTEXT_WINDOW_CONTINUATION = "[System: Your previous response was cut off at the model's context window before it produced any text or tool call, so nothing from it was kept. Continue concisely now that earlier context has been trimmed.]"
@@ -152,6 +166,7 @@ class RecoveryAction(Enum):
 
     COMPLETE = auto()  # visible text present, partial text to deliver as it stands, or recovery off → finish the turn
     SILENT = auto()  # a silence marker → end the turn without delivering it
+    REDIRECT = auto()  # thinking-only that looped → drop the thought, inject (empty) + a note, re-request
     PREFILL = auto()  # thinking-only → re-feed reasoning, re-request
     NUDGE = auto()  # post-tool empty → inject (empty) + user nudge, re-request
     RETRY = auto()  # plain empty → re-request as-is
@@ -270,6 +285,7 @@ class RecoveryState:
 
     rungs_used: set[str]  # the turn's, shared by every attempt of it
     prefills: int = 0
+    redirects: int = 0
     nudges: int = 0
     resends: int = 0
     continuations: int = 0
@@ -339,6 +355,11 @@ def has_inline_thinking(content: str | None) -> bool:
 def has_thinking(response: LLMResponse) -> bool:
     """True when the response produced reasoning in any form (structured or inline)."""
     return bool(response.reasoning_content or response.thinking_blocks or has_inline_thinking(response.content))
+
+
+def looped(response: LLMResponse) -> bool:
+    """True when the stream stopped this reply because its thought was repeating itself."""
+    return response.finish_reason == REASONING_LOOP
 
 
 def has_thinking_to_refeed(response: LLMResponse) -> bool:
@@ -432,14 +453,15 @@ def decide(
     next_rung: str | None,
     fallback_left: bool,
     resend_budget: int,
+    looping: bool = False,
 ) -> RecoveryAction:
     """The next move for a reply of ``kind``, given what the turn has already spent (``state``).
 
     The caller supplies what only it can see: whether the provider takes a prefill, whether the
     reply carries thinking a prefill can re-feed (:func:`has_thinking_to_refeed`: reasoning text or
     thinking blocks, not a bare token count or an empty think block), the rung
-    :func:`next_step_down` offers, whether a fallback model remains, and :func:`resend_budget`'s
-    answer. A fallback model gets one try: on one an empty or thinking-only reply is not resent,
+    :func:`next_step_down` offers, whether a fallback model remains, :func:`resend_budget`'s
+    answer, and whether the stream stopped the reply's thought as a loop (:func:`looped`). A fallback model gets one try: on one an empty or thinking-only reply is not resent,
     prefilled or stepped down again, so the next move is another model or the end. A cut answer is
     still continued there, and a reply right after tools still nudged.
     """
@@ -459,7 +481,14 @@ def decide(
     on_fallback = state.fallbacks_used > 0
     if kind is ReplyKind.THINKING_ONLY:
         if not on_fallback:
-            if prefill_supported and thinking_to_refeed and state.prefills < limits.thinking_prefill_max_retries:
+            if looping and state.redirects < MAX_LOOP_REDIRECTS:
+                return RecoveryAction.REDIRECT
+            if (
+                not looping
+                and prefill_supported
+                and thinking_to_refeed
+                and state.prefills < limits.thinking_prefill_max_retries
+            ):
                 return RecoveryAction.PREFILL
             if next_rung is not None:
                 return RecoveryAction.STEP_DOWN
