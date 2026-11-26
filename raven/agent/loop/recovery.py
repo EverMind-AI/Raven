@@ -657,6 +657,15 @@ class DraftGate:
         if text:
             await self._deliver(text)
 
+    def restate(self, text: str | None) -> None:
+        """Hold ``text`` in place of what streamed, when the loop read the reply differently.
+
+        A reply whose tool calls came as text streamed with its call blocks; once they
+        are read out as calls, what reaches the reader is the words around them.
+        """
+        if not self._dropped and not self._open:
+            self._held = text or ""
+
     def discard(self) -> None:
         """Drop the held draft. Nothing kept it, so nobody reads it."""
         self._held = ""

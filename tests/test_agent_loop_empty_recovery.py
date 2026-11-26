@@ -1684,6 +1684,60 @@ async def test_the_first_resend_of_an_empty_streamed_reply_goes_out_unstreamed(w
     assert messages[-1]["content"] == "the answer"
 
 
+class _HoldsDrafts(AgentHook):
+    """Declares it may send a response back, so the loop holds drafts; never does."""
+
+    rolls_back_iterations = True
+
+    @property
+    def name(self) -> str:
+        return "holding_probe"
+
+
+class _Search(Tool):
+    name = "web_search"
+    description = "search"
+    parameters = {"type": "object", "properties": {"query": {"type": "string"}}}
+
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    async def execute(self, **kwargs):
+        self.queries.append(kwargs["query"])
+        return "results"
+
+
+@pytest.mark.asyncio
+async def test_an_unstreamed_resend_that_writes_its_call_as_text_shows_its_words_once(workspace, monkeypatch):
+    """The unstreamed resend reaches a held draft only once the whole reply is in, so the words
+    around a call written as text go to the reader once, with the thought left out."""
+    block = (
+        "<use_mcp_tool>\n<server_name>s</server_name>\n<tool_name>web_search</tool_name>\n"
+        '<arguments>\n{"query": "q"}\n</arguments>\n</use_mcp_tool>'
+    )
+    _served(
+        monkeypatch,
+        [
+            _empty_finish(),
+            _reply("<think>secret plan</think>\nSearching first.\n" + block),
+            _finished_stream("the answer"),
+        ],
+    )
+    _recorded_sleeps(monkeypatch)
+    agent = _litellm_agent(workspace, hooks=[_HoldsDrafts()])
+    search = _Search()
+    agent.tools.register(search)
+    sink = _Sink()
+
+    final, _used, _messages, _outcome = await agent._run_agent_loop(_seed(), on_token_delta=sink.delta)
+
+    assert search.queries == ["q"], "the block was never read as a call, so this proves nothing"
+    shown = "".join(sink.text)
+    assert shown.count("Searching first.") == 1, shown
+    assert "secret plan" not in shown and "use_mcp_tool" not in shown
+    assert final == "the answer"
+
+
 @pytest.mark.asyncio
 async def test_the_unstreamed_resend_leaves_the_model_switch_to_the_loop(workspace, monkeypatch):
     """The provider's own chain walks the fallbacks on an error; the streamed turn's switch is the loop's,

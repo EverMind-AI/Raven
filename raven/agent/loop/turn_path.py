@@ -1943,6 +1943,7 @@ class TurnPathMixin:
                     break
                 # Read inside the bind: the count belongs to it and ends with it.
                 recorded_at_seam = usage_record.recorded_inbound()
+            shown = response.content
             if (recovered := recover_text_tool_calls(response, call_tools)) is not None:
                 logger.warning(
                     "text-tool-calls: read {} <use_mcp_tool> block(s) in the reply as calls to {}",
@@ -1950,14 +1951,19 @@ class TurnPathMixin:
                     ", ".join(call.name for call in recovered.tool_calls),
                 )
                 response = recovered
+                shown = self._strip_think(response.content)
+                # A streamed reply already sits in the draft with its blocks; an unstreamed one
+                # reaches the draft only below, so restating it too would show it twice.
+                if draft is not None and not unstreamed:
+                    draft.restate(shown)
             if unstreamed and response.finish_reason != "error":
                 # What the stream would have shown, shown once the whole reply is in and through the
                 # same sinks: the thought first, then the words, which pass the gates a streamed
                 # delta passes, so a marker is still held and a reply still reaches the reader once.
                 if on_reasoning_delta is not None and response.reasoning_content:
                     await on_reasoning_delta(response.reasoning_content)
-                if (sink := draft or gate or downstream) is not None and response.content:
-                    await sink(response.content)
+                if (sink := draft or gate or downstream) is not None and shown:
+                    await sink(shown)
             if response.finish_reason != "error" and (note := getattr(self.context_engine, "note_request", None)):
                 # What went out and was answered, for a history strategy that
                 # summarises by replaying it (its prefix is what is cached).

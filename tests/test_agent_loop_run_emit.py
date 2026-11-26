@@ -2105,6 +2105,53 @@ async def test_a_rolled_back_draft_never_reaches_the_stream(tmp_path):
     assert deltas == ["FINAL REPLY"], f"the caller saw the rejected draft: {deltas}"
 
 
+class _HoldsDraftsAndKeepsThem(AgentHook):
+    """Declares it may send a response back, so the loop holds drafts; never does."""
+
+    rolls_back_iterations = True
+
+    @property
+    def name(self) -> str:
+        return "holding_probe"
+
+
+class _Search(Tool):
+    name = "web_search"
+    description = "search"
+    parameters = {"type": "object", "properties": {"query": {"type": "string"}}}
+
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    async def execute(self, **kwargs):
+        self.queries.append(kwargs["query"])
+        return "results"
+
+
+async def test_a_held_draft_shows_the_words_around_a_call_written_as_text(tmp_path):
+    """The held draft is the reply as it streamed, call block included; once the block is
+    read as a call, the reader gets the words around it, never the block itself."""
+    block = (
+        "<toolbox><use_mcp_tool>\n<server_name>s</server_name>\n<tool_name>web_search</tool_name>\n"
+        '<arguments>\n{"query": "q"}\n</arguments>\n</use_mcp_tool></toolbox>'
+    )
+    provider = _FakeStreamToolProvider(
+        [[ChatDelta(content="Searching first.\n"), ChatDelta(content=block)], [ChatDelta(content="FINAL REPLY")]]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path, host=HostWiring(hooks=[_HoldsDraftsAndKeepsThem()]))
+    _stub_edges(loop)
+    search = _Search()
+    loop.tools.register(search)
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain)
+
+    deltas = [e.delta for e in sink.events if isinstance(e, EvStreamDelta)]
+    assert search.queries == ["q"], "the block was never read as a call, so this proves nothing"
+    assert not any("use_mcp_tool" in d or "toolbox" in d for d in deltas), deltas
+    assert "Searching first." in "".join(deltas)
+
+
 class _PassThroughObserver(AgentHook):
     """`eval_engine`'s judge shape: overrides the phase, awaits inside it, never
     sends anything back -- and says so, by leaving `rolls_back_iterations` alone."""

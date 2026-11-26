@@ -22,10 +22,14 @@ tag is missing ends where the ``<toolbox>`` wrapper closes, where the next block
 or at the end of the reply: the same model, on another turn, left it out every time
 and the turn ended on the text. Its ``<arguments>`` must still be closed. Only names
 among the tools the step offered become calls, and the arguments must be a JSON
-object; a reply holding anything else is left as it came. The server
+object; a reply holding anything else is left as it came. Blocks are read only outside
+the model's thinking - a paired ``<think>`` block, or the text before an orphan closing
+tag - since a thought can name the form without making a call, and the thinking is left
+in the reply for the loop's own strip. The server
 name is dropped: this loop's tools are not grouped by server. Like the reasoning split
 (``raven.providers.reasoning``) this needs the whole text, so it runs once the reply is
-in hand, and words of the block that already streamed to a reader stay shown.
+in hand; words of the block that already streamed to a reader stay shown, unless the
+loop held the draft, which then shows the words around the blocks.
 """
 
 from __future__ import annotations
@@ -49,6 +53,10 @@ _BLOCK_RE = re.compile(
 _TOOL_RE = re.compile(r"<tool_name>\s*(?P<name>.*?)\s*</tool_name>", re.DOTALL)
 _ARGS_RE = re.compile(r"<arguments>(?P<args>.*?)</arguments>", re.DOTALL)
 _WRAPPER_RE = re.compile(r"</?toolbox>")
+_NS = r"(?:[a-z][\w.-]{0,15}:)?"
+_THOUGHT_RE = re.compile(rf"<{_NS}(think|thinking|reasoning)>[\s\S]*?</{_NS}\1>", re.IGNORECASE)
+_OPEN_THOUGHT_RE = re.compile(rf"<{_NS}(?:think|thinking|reasoning)>", re.IGNORECASE)
+_CLOSE_THOUGHT_RE = re.compile(rf"</{_NS}(?:think|thinking|reasoning)>", re.IGNORECASE)
 _ALNUM = string.ascii_letters + string.digits
 
 
@@ -95,6 +103,21 @@ def _call(body: str, offered: set[str]) -> ToolCallRequest | None:
     )
 
 
+def _spoken(content: str) -> list[tuple[bool, str]]:
+    """``content`` in order as (spoken, text) runs: thinking is the runs that are not spoken."""
+    runs: list[tuple[bool, str]] = []
+    close = _CLOSE_THOUGHT_RE.search(content)
+    if close is not None and not _OPEN_THOUGHT_RE.search(content, 0, close.start()):
+        runs.append((False, content[: close.end()]))
+        content = content[close.end() :]
+    at = 0
+    for hit in _THOUGHT_RE.finditer(content):
+        runs += [(True, content[at : hit.start()]), (False, hit.group(0))]
+        at = hit.end()
+    runs.append((True, content[at:]))
+    return runs
+
+
 def recover_text_tool_calls(response: LLMResponse, tools: Iterable[dict[str, Any]] | None) -> LLMResponse | None:
     """``response`` with the ``<use_mcp_tool>`` blocks of its reply as tool calls, or None to keep it.
 
@@ -109,15 +132,17 @@ def recover_text_tool_calls(response: LLMResponse, tools: Iterable[dict[str, Any
     offered = _offered_names(tools)
     if not offered:
         return None
+    runs = _spoken(content)
     calls: list[ToolCallRequest] = []
-    for hit in _BLOCK_RE.finditer(content):
-        call = _call(hit.group("body"), offered)
-        if call is None:
-            return None
-        calls.append(call)
+    for spoken, text in runs:
+        for hit in _BLOCK_RE.finditer(text) if spoken else ():
+            call = _call(hit.group("body"), offered)
+            if call is None:
+                return None
+            calls.append(call)
     if not calls:
         return None
-    rest = _WRAPPER_RE.sub("", _BLOCK_RE.sub("", content)).strip()
+    rest = "".join(_WRAPPER_RE.sub("", _BLOCK_RE.sub("", text)) if spoken else text for spoken, text in runs).strip()
     return replace(response, content=rest or None, tool_calls=calls, finish_reason="tool_calls")
 
 

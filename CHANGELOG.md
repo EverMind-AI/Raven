@@ -299,8 +299,13 @@ All notable changes to Raven are documented here.
   passed the block on as text, a report gate read it as a draft, and the turn
   spent its budget re-sampling it. The loop now reads such a reply as the
   calls it holds when every block names a tool the step offered and carries a
-  JSON object as its arguments. Any other reply is left as it came. Words of
-  the block that already streamed to a reader stay shown.
+  JSON object as its arguments. Any other reply is left as it came. Blocks
+  are read only outside the model's thinking (a `<think>` block, or the text
+  before an orphan closing tag), so a thought that names the form calls
+  nothing and does not hide the real call after it. Where the loop holds a
+  draft (a hook may send it back), the reader gets the words around the
+  blocks, not the blocks, once, and without the thinking, on an unstreamed
+  resend too; otherwise words of the block that already streamed stay shown.
 
 - A tool call whose arguments are valid JSON but not an object, such as
   `"bad"` or a list, no longer ends the turn. The parse exits passed such

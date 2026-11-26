@@ -59,6 +59,17 @@ def test_a_block_without_its_closing_tag_ends_at_the_wrapper_or_the_reply():
     assert len(recover_text_tool_calls(_reply(open_block + "\n" + _BLOCK), _OFFERED).tool_calls) == 2
 
 
+def test_a_block_inside_the_thinking_is_no_call():
+    """A thought can name the form - an example, an unclosed sketch - without calling anything."""
+    sketch = "<use_mcp_tool><tool_name>shell</tool_name><arguments>{}</arguments>"
+    for thought in (f"<think>I could write {sketch}</think>\n", f"I could write {sketch}</think>\n"):
+        recovered = recover_text_tool_calls(_reply(thought + _BLOCK), _OFFERED)
+        assert recovered is not None, thought
+        assert [c.name for c in recovered.tool_calls] == ["web_search"]
+        assert recovered.content == thought.strip()
+        assert recover_text_tool_calls(_reply(thought + "No call after all."), _OFFERED) is None
+
+
 def test_repaired_arguments_are_flagged_on_the_call():
     broken = _BLOCK.replace('"count": 10}', '"count": 10')
     call = recover_text_tool_calls(_reply(broken), _OFFERED).tool_calls[0]
