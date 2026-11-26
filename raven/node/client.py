@@ -650,7 +650,14 @@ class NodePool:
             await endpoint.end()
 
     async def _launch_agent(self, machine_id: str, node: _Node, channel: int, name: str, params: dict[str, Any]) -> Any:
-        """The Raven node's answer to ``agent/launch`` on ``channel``, or :class:`NodeError` saying why there is none."""
+        """The Raven node's answer to ``agent/launch`` on ``channel``, or :class:`NodeError` saying why there is none.
+
+        An answer that never arrived is not a launch that did not happen. The
+        node starts the agent before it answers it, so the endpoint is left
+        in the pool for :meth:`_lost` to park and the next link to claim, and
+        only a refusal pops one: there the node answered, so it started
+        nothing to wait for.
+        """
         label = node.target.label
         try:
             return await node.client.request(protocol.AGENT_LAUNCH, params, timeout=protocol.AGENT_LAUNCH_TIMEOUT_S)
@@ -658,7 +665,6 @@ class NodePool:
             node.channels.pop(channel, None)
             raise NodeError(self._refused_launch(node, name, exc)) from None
         except AcpTimeoutError:
-            node.channels.pop(channel, None)
             said = (
                 f"the Raven node on machine {label} did not answer {protocol.AGENT_LAUNCH} "
                 f"within {protocol.AGENT_LAUNCH_TIMEOUT_S:.0f}s"
@@ -666,7 +672,6 @@ class NodePool:
             await self._lost(machine_id, node, said)
             raise NodeError(said) from None
         except AcpConnectionError as exc:
-            node.channels.pop(channel, None)
             said = self._ended(node.target, node.log, exc)
             await self._lost(machine_id, node, said)
             raise NodeError(said) from None
@@ -688,6 +693,12 @@ class NodePool:
         for a task that has ended, replays its record and says so. The endpoint returned is what an
         :class:`AcpClient` runs over; the answer says the pid, the frames
         and the exit code (``None`` while the agent runs).
+
+        An answer that never arrived is not a task that is not there: the
+        task is named here, so the endpoint waits for the link that comes
+        back to claim it rather than leaving the task on the machine with
+        nothing here holding it. A task the machine no longer knows is the
+        other case, and it ends its endpoint.
         """
         node = await self._acquire(machine_id)
         label = node.target.label
@@ -706,12 +717,10 @@ class NodePool:
                 f"machine {label} no longer runs {name!r} (task {task}): {exc.message}", reason=_REASONS.get(exc.code)
             ) from None
         except AcpTimeoutError:
-            node.channels.pop(channel, None)
             said = f"the Raven node on machine {label} did not answer {protocol.AGENT_ATTACH}"
             await self._lost(machine_id, node, said)
             raise NodeError(said) from None
         except AcpConnectionError as exc:
-            node.channels.pop(channel, None)
             said = self._ended(node.target, node.log, exc)
             await self._lost(machine_id, node, said)
             raise NodeError(said) from None
