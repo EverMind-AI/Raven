@@ -159,6 +159,23 @@ def test_task_ending_while_idle_waits_for_the_wake():
     assert settle.done(12.0) is True
 
 
+def test_task_end_and_wake_idle_in_the_same_tick_are_done_at_once():
+    settle = _idle_with_live_task()
+    same_tick = 10.0
+    settle.apply(_level(), same_tick)
+    settle.apply(_state("running"), same_tick)
+    settle.apply(_state("idle"), same_tick)
+    assert settle.done(same_tick) is True
+
+
+def test_same_tick_unwoken_task_end_keeps_the_15s_bound():
+    settle = _idle_with_live_task()
+    settle.apply(_level(), 10.0)
+    assert settle.done(10.0) is False
+    assert settle.done(24.9) is False
+    assert settle.done(25.1) is True
+
+
 def test_task_ending_while_idle_with_no_wake_is_done_after_15s():
     settle = _idle_with_live_task()
     settle.apply(_level(), 10.0)

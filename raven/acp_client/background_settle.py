@@ -48,8 +48,10 @@ class BackgroundSettle:
         self._live: dict[str, dict[str, Any]] = {}
         self._ended: list[str] = []
         self._last_end: float | None = None
-        self._last_idle = float("-inf")
-        self._last_running = float("-inf")
+        self._seq = 0
+        self._end_seq = -1
+        self._idle_seq = -1
+        self._running_seq = -1
         self._usage: dict[str, int] | None = None
 
     @property
@@ -70,6 +72,7 @@ class BackgroundSettle:
     def apply(self, message: Any, now: float) -> list[str] | None:
         if not isinstance(message, dict):
             return None
+        self._seq += 1
         kind = message.get("type")
         subtype = message.get("subtype")
         if kind == "result":
@@ -93,9 +96,9 @@ class BackgroundSettle:
     def done(self, now: float) -> bool:
         if not self._answered or self._state != "idle" or self.running_tasks():
             return False
-        if self._last_end is None or self._last_idle > self._last_end:
+        if self._last_end is None or self._idle_seq > self._end_seq:
             return True
-        return now - self._last_end > UNWOKEN_END_S and self._last_running <= self._last_end
+        return now - self._last_end > UNWOKEN_END_S and self._running_seq <= self._end_seq
 
     def running_tasks(self) -> list[str]:
         return [self._own[task_id]["description"] for task_id in self._live if self._holds(task_id)]
@@ -122,6 +125,7 @@ class BackgroundSettle:
             self._ended.append(self._own[task_id]["description"])
             if not self._is_monitor_call(self._own[task_id]["tool_use_id"]):
                 self._last_end = now
+                self._end_seq = self._seq
 
     def _set_state(self, state: Any, now: float) -> list[str] | None:
         if not isinstance(state, str):
@@ -129,10 +133,10 @@ class BackgroundSettle:
         self._reporting = True
         previous, self._state = self._state, state
         if state == "idle":
-            self._last_idle = now
+            self._idle_seq = self._seq
             self._ended = []
         elif state == "running":
-            self._last_running = now
+            self._running_seq = self._seq
             if self._answered and previous == "idle":
                 ended, self._ended = self._ended, []
                 return ended
