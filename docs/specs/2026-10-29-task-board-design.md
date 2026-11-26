@@ -295,9 +295,10 @@ turns' events for this one's, and the board record already holds each matter's h
 (`docs/specs/2026-11-16-task-board-matter-attribution-design.md`). The instruction carries:
 
 - the board as it stands: every open group's id, title, status, summary and the titles of
-  its last two steps; the completed groups retrieved as most related to this turn, with
-  their summary and the titles of their last two steps; every other completed group's id
-  and title;
+  its last two steps; the completed groups the recall ranked highest for this turn, in the
+  recall's order, and up to five more completed groups most recently updated first -- each
+  with its summary, created and last-updated times, and the titles of its last two steps;
+  every other completed group's id, title and times, on a single line;
 - this turn's dispatches, each as a handle (`spawn:<node_id>`, `dag:<run_id>`) with its task
   summary, followed by any `unassigned` left by an earlier failed update (6.1);
 - for a turn with Candidate Groups (What a turn may write, below), a line naming its owners
