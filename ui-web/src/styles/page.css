@@ -5104,7 +5104,7 @@ details[open] summary { margin-bottom: 8px; }
      the two cannot drift apart. */
   --two-pane-gutter: 5px;
   display: flex; flex-direction: column; gap: 1px; flex: 1; min-height: 0;
-  overflow-y: auto; margin: 0 -5px; padding: 0 var(--two-pane-gutter) 2px;
+  overflow-y: auto; margin: 0 calc(-1 * var(--two-pane-gutter)); padding: 0 var(--two-pane-gutter) 2px;
   /* A context of its own, so the card below stays inside it and does not
      slide out behind the column it belongs to. */
   position: relative; z-index: 0;
