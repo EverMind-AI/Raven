@@ -1,7 +1,11 @@
 """Budget visibility for the model (DR flow).
 
 Appends a compact budget line to the newest tool result each iteration,
-plus a one-shot converge warning past ``warn_ratio``. Persisted history
+plus a one-shot converge warning past ``warn_ratio``. With ``close_after`` set,
+the warning is also a deadline: that many iterations after it, ``web_search`` and
+``web_fetch`` are withdrawn for the rest of the turn, so the turn has to write.
+A warning alone was read and ignored: one product run said "two more searches"
+from the warning at iteration 48 to the iteration cap at 60. Persisted history
 is the only train-serve-safe channel for this: the runtime-context block
 is stripped on persist and TokenWise rewrites are wire-only, so anything
 injected there would be invisible to training. The note is part of the
@@ -16,12 +20,23 @@ import logging
 from raven.contracts.loop_hooks import HookDecision
 from research_flow.gates.base import Gate, GateCtx
 from research_flow.support.budget import usage_tokens
+from research_flow.support.evidence_round import EvidenceRound
 
 logger = logging.getLogger(__name__)
+
+_RESEARCH_TOOLS = frozenset({"web_search", "web_fetch"})
 
 _CONVERGE_WARNING = (
     "[budget warning: most of the budget is spent - stop opening new leads, "
     "verify what you have, and draft the final answer]"
+)
+_CLOSE_WARNING = (
+    "[budget warning: research closes {n} iterations from now - web_search and "
+    "web_fetch will be withdrawn then, so start the final answer before that]"
+)
+_CLOSED_NOTE = (
+    "[budget: research is closed - web_search and web_fetch are withdrawn for the "
+    "rest of this turn. Write the final answer now from what you have gathered.]"
 )
 
 
@@ -33,14 +48,40 @@ class BudgetNoteObserver(Gate):
         max_iterations: int,
         context_window_tokens: int = 0,
         warn_ratio: float = 0.8,
+        close_after: int | None = None,
+        evidence_round: EvidenceRound | None = None,
     ) -> None:
         self._max_iterations = max_iterations
         self._context_window_tokens = context_window_tokens
         self._warn_ratio = warn_ratio
+        self._close_after = close_after
+        self._evidence_round = evidence_round
 
     @property
     def name(self) -> str:
         return "BudgetNoteObserver"
+
+    def _closed(self, state: dict) -> bool:
+        # A reviewer's evidence round is a sanctioned search after a rejection, so it
+        # reopens research for as long as it lasts.
+        return bool(state.get("closed")) and not (self._evidence_round is not None and self._evidence_round.active)
+
+    async def before_iteration(self, ctx: GateCtx) -> HookDecision:
+        state = ctx.metadata.get("budget_note") or {}
+        if ctx.tools is None or not self._closed(state):
+            return HookDecision()
+        kept = [t for t in ctx.tools if (t.get("function") or {}).get("name") not in _RESEARCH_TOOLS]
+        return HookDecision(modified_tools=kept) if len(kept) != len(ctx.tools) else HookDecision()
+
+    async def before_execute_tools(self, ctx: GateCtx) -> HookDecision:
+        state = ctx.metadata.get("budget_note") or {}
+        if self._closed(state):
+            calls = getattr(ctx.response, "tool_calls", None) or []
+            named = sum(1 for call in calls if getattr(call, "name", None) in _RESEARCH_TOOLS)
+            if named:
+                # Withholding un-offers a tool, it does not unregister it: observation only.
+                state["called_when_closed"] = state.get("called_when_closed", 0) + named
+        return HookDecision()
 
     async def after_iteration(self, ctx: GateCtx) -> HookDecision:
         if not getattr(ctx.response, "has_tool_calls", False):
@@ -86,8 +127,21 @@ class BudgetNoteObserver(Gate):
         crossed_ctx = pct is not None and pct >= self._warn_ratio * 100
         if (crossed_iter or crossed_ctx) and not state.get("warned"):
             state["warned"] = True
+            state["warned_at"] = ctx.iteration or 0
             note = f"{note}\n{_CONVERGE_WARNING}"
+            if self._close_after:
+                note = f"{note}\n{_CLOSE_WARNING.format(n=self._close_after)}"
             logger.info("budget-note: converge warning injected at iteration %s", ctx.iteration)
+        elif (
+            self._close_after
+            and state.get("warned")
+            and not state.get("closed")
+            and (ctx.iteration or 0) - int(state.get("warned_at") or 0) >= self._close_after
+        ):
+            state["closed"] = True
+            state["closed_at"] = ctx.iteration or 0
+            note = f"{note}\n{_CLOSED_NOTE}"
+            logger.warning("budget-note: research tools withdrawn at iteration %s", ctx.iteration)
 
         # The note travels as ``append_note``: the loop lands it on the newest
         # tool result, a blank line between.

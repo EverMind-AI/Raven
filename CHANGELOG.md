@@ -77,6 +77,36 @@ All notable changes to Raven are documented here.
   `Published Time` header as the page's crawl or render time and returns an arXiv
   paper's first-version month as `first_version`; the digest is told the same.
   Label `...-length-shape-arc-scope-window`.
+- Raven-Research's high mode makes the budget warning a deadline
+  (`budgetNote.closeAfter: 6`): six iterations after it, `web_search` and
+  `web_fetch` are withdrawn for the rest of the turn, except while a reviewer's
+  evidence round is open. A turn cut off by a budget wraps up at the effort and
+  token cap its synthesis policy names (`forceFinalize.wrapUpReasoningEffort:
+  "low"`, `wrapUpMaxTokens: 16384`), and when that wrap-up still comes back
+  empty, the forced-finalize salvage is asked for a reply before the loop's static
+  apology (`wrapUpSalvage`). The outline style now states principles only: a
+  title, numbered sections each opening with its conclusion in one sentence, a
+  first section that compares the methods, paradigms, products or works side by
+  side in one table when the question surveys several, a table, list or prose
+  as the content has that form, and bold chosen by what a paragraph holds - the
+  names a reader scans for, the deciding figures, at most one short verdict -
+  never a whole sentence, in place of its paragraph-level rules and template. The
+  page's report drops its section on what could not be verified
+  (`finalShape.limits: false`): the rule asks for none, the shape bar requires
+  none, and one written anyway is left out of the file and the page, whose
+  closing list of sources is headed `## Sources` or `## 来源` by the report's
+  language. The page carries no highlights (`reportPage.highlights: false`):
+  their box framed too narrow a slice of the report, and the call that picked
+  them cost about 40 s after the reply and could run out of tokens.
+  Label `...-arc-scope-window-close-skim`. An opt-in write step
+  (`finalShape.writePhase`, off by default) sets a research turn's first draft
+  aside and asks for the report again with the tools withdrawn and the report
+  rule repeated after the research; with `finalShape.skimFloor` set, a report
+  too few of whose paragraphs bold a name or a figure is asked once more, for its
+  bold alone. The reading page takes a report's own list
+  of sources as the list when, under its sources heading, half of the entries
+  carry a link, so a list that cites a few papers by arXiv number alone is no
+  longer shown twice.
 - Raven-Research can run its draft review (`verify.onDigestProvider`) and its
   page highlights (`reportPage.highlightsOnDigestProvider`) on the fetch digest's
   own provider and model instead of the agent's, so a reasoning agent model no

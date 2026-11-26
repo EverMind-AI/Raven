@@ -24,7 +24,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from loguru import logger
 
@@ -87,6 +87,8 @@ from research_flow.gates.report_shape import (
 from research_flow.gates.spin_breaker import SpinEntryBreaker
 from research_flow.gates.sufficiency import SufficiencyGate
 from research_flow.gates.verify import DraftReviewerGate
+from research_flow.gates.write_phase import WritePhaseGate
+from research_flow.prompts import write_brief
 from research_flow.state import SessionStore
 from research_flow.support.answer_text import visible_answer
 from research_flow.support.evidence_round import EvidenceRound
@@ -115,7 +117,13 @@ if TYPE_CHECKING:
 _TURN_SEQ = itertools.count()
 
 
-def _turn_cargo(cfg: FlowConfig, text: str, *, sources: bool = False) -> dict[str, Any]:
+def _turn_cargo(
+    cfg: FlowConfig,
+    text: str,
+    *,
+    sources: bool = False,
+    salvage: Callable[[list[dict]], Awaitable[str | None]] | None = None,
+) -> dict[str, Any]:
     cargo: dict[str, Any] = {
         TURN_BUDGETS_KEY: {
             "wall_clock_seconds": cfg.wall_clock_seconds,
@@ -127,16 +135,45 @@ def _turn_cargo(cfg: FlowConfig, text: str, *, sources: bool = False) -> dict[st
     if cfg.final_shape.report_structure:
         layout = cfg.final_shape.effective_layout
         titled = layout == READER_LAYOUT and cfg.final_shape.report_style == "outline"
+        limits = cfg.final_shape.limits or not sources
         repair, fallback = interrupted_report_rewrite_prompt, interrupted_report_fallback
         if layout == READER_LAYOUT:
-            repair = partial(repair, layout=layout, sources=sources, titled=titled)
-            fallback = partial(fallback, layout=layout, language=scaffold_language(text))
+            repair = partial(repair, layout=layout, sources=sources, titled=titled, limits=limits)
+            fallback = partial(fallback, layout=layout, language=scaffold_language(text), limits=limits)
         cargo[TURN_SYNTHESIS_KEY] = TurnSynthesisPolicy(
-            guidance=interrupted_report_guidance(text, layout, sources, titled),
+            guidance=interrupted_report_guidance(text, layout, sources, titled, limits),
             repair_prompt=repair if cfg.final_shape.report_bounce else None,
             format_fallback=fallback,
+            reasoning_effort=cfg.force_finalize.wrap_up_reasoning_effort,
+            max_tokens=cfg.force_finalize.wrap_up_max_tokens,
+            salvage=salvage,
         )
     return cargo
+
+
+def _closes_with_sources(cfg: FlowConfig) -> bool:
+    """Whether the report closes with its list of sources: the page's report, as ``TurnFrame`` has it."""
+    return (
+        cfg.report_page.enabled
+        and cfg.final_shape.report_structure
+        and cfg.final_shape.effective_layout == READER_LAYOUT
+    )
+
+
+def _wrap_up_salvage(
+    cfg: FlowConfig, finalizer: ForcedFinalizeGate | None, ctx: Any
+) -> Callable[[list[dict]], Awaitable[str | None]] | None:
+    """The salvage the loop asks when a budget-cut turn's wrap-up comes back empty."""
+    if finalizer is None or not cfg.force_finalize.wrap_up_salvage:
+        return None
+    session_key, question, metadata = ctx.session_key, ctx.inbound_content or "", ctx.metadata
+
+    async def salvage(messages: list[dict]) -> str | None:
+        return await finalizer.wrap_up(
+            GateCtx(session_key=session_key, messages=messages, turn_question=question, metadata=metadata)
+        )
+
+    return salvage
 
 
 # ``ctx.metadata`` is ONE dict per turn on this host: the loop seeds it at
@@ -255,9 +292,13 @@ class TurnFrame(Gate):
         gate: ConversationGate | None,
         mode: str = "",
         page: ReportPage | None = None,
+        finalizer: ForcedFinalizeGate | None = None,
     ) -> None:
         self._cfg = cfg
         self._store = store
+        # Handed to the loop's wrap-up by ``ResearchFlowHook``: the cargo this frame
+        # writes lands in the participant's facts, not in the metadata the loop reads.
+        self.finalizer = finalizer
         self._gate = gate
         self._mode = mode
         # Resolved once, the way the fork's assembly resolved them: a feature
@@ -274,6 +315,8 @@ class TurnFrame(Gate):
         # With the page, the report closes with its list of sources (the page clause of the contract).
         self._sources = self._page is not None
         self._titled = self._layout == READER_LAYOUT and cfg.final_shape.report_style == "outline"
+        # Without limits the page's report closes its body with the list of sources alone.
+        self._limits = cfg.final_shape.limits or not self._sources
 
     @property
     def name(self) -> str:
@@ -332,7 +375,7 @@ class TurnFrame(Gate):
         if self._report_reminder:
             # The turn's own text, not the assembled content: the checklist reads the
             # request, and the memo and brief prefixed above are ours, not the user's.
-            content = f"{content}\n\n{render_reminder(text, self._layout, self._sources, self._titled)}"
+            content = f"{content}\n\n{render_reminder(text, self._layout, self._sources, self._titled, self._limits)}"
         if content != text:
             return HookDecision(modified_content=content)
         return HookDecision()
@@ -463,7 +506,7 @@ class TurnFrame(Gate):
             if self._cfg.final_shape.report_structure or self._cfg.final_shape.record:
                 observers["report_shape"] = {
                     "expected": bool(self._cfg.final_shape.report_structure),
-                    **ReportShape(shaped.visible, self._layout, self._sources).counters(),
+                    **ReportShape(shaped.visible, self._layout, self._sources, self._limits).counters(),
                 }
 
         # The reply as a reader sees it, when it reads as the report; None for a clarify
@@ -474,13 +517,13 @@ class TurnFrame(Gate):
         report: str | None = None
         if self._report_file and (report_paths or self._page is not None):
             visible = visible_answer(final_content)
-            if ReportShape(visible, self._layout, self._sources).well_formed:
+            if ReportShape(visible, self._layout, self._sources, self._limits).well_formed:
                 report = visible
         if self._report_file and report_paths:
             if report is not None:
                 # With the page on, the file is tidied as the page is: the two hold the same text.
                 observers["report_file"] = sync_report_file(
-                    report_paths, report, tidy=tidy if self._page is not None else None
+                    report_paths, report, tidy=partial(tidy, limits=self._limits) if self._page is not None else None
                 )
             else:
                 # A clarify or a reply that is not the report: the model's own file stands.
@@ -715,6 +758,8 @@ def build_chain(
                 max_iterations=effective_iterations,
                 context_window_tokens=effective_window,
                 warn_ratio=cfg.budget_note.warn_ratio,
+                close_after=cfg.budget_note.close_after,
+                evidence_round=evidence_round,
             )
         )
     if cfg.final_shape.report_structure and layout == READER_LAYOUT:
@@ -773,11 +818,12 @@ def build_chain(
                 evidence_round=evidence_round,
             )
         )
+    forced: ForcedFinalizeGate | None = None
     if cfg.force_finalize.enabled:
         if provider is None:
             _skip("forceFinalize")
         else:
-            finalizer: Gate = ForcedFinalizeGate(
+            forced = ForcedFinalizeGate(
                 provider,
                 model=cfg.force_finalize.model,
                 max_nudges=cfg.force_finalize.max_nudges,
@@ -790,6 +836,7 @@ def build_chain(
                 closing_tag_required=cfg.think_closing_tag_required,
                 reasoning_effort=cfg.force_finalize.reasoning_effort,
             )
+            finalizer: Gate = forced
             # The third terminal gate, and the one the commit marker cannot
             # reach: a prose clarify is "answerless" to it, so it is exempted
             # whenever the clarify round exists.
@@ -808,6 +855,15 @@ def build_chain(
         if ask_user_on:
             floor = ClarifyExemptHook(floor, layout)
         observers.append(floor)
+    if cfg.final_shape.write_phase and cfg.final_shape.report_structure:
+        # After the floor, whose bounce means the research is not over; before the
+        # reviewer, which reads the report the write step produces, not the draft it sets aside.
+        writer: Gate = WritePhaseGate(
+            write_brief(cfg), closing_tag_required=cfg.think_closing_tag_required, skim_floor=cfg.final_shape.skim_floor
+        )
+        if ask_user_on:
+            writer = ClarifyExemptHook(writer, layout)
+        observers.append(writer)
     if cfg.verify.enabled:
         review_on, review_model = _on_side(provider, cfg.verify.model, cfg.verify.on_digest_provider, side)
         if review_on is None:
@@ -859,6 +915,7 @@ def build_chain(
             layout=layout,
             sources=cfg.report_page.enabled and layout == READER_LAYOUT,
             titled=layout == READER_LAYOUT and cfg.final_shape.report_style == "outline",
+            limits=cfg.final_shape.limits,
         )
         # Same exemption as the reviewer's: a clarify has no report sections to
         # be missing, and demanding them turns the one turn that must not
@@ -896,8 +953,8 @@ def build_chain(
         on, model = _on_side(
             provider, cfg.report_page.highlights_model, cfg.report_page.highlights_on_digest_provider, side
         )
-        page = ReportPage(cfg.report_page, on, model)
-    return [TurnFrame(cfg, store, gate, mode, page), *observers]
+        page = ReportPage(cfg.report_page, on, model, limits=cfg.final_shape.limits)
+    return [TurnFrame(cfg, store, gate, mode, page, forced), *observers]
 
 
 def _on_side(
@@ -912,6 +969,10 @@ def _on_side(
     return provider, model
 
 
+def _finalizer_of(chain: list[Gate]) -> ForcedFinalizeGate | None:
+    return chain[0].finalizer if chain and isinstance(chain[0], TurnFrame) else None
+
+
 @dataclass
 class _ChainSlot:
     """One (session, mode) chain and the facts the hook needs beside it."""
@@ -920,6 +981,7 @@ class _ChainSlot:
     cfg: FlowConfig
     composite: CompositeHook
     opens_ledger: bool
+    finalizer: ForcedFinalizeGate | None = None
 
 
 class ResearchFlow:
@@ -1026,6 +1088,7 @@ class ResearchFlow:
                 mode=mode,
                 cfg=cfg,
                 composite=CompositeHook(observers),
+                finalizer=_finalizer_of(observers),
                 opens_ledger=(
                     cfg.final_shape.process_appendix or (cfg.conversation.enabled and cfg.conversation.research_memo)
                 ),
@@ -1053,20 +1116,20 @@ class ResearchFlow:
             return slot
         if self._unmoded is None:
             cfg = self.cfg
+            chain = build_chain(
+                cfg,
+                self.provider,
+                max_iterations=self.max_iterations,
+                context_window_tokens=self.context_window_tokens,
+                tools=self.tools,
+                store=self.store,
+                side=self.side,
+            )
             self._unmoded = _ChainSlot(
                 mode="",
                 cfg=cfg,
-                composite=CompositeHook(
-                    build_chain(
-                        cfg,
-                        self.provider,
-                        max_iterations=self.max_iterations,
-                        context_window_tokens=self.context_window_tokens,
-                        tools=self.tools,
-                        store=self.store,
-                        side=self.side,
-                    )
-                ),
+                composite=CompositeHook(chain),
+                finalizer=_finalizer_of(chain),
                 opens_ledger=(
                     cfg.final_shape.process_appendix or (cfg.conversation.enabled and cfg.conversation.research_memo)
                 ),
@@ -1273,7 +1336,14 @@ class ResearchFlowHook(ParticipantHook):
     async def before_user_inbound(self, ctx) -> HookDecision:
         text = ctx.inbound_content or ""
         slot = self.flow._reuse(GateCtx(session_key=ctx.session_key))
-        ctx.metadata.update(_turn_cargo(slot.cfg, text))
+        ctx.metadata.update(
+            _turn_cargo(
+                slot.cfg,
+                text,
+                sources=_closes_with_sources(slot.cfg),
+                salvage=_wrap_up_salvage(slot.cfg, slot.finalizer, ctx),
+            )
+        )
         return await super().before_user_inbound(ctx)
 
 

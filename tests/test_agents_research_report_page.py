@@ -38,6 +38,7 @@ from research_flow.support.report_html import (  # noqa: E402
     Highlights,
     Moment,
     close_with_sources,
+    fixed_closing,
     render_page,
 )
 from research_flow.support.report_page import ReportPage, page_line, written_pages  # noqa: E402
@@ -219,6 +220,36 @@ def test_sources_one_per_line_may_name_a_local_file_beside_the_addresses(path):
     page = render_page(report, show_limits=False)
     assert page.count("<h2>Sources</h2>") <= 1 and page.count('class="sources"') == 1, page
     assert "<h2>Limitations</h2>" not in page and "<h2>One</h2>" in page
+
+
+def test_a_sources_list_with_a_few_entries_cited_by_arxiv_number_alone_is_still_the_one_list():
+    """Under the sources heading, an entry with no link is a source the report named without one."""
+    report = "> a\n\n## One\nb\n\n## Limitations\nc\n\n## Sources\n" + "".join(
+        f"- Title {i} - Author, 2026, https://arxiv.org/abs/2601.0000{i}\n" for i in range(5)
+    )
+    report += "- A survey - Author, 2026, arXiv 2408.07666\n- Another survey - Author, arXiv 2503.08998\n"
+    page = render_page(report, show_limits=False)
+    assert page.count("<h2>Sources</h2>") <= 1 and page.count('class="sources"') == 1, page
+    assert 'id="sources"' not in page and "arXiv 2408.07666" in page
+
+
+def test_the_closing_list_takes_the_reports_language_and_without_limits_their_section_goes():
+    zh = "\u4e2d\u6587\u62a5\u544a\u7684\u6b63\u6587\uff0c\u8bf4\u660e\u4e86\u7ed3\u679c\u3002"
+    report = (
+        f"> {zh}\n\n## \u4e00\u3001\u7ed3\u679c\n{zh} [A](https://a.example)\n\n"
+        f"## Limitations\n{zh}\n\n## Sources\n- A: https://a.example\n"
+    )
+    kept, counts = fixed_closing(report, "zh")
+    assert "## Limitations" in kept and kept.rstrip().endswith("## \u6765\u6e90\n- A: https://a.example")
+    assert counts == {"sources_heading": 1}
+    dropped, counts = fixed_closing(report, "zh", limits=False)
+    assert "Limitations" not in dropped and "## \u6765\u6e90" in dropped and f"{zh} [A]" in dropped
+    assert counts == {"limits_dropped": 1, "sources_heading": 1}
+    # A fenced line is not a heading, and a report already in form is returned as it was.
+    fenced = "> a\n\n## One\n```\n## Sources\n```\n\n## Sources\n- https://a.example\n"
+    assert fixed_closing(fenced, "en", limits=False) == (fenced, {})
+    tidied, _ = page_module.tidy(report, None, limits=False)
+    assert "Limitations" not in tidied and "## \u6765\u6e90" in tidied
 
 
 def test_body_lines_that_each_end_in_a_link_are_not_a_source_list():
@@ -719,7 +750,7 @@ def test_paragraphs_opening_with_bold_sentences_stay_paragraphs():
 
 
 def test_a_conclusion_label_neither_joins_nor_vetoes_the_named_points():
-    """The outline clause opens each section with ``**Conclusion**:``; it is not the first of the points."""
+    """A section that opens with ``**Conclusion**:``, as earlier outline reports did, keeps it out of the points."""
     points = "**Safety**: audit logs.\n\n**Isolation**: per tenant.\n\n**Approval**: two people."
     for between in ("", "Evidence for it.\n\n"):
         page = render_page(
@@ -1358,6 +1389,17 @@ async def test_the_page_carries_the_highlights_the_report_holds(tmp_path, _no_tr
 
 
 @pytest.mark.asyncio
+async def test_without_limits_the_pages_last_section_is_body_not_the_limits(tmp_path, _no_trail):
+    report = _REPORT.split("## Limitations")[0] + "## Sources\n- Vite docs: https://vite.dev/guide/why.html\n"
+    cfg = _cfg()
+    frame = TurnFrame(cfg, SessionStore(tmp_path / "state"), None, page=ReportPage(cfg.report_page, None, limits=False))
+    with workdir.bind(tmp_path):
+        await _send(frame, report)
+    html = next(tmp_path.glob("*.html")).read_text(encoding="utf-8")
+    assert "<h2>Timeline</h2>" in html and 'class="panel is-limits"' not in html
+
+
+@pytest.mark.asyncio
 async def test_a_failed_selection_still_writes_the_page(tmp_path, _no_trail):
     with workdir.bind(tmp_path):
         _, facts = await _send(_frame(tmp_path, _cfg(highlights=True), _Provider(error=RuntimeError("x"))), _REPORT)
@@ -1615,12 +1657,12 @@ def test_the_chain_builds_the_page_writer_from_the_flows_configuration(tmp_path)
     assert isinstance(frame, TurnFrame) and isinstance(frame._page, ReportPage)
 
 
-def test_the_shipped_product_turns_the_page_and_its_highlights_on():
+def test_the_shipped_product_turns_the_page_on_without_highlights():
     flow = json.loads((REPO / "agents" / "raven-research" / "config.json").read_text())["plugins"]["config"][
         "research-flow"
     ]
     cfg = FlowConfig.from_slice(flow)
-    assert cfg.report_page.enabled and cfg.report_page.highlights and cfg.report_page.remove_markdown
+    assert cfg.report_page.enabled and not cfg.report_page.highlights and cfg.report_page.remove_markdown
     assert cfg.final_shape.effective_layout == "reader"
 
 

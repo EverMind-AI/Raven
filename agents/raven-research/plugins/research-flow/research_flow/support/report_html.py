@@ -82,6 +82,9 @@ _ENTRY_RE = re.compile(r"\[(\d{1,3})\][ \t]*")
 _GLUED_NAME_RE = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z0-9_]+\Z")
 #: A list or table lists sources when this share of its entries carry an address.
 _REFERENCE_SHARE = 0.8
+#: The same share under a heading that names the sources: there an entry citing a paper by
+#: its arXiv number alone is still a source, and a list missing a few links is still the list.
+_HEADED_SHARE = 0.5
 #: A list of sources is the report's own when it holds this share of the addresses the report links.
 _COVERED_SHARE = 0.5
 #: A table's first cell that is the row's own number: ``3``, ``[3]``, ``3.``.
@@ -893,7 +896,11 @@ def _lists_sources(block: Block, entries: list[tuple[int, str]], files: bool = F
     """Whether ``entries`` are all of ``block`` and nearly each carries an address, or with ``files`` a local path."""
     whole = _whole(block) or len(entries)
     addressed = sum(1 for _, text in entries if _first_address(text) or (files and _cites_file(text)))
-    return len(entries) >= 2 and len(entries) == whole and addressed >= whole * _REFERENCE_SHARE
+    return len(entries) >= 2 and len(entries) == whole and addressed >= whole * _share(files)
+
+
+def _share(headed: bool) -> float:
+    return _HEADED_SHARE if headed else _REFERENCE_SHARE
 
 
 def _marked(blocks: Iterable[Block]) -> set[int]:
@@ -956,7 +963,7 @@ def _listing(blocks: list[Block], lines: bool = False) -> tuple[dict[int, list[t
         own = _entries(block)
         entries = own or _rows(block)
         named = sum(1 for _, text in entries if names(text))
-        if not _lists_sources(block, entries, lines) or named < len(entries) * _REFERENCE_SHARE:
+        if not _lists_sources(block, entries, lines) or named < len(entries) * _share(lines):
             return None
         if own or block.kind == "table":
             return {held[0]: entries}, bool(own)
@@ -976,7 +983,7 @@ def _listing(blocks: list[Block], lines: bool = False) -> tuple[dict[int, list[t
             return None
     every = [text for at in texts for text in texts[at]]
     named = sum(1 for text in every if names(text))
-    if len(every) < 2 or named < len(every) * _REFERENCE_SHARE:
+    if len(every) < 2 or named < len(every) * _share(lines):
         return None
     parts: dict[int, list[tuple[int, str]]] = {}
     number = 0
@@ -1207,6 +1214,47 @@ def _exchanged(text: str, sections: list[_Section]) -> str | None:
     if [section.heading for section in _read(out).sections] != [*headings[:-2], headings[-1], headings[-2]]:
         return None
     return out
+
+
+_FENCE_RE = re.compile(r"^[ \t]{0,3}(```|~~~)")
+_LEVEL_TWO_RE = re.compile(r"^##[ \t]+(.+?)[ \t#]*$")
+
+
+def fixed_closing(report: str, language: str = "en", limits: bool = True) -> tuple[str, dict[str, int]]:
+    """``report`` with its closing headings as the contract fixes them, and what was changed.
+
+    The list of sources that closes the report goes under the "Sources" label of
+    ``language``, whatever the model called it; without ``limits`` a section under the
+    fixed limits heading is left out, the report's rule having asked for none.
+    """
+    lines = report.split("\n")
+    heads: list[int] = []
+    fenced = False
+    for index, line in enumerate(lines):
+        if _FENCE_RE.match(line):
+            fenced = not fenced
+        elif not fenced and _LEVEL_TWO_RE.match(line):
+            heads.append(index)
+
+    def label(index: int) -> str:
+        return span_text(parse_inline(_LEVEL_TWO_RE.match(lines[index]).group(1))).strip()
+
+    counts: dict[str, int] = {}
+    if not limits:
+        for at in reversed(heads):
+            if _LIMITS_LABEL_RE.fullmatch(label(at)):
+                end = next((h for h in heads if h > at), len(lines))
+                del lines[at:end]
+                heads = [h if h < at else h - (end - at) for h in heads if h != at]
+                counts["limits_dropped"] = counts.get("limits_dropped", 0) + 1
+    if heads and names_sources(label(heads[-1])) and not _LIMITS_LABEL_RE.fullmatch(label(heads[-1])):
+        fixed = f"## {t_in(language, 'Sources')}"
+        if lines[heads[-1]].strip() != fixed:
+            lines[heads[-1]] = fixed
+            counts["sources_heading"] = 1
+    if not counts:
+        return report, counts
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip(), counts
 
 
 def close_with_sources(report: str, language: str = "en") -> tuple[str, dict[str, int]]:
@@ -1479,5 +1527,6 @@ __all__ = [
     "Moment",
     "answer_blocks",
     "close_with_sources",
+    "fixed_closing",
     "render_page",
 ]

@@ -962,6 +962,12 @@ class TurnPathMixin:
         if reply_room := self._reply_room(synth_messages, None, model):
             effort_kwargs["max_tokens"] = reply_room
         if synthesis_policy is not None:
+            if synthesis_policy.reasoning_effort is not None:
+                effort_kwargs["reasoning_effort"] = synthesis_policy.reasoning_effort
+            if synthesis_policy.max_tokens:
+                effort_kwargs["max_tokens"] = min(
+                    reply_room or synthesis_policy.max_tokens, synthesis_policy.max_tokens
+                )
 
             async def _call(rows: list[dict]) -> str:
                 with _llm_purpose("main"):
@@ -991,6 +997,11 @@ class TurnPathMixin:
                             text = revised
                     except Exception as exc:
                         logger.warning("Early-exit synthesis repair failed: {}", exc)
+            if not text and synthesis_policy.salvage is not None:
+                try:
+                    text = await synthesis_policy.salvage(messages) or ""
+                except Exception as exc:
+                    logger.warning("Early-exit synthesis salvage failed: {}", exc)
             if not text:
                 text = fallback or _MAX_ITER_STATIC_FALLBACK.format(n=cap or "unbounded")
                 if synthesis_policy.format_fallback is not None:

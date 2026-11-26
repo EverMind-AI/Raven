@@ -858,11 +858,20 @@ TURN_SYNTHESIS_KEY = "turn_synthesis"
 
 @dataclass(frozen=True)
 class TurnSynthesisPolicy:
-    """Product guidance and one bounded repair for an interrupted turn's reply."""
+    """Product guidance and one bounded repair for an interrupted turn's reply.
+
+    ``reasoning_effort`` and ``max_tokens`` are the wrap-up call's own, None keeping
+    the turn's effort and the room beside the transcript. ``salvage`` is asked, with
+    the turn's messages, for a reply when the wrap-up and its repair came back empty,
+    before the static fallback.
+    """
 
     guidance: str
     repair_prompt: Callable[[str], str | None] | None = None
     format_fallback: Callable[[str], str] | None = None
+    reasoning_effort: str | None = None
+    max_tokens: int | None = None
+    salvage: Callable[[list[dict]], Awaitable[str | None]] | None = None
 
 
 def turn_synthesis(metadata: dict[str, Any] | None) -> TurnSynthesisPolicy | None:

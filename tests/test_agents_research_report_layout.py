@@ -167,7 +167,8 @@ def test_the_reader_form_asks_for_the_whole_subject_and_plain_prose():
         assert "survey before you dig" in contract
         assert "the blockquote names it and says why" in contract
         assert "every sentence parses" in contract
-        assert "keep an English word only for a name, a model number, a unit" in contract
+        assert "keep an English word only for a proper name" in contract
+        assert "let no English verb, adjective or common noun stand" in contract
         assert "use the mainland terms, never a Taiwan or Hong Kong variant" in contract
         assert "say in the same sentence what each one measures" in contract
     sections = " ".join(render_parts(report_depth=True)[1].split())
@@ -247,38 +248,81 @@ _OUTLINE = (
 )
 
 
-def test_the_outline_style_asks_for_a_title_numbers_bold_conclusions_and_lists():
+def test_the_outline_style_asks_for_a_title_numbers_a_lead_table_and_bold_to_skim():
     reader = {"report_depth": True, "report_layout": READER_LAYOUT, "report_page": True}
     prose = render_parts(**reader)[1]
     outline = render_parts(**reader, report_style="outline")[1]
     assert "one `#` line that names the topic and its scope" in outline
     assert "## \u4e00\u3001..." in outline and "### \uff08\u4e00\uff09..." in outline
-    assert "keep their\n   fixed headings, unnumbered" in outline
-    assert "conclusion in one\n   sentence after a bold label" in outline and "never the whole sentence" in outline
-    assert "opening with the item's name in bold" in outline
-    assert "never split into a list" in outline and "No paragraph opens with a bold\n   sentence" in outline
-    assert "never `1\u3001`" in outline and "the page sets two to four" in outline
-    assert "Number the list when its items are the points a section counts" in outline
-    assert "1. **<point>**\uff1a" in outline and "a section without any is prose" in outline
-    # The skeleton walks the argument the body clause names, a forecast table in its third step.
-    for step in ("<where things stand now>", "<why it is so>", "<what it leads to>", "<what would break that reading>"):
-        assert step in outline, step
-    assert "| <source> | <period> | <figure> |" in outline and "**\u98ce\u9669**\uff1a<the risk" in outline
-    assert "bold the one or two facts its point\n   rests on" in outline and "never a whole clause" in outline
-    assert "the opening blockquote's included" in outline and "its deciding figure in **bold**" in outline
+    assert "The limits and the list of sources keep their fixed headings, unnumbered." in outline
+    assert "conclusion in\n   one sentence, with no label before it." in outline
+    # Principles, not a rulebook: a survey opens on its comparison table, the form follows
+    # the content, and the bold alone carries the findings.
+    assert "the first numbered section sets\n   them side by side in one table" in outline
+    assert "table where the reader compares items across the same\n   measures" in outline
+    assert "so that the bold alone gives the report's findings" in " ".join(outline.split())
+    # Bold goes by what a paragraph holds - names, figures, a short verdict - never by
+    # where a sentence stands, and never on a whole sentence.
+    assert "by\n   what a paragraph holds, not by where it stands" in outline
+    assert "never a whole\n   sentence, the opening one included" in outline
+    assert "paragraph may open with its point as one bold sentence" not in outline
+    for gone in (
+        "<where things stand now>",
+        "not\n   every name the paragraph mentions",
+        "the page sets two to four",
+        "\u7ed3\u8bba",
+        "Conclusion**",
+    ):
+        assert gone not in outline, gone
     for kept in (
         "A number you did not read on a page you opened",
         "Keep each\n   paragraph to one point",
         "no bold label",
+        "`## \u672a\u6838\u9a8c\u9879` in Chinese",
+        "`## \u6765\u6e90` in Chinese",
     ):
         assert kept in outline, kept
-    assert "`**\u98ce\u9669**\uff1a`" in outline and "**\u7ed3\u8bba**\uff1a<the section's conclusion" in outline
-    assert "## \u672a\u6838\u9a8c\u9879\n" in outline and "## \u6765\u6e90\n" in outline
-    # Without the page, the outline names no page and closes with no list of sources.
+    # Without the page, the outline closes with no list of sources.
     bare = render_parts(report_depth=True, report_layout=READER_LAYOUT, report_page=False, report_style="outline")[1]
-    assert "the page sets" not in bare and "## \u6765\u6e90" not in bare and "## \u672a\u6838\u9a8c\u9879\n" in bare
+    assert "`## \u6765\u6e90`" not in bare and "The limits keep their heading unnumbered." in bare
     assert "no heading stands above the body as a\n   whole" in prose and "#` line" not in prose
     assert render_parts(**reader, report_style="prose") == render_parts(**reader)
+
+
+def test_without_limits_the_pages_report_is_the_answer_and_the_body_closing_with_its_sources():
+    reader = {"report_depth": True, "report_layout": READER_LAYOUT, "report_page": True}
+    for style in ("outline", "prose"):
+        bare = render_parts(**reader, report_style=style, report_limits=False)[1]
+        assert "in two parts" in bare and "the report in the two parts above" in bare
+        assert "Limitations" not in bare and "\u672a\u6838\u9a8c\u9879" not in bare
+        assert "Write no section on what could not be verified" in bare
+        assert "`## \u6765\u6e90` in Chinese" in bare and "its limits are" not in bare
+    assert (
+        "The list of sources keeps its fixed heading, unnumbered."
+        in render_parts(**reader, report_style="outline", report_limits=False)[1]
+    )
+    # Only the page's report closes without its limits.
+    off_page = {**reader, "report_page": False}
+    assert render_parts(**off_page, report_limits=False) == render_parts(**off_page)
+
+
+def test_without_limits_the_bar_reminder_and_wrap_up_ask_for_none():
+    report = "> yes\n\n## \u4e00\u3001A\nb\n\n## \u4e8c\u3001B\nc\n\n## Sources\n- [A](https://a.example)\n"
+    bare = ReportShape(report, READER_LAYOUT, True, limits=False)
+    assert bare.well_formed and bare.present == ("Answer", "Findings")
+    # With limits in the contract, the last body section stands in for them, annotated.
+    assert ReportShape(report, READER_LAYOUT, True).annotated == ("Limitations",)
+    assert ReportShape(
+        "> yes\n\n## Sources\n- [A](https://a.example)\n", READER_LAYOUT, True, limits=False
+    ).missing == ("Findings",)
+    reminder = render_reminder("", READER_LAYOUT, True, True, limits=False)
+    assert "in its two parts" in reminder and "`#` title line" in reminder
+    assert "with no section on what could not be verified" in reminder
+    ask = rewrite_prompt(("Answer",), READER_LAYOUT, True, limits=False)
+    assert "in its two\n" in ask or "in its two " in ask
+    assert "closing with the list of the pages" in ask
+    fallback = interrupted_report_fallback("stopped", READER_LAYOUT, "en", limits=False)
+    assert "Limitations" not in fallback and ReportShape(fallback, READER_LAYOUT, True, limits=False).well_formed
 
 
 def test_the_outline_style_touches_only_the_reader_layout():

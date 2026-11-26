@@ -219,6 +219,28 @@ class ForcedFinalizeGate(Gate):
         logger.warning("force-finalize: terminal salvage unavailable; the turn stays answerless")
         return HookDecision(notes=["force_finalize_terminal_failopen"])
 
+    async def wrap_up(self, ctx: GateCtx) -> str | None:
+        """Salvage for a turn cut off by a budget whose wrap-up came back empty.
+
+        That wrap-up's static apology is a non-empty reply, so the turn never
+        reaches ``terminal_answerless``; the loop asks here instead, before it.
+        """
+        state = ctx.metadata.setdefault(
+            "force_finalize",
+            {"empty_hits": 0, "nudges": 0, "synth_failed": 0},
+        )
+        state["wrap_up_hits"] = state.get("wrap_up_hits", 0) + 1
+        salvage = await self._salvage(ctx, self._last_assistant_text(ctx.messages or []))
+        if salvage:
+            state["synthesized"] = True
+            self._mark_committed(state, salvage, "wrap_up")
+            ledger_append({"ts": time.time(), "op": "force_finalize", "event": "salvage", "seam": "wrap_up"})
+            logger.warning("force-finalize: wrap-up salvage committed an answer for an interrupted turn")
+            return salvage
+        state["synth_failed"] += 1
+        logger.warning("force-finalize: wrap-up salvage unavailable; the static reply stands")
+        return None
+
     @staticmethod
     def _last_assistant_text(messages: list[dict]) -> str:
         for m in reversed(messages):

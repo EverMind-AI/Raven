@@ -144,11 +144,22 @@ _REMINDER_READER = (
 )
 _REMINDER_BODY_READER = _REMINDER_READER.format(limits=_READER_LIMITS)
 # The outline style puts the report's `#` title above the answer.
-_UNTITLED_OPENING = "Reply with the report in its three parts:"
-_TITLED_OPENING = "Reply with the report's `#` title line, then the report in its three parts:"
+_UNTITLED_OPENING = "Reply with the report in its "
+_TITLED_OPENING = "Reply with the report's `#` title line, then the report in its "
 _UNTITLED_START = "begin it at the blockquote directly"
 _TITLED_START = "begin it at the `#` title line, the blockquote right under it"
 _REMINDER_BODY_READER_SOURCED = _REMINDER_READER.format(limits=_READER_LIMITS_SOURCED)
+# The page's report without its limits: the answer and the body, the list of sources closing it.
+_READER_SOURCES_ONLY = (
+    "list of the pages the report cites under the last `##` heading (`## Sources` in English, "
+    "`## \u6765\u6e90` in Chinese), with no section on what could not be verified"
+)
+_REMINDER_BODY_READER_NO_LIMITS = (
+    _REMINDER_READER.format(limits=_READER_SOURCES_ONLY)
+    .replace("in its three parts", "in its two parts", 1)
+    .replace("then the body under `##` headings, then the ", "then the body under `##` headings, closing with the ", 1)
+)
+_THIRD_PART_WHERE = "the body"
 
 # Any heading level, any decoration around the name. Every one of these
 # deviations shows up in real replies and none costs the reader anything, so they
@@ -213,7 +224,9 @@ _LEAD_RE = re.compile(r"\s*(?:#[ \t][^\n]*\n)?\s*")
 _QUOTE_RE = re.compile(r"(?:[ \t]{0,3}>[^\n]*(?:\n|\Z))+")
 
 
-def _reader_sections(text: str, sources: bool = False) -> tuple[dict[str, tuple[float, bool, bool]], bool]:
+def _reader_sections(
+    text: str, sources: bool = False, limits: bool = True
+) -> tuple[dict[str, tuple[float, bool, bool]], bool]:
     """Sections found under the reader layout, and whether a ``##`` follows the limits.
 
     With ``sources`` the report closes with its list of sources: a last ``##`` heading
@@ -245,7 +258,8 @@ def _reader_sections(text: str, sources: bool = False) -> tuple[dict[str, tuple[
         if names_sources(last) and not limits_re.search(last):
             closing = level_two.pop()
     above = range((len(heads) if closing is None else closing) - 1, -1, -1)
-    limits_at = next((i for i in above if limits_re.search(labels[i])), None)
+    # Without limits in the contract every ``##`` above the sources is body.
+    limits_at = next((i for i in above if limits_re.search(labels[i])), None) if limits else None
     named = limits_at is not None
     shared = sources and named and not _FIXED_LIMITS_FIRST_RE.match(labels[limits_at])
     if shared:
@@ -256,7 +270,9 @@ def _reader_sections(text: str, sources: bool = False) -> tuple[dict[str, tuple[
     # with no body above it is a body heading that names a limit (export limits, a
     # labour shortfall), since the body comes before the limits.
     body_above = quote_end is not None and bool(heads) and bool(text[quote_end : heads[0][0]].strip())
-    if sources:
+    if not limits:
+        pass
+    elif sources:
         if limits_at is None and not shared and level_two and (len(level_two) >= 2 or body_above):
             limits_at = level_two[-1]
     elif (limits_at is None or (limits_at == 0 and not body_above)) and len(level_two) >= 2:
@@ -284,7 +300,9 @@ def _reader_sections(text: str, sources: bool = False) -> tuple[dict[str, tuple[
     return found, trailing
 
 
-def render_reminder(task: str = "", layout: str = "sections", sources: bool = False, titled: bool = False) -> str:
+def render_reminder(
+    task: str = "", layout: str = "sections", sources: bool = False, titled: bool = False, limits: bool = True
+) -> str:
     """The per-turn reminder block, delimiters included.
 
     ``task`` is this turn's user message. When it carries constraints a parser can settle -
@@ -299,9 +317,12 @@ def render_reminder(task: str = "", layout: str = "sections", sources: bool = Fa
     machine-readable constraints, renders exactly the bytes this function always rendered.
 
     ``sources`` is the reader layout whose report closes with its list of sources, and
-    ``titled`` the outline style, whose report opens with a ``#`` title line.
+    ``titled`` the outline style, whose report opens with a ``#`` title line. Without
+    ``limits`` that report has no section on what could not be verified.
     """
-    if layout == READER_LAYOUT and sources:
+    if layout == READER_LAYOUT and sources and not limits:
+        body = _REMINDER_BODY_READER_NO_LIMITS + render_checklist(task, limits=_THIRD_PART_WHERE)
+    elif layout == READER_LAYOUT and sources:
         body = _REMINDER_BODY_READER_SOURCED + render_checklist(task, limits=_SOURCED_LIMITS_NAME)
     elif layout == READER_LAYOUT:
         body = _REMINDER_BODY_READER + render_checklist(task, limits=_READER_PART_NAMES["Limitations"])
@@ -343,10 +364,11 @@ class ReportShape:
 
     __slots__ = ("present", "missing", "annotated", "off_level", "in_order", "empty")
 
-    def __init__(self, text: str, layout: str = "sections", sources: bool = False) -> None:
+    def __init__(self, text: str, layout: str = "sections", sources: bool = False, limits: bool = True) -> None:
         if layout == READER_LAYOUT:
-            found, trailing = _reader_sections(text or "", sources)
-            self._settle(text, found, trailing)
+            found, trailing = _reader_sections(text or "", sources, limits=limits or not sources)
+            required = REPORT_SECTIONS if limits or not sources else REPORT_SECTIONS[:2]
+            self._settle(text, found, trailing, required)
             return
         found: dict[str, tuple[float, bool, bool]] = {}
         for order, (hashes, body) in enumerate(_HEADING_RE.findall(text or "")):
@@ -368,10 +390,16 @@ class ReportShape:
                     found[name] = (order, label.lower() != name.lower(), len(hashes) != 2)
         self._settle(text, found, False)
 
-    def _settle(self, text: str, found: dict[str, tuple[float, bool, bool]], trailing: bool) -> None:
+    def _settle(
+        self,
+        text: str,
+        found: dict[str, tuple[float, bool, bool]],
+        trailing: bool,
+        required: tuple[str, ...] = REPORT_SECTIONS,
+    ) -> None:
         self.empty = not (text or "").strip()
-        self.present = tuple(n for n in REPORT_SECTIONS if n in found)
-        self.missing = tuple(n for n in REPORT_SECTIONS if n not in found)
+        self.present = tuple(n for n in required if n in found)
+        self.missing = tuple(n for n in required if n not in found)
         self.annotated = tuple(n for n in self.present if found[n][1])
         self.off_level = tuple(n for n in self.present if found[n][2])
         seen = [found[n][0] for n in self.present]
@@ -426,8 +454,15 @@ _REWRITE_PROMPT_READER = (
 
 
 def rewrite_prompt(
-    missing: tuple[str, ...], layout: str = "sections", sources: bool = False, titled: bool = False
+    missing: tuple[str, ...], layout: str = "sections", sources: bool = False, titled: bool = False, limits: bool = True
 ) -> str:
+    if layout == READER_LAYOUT and sources and not limits:
+        text = (
+            _REWRITE_PROMPT_READER.replace("in its three", "in its two", 1)
+            .replace("headings, then the {limits}", "headings, closing with the {limits}", 1)
+            .format(missing=", ".join(_READER_PART_NAMES[n] for n in missing), limits=_READER_SOURCES_ONLY)
+        )
+        return text.replace(_UNTITLED_START, _TITLED_START, 1) if titled else text
     if layout == READER_LAYOUT:
         sourced = {"Limitations": f"{_SOURCED_LIMITS_NAME}, under its fixed heading and no other"}
         names = {**_READER_PART_NAMES, **sourced} if sources else _READER_PART_NAMES
@@ -440,36 +475,45 @@ def rewrite_prompt(
 
 
 def interrupted_report_guidance(
-    task: str, layout: str = "sections", sources: bool = False, titled: bool = False
+    task: str, layout: str = "sections", sources: bool = False, titled: bool = False, limits: bool = True
 ) -> str:
     return (
         "This research turn was interrupted before completion. Give the best-supported "
         "partial answer, preserve source URLs and uncertainty, and state what remains "
         "unfinished. Do not present the partial result as a completed investigation. "
         "Reply in the same language as the user's request.\n\n"
-        f"{render_reminder(task, layout, sources, titled)}"
+        f"{render_reminder(task, layout, sources, titled, limits)}"
     )
 
 
 def interrupted_report_rewrite_prompt(
-    draft: str, layout: str = "sections", sources: bool = False, titled: bool = False
+    draft: str, layout: str = "sections", sources: bool = False, titled: bool = False, limits: bool = True
 ) -> str | None:
-    missing = ReportShape(draft, layout, sources).missing
+    missing = ReportShape(draft, layout, sources, limits).missing
     if not missing:
         return None
     where = (
-        (_SOURCED_LIMITS_NAME if sources else _READER_PART_NAMES["Limitations"])
+        (_THIRD_PART_WHERE if not limits else _SOURCED_LIMITS_NAME if sources else _READER_PART_NAMES["Limitations"])
         if layout == READER_LAYOUT
         else "Limitations"
     )
     return (
-        rewrite_prompt(missing, layout, sources, titled)
-        + f" Keep the interruption and unfinished work explicit under {where}."
+        rewrite_prompt(missing, layout, sources, titled, limits)
+        + f" Keep the interruption and unfinished work explicit {'in' if where == _THIRD_PART_WHERE else 'under'} {where}."
     )
 
 
-def interrupted_report_fallback(reason: str, layout: str = "sections", language: str = "en") -> str:
+def interrupted_report_fallback(
+    reason: str, layout: str = "sections", language: str = "en", limits: bool = True
+) -> str:
     """The reply when nothing better survives. The reader layout's headings are in ``language``."""
+    if layout == READER_LAYOUT and not limits:
+        return (
+            f"> {reason}\n\n"
+            f"## {t_in(language, 'Partial result')}\n"
+            f"{t_in(language, 'The available record could not be summarized into a reliable partial result.')} "
+            f"{t_in(language, 'The research turn ended before the task was complete.')}"
+        )
     if layout == READER_LAYOUT:
         return (
             f"> {reason}\n\n"
@@ -508,11 +552,13 @@ class ReportShapeGate(Gate):
         layout: str = "sections",
         sources: bool = False,
         titled: bool = False,
+        limits: bool = True,
     ) -> None:
         self._closing_tag_required = closing_tag_required
         self._layout = layout
         self._sources = sources
         self._titled = titled
+        self._limits = limits
 
     @property
     def name(self) -> str:
@@ -534,7 +580,7 @@ class ReportShapeGate(Gate):
             # three sections.
             return HookDecision()
 
-        shape = ReportShape(draft, self._layout, self._sources)
+        shape = ReportShape(draft, self._layout, self._sources, self._limits)
         # ``report_shape_gate``, not ``report_shape``: the loop seam records the
         # shape that SHIPPED under the latter, and these are two different facts.
         # Same split the verify gate draws - the delivered verdict is near
@@ -593,7 +639,7 @@ class ReportShapeGate(Gate):
                 {"role": "assistant", "content": draft, "_recovery_synthetic": True},
                 {
                     "role": "user",
-                    "content": rewrite_prompt(shape.missing, self._layout, self._sources, self._titled),
+                    "content": rewrite_prompt(shape.missing, self._layout, self._sources, self._titled, self._limits),
                     "_recovery_synthetic": True,
                 },
             ],

@@ -65,7 +65,9 @@ def test_both_knobs_default_on():
     # deep template changes what the model reads on any arm that opts in. It
     # earns a default flip from a bench round, not from this file; under the
     # launch convention the label is a batch's concern, not this knob's.
-    off_by_design = {"report_bounce", "report_depth"}
+    # ``write_phase`` is off because it spends a second long generation on every
+    # research turn, for a report shape not yet measured against the draft it replaces.
+    off_by_design = {"report_bounce", "report_depth", "write_phase"}
     bools = {
         n: getattr(FinalShapeConfig(), n) for n, f in FinalShapeConfig.model_fields.items() if f.annotation is bool
     }

@@ -88,3 +88,62 @@ def test_the_converge_warning_follows_the_denominator():
     used = 72_000
     assert "budget warning" in _note_for(_CONFIGURED_DEFAULT, used)
     assert "budget warning" not in _note_for(_RESOLVED_WINDOW, used)
+
+
+_TOOLS = [{"function": {"name": name}} for name in ("web_search", "web_fetch", "write_file")]
+
+
+def _offered(obs: BudgetNoteObserver, metadata: dict) -> list[str]:
+    ctx = AgentHookContext(session_key="t", iteration=1, messages=[], tools=list(_TOOLS), metadata=metadata)
+    decision = asyncio.run(obs.before_iteration(ctx))
+    tools = decision.modified_tools if decision.modified_tools is not None else _TOOLS
+    return [t["function"]["name"] for t in tools]
+
+
+def _step(obs: BudgetNoteObserver, iteration: int, metadata: dict) -> str:
+    ctx = AgentHookContext(
+        session_key="t",
+        iteration=iteration,
+        messages=[{"role": "tool", "content": "body"}],
+        response=_Response(1_000),
+        metadata=metadata,
+    )
+    return asyncio.run(obs.after_iteration(ctx)).append_note or ""
+
+
+def test_research_closes_a_set_number_of_iterations_after_the_warning():
+    """One run said "two more searches" from the warning at 48 to the cap at 60."""
+    obs = BudgetNoteObserver(max_iterations=60, context_window_tokens=_RESOLVED_WINDOW, close_after=6)
+    metadata: dict = {}
+    warned = _step(obs, 48, metadata)
+    assert "research closes 6 iterations from now" in warned
+    assert "research is closed" not in _step(obs, 53, metadata)
+    assert _offered(obs, metadata) == ["web_search", "web_fetch", "write_file"]
+    assert "research is closed" in _step(obs, 54, metadata)
+    assert _offered(obs, metadata) == ["write_file"]
+    assert "research is closed" not in _step(obs, 55, metadata), "the closing note is said once"
+
+
+def test_without_a_deadline_the_warning_stays_advisory():
+    obs = BudgetNoteObserver(max_iterations=60, context_window_tokens=_RESOLVED_WINDOW)
+    metadata: dict = {}
+    assert "research closes" not in _step(obs, 48, metadata)
+    _step(obs, 59, metadata)
+    assert _offered(obs, metadata) == ["web_search", "web_fetch", "write_file"]
+
+
+def test_a_reviewers_evidence_round_reopens_closed_research_while_it_lasts():
+    from research_flow.support.evidence_round import EvidenceRound
+
+    rounds = EvidenceRound(searches=1)
+    obs = BudgetNoteObserver(
+        max_iterations=60, context_window_tokens=_RESOLVED_WINDOW, close_after=2, evidence_round=rounds
+    )
+    metadata: dict = {}
+    _step(obs, 48, metadata)
+    _step(obs, 50, metadata)
+    assert _offered(obs, metadata) == ["write_file"]
+    rounds.open()
+    assert _offered(obs, metadata) == ["web_search", "web_fetch", "write_file"]
+    rounds.consume()
+    assert _offered(obs, metadata) == ["write_file"]

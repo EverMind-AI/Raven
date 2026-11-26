@@ -325,6 +325,35 @@ PRODUCT_ONLY_FIELDS: dict[str, str] = {
         "answer judged or escalated to research (gates/plain_first.py). Off as a class "
         "default; the product's base slice turns it on and only the max overlay turns it off"
     ),
+    "budget_note.close_after": (
+        "the converge warning made a deadline: that many iterations after it, web_search "
+        "and web_fetch are withheld for the rest of the turn (gates/budget_note.py). Off as "
+        "a class default; the product's high overlay sets it"
+    ),
+    "force_finalize.wrap_up_reasoning_effort": (
+        "the effort of the loop's wrap-up for a turn cut off by a budget, handed to the "
+        "loop on the turn's synthesis policy. Unset keeps the turn's own effort, as the fork has it"
+    ),
+    "force_finalize.wrap_up_max_tokens": "a cap on that wrap-up's output, unset with it",
+    "force_finalize.wrap_up_salvage": (
+        "the salvage asked for a reply when that wrap-up comes back empty, before the "
+        "loop's static apology. Off as a class default; the product's base slice turns it on"
+    ),
+    "final_shape.write_phase": (
+        "the report as a step of its own: a research turn's first draft is set aside and the "
+        "report asked for again with the tools withdrawn and the report rule repeated "
+        "(gates/write_phase.py). Off as a class default and in the product; an experiment turns it on"
+    ),
+    "final_shape.skim_floor": (
+        "the write step's bold check: a report too few of whose paragraphs bold a name, a figure "
+        "or a few words is asked once for its bold alone (gates/write_phase.py). Off as a class "
+        "default and in the product; an experiment sets a floor"
+    ),
+    "final_shape.limits": (
+        "the page's report can close without its section on what could not be verified: the "
+        "rule asks for none, the shape bar requires none and the page and file drop one. On "
+        "as a class default; the product turns it off"
+    ),
 }
 
 

@@ -127,6 +127,9 @@ class BudgetNoteConfig(_Base):
 
     enabled: bool = True
     warn_ratio: float = 0.8
+    # Iterations after the warning before web_search and web_fetch are withdrawn for
+    # the rest of the turn; None keeps the warning advisory.
+    close_after: int | None = None
 
 
 class ForceFinalizeConfig(_Base):
@@ -142,6 +145,15 @@ class ForceFinalizeConfig(_Base):
     evidence_items: int = 8
     evidence_item_chars: int = 2000
     reasoning_excerpt_chars: int = 8000
+    # The loop's wrap-up for a turn cut off by a budget (the iteration cap, the wall
+    # clock): its reasoning effort and a cap on its output, None keeping the turn's own.
+    # At the turn's high effort one product run's wrap-up spent all 32768 tokens of its
+    # room reasoning over a 110k-token transcript and shipped the loop's static apology.
+    wrap_up_reasoning_effort: str | None = None
+    wrap_up_max_tokens: int | None = None
+    # When the wrap-up still comes back empty, salvage an answer from the evidence
+    # before the static apology.
+    wrap_up_salvage: bool = False
 
 
 class SpinBreakerConfig(_Base):
@@ -266,12 +278,24 @@ class FinalShapeConfig(_Base):
     report_layout: Literal["sections", "reader"] = "sections"
     # The reader layout's style. "prose": sections of paragraphs, lists and tables only for
     # side-by-side items. "outline": the same prose and tables, plus a `#` title, numbered
-    # sections and subsections, a bold conclusion opening each section and lists for
-    # parallel items.
+    # sections and subsections, a conclusion opening each section, bold on the names
+    # and figures a skimming reader looks for, and lists for parallel items.
     report_style: Literal["prose", "outline"] = "prose"
     report_reminder: bool = True
     report_bounce: bool = False
     process_appendix: bool = True
+    # The report as a step of its own: the first draft a research turn writes is set
+    # aside, and the model writes the report again with the tools withdrawn and the
+    # report rule repeated after the research (``WritePhaseGate``).
+    write_phase: bool = False
+    # The write step's bold check: when fewer than this share of the report body's
+    # paragraphs bold a name, a figure or a few words - a whole sentence does not count -
+    # the report is asked once for its bold alone. 0 turns the check off.
+    skim_floor: float = 0.0
+    # The reader layout's closing section on what could not be verified. Off, the report
+    # under the page has no such section: the rule does not ask for it, the shape bar does
+    # not require it, and one the model writes anyway is left out of the file and the page.
+    limits: bool = True
 
     @property
     def effective_layout(self) -> str:
@@ -525,6 +549,17 @@ PRODUCT_SUPERSEDED_PROFILES: dict[str, str] = {
     # the fetch tool labels a reader's page time and reads an arXiv ID's month, so the
     # label moves.
     "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window",
+    # 2026-11-26: in the high mode the converge warning is a deadline - six iterations
+    # after it the search and fetch tools are withdrawn for the turn - and a turn cut
+    # off by a budget wraps up at low effort under a token cap, with a salvage when the
+    # wrap-up comes back empty. The outline style keeps principles only - a conclusion
+    # opening each section, an overview table first when the question surveys several
+    # methods or works, a table, list or prose as the content has that form, bold a
+    # skimming reader can follow - in place of its rulebook and template, and the page's
+    # report drops its limits section and its highlights. A turn that used to
+    # search to the iteration cap now writes earlier, and the report clause changed, so
+    # the label moves.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window-close-skim",
     # The interim label this branch's 2026-09-07 batches ran under before it rebased onto
     # the cite-rank clause and the dr@3.7 rung; never shipped, retired so those bench
     # configs still load.

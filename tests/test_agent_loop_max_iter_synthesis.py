@@ -269,6 +269,44 @@ async def test_product_synthesis_formats_the_static_fallback():
     assert provider.calls[0]["messages"][-1]["content"].endswith("Use three sections.")
 
 
+@pytest.mark.asyncio
+async def test_a_product_sets_the_wrap_ups_effort_and_caps_its_room():
+    """At the turn's high effort one wrap-up reasoned through all of its room and
+    shipped the static apology; the product names the wrap-up's own effort and cap."""
+    provider = _RecordingProvider(response=LLMResponse(content="wrapped up", finish_reason="stop"))
+    synth = _bind_synth(provider)
+    synth.__self__._reply_room = lambda messages, tools, model: 32768
+    policy = TurnSynthesisPolicy(guidance="g", reasoning_effort="low", max_tokens=16384)
+
+    await synth([], "m", None, reasoning_effort="high", synthesis_policy=policy)
+    await synth([], "m", None, reasoning_effort="high", synthesis_policy=TurnSynthesisPolicy(guidance="g"))
+
+    assert (provider.calls[0]["reasoning_effort"], provider.calls[0]["max_tokens"]) == ("low", 16384)
+    assert (provider.calls[1]["reasoning_effort"], provider.calls[1]["max_tokens"]) == ("high", 32768)
+
+
+@pytest.mark.asyncio
+async def test_an_empty_wrap_up_asks_the_products_salvage_before_the_static_reply():
+    provider = _RecordingProvider(response=LLMResponse(content="", finish_reason="length"))
+    synth = _bind_synth(provider, max_iterations=60)
+    seen: list[list[dict]] = []
+
+    async def salvage(messages):
+        seen.append(messages)
+        return "salvaged answer"
+
+    async def nothing(messages):
+        return None
+
+    turn = [{"role": "user", "content": "q"}]
+    saved = await synth(turn, "m", None, synthesis_policy=TurnSynthesisPolicy(guidance="g", salvage=salvage))
+    static = await synth(turn, "m", None, synthesis_policy=TurnSynthesisPolicy(guidance="g", salvage=nothing))
+
+    assert saved == "salvaged answer"
+    assert seen == [turn], "the salvage reads the turn, not the wrap-up instruction"
+    assert static == _MAX_ITER_STATIC_FALLBACK.format(n=60)
+
+
 def test_synthesis_prompt_pins_reply_language():
     """The English nudge must not drag a non-English conversation into English.
 

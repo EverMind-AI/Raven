@@ -314,6 +314,12 @@ TWIN_DRFLOW_PRODUCT_ONLY = {
 }
 
 TWIN_DRFLOW_DIVERGED = {
+    "forceFinalize": (
+        "the trunk product's wrap-up for a turn cut off by the iteration cap runs at low "
+        "effort under a 16384-token cap, with a salvage when it still comes back empty. "
+        "At the turn's high effort one wrap-up spent all 32768 tokens of its room "
+        "reasoning and shipped the loop's static apology. The fork keeps the inherited form"
+    ),
     "sufficiency": (
         "the trunk product raised the judge's budget from 30s/15s to 60s/30s. Every "
         "attempt on a measured batch stalled past 15s and the gate returned no verdict "
@@ -336,7 +342,8 @@ TWIN_DRFLOW_DIVERGED = {
         "is a shape defect, not a depth setting, and it belongs to no tier. Measured at 0 "
         "bounces over 15 turns, so it costs the baseline nothing. The fork ran it off. "
         "It also ships reportLayout=reader, the report in the form a reader receives, "
-        "which the fork's schema does not have"
+        "which the fork's schema does not have, and closes that report with its sources and "
+        "no limits section (limits off), a knob the fork's schema does not have either"
     ),
     "version": (
         "the trunk product's flow now carries the numeric-discipline rule in its deep "
@@ -483,9 +490,9 @@ def test_the_shipped_label_moves_when_the_shipped_prompt_does():
 
     assert (
         shipped["version"]
-        == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window"
+        == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window-close-skim"
     )
-    assert digest == "630e021f92a44a18", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
+    assert digest == "133b14461ac5e61f", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
 
 
 def test_every_retirement_this_product_declares_names_a_label_it_can_load():

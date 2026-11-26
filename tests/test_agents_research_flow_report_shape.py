@@ -516,6 +516,43 @@ async def test_interrupted_turn_receives_the_report_policy(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_the_wrap_up_carries_the_products_effort_cap_and_salvage(tmp_path):
+    from raven.providers.base import LLMResponse
+
+    class Provider:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def chat_with_retry(self, **kwargs):
+            self.calls.append(kwargs)
+            return LLMResponse(
+                content="Best-supported answer, from https://example.org/a",
+                reasoning_content="weighed the evidence",
+                finish_reason="stop",
+            )
+
+    cfg = FlowConfig(enabled=True)
+    cfg.force_finalize.wrap_up_reasoning_effort = "low"
+    cfg.force_finalize.wrap_up_max_tokens = 16384
+    provider = Provider()
+    ctx = AgentHookContext(session_key="cli:t", inbound_content="who founded X?")
+    await ResearchFlowHook(cfg, provider, ToolHandles(), SessionStore(tmp_path)).before_user_inbound(ctx)
+    policy = turn_synthesis(ctx.metadata)
+    assert (policy.reasoning_effort, policy.max_tokens, policy.salvage) == ("low", 16384, None)
+
+    cfg.force_finalize.wrap_up_salvage = True
+    ctx = AgentHookContext(session_key="cli:t", inbound_content="who founded X?")
+    await ResearchFlowHook(cfg, provider, ToolHandles(), SessionStore(tmp_path)).before_user_inbound(ctx)
+    answer = await turn_synthesis(ctx.metadata).salvage(
+        [{"role": "user", "content": "who founded X?"}, {"role": "tool", "name": "web_fetch", "content": "X page"}]
+    )
+
+    assert answer == "Best-supported answer, from https://example.org/a"
+    assert "who founded X?" in provider.calls[0]["messages"][-1]["content"]
+    assert "X page" in provider.calls[0]["messages"][-1]["content"]
+
+
+@pytest.mark.asyncio
 async def test_interrupted_report_policy_follows_the_structure_switch(tmp_path):
     cfg = FlowConfig(enabled=True)
     cfg.final_shape.report_structure = False

@@ -65,7 +65,13 @@ from research_flow.support.report_file import (
     write_text,
 )
 from research_flow.support.report_highlights import select_highlights
-from research_flow.support.report_html import GENERATOR, Highlights, close_with_sources, render_page
+from research_flow.support.report_html import (
+    GENERATOR,
+    Highlights,
+    close_with_sources,
+    fixed_closing,
+    render_page,
+)
 from research_flow.support.report_markdown import (
     list_steps,
     parse_blocks,
@@ -149,15 +155,18 @@ def _without_talk(report: str, draft: str | None) -> tuple[str, int]:
     return "\n".join([*kept, *lines[above:]]).strip(), dropped
 
 
-def tidy(text: str, draft: str | None) -> tuple[str, dict[str, int]]:
+def tidy(text: str, draft: str | None, limits: bool = True) -> tuple[str, dict[str, int]]:
     """``text`` as the report's file and its page hold it, and what was changed.
 
     ``draft`` is the report file as it stood before ``text`` replaces it, or None.
+    Without ``limits`` a section under the fixed limits heading is left out.
     """
+    language = scaffold_language(text)
     text, talk = _without_talk(text, draft)
     text, lists = list_steps(text)
     text, parted = part_numbered_lists(text)
-    text, closing = close_with_sources(text, scaffold_language(text))
+    text, fixed = fixed_closing(text, language, limits)
+    text, closing = close_with_sources(text, language)
     counts: dict[str, int] = {}
     if talk:
         counts["talk_lines"] = talk
@@ -165,6 +174,7 @@ def tidy(text: str, draft: str | None) -> tuple[str, dict[str, int]]:
         counts["step_lists"] = lists
     if parted:
         counts["lists_parted"] = parted
+    counts.update(fixed)
     counts.update(closing)
     return text, counts
 
@@ -176,10 +186,18 @@ def _named(report: str) -> str:
 class ReportPage:
     """Writes the reading page of one flow configuration's reports."""
 
-    def __init__(self, cfg: ReportPageConfig, provider: LLMProvider | None = None, model: str | None = None) -> None:
+    def __init__(
+        self,
+        cfg: ReportPageConfig,
+        provider: LLMProvider | None = None,
+        model: str | None = None,
+        *,
+        limits: bool = True,
+    ) -> None:
         self._cfg = cfg
         self._provider = provider
         self._model = model or cfg.highlights_model
+        self._limits = limits
 
     @property
     def removes_file(self) -> bool:
@@ -229,7 +247,7 @@ class ReportPage:
                 report = held
                 record["follows"] = "file"
             else:
-                report, counts = tidy(report, None)
+                report, counts = tidy(report, None, self._limits)
                 record.update(counts)
                 # The reply stands in for a report file: like one, it leaves out the line that names it.
                 report, _ = file_text(report, str(target))
@@ -252,6 +270,7 @@ class ReportPage:
                 language=scaffold_language(report),
                 highlights=highlights,
                 show_limits=self._cfg.show_limits,
+                limits_last=self._limits,
             )
             write_text(target, page)
         except OSError as exc:
