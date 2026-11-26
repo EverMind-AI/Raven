@@ -283,10 +283,11 @@ def test_a_grouped_effort_option_is_read_and_junk_entries_are_skipped() -> None:
 def _qoder_menus() -> dict:
     """A synthetic pair of ``category: "model"`` entries, effort first.
 
-    The effort-first order is deliberate, not captured: no recorded Qoder
-    handshake fixes the order of its two entries, so this fixture only
-    reproduces the shape in which a positional read would take the effort
-    ladder as the model menu. It is not evidence of what Qoder sends.
+    Every Qoder 1.1.45 handshake captured so far lists ``mode``, ``model``,
+    ``reasoning_effort`` -- model first, effort second -- but that order is not
+    treated as a guarantee. This fixture reverses it deliberately to reproduce
+    the shape in which a positional read would take the effort ladder as the
+    model menu. It is not evidence of what Qoder sends.
     """
     return {
         "configOptions": [
@@ -404,6 +405,68 @@ def test_a_model_menu_whose_label_mentions_effort_is_still_a_model_menu() -> Non
     assert [c.value for c in _read_session_model_choices(labelled)] == ["gpt-x", "gpt-y"]
     assert read_session_current_model(labelled) == "gpt-x"
     assert read_session_effort(labelled) == ("", "", ())
+
+
+@pytest.mark.parametrize("option_id", ["thoughtful-menu", "effortless"])
+def test_a_model_menu_whose_id_contains_effort_as_a_substring_is_still_a_model_menu(option_id: str) -> None:
+    """The id words must be whole segments, not substrings.
+
+    ``thoughtful-menu`` and ``effortless`` are model ids whose spelling happens
+    to contain ``thought`` or ``effort``. Matching the substring skipped the
+    model entry and surfaced its model ids as effort levels, which the same ids
+    did not do before the id-only rule.
+    """
+    shaped = {
+        "configOptions": [
+            {
+                "id": option_id,
+                "name": "Model",
+                "category": "model",
+                "currentValue": "gpt-x",
+                "options": [{"value": "gpt-x"}, {"value": "gpt-y"}],
+            }
+        ]
+    }
+
+    assert [c.value for c in _read_session_model_choices(shaped)] == ["gpt-x", "gpt-y"]
+    assert read_session_current_model(shaped) == "gpt-x"
+    assert read_session_effort(shaped) == ("", "", ())
+
+
+def test_a_name_only_effort_hint_is_not_an_effort_signal() -> None:
+    """The label is not a signal, even when the id carries neither word.
+
+    An entry with id ``reasoning`` and name "Reasoning effort" is deliberately
+    not read as an effort menu: no measured agent has that shape, and reading
+    the name would restore the display-label false positive the id-only rule
+    exists to avoid. Beside a real ``model`` entry the model menu stays intact;
+    on its own the category fallback still takes it as the model menu.
+    """
+    name_only = {
+        "id": "reasoning",
+        "name": "Reasoning effort",
+        "category": "model",
+        "currentValue": "high",
+        "options": [{"value": "high"}, {"value": "max"}, {"value": "none"}],
+    }
+    model = {
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "currentValue": "gpt-x",
+        "options": [{"value": "gpt-x"}],
+    }
+    beside_model = {"configOptions": [name_only, model]}
+
+    assert read_session_effort(beside_model) == ("", "", ())
+    assert [c.value for c in _read_session_model_choices(beside_model)] == ["gpt-x"]
+    assert read_session_current_model(beside_model) == "gpt-x"
+
+    alone = {"configOptions": [name_only]}
+
+    assert read_session_effort(alone) == ("", "", ())
+    assert [c.value for c in _read_session_model_choices(alone)] == ["high", "max", "none"]
+    assert read_session_current_model(alone) == "high"
 
 
 def test_a_mode_menu_of_effort_levels_is_offered_as_reasoning_effort() -> None:

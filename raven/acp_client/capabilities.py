@@ -25,6 +25,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import shutil
 import time
 from collections.abc import Sequence
@@ -891,16 +892,21 @@ def _read_session_models(result: Any) -> tuple[str, ...]:
     return tuple(str(m["modelId"]) for m in models if isinstance(m, dict) and isinstance(m.get("modelId"), str))
 
 
+_ID_SEGMENT = re.compile(r"[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])")
+
+
 def _looks_like_effort(entry: dict[str, Any]) -> bool:
     """Whether an entry's id says it is a reasoning-effort menu.
 
     Only the id is read: it is the machine name (``reasoning_effort``,
     ``thought_level``) and says what the entry is, while the name is a display
     label -- an entry called "Effort-aware model" is still a model menu, so a
-    label is no evidence about the entry's role.
+    label is no evidence about the entry's role. The words count only as whole
+    id segments, not as substrings: ``effortless`` and ``thoughtful-menu`` are
+    model ids that merely happen to contain them.
     """
-    option_id = str(entry.get("id") or "").lower()
-    return "effort" in option_id or "thought" in option_id
+    option_id = str(entry.get("id") or "")
+    return any(segment.lower() in {"effort", "thought"} for segment in _ID_SEGMENT.split(option_id))
 
 
 def _model_option(result: Any) -> dict[str, Any] | None:
