@@ -22,11 +22,9 @@ The table is the four rules Codex uses for the same job
 (``codex-rs/secrets/src/sanitizer.rs``) -- an OpenAI key, an AWS access key id,
 a bearer token, and an assignment to a name that says secret -- plus one rule
 Codex does not carry: PEM-armoured private key material. It is not one rule per
-credential vendor: a vendor prefix is matched only when the prefix alone
-identifies the value, and only for the two vendors that rule covers. Everything
-else that carries a secret reaches this table through its label -- which is why
-an ``aws_secret_access_key`` line and a ``~/.raven/beta.json`` token are caught
-without either being named here.
+credential vendor; a vendor prefix is matched only when the prefix alone
+identifies the value, and only for the two vendors those rules cover. Everything
+else reaches this table through its label.
 
 ``pem`` is the fifth rule and the only place this table goes beyond Codex. It is
 structural rather than a vendor enumeration: a PEM block's opening delimiter is a
@@ -113,12 +111,9 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 # Redacting a very large string costs real time on a streaming path, and the
-# strings that reach :func:`redact` are titles, previews and messages -- not file
-# bodies. Past the cap the text is truncated rather than scanned, because a
-# half-scanned string is worse than an honestly shortened one. Tool results do
-# not go through this cap: they have their own ceiling (1,000,000 characters)
-# and :func:`redact_tool_result` scans them whole, so this one cannot silently
-# cut a legitimate read short.
+# strings that reach here are titles, previews and messages -- not file bodies.
+# Past the cap the text is truncated rather than scanned, because a half-scanned
+# string is worse than an honestly shortened one.
 MAX_SCAN_CHARS = 256 * 1024
 
 # At a known cut, a token may be too short for the ordinary patterns or have
@@ -178,7 +173,7 @@ def _redact_cut_tail(text: str) -> str:
     the match a search of the whole text finds. ``re.sub`` over the whole text
     retries every position instead, and a tail pattern's value runs to the end, so
     each retry before the final run walks on to the character that stops it:
-    64,000 characters of ``token=`` ending in a comma take 10.8 seconds. A regex
+    64,000 characters of ``pwd=`` ending in a comma take 10.8 seconds. A regex
     search for where that run starts retries every position too, 32 seconds for
     31,000 spaces before the last two words of a failure.
     """
@@ -186,13 +181,6 @@ def _redact_cut_tail(text: str) -> str:
         found = pattern.search(text, _tail_search_start(text, value))
         if found is not None:
             text = text[: found.start()] + found.group(1) + REPLACEMENT
-    return text
-
-
-def _scrub(text: str) -> str:
-    """Every pattern applied to ``text`` whole. The caller owns its size."""
-    for _, pattern in _PATTERNS:
-        text = pattern.sub(lambda m: m.group(1) + REPLACEMENT, text)
     return text
 
 
@@ -212,7 +200,8 @@ def redact(text: str, *, truncated: bool = False) -> str:
         text = text[:MAX_SCAN_CHARS]
     if truncated or scan_cut:
         text = _redact_cut_tail(text)
-    text = _scrub(text)
+    for _, pattern in _PATTERNS:
+        text = pattern.sub(lambda m: m.group(1) + REPLACEMENT, text)
     if scan_cut:
         text += "\n[truncated before scanning for credentials]"
     return text
@@ -276,15 +265,26 @@ def _argument_strings(arguments: Any, *, depth: int = 0) -> list[str]:
     return [] if arguments is None else [str(arguments)]
 
 
+#: The subdirectories of Raven's home a coding turn reads its own source from.
+#: Exempt from the home-config pass. Not a claim that the rest of the home holds
+#: no source-shaped text: it is the set known to hold source a turn edits, and a
+#: new directory of that kind has to be added here when one appears. The
+#: neighbours that are left out are each left out on purpose, with the reason in
+#: :func:`_home_config`: ``bridge`` (a compiled install of the shipped bridge, not
+#: the user's tree), ``traces`` and ``telemetry`` (written by the tracing and usage
+#: code), ``subagent_sessions`` (per-product runtime state), ``playbooks`` (which
+#: resolves under ``workspace`` by default and so is covered by the first entry).
+_OWN_SOURCE_DIRS = ("workspace", "tmp", "plugins", "agents")
+
 # Raven's own token files name their credentials with words that mean nothing on
 # their own: ``save_token`` writes ``asdict(MiniMaxOAuthToken)``, whose fields are
 # ``access`` and ``refresh``. Adding those two names to ``_PATTERNS`` would be the
 # cheap fix and the wrong one -- it rewrites "refresh the page" and "access the
-# network" in every tool result. So this pair is fenced twice over: the call must
-# have reached Raven's OAuth directory (below), and the value must look like a
-# token rather than a word -- sixteen characters or more, no whitespace, no
-# quote. Both conditions together are what the label patterns cannot express for
-# a name this ordinary.
+# network" in every tool result, a coding turn's included. So this pair is fenced
+# twice over: the call must have reached Raven's OAuth directory (below), and the
+# value must look like a token rather than a word -- sixteen characters or more,
+# no whitespace, no quote. Both conditions together are what the label patterns
+# cannot express for a name this ordinary.
 _OAUTH_TOKEN_FIELD = re.compile(r'("(?:access|refresh)"\s*:\s*")([^\s"\\]{16,})')
 
 
@@ -322,9 +322,12 @@ def _own_oauth_store() -> re.Pattern[str]:
     (``RAVEN_HOME`` elsewhere) has no abbreviation to add and is matched by its
     absolute path alone, which is the only spelling a call can use for it.
 
-    This is the only path check left in this module. The pattern table is applied
-    to every tool result regardless of path, so there is no "which directories
-    count as credentials" list to keep current.
+    This is a second resolver beside :func:`_home_config`, not the same one: that
+    one answers "is this any program's dot-directory of the home", this one "is
+    this Raven's token store". They share ``raven_home()`` through
+    ``home.oauth_home`` -- the one definition the config shelf's ``oauth_dir``
+    also answers with -- and are asserted together wherever a change could make
+    one wider than the other.
     """
     from raven.home import oauth_home
 
@@ -359,33 +362,107 @@ def _redact_oauth_store(text: str) -> str:
     return _OAUTH_TOKEN_FIELD.sub(lambda m: m.group(1) + REPLACEMENT, text)
 
 
-def redact_tool_result(arguments: Any, text: str) -> str:
-    """``text`` from a tool call, with every recognised credential replaced.
+def _home_config() -> re.Pattern[str]:
+    """A path into a dot-directory of the home, Raven's own source directories excepted.
 
-    The pattern table runs on every tool result, whatever path the call named.
-    That is the point: the alternative is a list of directories that hold
-    credentials, and such a list fails silently -- a credential file it does not
-    name reaches the model in plaintext, and no test goes red. A list was tried
-    and dropped for that reason (``~/.raven/beta.json``, whose ``token`` field is
-    a deploy token, was in the gap).
+    Raven's home holds four directories a coding turn reads its own source from:
+    the default workspace and the channels' scratch directories, the user plugin
+    directory (``plugins``, ``raven/core/plugin_stack.py``) and the installed
+    vendored agents (``agents``,
+    ``raven/agent/subagent/vendored_agents.py``). Rewriting ``token = ...`` lines
+    in that source breaks every edit built from them, so those four stay exempt.
+    They are the set known to hold source a turn edits, not a survey of the home:
+    a directory that starts holding such source has to join ``_OWN_SOURCE_DIRS``,
+    which is why that list is not called exhaustive. The neighbours measured when
+    this list was narrowed are outside it on purpose:
 
-    What the unconditional pass costs is the ability to read a file that
-    contains a label-shaped line -- ``token = self.get_token(request)`` in a
-    project's source, for instance -- without that line being rewritten. With
-    four patterns and an eight-character floor the false-positive surface is
-    small, and it is the price of not maintaining a list.
+    * ``bridge`` -- the WhatsApp bridge as installed under the home
+      (``raven/config/paths.py``:``get_bridge_install_dir``), a copy of the
+      shipped ``bridge/`` built by ``_build_bridge`` (``shutil.copytree`` then
+      ``npm install`` and ``tsc``). It does hold source-shaped text, and the
+      ``private token: string`` annotation in its ``src/server.ts`` is rewritten
+      to ``private token: [redacted]`` by this pass -- a known cost, taken
+      because it is a build the next ``ensure_bridge_dir`` replaces, not a tree a
+      turn's edit belongs in. Its credentials are not in there: the bridge token
+      and the Baileys auth state are siblings, under ``whatsapp-auth``.
+    * ``traces`` (``raven/tracing/config.py``) and ``telemetry``
+      (``raven/token_wise/usage_tracker.py``) -- written by the tracing and usage
+      code, never read back as source.
+    * ``subagent_sessions`` (``raven/config/product_render.py``) -- per-product
+      runtime state: rendered config, ``TOOLS.md``, ``agent_memory``, caches.
+    * ``cache`` (``raven/sandbox/compat_bin.py``, ``raven/providers/codex_client_version.py``)
+      and ``runtime`` (``raven/cli/tui_commands.py``, a node install) -- build and
+      download caches, regenerated rather than edited.
+    * ``playbooks`` -- the user layer resolves to ``<workspace>/playbooks``
+      (``raven/rpc/methods/playbooks.py``) unless ``playbooks.dir`` overrides it,
+      so the default is already inside the first entry; an override elsewhere in
+      the home was never covered by this pass and is not a directory name this
+      list can exempt without also exempting ``bridge``-style build output.
 
-    The one path-sensitive pass left is Raven's own OAuth store, for the token
-    fields whose names (``access``, ``refresh``) are ordinary words: see
+    The home and the four names are compared in the host's terms
+    (:func:`_host_paths`): on Windows either slash separates and case is
+    ignored, so ``C:\\Users\\a\\.raven\\Workspace`` is the ``workspace`` directory; on POSIX
+    ``/`` separates and ``Workspace`` is not ``workspace``. Either way a name
+    ends at a separator, a quote or the end, so ``pluginsfoo`` is not exempt.
+    Before the name, separators may repeat and ``.`` segments may sit between
+    them: the arguments are matched as the call wrote them, no caller
+    normalizes them first, and ``.raven//workspace`` is the same directory.
+
+    The OAuth token store (``oauth/<provider>/...``) is deliberately not among
+    them: it holds no source to edit, and a read of it is a credential file like
+    another program's settings, so it loses its tokens to this pass —
+    :func:`redact_home_config_read` additionally applies
+    :data:`_OAUTH_TOKEN_FIELD` there, for the token fields whose names are
+    ordinary words.
+
+    Why the store is not left to the pass that already existed: from #833 until
+    this change the whole of Raven's home was exempt here, on the argument that
+    Raven's own keys are taken out by the exact-match pass over ``config.json``
+    (``raven/config/held_secrets.py``). That pass reads ``config.json`` only, and
+    it finds a credential by the name on it -- ``api_key``, ``token``, ``secret``.
+    ``access`` and ``refresh``, which is what ``save_token`` writes, are ordinary
+    English words and name nothing, so nothing caught the token files at all. The
+    argument held for the keys it was about and never held for the store, which is
+    why the exemption is now this list instead of the whole home.
+    """
+    from raven.home import raven_home
+
+    style = _path_style()
+    flavour, sep, flags = _host_paths(style)
+    home_dir = flavour(os.path.expanduser("~"))
+    home = _spelled(home_dir, sep) if len(home_dir.parts) > 1 else re.escape(home_dir.anchor.rstrip("/\\"))
+    own = flavour(str(raven_home()))
+    skip = ""
+    if own.parent == home_dir and own.name.startswith("."):
+        name = re.escape(own.name[1:])
+        boundary = r"(?:/|\\|$|[\"'\s])"
+        lead = sep if style == _WINDOWS else "/+"
+        lead += r"(?:\." + lead + r")*"
+        source = r"(?:" + lead + r"(?:" + "|".join(_OWN_SOURCE_DIRS) + r"))" + boundary
+        skip = r"(?!" + name + r"(?:" + source + r"|(?:$|[\"'\s])))"
+    return re.compile(r"(?:~|\$HOME|\$\{HOME\}|" + home + r")" + sep + r"\." + skip + r"[A-Za-z0-9_-]", flags)
+
+
+def redact_home_config_read(arguments: Any, text: str) -> str:
+    """``text`` redacted when the call that produced it reached into a dot-directory of the home.
+
+    Another program's settings (``~/.qwen/settings.json``, ``~/.openclaw``,
+    ``~/.aws``) hold its keys, and a turn diagnosing that program reads them
+    whole more often than it is told not to -- measured, a model asked to
+    connect an agent ran ``read_file`` on its settings and read its key back.
+    Only those calls: the patterns here would also rewrite placeholders in a
+    project's source and tests, which a coding turn then fails to edit.
+
+    Raven's own OAuth store is the one place a second pass runs, for the token
+    fields whose names (``access``, ``refresh``) are ordinary words -- see
     :data:`_OAUTH_TOKEN_FIELD`. It is gated on the read reaching that directory,
-    so it costs nothing anywhere else, and prose is safe for a reason narrower
-    than the gate: the field shape is required (a quoted ``access`` or
-    ``refresh``, a colon, then sixteen characters with no space or quote), so a
-    sentence saying "refresh the page" is untouched, while a passage that quotes
-    a token sample is rewritten with the rest of the passage intact.
-
-    ``text`` is scanned whole rather than through :data:`MAX_SCAN_CHARS`: a tool
-    result may legitimately be a megabyte, and that cap exists for ACP frames.
+    so it costs nothing anywhere else. Prose is safe for a reason narrower than
+    that: the field shape is required (a quoted ``access`` or ``refresh``, a colon,
+    then sixteen characters with no space or quote), so a sentence saying "refresh
+    the page" is untouched, while a passage that quotes a token sample -- a note
+    explaining the file format, with ``"refresh": "<40 hex>"`` in it -- is rewritten
+    with the rest of the passage intact. The gate is on the path, not on whether
+    the text is prose.
     """
     if not text:
         return text
@@ -393,15 +470,17 @@ def redact_tool_result(arguments: Any, text: str) -> str:
     store = _own_oauth_store()
     if any(store.search(value) for value in strings):
         text = _redact_oauth_store(text)
-    return _scrub(text)
+    config = _home_config()
+    return redact(text) if any(config.search(value) for value in strings) else text
 
 
 # A mapping key that names its value a secret. The structure carries the label
 # here, which a per-string pass cannot see: in ``{"AWS_SECRET_ACCESS_KEY": "wJal..."}``
 # the value on its own is indistinguishable from a hash. This is the ``mcpServers``
-# ``env`` dict channel, which is one of the reasons this module exists. The same
-# five names as ``named-secret``, for the same reason it has them.
-_SECRET_KEY = re.compile(r"(?:api[_-]?key|token|secret|password|access[_-]?key)", re.IGNORECASE)
+# ``env`` dict channel, which is one of the reasons this module exists.
+_SECRET_KEY = re.compile(
+    r"(?:api[_-]?key|secret|token|password|passwd|pwd|credential|private[_-]?key|access[_-]?key|auth)", re.IGNORECASE
+)
 
 
 def redact_value(value: Any, *, depth: int = 0) -> Any:
@@ -437,4 +516,4 @@ def pattern_names() -> tuple[str, ...]:
     return tuple(name for name, _ in _PATTERNS)
 
 
-__all__ = ["MAX_SCAN_CHARS", "REPLACEMENT", "pattern_names", "redact", "redact_tool_result", "redact_value"]
+__all__ = ["MAX_SCAN_CHARS", "REPLACEMENT", "pattern_names", "redact", "redact_value"]

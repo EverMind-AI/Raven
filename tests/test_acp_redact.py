@@ -187,12 +187,25 @@ class TestWhatItCatches:
         assert "AWS_SECRET_ACCESS_KEY" in result["env"], "the key stays; the reader needs to know what was set"
 
     def test_a_key_that_names_a_token_redacts_its_value(self):
-        """No ``auth`` rule means docker's ``identitytoken`` is the one field of
-        that file still caught, and it is caught because its name ends in
-        ``token``."""
+        """Docker's ``identitytoken`` is caught because its name ends in
+        ``token``, which the mapping-key table matches."""
         result = redact_value({"identitytoken": "abc-token-value-0123456789"})
 
         assert result["identitytoken"] == REPLACEMENT
+
+    @pytest.mark.parametrize("key", ["auth", "credential", "private_key"])
+    def test_a_structured_credential_key_is_redacted(self, key):
+        """The mapping-key table stays wider than the pattern table on purpose.
+
+        A key is a name, not prose, so ``auth``, ``credential`` and
+        ``private_key`` name a value that must go even though the text rules no
+        longer treat those words as secret labels. Dropping them let a
+        structured ``{"headers": {"Authorization": ...}, "credential": ...}``
+        payload publish its values to ``rawInput`` in plaintext.
+        """
+        result = redact_value({key: "plain-value-not-shaped-like-a-secret"})
+
+        assert result[key] == REPLACEMENT
 
     def test_a_secret_named_key_holding_a_structure_is_still_walked(self):
         """Replacing a whole subtree would lose the shape the client asked for,

@@ -20,7 +20,7 @@ from loguru import logger
 
 from raven.config.loader import get_config_path
 from raven.config.self_surface import is_secret_path, read_raw, url_credentials
-from raven.security.redact import redact_tool_result
+from raven.security.redact import redact_home_config_read
 
 #: Shorter strings are too likely to be ordinary text ("true", a port). Six,
 #: not eight: a mailbox password (``hunter2``) is a credential too.
@@ -159,15 +159,12 @@ def scrub_held_value(value: Any) -> Any:
 def scrub_tool_output(arguments: Any, text: str) -> str:
     """A tool result with the credentials it could carry taken out.
 
-    The exact-match pass runs first: it knows the value Raven itself holds, so it
-    can say *where* the credential came from (``[redacted: providers...apiKey]``),
-    which a pattern cannot. The pattern pass then cleans up whatever the known
-    values did not name, and it runs on every result whatever path the call
-    named -- a list of directories fails silently, so there is none. Every loop
-    that hands a tool result to a model -- the main turn and a sub-agent's -- goes
-    through this, so neither is the one that forgot.
+    A read of a dotfile config under home loses its key values, and any value
+    Raven itself holds is replaced by where it is kept. Every loop that hands a
+    tool result to a model -- the main turn and a sub-agent's -- goes through
+    this, so neither is the one that forgot.
     """
-    return redact_tool_result(arguments, scrub_held_secrets(text))
+    return scrub_held_secrets(redact_home_config_read(arguments, text))
 
 
 def scrub_tool_blocks(arguments: Any, blocks: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
