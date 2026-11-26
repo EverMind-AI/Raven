@@ -53,6 +53,7 @@ from typing import TYPE_CHECKING, Any, Sequence
 
 from raven.config.raven import PRUNE_LINE_MAX_CHARS
 from raven.context_engine.history_trimmer import _group_index, _tool_parents
+from raven.context_engine.runtime_context import WIRE_CONTENT_FIELD
 from raven.session.refs import session_ref
 from raven.utils.refs import SourceRef
 from raven.utils.tokens import estimate_message_tokens
@@ -208,6 +209,10 @@ class ToolResultPruner:
                 ref = session_ref(revision, index)
                 replaced = dict(message)
                 replaced["content"] = self._record_line(message, call_by_result.get(index), ref)
+                # The replay prefers the wire form; it stood for the body just
+                # replaced, so it goes with the body. Scaffolding after the row
+                # still rides the record line.
+                replaced.pop(WIRE_CONTENT_FIELD, None)
             elif index in arg_targets:
                 ref = session_ref(revision, index)
                 replaced = self._with_shortened_args(message, ref)

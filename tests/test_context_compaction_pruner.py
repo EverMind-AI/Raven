@@ -90,6 +90,23 @@ class TestTheReplacement:
         assert ref == SourceRef("session", SCOPE, 2, 2)
         assert out.refs == (ref,)
 
+    def test_a_pruned_body_takes_its_wire_form_with_it(self) -> None:
+        """The replay prefers the wire form; leaving it behind sends the body
+        the pruner just replaced. The scaffolding after the row still rides it."""
+        messages = _session(("c1", "exec", BIG))
+        messages[2]["wire_content"] = BIG
+        messages[2]["wire_after"] = [{"role": "user", "content": "nudge"}]
+
+        out = _prune(messages)
+
+        assert "wire_content" not in out.messages[2]
+        assert out.messages[2]["wire_after"] == [{"role": "user", "content": "nudge"}]
+        replayed = HistoryTrimmer.history_from_ids(out.messages, [2])
+        assert [message["content"] for message in replayed] == [
+            out.messages[2]["content"],
+            "nudge",
+        ]
+
     def test_the_line_names_the_tool_and_the_size_of_what_it_replaced(self) -> None:
         out = _prune(_session(("c1", "grep", BIG), arguments={"pattern": "refreshToken"}))
 
