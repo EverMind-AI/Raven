@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from raven.context_engine.runtime_context import replayed_content
+from raven.context_engine.runtime_context import PROVIDER_MESSAGE_KEYS, WIRE_AFTER_FIELD, replayed_content
 from raven.contracts.llm_provider import LLMProvider
 from raven.providers.binding import ModelBinding, active_window, resolve
 from raven.providers.capabilities import replay_gates
@@ -36,15 +36,7 @@ from raven.utils.tokens import estimate_prompt_tokens_chain, reuse_prompt_tokeni
 # the dict reaches the LLM. reasoning_content / thinking_blocks must survive
 # so multi-turn reasoning contracts (e.g. DeepSeek thinking mode) hold; the
 # provider gate strips thinking_blocks for non-Anthropic targets downstream.
-_ALLOWED_KEYS = {
-    "role",
-    "content",
-    "tool_calls",
-    "tool_call_id",
-    "name",
-    "reasoning_content",
-    "thinking_blocks",
-}
+_ALLOWED_KEYS = set(PROVIDER_MESSAGE_KEYS)
 
 STORED_MID_TURN_KEY = "mid_turn"
 """The mark the session write leaves on an arrival the reader typed mid-turn.
@@ -198,6 +190,9 @@ class HistoryTrimmer:
                 if messages[mid].get(STORED_MID_TURN_KEY):
                     clean[STORED_MID_TURN_KEY] = True
                 history.append(clean)
+                for extra in messages[mid].get(WIRE_AFTER_FIELD) or ():
+                    if isinstance(extra, dict) and extra.get("role"):
+                        history.append({key: value for key, value in extra.items() if key in _ALLOWED_KEYS})
         return history
 
     @staticmethod

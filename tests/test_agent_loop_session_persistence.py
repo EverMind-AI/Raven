@@ -584,3 +584,120 @@ def test_an_image_question_keeps_its_placeholder_when_the_turn_closes(tmp_path):
         {"type": "text", "text": "what is this?"},
         {"type": "text", "text": "[image]"},
     ], "the closing write rewrote the question as text"
+
+
+def test_a_hook_rewrite_is_replayed_as_sent_while_history_keeps_the_words(tmp_path):
+    """The model saw the hook's memo; a later turn has to see it again.
+
+    The display content stays the user's words, so readers never draw the
+    memo as something the user typed. The sent body is filed beside it and the
+    history projection joins it back.
+    """
+    from raven.agent.context import ContextBuilder
+    from raven.context_engine.history_trimmer import HistoryTrimmer
+
+    loop = _loop(tmp_path, _ScriptedProvider([_text("unused")]))
+    session = loop.sessions.get_or_create("cli:c")
+    tag = ContextBuilder._RUNTIME_CONTEXT_TAG
+    lines = f"{tag}\nCurrent Time: now"
+    sent = "a memo the hook added\n\nwhat the user typed"
+    question = {"role": "user", "content": f"{lines}\n\n{sent}", "_runtime_context": lines}
+
+    loop._save_turn(session, [question], 0, inbound_original="what the user typed")
+    loop.sessions.save(session)
+    rows = _filed(loop.sessions.session_path("cli:c"))
+
+    assert rows[0]["content"] == "what the user typed"
+    assert rows[0]["wire_content"] == sent
+    [replayed] = HistoryTrimmer.history_from_ids(rows, [0])
+    assert replayed["content"] == f"{lines}\n\n{sent}"
+
+
+def test_an_attachment_note_is_replayed_as_sent(tmp_path):
+    """The note names the file for the model; dropping it loses the path too."""
+    from raven.agent.context import ContextBuilder
+    from raven.context_engine.history_trimmer import HistoryTrimmer
+
+    loop = _loop(tmp_path, _ScriptedProvider([_text("unused")]))
+    session = loop.sessions.get_or_create("cli:c")
+    tag = ContextBuilder._RUNTIME_CONTEXT_TAG
+    lines = f"{tag}\nCurrent Time: now"
+    sent = "summarize this\n\n[Attachment: notes.txt (path: /tmp/notes.txt)]"
+    question = {"role": "user", "content": f"{lines}\n\n{sent}", "_runtime_context": lines}
+
+    loop._save_turn(session, [question], 0, inbound_original="summarize this")
+    loop.sessions.save(session)
+    rows = _filed(loop.sessions.session_path("cli:c"))
+
+    assert rows[0]["content"] == "summarize this"
+    assert rows[0]["wire_content"] == sent
+    [replayed] = HistoryTrimmer.history_from_ids(rows, [0])
+    assert replayed["content"] == f"{lines}\n\n{sent}"
+
+
+def test_a_withdrawn_note_keeps_the_sent_wording_for_replay(tmp_path):
+    """The live note says why the picture left; the filed note is only the facts.
+
+    The display row keeps the filed wording, and the replay keeps the wording
+    the turn sent, so the prefix does not change under the provider.
+    """
+    from raven.agent.window.images import filed_image_note, withdrawn_image_note
+    from raven.context_engine.runtime_context import replayed_content
+
+    loop = _loop(tmp_path, _ScriptedProvider([_text("unused")]))
+    session = loop.sessions.get_or_create("cli:c")
+    picture = {
+        "role": "tool",
+        "tool_call_id": "c1",
+        "name": "screenshot",
+        "content": [
+            {"type": "text", "text": "the window"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        ],
+    }
+    after = {"role": "assistant", "content": "done"}
+    loop._save_turn(session, [picture, after], 0, final=False)
+    loop.sessions.save(session)
+
+    note = withdrawn_image_note(
+        {"caption": "the window", "tool": "screenshot", "iteration": 1},
+        index=1,
+        total=1,
+        reason="budget",
+        keep=0,
+    )
+    picture["content"][-1] = {"type": "text", "text": note}
+    loop._save_turn(session, [picture, after], len(session.messages), final=False)
+    loop.sessions.save(session)
+
+    row = next(r for r in _filed(loop.sessions.session_path("cli:c")) if r.get("tool_call_id") == "c1")
+    assert row["content"][-1]["text"] == filed_image_note(note)
+    assert row["wire_content"][-1]["text"] == note
+    replayed = replayed_content(row)
+    assert replayed[-1]["text"] == note
+    assert "outgrew" in replayed[-1]["text"], "the live reason did not survive replay"
+
+
+def test_recovery_scaffolding_replays_after_the_row_it_followed(tmp_path):
+    """The model saw the placeholder and the nudge; the next turn has to see them too.
+
+    They stay out of the display rows, and ride the kept row they followed.
+    """
+    from raven.context_engine.history_trimmer import HistoryTrimmer
+
+    loop = _loop(tmp_path, _ScriptedProvider([_text("unused")]))
+    session = loop.sessions.get_or_create("cli:c")
+    tool = {"role": "tool", "tool_call_id": "c1", "name": "t", "content": "result"}
+    placeholder = {"role": "assistant", "content": "(empty)", "_recovery_synthetic": True}
+    nudge = {"role": "user", "content": "nudge", "_recovery_synthetic": True}
+    answer = {"role": "assistant", "content": "done"}
+
+    loop._save_turn(session, [tool, placeholder, nudge, answer], 0)
+    loop.sessions.save(session)
+    rows = _filed(loop.sessions.session_path("cli:c"))
+
+    assert [r["content"] for r in rows if r.get("role") == "tool"] == ["result"]
+    assert not any(r.get("content") in ("(empty)", "nudge") for r in rows)
+    assert [r["content"] for r in rows[0]["wire_after"]] == ["(empty)", "nudge"]
+    replayed = HistoryTrimmer.history_from_ids(session.messages, list(range(len(session.messages))))
+    assert [m["content"] for m in replayed] == ["result", "(empty)", "nudge", "done"]

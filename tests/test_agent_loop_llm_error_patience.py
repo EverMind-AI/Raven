@@ -10,6 +10,7 @@ giving the turn up, and the messages it asks with are the ones it asked with bef
 
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -1156,10 +1157,13 @@ async def test_the_tool_result_transport_stamps_the_same_provenance(workspace):
 
 
 @pytest.mark.asyncio
-async def test_a_note_on_the_tool_result_transport_is_filed_with_its_facts_only(workspace):
-    """The tool message survives the turn on this transport, so the note it carries
-    is filed: which picture, which tool, which round -- not why it left this turn or
-    how to ask for it again, which a resumed session would read as current."""
+async def test_a_note_on_the_tool_result_transport_files_facts_and_the_sent_wording(workspace):
+    """The display row keeps the facts; the wire form keeps what the turn sent.
+
+    A resumed session must not read this turn's reasons as current, so the
+    display note is facts-only. The provider still has to see the wording it was
+    sent with, so that form is filed beside it and replayed.
+    """
     provider = _ShowsThenRefuses()
     agent = _agent(workspace, provider, delays=(0.0,))
     agent._image_tool_result_ok["stub"] = True
@@ -1174,10 +1178,21 @@ async def test_a_note_on_the_tool_result_transport_is_filed_with_its_facts_only(
     )
     assert live.endswith("ask page_render for it again]")
 
-    persisted = " ".join(p.read_text(encoding="utf-8") for p in (workspace / "sessions").rglob("*.jsonl"))
-    assert "from page_render at iteration 1.]" in persisted and "Page 7 of 20: the claim" in persisted
-    assert "refused this request" not in persisted and "To see it again" not in persisted
-    assert "_image_sources" not in persisted
+    rows = [
+        json.loads(line)
+        for path in (workspace / "sessions").rglob("*.jsonl")
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    rows = [row for row in rows if row.get("_type") != "metadata"]
+    filed = next(row for row in rows if row.get("role") == "tool" and row.get("wire_content"))
+    display = filed["content"][1]["text"]
+
+    assert display.startswith('[image no longer in context: "Page 7 of 20: the claim" from page_render at iteration 1.')
+    assert display.endswith("from page_render at iteration 1.]")
+    assert "refused this request" not in display and "To see it again" not in display
+    assert filed["wire_content"][1]["text"] == live
+    assert "_image_sources" not in json.dumps(rows)
 
 
 @pytest.mark.parametrize(

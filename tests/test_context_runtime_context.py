@@ -816,3 +816,51 @@ class TestAPluginNameKeysItsOwnLine:
         assert header == TOOL_HEADER
         assert notice_key(cleared) == ("tool", "web_search")
         assert "available again" in cleared
+
+
+class TestTheWireForm:
+    """The form a row was sent in, filed beside the form a reader sees."""
+
+    def test_a_wire_content_is_replayed_instead_of_the_display_words(self) -> None:
+        stored = [
+            {
+                "role": "user",
+                "content": "the user's words",
+                "wire_content": "the user's words\n\n[Attachment: notes.txt]",
+                RUNTIME_CONTEXT_FIELD: _LINES,
+            }
+        ]
+
+        [replayed] = HistoryTrimmer.history_from_ids(stored, [0])
+
+        assert replayed["content"] == with_runtime_context(_LINES, "the user's words\n\n[Attachment: notes.txt]")
+
+    def test_wire_after_rows_follow_the_row_that_carried_them(self) -> None:
+        stored = [
+            {
+                "role": "tool",
+                "tool_call_id": "c1",
+                "name": "t",
+                "content": "result",
+                "wire_after": [
+                    {"role": "assistant", "content": "(empty)"},
+                    {"role": "user", "content": "nudge"},
+                ],
+            }
+        ]
+
+        replayed = HistoryTrimmer.history_from_ids(stored, [0])
+
+        assert [message["content"] for message in replayed] == ["result", "(empty)", "nudge"]
+
+    def test_the_token_estimate_counts_the_wire_content(self) -> None:
+        plain = {"role": "user", "content": "short", RUNTIME_CONTEXT_FIELD: _LINES}
+        wire = {**plain, "wire_content": "a longer body " * 50}
+
+        assert estimate_message_tokens(wire) > estimate_message_tokens(plain)
+
+    def test_the_token_estimate_counts_wire_after_rows(self) -> None:
+        plain = {"role": "tool", "content": "result"}
+        wire = {**plain, "wire_after": [{"role": "user", "content": "nudge " * 50}]}
+
+        assert estimate_message_tokens(wire) > estimate_message_tokens(plain)

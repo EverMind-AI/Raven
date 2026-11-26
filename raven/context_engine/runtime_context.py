@@ -31,6 +31,41 @@ allowlist of keys). ``_save_turn`` pops it, so it never reaches the session.
 RUNTIME_CONTEXT_FIELD = "runtime_context"
 """The same lines as the session entry stores them, beside the user's words."""
 
+WIRE_CONTENT_FIELD = "wire_content"
+"""The body a user or tool row was sent with, when the display content differs.
+
+``content`` keeps what a reader sees (the user's words, the filed image note);
+this keeps the body the model received (an attachment note, a hook rewrite, the
+live withdrawn-picture note, a tool body the save cap would shorten). The
+history projection replays it instead of ``content``.
+"""
+
+WIRE_AFTER_FIELD = "wire_after"
+"""Provider-safe rows a recovery appended after a kept row.
+
+The empty placeholder, the nudge, the continuation: the model was shown them,
+but they are scaffolding and never become display rows. They ride the kept row
+they followed and the history projection inserts them back in place.
+"""
+
+PROVIDER_MESSAGE_KEYS = frozenset(
+    {
+        "role",
+        "content",
+        "tool_calls",
+        "tool_call_id",
+        "name",
+        "reasoning_content",
+        "thinking_blocks",
+    }
+)
+"""The keys a provider payload keeps; the wire rows are already this shape."""
+
+
+def provider_row(message: dict[str, Any]) -> dict[str, Any]:
+    """``message`` reduced to the keys a provider payload carries."""
+    return {key: value for key, value in message.items() if key in PROVIDER_MESSAGE_KEYS}
+
 
 def with_runtime_context(lines: str, content: Any) -> Any:
     """``content`` opened with ``lines``, in the shape the content already has."""
@@ -65,15 +100,17 @@ def replayed_content(
     can_see_images: bool = True,
     tool_images_ok: bool = True,
 ) -> Any:
-    """The content ``message`` was sent with, as far as its filed lines go.
+    """The content ``message`` was sent with, as far as its filed forms go.
 
-    A user entry filed before the field existed, and every other entry, comes
-    back as it is. Archived pictures are expanded only when the receiving model
-    and transport can take them, which is the same verdict the live assembly
-    applied to the message they came from.
+    A wire form filed beside the display content wins when present; an entry
+    filed before the field existed, and every other entry, comes back as its
+    display content. Archived pictures are expanded only when the receiving
+    model and transport can take them, which is the same verdict the live
+    assembly applied to the message they came from.
     """
+    wire = message.get(WIRE_CONTENT_FIELD)
     content = expand_images(
-        message.get("content"),
+        message.get("content") if wire is None else wire,
         message,
         can_see_images=can_see_images,
         tool_images_ok=tool_images_ok,
