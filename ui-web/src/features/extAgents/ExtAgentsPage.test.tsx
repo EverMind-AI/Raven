@@ -426,6 +426,10 @@ describe('the Mirasim family card', () => {
     const { acts } = install(all)
     await mount()
     await click(family())
+    /* The drawer is a settings-list sheet, which is what page.css sizes to its
+       content; it says what it is for on the line under its name. */
+    expect(sheet()!.className).toContain('extAgents-sheet-list')
+    expect(sheet()!.querySelector('.extAgents-maker')!.textContent).toBe('gui.agent.fam_lead')
     const go = pickNamed('codex-Mirasim').querySelector<HTMLButtonElement>('.extAgents-pickgo')!
     expect(go.textContent).toBe('gui.agent.unauthorized')
     expect(go.disabled).toBe(true)

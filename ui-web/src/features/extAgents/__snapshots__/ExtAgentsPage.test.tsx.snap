@@ -82,7 +82,7 @@ div.extAgents-grid
 
 exports[`the sheet > keeps its rendered shape, sheet 1`] = `
 "div
-  div.extAgents-sheet.extAgents-sheet-agent
+  div.extAgents-sheet.extAgents-sheet-list.extAgents-sheet-agent
     div.extAgents-head
       span.extAgents-tile
         span.agent-mark

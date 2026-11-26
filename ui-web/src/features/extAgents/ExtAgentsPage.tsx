@@ -909,7 +909,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
   const by = byOf(row)
   const strip = <StatusStrip actions={actions} note={note} row={row} s={lineState} shown={shownOf(row, lineState)} />
   return createPortal(
-    <div className="extAgents-sheet extAgents-sheet-agent" aria-label={row.name} role="document">
+    <div className="extAgents-sheet extAgents-sheet-list extAgents-sheet-agent" aria-label={row.name} role="document">
       <div className="extAgents-head">
         <Tile row={row} />
         <div className="extAgents-meta">
@@ -1153,14 +1153,14 @@ function FamilyPicker({ family, s }: { family: string; s: ExtAgentsState }): JSX
   const dHost = store.detailHost()
   const members = ordered(s.rows.filter((row) => familyOf(row) === family && !row.configured))
   return createPortal(
-    <div className="extAgents-sheet" aria-label={t('gui.agent.fam_mirasim')} role="document">
+    <div className="extAgents-sheet extAgents-sheet-list extAgents-sheet-family" aria-label={t('gui.agent.fam_mirasim')} role="document">
       <div className="extAgents-head">
         <span className="extAgents-tile">
           <AgentMark preset={MIRASIM_GROUP} />
         </span>
         <div className="extAgents-meta">
           <h3>{t('gui.agent.fam_mirasim')}</h3>
-          <div className="extAgents-by">{t('gui.agent.fam_lead')}</div>
+          <div className="extAgents-maker">{t('gui.agent.fam_lead')}</div>
         </div>
       </div>
       <div className="extAgents-body">

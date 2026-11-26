@@ -365,20 +365,20 @@
    end. */
 .extAgents-act { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 9px; padding: 14px 20px 18px; border-top: 1px solid var(--line-soft); }
 
-/* ── the agent's sheet: a settings list ─────────────────────────────
+/* ── the settings-list sheets: an agent's own, and the family picker ──
 
    Framed groups on a ground a shade off the paper, so the groups -- white,
    like every field -- read as the things to touch. Reading and typing
    surfaces stay neutral; colour is spent on the state alone. The machine
-   sheets and the family picker share the drawer and keep the plain ground
-   and the action bar above. */
-.extAgents-sheet-agent { background: color-mix(in srgb, var(--text) 3.2%, var(--ink)); }
+   sheets share the drawer and keep the plain ground and the action bar
+   above. */
+.extAgents-sheet-list { background: color-mix(in srgb, var(--text) 3.2%, var(--ink)); }
 .extAgents-maker { font-size: 12px; color: var(--faint); margin-top: 2px; }
-.extAgents-sheet-agent .extAgents-body { display: flex; flex-direction: column; gap: 16px; padding: 18px 20px 20px; }
+.extAgents-sheet-list .extAgents-body { display: flex; flex-direction: column; gap: 16px; padding: 18px 20px 20px; }
 /* The column's gap is the spacing; the margins the fields carry for the
    other sheets would add to it. */
-.extAgents-sheet-agent .extAgents-body > *,
-.extAgents-sheet-agent .extAgents-body > .extAgents-about + .extAgents-fld { margin-top: 0; margin-bottom: 0; }
+.extAgents-sheet-list .extAgents-body > *,
+.extAgents-sheet-list .extAgents-body > .extAgents-about + .extAgents-fld { margin-top: 0; margin-bottom: 0; }
 
 /* The status strip: the state, how the last test went, and the presses that
    change it. Tinted by the state; the note takes its place when there is
@@ -426,8 +426,9 @@
 .extAgents-hint { display: block; margin: 6px 0 0 2px; font-size: 11.5px; line-height: 1.5; color: var(--faint); }
 
 /* How it runs: one group, one row per setting, the label at the left and the
-   control taking the rest. The model pill has no frame of its own here -- the
-   group is the frame -- and shows one under the pointer and while open. */
+   control taking the rest. The model pill keeps its own frame, as the select
+   and the rungs below it do: unset, its value is grey text, and framed only by
+   the group it read as a line of text rather than something to press. */
 .extAgents-grp { background: var(--paper); border: 1px solid var(--line-soft); border-radius: 12px; }
 .extAgents-grp:empty { display: none; }
 .extAgents-grp > .extAgents-fld {
@@ -437,9 +438,13 @@
 /* `~`, not `+`: the open model picker is drawn between two rows. */
 .extAgents-grp > .extAgents-fld ~ .extAgents-fld { margin-top: 0; border-top: 1px solid var(--line-soft); }
 .extAgents-grp > .extAgents-fld > .extAgents-k { flex: none; width: 76px; margin: 0; font-size: 13px; color: var(--text); }
-.extAgents-grp .extAgents-pill { flex: 1; width: auto; min-width: 0; border-color: transparent; background: none; }
-.extAgents-grp .extAgents-pill:hover { border-color: transparent; background: color-mix(in srgb, var(--text) 4%, transparent); }
-.extAgents-grp .extAgents-mx { background: none; }
+.extAgents-grp .extAgents-pill { flex: 1; width: auto; min-width: 0; }
+/* The model row ends in its re-read; the controls in the other rows stop where
+   the pill stops (the button's 28px and the row's 12px column gap), so the
+   framed controls of the group share one right edge. */
+.extAgents-grp:has(.extAgents-mrf) > .extAgents-fld:not(:has(.extAgents-mrf)) > .extAgents-in,
+.extAgents-grp:has(.extAgents-mrf) > .extAgents-fld:not(:has(.extAgents-mrf)) > .extAgents-rungs,
+.extAgents-grp:has(.extAgents-mrf) > .extAgents-fld:not(:has(.extAgents-mrf)) > .keyfield { margin-right: 40px; }
 .extAgents-grp > .extAgents-fld > .extAgents-in, .extAgents-grp .extAgents-fld .keyfield { flex: 1; width: auto; min-width: 0; }
 /* What sits under a control lines up with the control, past the label. */
 .extAgents-grp .extAgents-mnote, .extAgents-grp > .extAgents-fld > .extAgents-about { flex-basis: 100%; margin: 0 0 4px 88px; }
@@ -632,6 +637,48 @@
 /* Wide enough for the pending face, ring and all, in either language, so the
    press that starts a connect does not shove the pill out of its column. */
 .extAgents-pickgo { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 90px; }
+
+/* In the settings-list drawer the members are one white group, a hairline
+   between rows, as the agent sheet's settings are. The pill keeps its own
+   frame: beside a member's name its unset value is grey text, and without
+   the frame it no longer read as something to press. `~`, not `+`: an open
+   picker is drawn between two rows. `clip`, not `hidden`, for the corners: `hidden` makes the group a
+   scroll container, whose flex minimum is zero, so a drawer at its height
+   ceiling squeezed the group instead of scrolling the body -- the rows
+   overlapped in a narrow window and the last ones were cut off in a short
+   one. */
+.extAgents-sheet-family .extAgents-picklist {
+  gap: 0; flex-shrink: 0; background: var(--paper); border: 1px solid var(--line-soft); border-radius: 12px; overflow: clip;
+}
+.extAgents-sheet-family .extAgents-pickrow { border: 0; border-radius: 0; padding: 9px 10px 9px 14px; min-height: 58px; }
+.extAgents-sheet-family .extAgents-pickrow ~ .extAgents-pickrow { border-top: 1px solid var(--line-soft); }
+.extAgents-sheet-family .extAgents-pickrow:hover { background: color-mix(in srgb, var(--text) 2.5%, var(--paper)); }
+
+/* The frame a field draws in the settings-list sheets. In the dark theme a
+   field and the white group it sits in are both --paper, so the frame is all
+   that marks a field, and the theme's --line -- a shade off that ground --
+   read as no frame at all. The light theme keeps its --line. */
+.extAgents-sheet-list {
+  --extAgents-edge: var(--line);
+  --extAgents-edge-hi: color-mix(in oklab, var(--line) 50%, var(--muted));
+}
+:root[data-theme="dark"] .extAgents-sheet-list {
+  --extAgents-edge: color-mix(in oklab, var(--line) 60%, var(--muted));
+  --extAgents-edge-hi: color-mix(in oklab, var(--line) 30%, var(--muted));
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .extAgents-sheet-list {
+    --extAgents-edge: color-mix(in oklab, var(--line) 60%, var(--muted));
+    --extAgents-edge-hi: color-mix(in oklab, var(--line) 30%, var(--muted));
+  }
+}
+/* `:where` holds these to the pill's own one class, after its rules, so its
+   open, focused and busy states -- which name it with more -- still win. A
+   pill with nothing to pick has no frame, and keeps none. */
+:where(.extAgents-sheet-list) .extAgents-pill:where(:not(.extAgents-pill-fixed)) { border-color: var(--extAgents-edge); }
+:where(.extAgents-sheet-list) .extAgents-pill:where(:not(.extAgents-pill-fixed)):hover { border-color: var(--extAgents-edge-hi); }
+:where(.extAgents-sheet-list) .extAgents-pill-busy:hover { border-color: var(--extAgents-edge); }
+:where(.extAgents-grp) > .extAgents-fld > .extAgents-in { border-color: var(--extAgents-edge); }
 
 @media (max-width: 560px) {
   .extAgents-pickrow { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; row-gap: 8px; }

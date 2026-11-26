@@ -142,22 +142,27 @@ function DetailPanel(): JSX.Element {
   useScrim('detail', detail.close)
   const panel = useRef<HTMLDivElement>(null)
   const body = useRef<HTMLDivElement>(null)
-  /* The agent sheet is as tall as its content, and its content moves while it
-     is read -- a test fails and a note arrives, a description grows a line --
-     so it glides to the new height (lib/glide.ts). Only that card for now: the
-     other owners are fixed boxes, or cards nobody has asked to move. A fresh
-     open, or another owner's card, starts at its own height; another agent's
-     sheet opened over this one glides like any other change. */
+  /* The agents' settings-list sheets are as tall as their content, and it
+     moves while it is read -- a test fails and a note arrives, a description
+     grows a line, a member the family picker connected leaves its list -- so
+     the panel glides to the new height (lib/glide.ts). The agents owner only:
+     its machine sheets are fixed boxes and never change height, and the other
+     owners' cards are ones nobody has asked to move. A fresh open, or another
+     owner's card, starts at its own height; another sheet opened over this
+     one glides like any other change. */
   useEffect(() => {
     if (!panel.current || !body.current) return
     const g = glide(panel.current, body.current, () => {
       const d = detail.get()
       return d.open && d.owner === 'extAgents'
     })
+    /* Settled on an open, not on a close: a connect in the family picker
+       drops its row and then closes the drawer, and settling there cut the
+       glide the dropped row had started into a jump at the top of the fade. */
     let seen = detail.get()
     const off = detail.subscribe(() => {
       const d = detail.get()
-      if (d.gen !== seen.gen || d.open !== seen.open || d.owner !== seen.owner) g.settle()
+      if (d.gen !== seen.gen || (d.open && !seen.open) || d.owner !== seen.owner) g.settle()
       seen = d
     })
     return () => {
