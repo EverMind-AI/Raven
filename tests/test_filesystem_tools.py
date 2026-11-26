@@ -289,6 +289,10 @@ async def test_a_file_url_that_cannot_be_parsed_names_no_local_path(tmp_path: Pa
     assert "-- try" not in answer, f"no local path may be named: {answer}"
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="a colon cannot appear in a Windows directory name, so the file: hazard cannot exist there",
+)
 @pytest.mark.asyncio
 async def test_a_file_url_whose_spelling_resolves_is_still_refused_by_scheme(tmp_path: Path):
     """A URL's own spelling can reach a real file, and the answer must not read it.

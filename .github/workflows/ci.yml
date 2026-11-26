@@ -407,6 +407,14 @@ jobs:
           tests/test_ops_connection_add.py::test_ssh_defaults_is_empty_when_ssh_cannot_answer
           -q -n 0 --tb=short
 
+      # The file tools force their Windows branches by patching the converter,
+      # so the ubuntu shards run them against a substitute. Here the converter
+      # is the platform's own, and a path it hands back is a real one.
+      - name: Test the file tools on Windows
+        run: >-
+          uv run --frozen --python 3.13 --no-sync pytest tests/test_filesystem_tools.py
+          -q -n 0 --tb=short
+
       - name: Test ACP handshakes and bundled launchers
         run: uv run --frozen --python 3.13 --no-sync pytest tests/integration/test_acp_stdio_smoke.py -m integration -q -n 0 --tb=short
 
