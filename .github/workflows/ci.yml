@@ -430,6 +430,13 @@ jobs:
       - name: Test Windows ACP teardown
         run: uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_acp.py -k close_without_killpg -q -n 0 --tb=short
 
+      # The composer's drop detector runs on the host the terminal runs on, so
+      # its file-URI and path candidates are Windows-shaped there. The cases
+      # that were not portable have been fixed or marked POSIX-only, which
+      # leaves a file the ubuntu shards cannot judge: this runs it on Windows.
+      - name: Test the composer's path detection on Windows
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_rpc_input.py -q -n 0 --tb=short
+
       # The launcher digest is a Windows rule, and the ubuntu shards cannot
       # measure it: they fake os.name, which leaves os.path on posixpath,
       # where a drive-letter path is neither absolute nor directory-named.
