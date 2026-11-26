@@ -130,6 +130,21 @@ def home(tmp_path: Path, monkeypatch) -> Path:
     return tmp_path / "home"
 
 
+def _write_workspace_config(workspace: Path) -> None:
+    """Name an explicit workspace in this home's config file.
+
+    The launch-directory check reads the config file itself rather than going
+    through ``load_config``, so patching the loader pins nothing. The value is
+    meant to differ from the default ``<home>/workspace``: a reader that ignored
+    the file would fall back to that default rather than to this.
+    """
+    from raven.config.loader import get_config_path
+
+    path = get_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"agents": {"defaults": {"workspace": str(workspace)}}}), encoding="utf-8")
+
+
 class TestTheStateFileFollowsTheAgentHome:
     """`raven web` finds the engine through this file, so where it lands has to
     be the one answer the rest of raven gives. Read inline, `RAVEN_HOME` was
@@ -1137,13 +1152,10 @@ class TestTheSupervisor:
         lock comes back as serve, and serve cannot root sessions in this
         directory. A check made once, before the loop, would leave that second
         launch unguarded."""
-        from types import SimpleNamespace
-
-        home.mkdir(parents=True, exist_ok=True)
-        monkeypatch.chdir(home.parent)
-        monkeypatch.setattr(
-            "raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=home / "workspace")
-        )
+        workspace = home / "projects" / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        _write_workspace_config(workspace)
+        monkeypatch.chdir(workspace.parent)
         launches = iter([(["engine"], "gateway"), (["engine"], "gateway"), (["engine"], "serve")])
         monkeypatch.setattr(serve_commands, "_gateway_launch", lambda _port: next(launches))
         argv = self._run(monkeypatch, [1])
@@ -1514,14 +1526,13 @@ class TestTheSupervisor:
         self, home: Path, monkeypatch, capsys, call: str
     ) -> None:
         import subprocess
-        from types import SimpleNamespace
 
         monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda *_a, **_k: None)
         monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: True)
-        monkeypatch.chdir(home.parent)
-        monkeypatch.setattr(
-            "raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=home / "workspace")
-        )
+        workspace = home / "projects" / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        _write_workspace_config(workspace)
+        monkeypatch.chdir(workspace.parent)
         spawned: list[list[str]] = []
         monkeypatch.setattr(subprocess, "Popen", lambda argv, **_k: spawned.append(list(argv)))
 
@@ -1563,13 +1574,11 @@ class TestTheChosenSurface:
         assert f"raven {verb}" in out and cost in out
 
     def test_standalone_serve_refuses_the_same_directory(self, home: Path, monkeypatch, capsys) -> None:
-        from types import SimpleNamespace
-
         monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda *_a, **_k: None)
-        monkeypatch.chdir(home.parent)
-        monkeypatch.setattr(
-            "raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=home / "workspace")
-        )
+        workspace = home / "projects" / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        _write_workspace_config(workspace)
+        monkeypatch.chdir(workspace.parent)
         ran: list[object] = []
         monkeypatch.setattr(serve_commands.bounded_asyncio, "run", lambda coro: ran.append(coro) or coro.close())
 
@@ -1628,13 +1637,11 @@ class TestTheChosenSurface:
         reached web.log. The parent makes the same decision first, before
         anything is spawned."""
         import time
-        from types import SimpleNamespace
 
-        home.mkdir(parents=True, exist_ok=True)
-        monkeypatch.chdir(home.parent)
-        monkeypatch.setattr(
-            "raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=home / "workspace")
-        )
+        workspace = home / "projects" / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        _write_workspace_config(workspace)
+        monkeypatch.chdir(workspace.parent)
         monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: True)
         monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
         monkeypatch.setattr(serve_commands, "_read_web_state", lambda: None)
@@ -1661,13 +1668,10 @@ class TestTheChosenSurface:
         """The launch-directory rule is serve's, not the parent's. A gateway
         groups sessions by channel and may run from anywhere; refusing it here
         would take the page away from the only engine with the adapters."""
-        from types import SimpleNamespace
-
         home.mkdir(parents=True, exist_ok=True)
+        # No workspace is configured, so ``home.parent`` contains the default
+        # ``<home>/workspace``: this only passes if the rule is not applied here.
         monkeypatch.chdir(home.parent)
-        monkeypatch.setattr(
-            "raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=home / "workspace")
-        )
         monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: False)
         monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
         monkeypatch.setattr(serve_commands, "_read_web_state", lambda: None)
@@ -1685,12 +1689,8 @@ class TestTheChosenSurface:
         so a supervisor that stopped writing it would silently stop saying
         which one the page is on."""
         import subprocess
-        from types import SimpleNamespace
 
         home.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setattr(
-            "raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=home / "workspace")
-        )
         monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: True)
         seen: list[str] = []
 
@@ -1719,14 +1719,13 @@ class TestTheChosenSurface:
         directory inside the store the dispatch writes to, which is the case
         this check exists for."""
         import subprocess
-        from types import SimpleNamespace
 
-        workspace = home / "workspace"
+        workspace = home / "projects" / "workspace"
         (workspace / "sessions" / "project" / "chat").mkdir(parents=True)
         monkeypatch.chdir(workspace / "sessions" / "project" / "chat")
         monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda *_a, **_k: None)
         monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: True)
-        monkeypatch.setattr("raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=workspace))
+        _write_workspace_config(workspace)
         monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: pytest.fail("spawned from the sessions store"))
 
         with pytest.raises(typer.Exit) as exit_info:
