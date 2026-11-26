@@ -327,6 +327,22 @@ export class StylePool {
     this.selectionBgCode = bg
     this.selectionBgCache.clear()
   }
+  /**
+   * Optional foreground the selection paints over the cell's own one.
+   * Set when a palette needs the highlight to stay readable whatever the
+   * selected text was (the 16-color tier, where a muted foreground would
+   * otherwise sink into the highlight); null → the cell keeps its own
+   * foreground, which is what the higher tiers do.
+   */
+  private selectionFgCode: AnsiCode | null = null
+  setSelectionFg(fg: AnsiCode | null): void {
+    if (this.selectionFgCode?.code === fg?.code) {
+      return
+    }
+
+    this.selectionFgCode = fg
+    this.selectionBgCache.clear()
+  }
   withSelectionBg(baseId: number): number {
     const bg = this.selectionBgCode
 
@@ -340,6 +356,18 @@ export class StylePool {
       // Keep everything except bg (49m) and inverse (27m). Fg, bold, dim,
       // italic, underline, strikethrough all preserved.
       const kept = this.get(baseId).filter(c => c.endCode !== '\x1b[49m' && c.endCode !== '\x1b[27m')
+
+      if (this.selectionFgCode) {
+        // Drop the cell's own fg (39m) so the selection fg replaces it
+        // instead of stacking on top of it.
+        for (let i = kept.length - 1; i >= 0; i--) {
+          if (kept[i]!.endCode === '\x1b[39m') {
+            kept.splice(i, 1)
+          }
+        }
+
+        kept.push(this.selectionFgCode)
+      }
 
       kept.push(bg)
       id = this.intern(kept)

@@ -43,6 +43,11 @@ export function useSelection(): {
    *  replaces the old SGR-7 inverse so syntax highlighting stays readable
    *  under selection). Call once on mount + whenever theme changes. */
   setSelectionBgColor: (color: string) => void
+  /** Set the selection highlight fg color (theme-piping). Replaces the fg
+   *  of every selected cell so the highlight stays readable; an empty color
+   *  leaves each cell with its own fg. Call once on mount + whenever the
+   *  theme changes. */
+  setSelectionFgColor: (color: string) => void
   /** Monotonic counter incremented on every selection mutation. */
   version: () => number
 } {
@@ -69,6 +74,7 @@ export function useSelection(): {
         moveFocus: () => {},
         captureScrolledRows: () => {},
         setSelectionBgColor: () => {},
+        setSelectionFgColor: () => {},
         version: () => 0
       }
     }
@@ -85,6 +91,7 @@ export function useSelection(): {
       moveFocus: (move: FocusMove) => ink.moveSelectionFocus(move),
       captureScrolledRows: (firstRow, lastRow, side) => ink.captureScrolledRows(firstRow, lastRow, side),
       setSelectionBgColor: (color: string) => ink.setSelectionBgColor(color),
+      setSelectionFgColor: (color: string) => ink.setSelectionFgColor(color),
       version: () => ink.getSelectionVersion()
     }
   }, [ink])

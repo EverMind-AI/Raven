@@ -441,6 +441,88 @@ describe('reduced color tiers keep their curated surfaces', () => {
   })
 })
 
+describe('16-color selection', () => {
+  // The xterm default palette — the ANSI colors a terminal starts from.
+  // A terminal may override them, but these are the numbers the selection
+  // contrast is measured against.
+  const XTERM_16 = {
+    black: '#000000',
+    red: '#cd0000',
+    green: '#00cd00',
+    yellow: '#cdcd00',
+    blue: '#0000ee',
+    magenta: '#cd00cd',
+    cyan: '#00cdcd',
+    white: '#e5e5e5',
+    blackBright: '#7f7f7f',
+    redBright: '#ff0000',
+    greenBright: '#00ff00',
+    yellowBright: '#ffff00',
+    blueBright: '#5c5cff',
+    magentaBright: '#ff00ff',
+    cyanBright: '#00ffff',
+    whiteBright: '#ffffff'
+  } as const
+
+  const ansiHex = (token: string): string => {
+    const hex = XTERM_16[token.replace('ansi:', '') as keyof typeof XTERM_16]
+
+    if (!hex) {
+      throw new Error(`not a 16-color token: ${token}`)
+    }
+
+    return hex
+  }
+
+  const relativeLuminance = (hex: string): number => {
+    const channel = (value: number) => {
+      const c = value / 255
+
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+    }
+
+    const [r, g, b] = [1, 3, 5].map(i => channel(parseInt(hex.slice(i, i + 2), 16)))
+
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!
+  }
+
+  const contrastRatio = (a: string, b: string): number => {
+    const [high, low] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x)
+
+    return (high! + 0.05) / (low! + 0.05)
+  }
+
+  it('keeps the highlight off the foreground roles it covers', async () => {
+    const { resolveTheme } = await importThemeWithCleanEnv()
+    const c = resolveTheme('dark', 1).color
+
+    expect(c.selectionBg).not.toBe(c.muted)
+    expect(c.selectionBg).not.toBe(c.label)
+    expect(c.selectionBg).not.toBe(c.text)
+  })
+
+  it('draws selected text over the highlight at a contrast the tier can hold', async () => {
+    const { resolveTheme } = await importThemeWithCleanEnv()
+
+    for (const scheme of ['dark', 'light'] as const) {
+      const c = resolveTheme(scheme, 1).color
+
+      expect(c.selectionFg).not.toBe('')
+      // Dark: black on cyan = 10.6:1. Light: black on bright magenta = 6.7:1.
+      expect(contrastRatio(ansiHex(c.selectionFg), ansiHex(c.selectionBg))).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  it('leaves the higher tiers their own foreground under the highlight', async () => {
+    const { resolveTheme } = await importThemeWithCleanEnv()
+
+    for (const tier of [0, 2, 3] as const) {
+      expect(resolveTheme('dark', tier).color.selectionFg).toBe('')
+      expect(resolveTheme('light', tier).color.selectionFg).toBe('')
+    }
+  })
+})
+
 describe('fromSkin', () => {
   // `fromSkin` closes over DEFAULT_THEME (which is env-derived), so we
   // must dynamic-import it after sterilizing env — otherwise an ambient

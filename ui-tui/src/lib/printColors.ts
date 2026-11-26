@@ -37,6 +37,12 @@ export function renderColorSwatches(theme: Theme, tier: 0 | 1 | 2 | 3): string {
   for (const role of roles) {
     const value = theme.color[role]
     const label = role.padEnd(labelWidth)
+
+    if (!value) {
+      lines.push(`  ${label}  (unset)`)
+      continue
+    }
+
     const swatch = colorize('████████', value, 'foreground')
     lines.push(`  ${label}  ${swatch}  ${value}`)
   }
@@ -118,7 +124,9 @@ export function renderColorPreview(theme: Theme, tier: 0 | 1 | 2 | 3): string {
   out.push('  ' + fgbg(' /clear   ', c.text, c.completionBg) + fgbg(' reset session ', c.muted, c.completionMetaBg))
 
   section('Selection')
-  out.push('  ' + fg('normal ', c.text) + fgbg('selected text', c.text, c.selectionBg) + fg(' normal', c.text))
+  out.push(
+    '  ' + fg('normal ', c.text) + fgbg('selected text', c.selectionFg || c.text, c.selectionBg) + fg(' normal', c.text)
+  )
 
   section('Session box (border / sessionLabel / sessionBorder)')
   out.push('  ' + fg('╭────────────────────────────╮', c.sessionBorder))
