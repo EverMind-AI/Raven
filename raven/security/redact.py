@@ -379,12 +379,14 @@ def _home_config() -> re.Pattern[str]:
     * ``bridge`` -- the WhatsApp bridge as installed under the home
       (``raven/config/paths.py``:``get_bridge_install_dir``), a copy of the
       shipped ``bridge/`` built by ``_build_bridge`` (``shutil.copytree`` then
-      ``npm install`` and ``tsc``). It does hold source-shaped text, and the
-      ``private token: string`` annotation in its ``src/server.ts`` is rewritten
-      to ``private token: [redacted]`` by this pass -- a known cost, taken
-      because it is a build the next ``ensure_bridge_dir`` replaces, not a tree a
-      turn's edit belongs in. Its credentials are not in there: the bridge token
-      and the Baileys auth state are siblings, under ``whatsapp-auth``.
+      ``npm install`` and ``tsc``). It does hold source-shaped text, but the
+      ``private token: string`` annotation in its ``src/server.ts`` survives this
+      pass: ``string`` is six characters, below the table's eight-character
+      floor. The directory stays outside the exemption -- it is a build the next
+      ``ensure_bridge_dir`` replaces, not a tree a turn's edit belongs in -- so a
+      credential-shaped value in the same tree still loses its value. Its
+      credentials are not in there: the bridge token and the Baileys auth state
+      are siblings, under ``whatsapp-auth``.
     * ``traces`` (``raven/tracing/config.py``) and ``telemetry``
       (``raven/token_wise/usage_tracker.py``) -- written by the tracing and usage
       code, never read back as source.
