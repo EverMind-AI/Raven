@@ -443,88 +443,97 @@ async def _iter_sse(
         buffer.append(line)
 
 
-async def _consume_sse(
-    response: httpx.Response,
-    timeout: float,
-    *,
-    usage_sink: dict[str, Any] | None = None,
-    first_byte: float = 0.0,
-) -> tuple[str, list[ToolCallRequest], str]:
-    content = ""
-    refusal = ""
-    tool_calls: list[ToolCallRequest] = []
-    tool_call_buffers: dict[str, dict[str, Any]] = {}
-    # What a stream that closes without a terminal event keeps: nothing here said
-    # how the response ended, so it must not read as a finished one.
-    finish_reason = "unknown"
+class _ResponsesStreamState:
+    """One Responses SSE body, assembled event by event.
 
-    async for event in _iter_sse(response, timeout, first_byte):
+    ``feed`` keeps what one event contributes and answers the text a streaming
+    reader may show as it arrives -- the reply's deltas and a refusal's, which
+    ``chat`` only ever sees folded together. ``result`` is what ``chat`` needs
+    once the body ends. Both readers share this state so the streamed and
+    non-streamed paths cannot disagree on tool calls, usage or the finish
+    reason.
+    """
+
+    def __init__(self, usage_sink: dict[str, Any] | None = None) -> None:
+        self._usage_sink = usage_sink
+        self.content = ""
+        self.refusal = ""
+        self.tool_calls: list[ToolCallRequest] = []
+        self._tool_call_buffers: dict[str, dict[str, Any]] = {}
+        # What a stream that closes without a terminal event keeps: nothing here
+        # said how the response ended, so it must not read as a finished one.
+        self.finish_reason = "unknown"
+
+    def feed(self, event: dict[str, Any]) -> tuple[str | None, str | None]:
+        """Take one event; answer the (text, refusal) a reader may show now."""
         raw_usage = (event.get("response") or {}).get("usage")
-        if usage_sink is not None and isinstance(raw_usage, dict):
-            usage_sink.update(merge_usage(usage_sink, raw_usage))
+        if self._usage_sink is not None and isinstance(raw_usage, dict):
+            self._usage_sink.update(merge_usage(self._usage_sink, raw_usage))
         event_type = event.get("type")
         if event_type == "response.output_item.added":
             item = event.get("item") or {}
             if item.get("type") == "function_call":
                 call_id = item.get("call_id")
-                if not call_id:
-                    continue
-                tool_call_buffers[call_id] = {
-                    "id": item.get("id") or "fc_0",
-                    "name": item.get("name"),
-                    "arguments": item.get("arguments") or "",
-                }
+                if call_id:
+                    self._tool_call_buffers[call_id] = {
+                        "id": item.get("id") or "fc_0",
+                        "name": item.get("name"),
+                        "arguments": item.get("arguments") or "",
+                    }
         elif event_type == "response.output_text.delta":
-            content += event.get("delta") or ""
+            delta = event.get("delta") or ""
+            self.content += delta
+            return delta or None, None
         elif event_type == "response.refusal.delta":
-            refusal += event.get("delta") or ""
+            delta = event.get("delta") or ""
+            self.refusal += delta
+            return None, delta or None
         elif event_type == "response.refusal.done":
             # The whole text, which the deltas have already spelled out.
-            refusal = event.get("refusal") or refusal
+            self.refusal = event.get("refusal") or self.refusal
         elif event_type == "response.function_call_arguments.delta":
             call_id = event.get("call_id")
-            if call_id and call_id in tool_call_buffers:
-                tool_call_buffers[call_id]["arguments"] += event.get("delta") or ""
+            if call_id and call_id in self._tool_call_buffers:
+                self._tool_call_buffers[call_id]["arguments"] += event.get("delta") or ""
         elif event_type == "response.function_call_arguments.done":
             call_id = event.get("call_id")
-            if call_id and call_id in tool_call_buffers:
-                tool_call_buffers[call_id]["arguments"] = event.get("arguments") or ""
+            if call_id and call_id in self._tool_call_buffers:
+                self._tool_call_buffers[call_id]["arguments"] = event.get("arguments") or ""
         elif event_type == "response.output_item.done":
             item = event.get("item") or {}
             if item.get("type") == "function_call":
                 call_id = item.get("call_id")
-                if not call_id:
-                    continue
-                buf = tool_call_buffers.get(call_id) or {}
-                args_raw = buf.get("arguments") or item.get("arguments") or "{}"
-                # Repaired rather than wrapped in {"raw": ...}, and the repair
-                # recorded: a turn cut mid-blob ends the arguments text here,
-                # and that is the one local signal the call never finished
-                # arriving. Wrapped, it stayed dispatchable and the model read
-                # a schema complaint about a field it never sent.
-                repaired = False
-                try:
-                    args = json.loads(args_raw)
-                except Exception:
-                    args = json_repair.loads(args_raw)
-                    repaired = True
-                if not isinstance(args, dict):
-                    args, repaired = {"raw": args_raw}, True
-                tool_calls.append(
-                    ToolCallRequest(
-                        id=f"{call_id}|{buf.get('id') or item.get('id') or 'fc_0'}",
-                        name=normalized_tool_name(buf.get("name") or item.get("name")),
-                        arguments=args,
-                        run_meta=RunMeta(arguments_repaired=True) if repaired else None,
+                if call_id:
+                    buf = self._tool_call_buffers.get(call_id) or {}
+                    args_raw = buf.get("arguments") or item.get("arguments") or "{}"
+                    # Repaired rather than wrapped in {"raw": ...}, and the repair
+                    # recorded: a turn cut mid-blob ends the arguments text here,
+                    # and that is the one local signal the call never finished
+                    # arriving. Wrapped, it stayed dispatchable and the model read
+                    # a schema complaint about a field it never sent.
+                    repaired = False
+                    try:
+                        args = json.loads(args_raw)
+                    except Exception:
+                        args = json_repair.loads(args_raw)
+                        repaired = True
+                    if not isinstance(args, dict):
+                        args, repaired = {"raw": args_raw}, True
+                    self.tool_calls.append(
+                        ToolCallRequest(
+                            id=f"{call_id}|{buf.get('id') or item.get('id') or 'fc_0'}",
+                            name=normalized_tool_name(buf.get("name") or item.get("name")),
+                            arguments=args,
+                            run_meta=RunMeta(arguments_repaired=True) if repaired else None,
+                        )
                     )
-                )
         elif event_type in {"response.completed", "response.done"}:
             status = (event.get("response") or {}).get("status")
-            finish_reason = _map_finish_reason(status)
+            self.finish_reason = _map_finish_reason(status)
         elif event_type == "response.incomplete":
             details = (event.get("response") or {}).get("incomplete_details")
             reason = details.get("reason") if isinstance(details, dict) else None
-            finish_reason = _INCOMPLETE_REASONS.get(reason, "unknown")
+            self.finish_reason = _INCOMPLETE_REASONS.get(reason, "unknown")
         elif event_type in {"error", "response.failed"}:
             # The code is the retry signal: classify_error buckets by message
             # substring, and "server_is_overloaded" is what turns a dead-end
@@ -538,13 +547,31 @@ async def _consume_sse(
             message = err.get("message") or event.get("message") or ""
             detail = ": ".join(str(part) for part in (code, message) if part)
             raise RuntimeError(f"Codex response failed: {detail}" if detail else "Codex response failed")
+        return None, None
 
-    # A refusal part makes the call a refusal even though the response closes as
-    # ``completed``; a failed status keeps its own word.
-    if refusal and finish_reason != "error":
-        content = content or refusal
-        finish_reason = "refusal"
-    return content, tool_calls, finish_reason
+    def result(self) -> tuple[str, list[ToolCallRequest], str]:
+        content = self.content
+        finish_reason = self.finish_reason
+        # A refusal part makes the call a refusal even though the response closes
+        # as ``completed``; a failed status keeps its own word.
+        if self.refusal and finish_reason != "error":
+            content = content or self.refusal
+            finish_reason = "refusal"
+        return content, self.tool_calls, finish_reason
+
+
+async def _consume_sse(
+    response: httpx.Response,
+    timeout: float,
+    *,
+    usage_sink: dict[str, Any] | None = None,
+    first_byte: float = 0.0,
+) -> tuple[str, list[ToolCallRequest], str]:
+    """Consume one Responses SSE body into the reply ``chat`` returns."""
+    state = _ResponsesStreamState(usage_sink)
+    async for event in _iter_sse(response, timeout, first_byte):
+        state.feed(event)
+    return state.result()
 
 
 _FINISH_REASON_MAP = {"completed": "stop", "incomplete": "length", "failed": "error", "cancelled": "error"}
