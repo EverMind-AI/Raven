@@ -5,8 +5,8 @@ external agents so that ``spawn`` and a DAG node pick from one roster -- a
 built-in agent only reachable by omitting the ``subagent`` argument is an agent
 the model cannot be told about. The transport is the seed's, with one deliberate
 exception: a config row of a seed's name with ``kind: "acp"`` redeclares it as
-the host's own ``raven acp`` (see :func:`merge_builtin_seeds`), which is the
-established way to run the generic agent's work outside the main process.
+the host's own ``raven acp --as-subagent <name>`` (see :func:`merge_builtin_seeds`),
+which is the established way to run the generic agent's work outside the main process.
 
 It is a seed rather than a default-in-a-field: the row exists whether or not
 config mentions it, and a config row of the same name is a *field-level*
@@ -199,7 +199,8 @@ def merge_builtin_seeds(configs: list[Any] | None) -> list[Any]:
     cli / openai row take the slot would silently put an external backend behind
     every such dispatch. An ``acp`` row of a seed's name is exactly that tradeoff
     named by the user, so it wins: the generic agent is then served by a spawned
-    ``raven acp`` (see :func:`host_raven_acp_command`), not the in-process loop.
+    ``raven acp --as-subagent <name>`` (see :func:`_acp_host_override`), not the
+    in-process loop.
     The seed is not recoverable either way except by renaming that row, which
     the warning says.
     """
@@ -270,8 +271,9 @@ def host_raven_acp_command() -> str:
 
 
 _ACP_HOST_DESCRIPTION = (
-    "Raven's own agent served over ACP: this raven as a separate process, on the same config and "
-    "model, with its own subagent delegation."
+    "Raven's general-purpose agent in a process of its own, on this raven's config and model, with every tool "
+    "that config grants except delegation. IMPORTANT: it cannot call subagents, so give it only work it can "
+    "finish on its own."
 )
 
 
@@ -279,24 +281,30 @@ def _acp_host_override(cfg: Any, *, name: str) -> Any:
     """An acp row that takes a seed's slot, with the host defaults filled in.
 
     The config row brings the transport choice and nothing else: ``command``
-    defaults to this install's own ``raven acp``, ``env`` carries the host's
-    ``RAVEN_HOME`` (unless the row sets one) so the child engine reads the same
-    config and provider the host does, and a blank ``description`` gets the
-    host-raven line rather than leaving the roster entry with the in-process
-    description that no longer applies.
+    defaults to this install's own ``raven acp --as-subagent <name>``, ``env``
+    carries the host's ``RAVEN_HOME`` (unless the row sets one) so the child
+    engine reads the same config and provider the host does, and a blank
+    ``description`` gets the acp line rather than leaving the roster entry with
+    the in-process description that no longer applies.
+
+    ``--as-subagent`` is what keeps the child from being Raven. A bare ``raven
+    acp`` renders the host's identity, so the generic row's child introduced
+    itself as the agent that had dispatched it; with the flag it is told which
+    row it serves, and it keeps the sub-agent role even where a row's ``env``
+    switches the role off.
 
     ``RAVEN_HOME`` alone does not carry a host started with ``--config``: that
     flag sets a path inside the loader and never touches the environment, so the
     child derived its config from a home the host was not using and came up on a
     different model and provider than the row promises.
 
-    Two things stop that from overriding a choice somebody made. The flag is
+    Two things stop either flag from overriding a choice somebody made. Both are
     appended only to a command this function generated -- a row that brought its
     own command line chose it, and is not somewhere to inject arguments -- and
-    only when the row named no ``RAVEN_HOME`` of its own. An explicit one is the
-    row asking for a different instance, and ``--config`` outranks ``RAVEN_HOME``
-    in the child, so propagating regardless would serve that row the host's model
-    and provider under its own name.
+    ``--config`` only when the row named no ``RAVEN_HOME`` of its own. An explicit
+    one is the row asking for a different instance, and ``--config`` outranks
+    ``RAVEN_HOME`` in the child, so propagating regardless would serve that row
+    the host's model and provider under its own name.
     """
     from raven.contracts.path_policy import CONFIG_FILENAME, HOME_ENV_VAR
     from raven.home import raven_home
@@ -314,8 +322,10 @@ def _acp_host_override(cfg: Any, *, name: str) -> Any:
                 "could not be resolved; the row will fail at dispatch",
                 name,
             )
-        elif not row_named_its_own_home and (config_path := get_config_path()) != home / CONFIG_FILENAME:
-            command = f"{command} --config {command_quote(str(config_path))}"
+        else:
+            command = f"{command} --as-subagent {command_quote(name)}"
+            if not row_named_its_own_home and (config_path := get_config_path()) != home / CONFIG_FILENAME:
+                command = f"{command} --config {command_quote(str(config_path))}"
     description = str(getattr(cfg, "description", "") or "").strip()
     if not description:
         description = _ACP_HOST_DESCRIPTION

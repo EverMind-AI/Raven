@@ -21,7 +21,9 @@ from raven.acp.server import install_crash_handlers, serve
 from raven.acp.stdio import claim_stdout
 from raven.acp.stdio import open_stdin as _open_stdin
 from raven.cli._log_file import redirect_loguru_to_file
+from raven.config.agent_names import BUILTIN_AGENT_NAMES, canonical_agent_name, is_builtin_agent_name
 from raven.config.loader import set_config_path
+from raven.home import SUBAGENT_ENV_VAR, SUBAGENT_NAME_ENV_VAR, is_subagent_process
 from raven.providers.relay import target as relay_target
 from raven.utils import asyncio_runner as bounded_asyncio
 from raven.utils.heap import start_trimmer
@@ -83,6 +85,14 @@ Environment:
                        prompt. Set by the host on every child it
                        launches; set it yourself only to reproduce
                        what a sub-agent sees.
+  RAVEN_SUBAGENT_NAME  The roster row this process serves as, read only
+                       while RAVEN_SUBAGENT is on: the prompt says
+                       "You are <name>" instead of "You are Raven", and
+                       initialize answers agentInfo.title with it.
+                       --as-subagent writes it, and the role with it.
+                       Only a package seed name is accepted
+                       (Raven-General); an agent under agents/ carries
+                       its identity in its own launcher.
 
 Design notes are in docs/specs, in the files named *-acp-*.
 """
@@ -108,6 +118,12 @@ def acp(
         "-v",
         help="Log at DEBUG to the file. Leaves stderr at WARNING; see RAVEN_CLI_DEBUG.",
     ),
+    as_subagent: str | None = typer.Option(
+        None,
+        "--as-subagent",
+        metavar="NAME",
+        help="Serve as the named sub-agent row (Raven-General) instead of as Raven; see RAVEN_SUBAGENT_NAME.",
+    ),
 ) -> None:
     """Serve the Agent Client Protocol on stdin/stdout.
 
@@ -117,6 +133,9 @@ def acp(
     it, a host running several of these -- each meant to be a different agent, with
     its own model, provider and identity -- has no way to say which one this
     process is, and every one of them comes up on the host's config.
+
+    ``--as-subagent`` is applied before the engine is built, because the role
+    decides which tools get registered at all.
     """
     if ctx.invoked_subcommand is not None:
         return
@@ -125,6 +144,7 @@ def acp(
     relay_target()
     if config:
         _use_config(config)
+    _take_subagent_name(as_subagent)
     try:
         served = bounded_asyncio.run(_serve(verbose=verbose))
     except Exception as exc:
@@ -157,6 +177,42 @@ def _use_config(path: str) -> None:
         typer.echo(f"raven acp: no config file at {resolved}", err=True)
         raise typer.Exit(code=2)
     set_config_path(resolved)
+
+
+def _take_subagent_name(flag: str | None) -> None:
+    """Serve as the named sub-agent row, from ``--as-subagent`` or the environment.
+
+    The flag switches the role on whatever the environment says. A config ``env``
+    of ``RAVEN_SUBAGENT=0`` is how an ordinary child gets its full registry back,
+    and a named child holding ``spawn`` would hand an unnamed dispatch straight
+    back to its own row. A name already in the environment counts only while the
+    role is on, since only then does anything read it.
+
+    Only a package seed name is accepted. A product under ``agents/`` carries its
+    identity in its own launcher, config and ``soul.md``; a bare ``raven acp``
+    under its name would answer with the right name and none of its abilities.
+    Exit 2 for the same reason as a missing ``--config``: the spawn command is
+    wrong, and the agent did not crash.
+    """
+    if flag is None:
+        if not is_subagent_process():
+            return
+        written = os.environ.get(SUBAGENT_NAME_ENV_VAR)
+        if written is None:
+            return
+        requested = written
+    else:
+        requested = flag
+    name = canonical_agent_name(requested.strip())
+    if not is_builtin_agent_name(name):
+        typer.echo(
+            f"raven acp: cannot serve as {requested.strip()!r}: only a built-in agent name is accepted "
+            f"({', '.join(sorted(BUILTIN_AGENT_NAMES))})",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    os.environ[SUBAGENT_ENV_VAR] = "1"
+    os.environ[SUBAGENT_NAME_ENV_VAR] = name
 
 
 def _file_log_level(verbose: bool = False) -> str:

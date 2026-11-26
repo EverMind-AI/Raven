@@ -433,6 +433,15 @@ guide follow the tools out on their own, both being conditional on a live dispat
 `WITHHELD_FROM_SUBAGENT` is the specification; the gates enforce it by not building, and the
 tests hold the two in agreement. A config `env` entry outranks the host's, which is how one
 agent is handed back a full registry.
+A role may carry a **sub-agent name** (`RAVEN_SUBAGENT_NAME`, read by `subagent_name()` in
+`raven/home.py`): the roster row the process serves as, written by
+`raven acp --as-subagent <name>`, which also forces the role on so a named child can never
+hold `spawn`. Only a package seed name is accepted; the acp redeclaration of `Raven-General`
+gets the flag on the command it generates. The name changes the identity line to
+"You are <name>, a sub-agent working for Raven." and answers `agentInfo.title` with it;
+`agentInfo.name` stays `raven`, the family marker raven's client reads. The host never adds
+the name to `subagent_role_env()`: the products under `agents/` run with the role and no
+name, and their prompt faces are pinned.
 It is a property of the *process*, and one pooled acp connection serves every call to an
 agent, so the same process answers a dispatched DAG node and a person's direct chat and
 cannot tell them apart. Withholding is correct on both lanes; anything written into the

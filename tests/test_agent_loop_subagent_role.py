@@ -65,6 +65,7 @@ def _no_ambient_role(monkeypatch: pytest.MonkeyPatch) -> None:
     """A developer whose shell exports the variable would otherwise see the
     baseline half of every test below pass for the wrong reason."""
     monkeypatch.delenv("RAVEN_SUBAGENT", raising=False)
+    monkeypatch.delenv("RAVEN_SUBAGENT_NAME", raising=False)
 
 
 def _loop(workspace: Path, **kw) -> AgentLoop:
@@ -338,6 +339,43 @@ def test_the_manager_role_is_the_host_s_alone(workspace, monkeypatch: pytest.Mon
 
     assert "## Your role" not in child
     assert "You are Raven, a helpful AI assistant." in child
+
+
+def test_a_named_sub_agent_is_told_its_own_name(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``raven acp --as-subagent Raven-General`` is a roster row, not the host.
+
+    Before the name existed the child read "You are Raven" and answered as the
+    agent that had dispatched it.
+    """
+    monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+    monkeypatch.setenv("RAVEN_SUBAGENT_NAME", "Raven-General")
+
+    child = render.identity_text(workspace)
+
+    assert "You are Raven-General, a sub-agent working for Raven." in child
+    assert "You are Raven, a helpful AI assistant." not in child
+    assert "## Your role" not in child
+    assert "## Sub-agent" in child
+
+
+def test_an_unnamed_sub_agent_keeps_the_identity_its_products_pin(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every product under ``agents/`` runs with the role and no name, and the
+    ones that keep the host identity segment have that prompt face pinned."""
+    monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+    unnamed = render.identity_text(workspace)
+
+    monkeypatch.setenv("RAVEN_SUBAGENT_NAME", "")
+
+    assert render.identity_text(workspace) == unnamed
+    assert "You are Raven, a helpful AI assistant." in unnamed
+
+
+def test_a_name_without_the_role_changes_nothing(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
+    plain = render.identity_text(workspace)
+
+    monkeypatch.setenv("RAVEN_SUBAGENT_NAME", "Raven-General")
+
+    assert render.identity_text(workspace) == plain
 
 
 def test_the_reply_rules_leave_one_blank_line_either_side(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
