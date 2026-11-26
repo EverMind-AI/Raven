@@ -620,11 +620,12 @@ def test_windows_managed_file_and_dir_deny_non_owner_reads(tmp_path: Path, monke
 
     # Widen the parent workspace ACL explicitly so an unprotected file would
     # inherit Everyone:F; the managed output must ignore that inheritance.
+    # The exit code is all this test needs; decoding icacls output raises on
+    # a console codepage that is not UTF-8.
     subprocess.run(
         ["icacls", str(tmp_path), "/grant", "*S-1-1-0:(OI)(CI)F"],
         check=True,
         capture_output=True,
-        text=True,
     )
     real_open = os.open
 
@@ -652,11 +653,12 @@ def test_windows_existing_wide_tool_output_directory_is_tightened(tmp_path: Path
 
     directory = tool_output_dir(tmp_path)
     directory.mkdir()
+    # The exit code is all this test needs; decoding icacls output raises on
+    # a console codepage that is not UTF-8.
     subprocess.run(
         ["icacls", str(directory), "/grant", "*S-1-1-0:F"],
         check=True,
         capture_output=True,
-        text=True,
     )
 
     bounded = bound_tool_result(wrap_untrusted(LONG_BODY, source="exec"), tmp_path, limits=BYTES)
