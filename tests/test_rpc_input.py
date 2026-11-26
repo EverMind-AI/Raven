@@ -118,7 +118,17 @@ async def test_a_file_uri_with_a_mixed_case_localhost_matches(tmp_path: Path) ->
 
 
 async def test_a_file_uri_from_another_machine_is_not_a_drop(tmp_path: Path) -> None:
-    assert await input_detect_drop({"text": "file://fileserver/share/dropped.txt"}) == {"matched": False}
+    """The guard, not the existence check, must reject a foreign authority.
+
+    ``file://fileserver/share/dropped.txt`` names a path that is absent here
+    anyway, so ``matched: False`` holds with the guard deleted. The direct
+    assertions are what pin it: the helper names no path, and no second
+    candidate is added for the local-looking part of the URI.
+    """
+    uri = "file://fileserver/share/dropped.txt"
+    assert input_methods._file_uri_path(uri) is None
+    assert input_methods._candidates(uri) == [uri]
+    assert await input_detect_drop({"text": uri}) == {"matched": False}
 
 
 def test_a_windows_file_uri_keeps_its_drive(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -149,6 +159,12 @@ def test_a_file_uri_with_an_invalid_bracketed_host_names_no_path() -> None:
     with pytest.raises(ValueError):
         urlparse("file://[bad/a.md")
     assert input_methods._file_uri_path("file://[bad/a.md") is None
+
+
+def test_a_file_uri_carrying_no_path_names_no_path() -> None:
+    """``file://`` and a bare authority have nothing to convert."""
+    assert input_methods._file_uri_path("file://") is None
+    assert input_methods._file_uri_path("file://localhost") is None
 
 
 async def test_a_directory_is_not_a_file_drop(tmp_path: Path) -> None:
