@@ -1167,14 +1167,16 @@ def test_the_home_directories_outside_the_exemption_still_lose_their_tokens() ->
     from raven.home import raven_home
 
     own = raven_home()
-    # The build output of the WhatsApp bridge. ``src/server.ts`` declares
-    # ``private token: string``; ``string`` is a type, not a credential, and is
-    # rewritten anyway. That cost is recorded in ``_home_config`` and taken
-    # because the tree is a compiled install, replaced by the next build.
+    # The build output of the WhatsApp bridge is not exempt. Its ``private
+    # token: string`` annotation is six characters past the label, below the
+    # table's eight-character floor, so it survives; a credential-shaped value
+    # in the same tree still loses its value.
     bridge_source = "class Bridge {\n  constructor(private token: string) {}\n}\n"
     shown = scrub_tool_output({"path": str(own / "bridge" / "src" / "server.ts")}, bridge_source)
-    assert "private token: [redacted]" in shown, shown
-    assert "string" not in shown, shown
+    assert shown == bridge_source, shown
+    bridge_token = "class Bridge {\n  private token = 'br_live_0123456789abcdef'\n}\n"
+    shown = scrub_tool_output({"path": str(own / "bridge" / "src" / "server.ts")}, bridge_token)
+    assert "br_live_0123456789abcdef" not in shown, shown
     # Runtime state: written by the tracing, usage and product-render code.
     recorded = '{"token": "sk-live-0123456789abcdef", "note": "kept"}\n'
     for arguments in (

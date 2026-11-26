@@ -16,9 +16,32 @@ measured rather than imagined:
 What this is not: a general secret scanner. Only the capture group is replaced,
 so the shape of the text survives and a person can still tell *what* was run --
 ``curl -H "Authorization: Bearer [redacted]"`` is a readable line, and a wholesale
-match replacement would leave a row nobody can act on. The pattern list is the
-same size as the one openclaw uses for the same job (about sixteen), and
-deliberately not the 409-line RFC-7235 header scanner sitting next to it.
+match replacement would leave a row nobody can act on.
+
+The table is the four rules Codex uses for the same job
+(``codex-rs/secrets/src/sanitizer.rs``) -- an OpenAI key, an AWS access key id,
+a bearer token, and an assignment to a name that says secret -- plus one rule
+Codex does not carry: PEM-armoured private key material. It is not one rule per
+credential vendor; a vendor prefix is matched only when the prefix alone
+identifies the value, and only for the two vendors those rules cover. Everything
+else reaches this table through its label.
+
+``pem`` is the fifth rule and the only place this table goes beyond Codex. It is
+structural rather than a vendor enumeration: a PEM block's opening delimiter is a
+delimiter the way ``Bearer`` is a scheme word and ``password=`` is a label, so it
+catches every key format those brackets wrap without naming a vendor. Codex can
+leave it out because Codex has no ``agent/loop/failure_text.py``, the path that
+persists a dispatcher traceback tail to disk here: a key cut in half by that cap
+has no label left, and only the armour identifies it.
+
+Two deviations from Codex's rules, both load-bearing:
+
+* the assignment rule has no leading ``\\b`` and includes ``access_key``.
+  ``~/.aws/credentials`` writes ``aws_secret_access_key = ...``, and a ``\\b``
+  before ``secret`` cannot match after the ``_`` that precedes it, so the literal
+  copy of Codex's rule misses the one file that makes this module worth having.
+* the OpenAI value class keeps ``-`` (Codex's does not), so ``sk-ant-...`` and
+  ``sk-proj-...`` are matched whole rather than not at all.
 
 This table applies to Raven's own publishing surfaces. Content received from
 another agent retains that agent's redaction policy.
@@ -36,56 +59,55 @@ from typing import Any
 
 REPLACEMENT = "[redacted]"
 
-# Each pattern captures exactly the secret, never the label. Ordered
-# roughly by how specific they are, though order does not change the result:
-# every pattern is applied, and a string already redacted no longer matches.
+# Each pattern captures exactly the secret, never the label. Every pattern is
+# applied, and a string already redacted no longer matches, so the order is not
+# load-bearing; the bearer rule is first because that is where Codex puts it.
 _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    # Authorization / proxy headers, in either the -H "..." or the raw form.
-    (
-        "http-auth",
-        re.compile(
-            r"((?:Authorization|Proxy-Authorization)\s*+:\s*+(?:Bearer|Basic|Token)\s++)([\w\-.~+/=]{8,}+)",
-            re.IGNORECASE,
-        ),
-    ),
-    # An assignment to anything whose name says secret. Quoted or bare.
+    # Codex rule 3. Matched anywhere rather than behind an ``Authorization``
+    # label, so both ``Authorization: Bearer <token>`` and a bare ``Bearer
+    # <token>`` lose the value. ``Basic`` and ``Token`` are not matched: neither
+    # is in Codex's table, and a Basic value is base64 of ``user:password`` with
+    # no label inside it to recognise.
+    ("bearer", re.compile(r"(\bBearer[ \t]+)([A-Za-z0-9._~+/-]{16,}=*)", re.IGNORECASE)),
+    # Codex rule 1, with ``-`` admitted in the value so the provider-prefixed
+    # forms (``sk-ant-``, ``sk-proj-``) match whole. ``sk_live_`` is Stripe and
+    # is not matched: ``_`` is not in the value class, and this repository has
+    # no Stripe credential.
+    ("openai", re.compile(r"()(sk-[A-Za-z0-9_-]{16,})")),
+    # Codex rule 2, narrowed to the two prefixes a credentials file writes:
+    # ``AKIA`` for a long-term key, ``ASIA`` for a temporary one.
+    ("aws-access-key", re.compile(r"()(\b(?:AKIA|ASIA)[A-Z0-9]{16}\b)")),
+    # Codex rule 4, with the leading ``\b`` dropped and ``access_key`` added --
+    # see the module docstring. Eight characters, as in Codex: below that the
+    # value is a placeholder or a word, not a credential. ``[`` is excluded from
+    # the value so a replacement this module or ``held_secrets`` already wrote --
+    # ``[redacted]``, ``[redacted: providers...apiKey]`` -- cannot be rewritten
+    # again inside a labelled slot; no real credential begins with a bracket.
     (
         "named-secret",
         re.compile(
-            r"((?:api[_-]?key|secret|token|password|passwd|pwd|credential|private[_-]?key|access[_-]?key|auth)"
-            r"[\"']?\s*[:=]\s*[\"']?)([^\s\"',;&|)]{6,})",
+            r"((?:api[_-]?key|token|secret|password|access[_-]?key)"
+            r"[\"']?\s*[:=]\s*[\"']?)([^\s\"',;&|)\[]{8,})",
             re.IGNORECASE,
         ),
     ),
-    # Command-line flags that take a credential.
-    ("cli-flag", re.compile(r"(--(?:token|password|api-key|secret|with-token)[= ])([^\s\"']{6,})", re.IGNORECASE)),
-    # A URL with an inline password: scheme://user:secret@host. The user may be
-    # empty, as in redis://:secret@host.
-    ("url-userinfo", re.compile(r"(://[^\s/:@]*:)([^\s/@]{3,})(?=@)")),
-    # Vendor-shaped keys, recognisable without a label because their prefix is
-    # the label. The one class worth matching bare: a leaked key is a leaked key
-    # whether or not somebody wrote "api_key" next to it.
-    ("openai", re.compile(r"()(sk-(?:proj-|ant-|or-)?[A-Za-z0-9_-]{16,})")),
-    ("github", re.compile(r"()(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{22,})")),
-    ("gitlab", re.compile(r"()(glpat-[A-Za-z0-9_-]{16,})")),
-    ("slack", re.compile(r"()(xox[abposr]-[A-Za-z0-9-]{10,})")),
-    ("google", re.compile(r"()(AIza[0-9A-Za-z_-]{30,})")),
-    ("aws-access-key", re.compile(r"()((?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16})")),
-    ("anthropic-legacy", re.compile(r"()(sk_live_[A-Za-z0-9]{16,})")),
-    (
-        "jwt",
-        re.compile(r"()(?<![A-Za-z0-9_-])(eyJ[A-Za-z0-9_-]{10,}+\.[A-Za-z0-9_-]{10,}+\.[A-Za-z0-9_-]{10,}+)"),
-    ),
-    # A scan or call-record cap may have removed the closing armour.
+    # The fifth rule, and the one Codex does not have. A delimiter rather than a
+    # vendor prefix: any PEM block whose header label ends in the key words opens
+    # it, so every key format those brackets carry -- RSA, EC, DSA, OPENSSH,
+    # ENCRYPTED, bare -- is one rule. Only the body goes; the armour stays, so the
+    # reader can still tell a key was there.
+    #
+    # ``(?=-----END|\Z)``: the ``\Z`` arm is not optional. A body a cap cut in
+    # half has no closing armour, and it is exactly that half-slain key that
+    # ``agent/loop/failure_text.py`` writes to disk; ``-----END`` alone would
+    # leave it whole.
     ("pem", re.compile(r"(-----BEGIN [A-Z ]*PRIVATE KEY-----)([\s\S]+?)(?=-----END|\Z)")),
-    # A heredoc or echo piping a credential into a file.
-    ("env-export", re.compile(r"((?:export|set)\s+[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*=)(\S+)")),
     # Deliberately NOT here: a pattern for credential *paths*
     # (``~/.aws/credentials``, ``~/.ssh/id_rsa``). It was written and removed --
     # the path is not a secret, and hiding it takes away the one thing the reader
     # most needs, which is that the agent read their credential file. What must
     # not escape is the file's *contents*, and those arrive through a result
-    # preview where the named-secret and vendor patterns above catch them.
+    # preview where the label and vendor patterns above catch them.
 )
 
 # Redacting a very large string costs real time on a streaming path, and the
@@ -96,38 +118,28 @@ MAX_SCAN_CHARS = 256 * 1024
 
 # At a known cut, a token may be too short for the ordinary patterns or have
 # lost a closing delimiter. Keep ordinary unlabelled text, but remove a tail
-# whose label or prefix already identifies it as a credential. Each pattern is
-# paired with the characters its value is made of, which say where its search
-# can start (_tail_search_start).
+# whose label or prefix already identifies it as a credential.
+#
+# One entry per surviving pattern -- the vendor prefixes share one because they
+# share a value class -- so this is not a second credential enumeration. Each
+# entry is paired with the characters its value is made of, which say where its
+# search can start (_tail_search_start).
 _TRUNCATED_SECRETS: tuple[tuple[re.Pattern[str], re.Pattern[str]], ...] = (
     (
-        re.compile(
-            r"()(?<![A-Za-z0-9_-])((?:sk-|gh[pousr]_|github_pat_|glpat-|xox[abposr]-|AIza"
-            r"|A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA|eyJ)"
-            r"[A-Za-z0-9_.-]*+)\Z"
-        ),
+        re.compile(r"()(?<![A-Za-z0-9_-])((?:sk-|AKIA|ASIA)[A-Za-z0-9_.-]*+)\Z"),
         re.compile(r"[A-Za-z0-9_.-]*+"),
     ),
-    (re.compile(r"(://[^\s/:@]*+:)([^\s/@]++)\Z"), re.compile(r"[^\s/@]*+")),
     (
         re.compile(
-            r"((?:api[_-]?key|secret|token|password|passwd|pwd|credential|private[_-]?key|access[_-]?key|auth)"
-            r"[\"']?\s*+[:=]\s*+[\"']?)([^\s\"',;&|)]++)\Z",
+            r"((?:api[_-]?key|token|secret|password|access[_-]?key)"
+            r"[\"']?\s*+[:=]\s*+[\"']?)([^\s\"',;&|)\[]++)\Z",
             re.IGNORECASE,
         ),
-        re.compile(r"[^\s\"',;&|)]*+"),
+        re.compile(r"[^\s\"',;&|)\[]*+"),
     ),
     (
-        re.compile(
-            r"((?:Proxy-)?Authorization[\"']?\s*+[:=]\s*+[\"']?(?:(?:Bearer|Basic|Token)\s++)?)"
-            r"([\w\-.~+/=]++)\Z",
-            re.IGNORECASE,
-        ),
-        re.compile(r"[\w\-.~+/=]*+"),
-    ),
-    (
-        re.compile(r"(--(?:token|password|api-key|secret|with-token)[= ])([^\s\"']++)\Z", re.IGNORECASE),
-        re.compile(r"[^\s\"']*+"),
+        re.compile(r"(\bBearer[ \t]++)([A-Za-z0-9._~+/-]++)\Z", re.IGNORECASE),
+        re.compile(r"[A-Za-z0-9._~+/-]*+"),
     ),
 )
 
@@ -135,7 +147,7 @@ _TRUNCATED_SECRETS: tuple[tuple[re.Pattern[str], re.Pattern[str]], ...] = (
 # colon or an equals sign, and the scheme word an Authorization label can carry.
 _LABEL_GAP = re.compile(r"[\s\"':=]*+")
 _LABEL_SCHEME = re.compile(r"[A-Za-z]{0,6}+")
-# Room for the name itself; the longest, Proxy-Authorization, is 19 characters.
+# Room for the name itself; the longest label in the table is ``access_key``.
 _LABEL_NAME_CHARS = 32
 
 

@@ -20,9 +20,6 @@ from raven.spine.scheduler import describe_failure
 from raven.spine.turn import AnswerlessTurnError
 
 KEY = "sk-or-v1-" + "a" * 40
-GOOGLE_KEY = "AIza" + "Ab1_-" * 7
-GITHUB_TOKEN = "ghp_" + "a1B2" * 9
-SLACK_TOKEN = "xoxb-" + "1234567890-abcdefghijKLMNOP"
 
 
 class _Frozen(Exception):
@@ -153,17 +150,17 @@ def test_a_failed_call_with_only_a_body_reads_as_that_body():
     ("text", "secret"),
     [
         pytest.param(
-            f"GET https://maps.example.com/v1/geocode?key={GOOGLE_KEY}&address=x",
-            GOOGLE_KEY,
-            id="key-in-a-url",
+            "Authorization: Bearer " + "b" * 32,
+            "b" * 32,
+            id="bearer-token",
         ),
         pytest.param(
-            f"clone https://user:{GITHUB_TOKEN}@github.com/owner/repo.git failed",
-            GITHUB_TOKEN,
-            id="userinfo-in-a-url",
+            "aws sts get-caller-identity failed: AKIAIOSFODNN7EXAMPLE",
+            "AKIAIOSFODNN7EXAMPLE",
+            id="aws-access-key",
         ),
         pytest.param("login failed: password=hunter2hunter2 for svc", "hunter2hunter2", id="password-assignment"),
-        pytest.param(f"slack rejected {SLACK_TOKEN}", SLACK_TOKEN, id="slack-bot-token"),
+        pytest.param(f"upstream refused key {KEY}", KEY, id="openai-key"),
     ],
 )
 def test_a_credential_in_a_crash_message_is_scrubbed(text, secret):
@@ -232,14 +229,15 @@ def test_an_unreadable_attribute_costs_the_body_not_the_account(attribute):
     assert attach_full_detail(_unreadable(attribute)) == "_Unreadable: " + "z" * 500
 
 
-def test_a_scan_cut_private_key_stays_hidden_after_an_earlier_secret_shrinks():
-    secret = "synthetic-private-material-" + "a" * 1600
-    pem = "-----BEGIN " + f"PRIVATE KEY-----\n{secret}\n-----END PRIVATE KEY-----"
-    text = "Authorization: Bearer " + "b" * 31000 + "\n" + pem
+def test_a_scan_cut_token_stays_hidden_after_an_earlier_secret_shrinks():
+    """Redaction runs before the body is capped, so a later secret does not move
+    into the cap's blind spot when an earlier one shrinks."""
+    secret = "sk-" + "a" * 2000
+    text = "Authorization: Bearer " + "b" * 31000 + "\n" + secret
 
     full = full_failure_text(text)
 
-    assert "synthetic-private-material" not in full
+    assert secret not in full
     assert len(full) <= MAX_BODY_CHARS
     assert REPLACEMENT in full
 
@@ -247,13 +245,12 @@ def test_a_scan_cut_private_key_stays_hidden_after_an_earlier_secret_shrinks():
 @pytest.mark.parametrize(
     ("tail", "visible", "kept"),
     [
-        ("eyJ" + "A" * 1400 + "." + "B" * 20 + "." + "C" * 20, "eyJ" + "A" * 30, 978),
-        ("https://user:synthetic-password-" + "a" * 1400 + "@host", "synthetic-password", 978),
-        ("ghp_" + "A" * 30, "ghp_" + "A" * 8, 12),
-        ("password=abcdefghijk", "abcde", 14),
         ('"Authorization": "Bearer opaque-token-value"', "opaqu", 30),
+        ("sk-" + "A" * 30, "sk-" + "A" * 8, 12),
+        ("password=abcdefghijk", "abcde", 14),
+        ("token=" + "A" * 30, "token=" + "A" * 8, 14),
     ],
-    ids=["jwt", "url-userinfo", "vendor-token", "named-secret", "quoted-header"],
+    ids=["quoted-header", "vendor-token", "named-secret", "label-tail"],
 )
 def test_a_scan_cut_credential_tail_is_removed_before_earlier_redactions_move_it(tail, visible, kept):
     prefix = "Authorization: Bearer "
@@ -261,23 +258,23 @@ def test_a_scan_cut_credential_tail_is_removed_before_earlier_redactions_move_it
     assert visible not in full_failure_text(text)
 
 
-def test_a_previously_capped_record_does_not_expose_a_private_key_fragment():
-    body = "diagnostic " * 700 + "\n-----BEGIN " + "PRIVATE KEY-----\nsynthetic-private-material-" + "a" * 1600
+def test_a_previously_capped_record_does_not_expose_a_token_fragment():
+    body = "diagnostic " * 700 + "\nsk-" + "a" * 1600
     full = response_failure_text("provider refused", CallRecord(body=body[:MAX_BODY_CHARS], body_truncated=True))
-    assert "synthetic-private-material" not in full
+    assert "sk-" + "a" * 1600 not in full
 
 
-def test_a_previously_capped_record_removes_an_incomplete_jwt():
-    token = "eyJ" + "a" * 100
+def test_a_previously_capped_record_removes_an_incomplete_vendor_token():
+    token = "sk-" + "a" * 100
     full = response_failure_text("provider refused", CallRecord(body=token, body_truncated=True))
     assert token not in full
     assert REPLACEMENT in full
 
 
-def test_a_client_body_loses_its_private_key_before_the_record_is_capped():
-    body = "diagnostic " * 700 + "\n-----BEGIN " + "PRIVATE KEY-----\nsynthetic-private-material-" + "a" * 1600
+def test_a_client_body_loses_its_token_before_the_record_is_capped():
+    body = "diagnostic " * 700 + "\nsk-" + "a" * 1600
     record = from_exception(_ClientError("provider refused", body), status=400)
-    assert "synthetic-private-material" not in record.body
+    assert "sk-" + "a" * 1600 not in record.body
 
 
 @pytest.mark.production_timing
@@ -285,20 +282,18 @@ def test_a_client_body_loses_its_private_key_before_the_record_is_capped():
     "tail",
     [
         "Authorization:" + " " * 32000 + "!",
-        "eyJ" * 10000 + "!",
         # A credential-shaped run that ends before the cut, with other text after
         # it: the tail patterns retry at every position in the run, so each of
         # those attempts walks it again.
         "--token=" * 3900 + " " + "x" * 1500,
-        "pwd=" * 7800 + " " + "x" * 1500,
+        "token=" * 7800 + " " + "x" * 1500,
         # The same run stopped by a comma rather than a space, and a long gap
         # before the last two words: the window cut keeps both inside it.
-        "pwd=" * 7800 + "," + "x" * 2000,
+        "token=" * 7800 + "," + "x" * 2000,
         " " * 16000 + "x y" + "z" * 17000,
     ],
     ids=[
         "authorization-whitespace",
-        "jwt-prefixes",
         "cli-flag-run",
         "named-secret-run",
         "unspaced-named-secret-run",
