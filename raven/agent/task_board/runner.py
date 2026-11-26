@@ -64,6 +64,7 @@ from raven.i18n import prompt
 MAX_ATTEMPTS = 3
 OPEN_STEPS_SHOWN = 2
 ASKED_SHOWN = 8
+RECENT_COMPLETED_SHOWN = 5
 TEMPLATE = "task_board_update"
 RECALL_TEMPLATE = "task_board_recall"
 MATTERS_TEMPLATE = "task_board_matters"
@@ -126,11 +127,21 @@ def _snapshot(board: Board, completed_ids: Sequence[str] = ()) -> str:
             continue
         seen.add(group.id)
         recalled.append(group)
+    recent: list[TaskGroup] = []
+    for group in sorted(
+        (g for g in board.groups if g.status == "completed"),
+        key=lambda g: g.updated_at,
+        reverse=True,
+    )[:RECENT_COMPLETED_SHOWN]:
+        if group.id in seen:
+            continue
+        seen.add(group.id)
+        recent.append(group)
     lines: list[str] = []
     for group in sorted((g for g in board.groups if g.status != "completed"), key=lambda g: g.created_at):
         lines.append(_group_line(group))
         lines.extend(_step_lines(group))
-    for group in recalled:
+    for group in [*recalled, *recent]:
         lines.append(_group_line(group))
         lines.extend(_step_lines(group))
     earlier = [group for group in board.groups if group.status == "completed" and group.id not in seen]
