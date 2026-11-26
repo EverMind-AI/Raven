@@ -5346,6 +5346,33 @@ def test_copilot_login_is_the_one_spelling(monkeypatch: pytest.MonkeyPatch) -> N
     assert "switch the model it uses" in text
 
 
+def test_antigravity_login_is_the_acp_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Antigravity signs in with `agy acp --login`, the ACP terminal auth its CLI names.
+
+    Its help text on 1.5.17 says "Log in with Google interactively, then exit
+    (ACP terminal auth)" and waits for a pasted authorization code -- the only
+    sign-in a headless host can complete. The row launches `agy acp`, a local
+    install, so a machine without `agy` is told the executable is missing rather
+    than handed a command it cannot run.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.presets import SIGN_IN_HINTS, SignIn
+    from raven.agent.subagent.probe_state import Remedy
+
+    assert SIGN_IN_HINTS["antigravity"] == SignIn(exe="agy", local="agy acp --login")
+
+    said = "request failed: [-32000] Authentication required"
+    cfg = SimpleNamespace(preset="antigravity", kind="acp")
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: None)
+    text, remedy = probe_mod._refusal(cfg, said)
+    assert remedy == Remedy("sign_in", "agy acp --login")
+    assert text == probe_mod._refusal_detail(cfg, said)
+    assert "sign in with `agy acp --login`" in text
+    assert said in text
+
+
 def test_each_agent_s_fix_is_named_as_data_from_the_one_decision(monkeypatch: pytest.MonkeyPatch) -> None:
     """The page's fix and the terminal's sentence come out of the same call.
 
@@ -5367,6 +5394,7 @@ def test_each_agent_s_fix_is_named_as_data_from_the_one_decision(monkeypatch: py
     cases = [
         (SimpleNamespace(preset="claude_code", kind="acp"), Remedy("sign_in", "claude auth login")),
         (SimpleNamespace(preset="codex", kind="acp"), Remedy("sign_in", "npx -y @openai/codex login")),
+        (SimpleNamespace(preset="antigravity", kind="acp"), Remedy("sign_in", "agy acp --login")),
         (SimpleNamespace(preset="hermes", kind="acp"), Remedy("setup", "hermes model")),
         (SimpleNamespace(preset="github_copilot", kind="acp"), Remedy("sign_in", "copilot login")),
         (SimpleNamespace(preset="grok", kind="acp"), Remedy("sign_in", "grok login")),
