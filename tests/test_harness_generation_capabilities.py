@@ -663,6 +663,21 @@ def _literal_rows(node: ast.AST) -> list[tuple[str, ...]] | None:
     return rows
 
 
+def _clause_rows(node: ast.AST) -> list[tuple[str, ...]] | None:
+    """The rows a comprehension clause iterates over, or ``None`` if it is not a table of strings."""
+    rows = _literal_rows(node)
+    if rows is not None:
+        return rows
+    if not isinstance(node, (ast.Tuple, ast.List)):
+        return None
+    flat: list[tuple[str, ...]] = []
+    for element in node.elts:
+        if not isinstance(element, ast.Constant) or not isinstance(element.value, str):
+            return None
+        flat.append((element.value,))
+    return flat
+
+
 def _bound(node: ast.AST, env: dict[str, object]) -> object | None:
     """What a name bound by this expression can be.
 
@@ -751,6 +766,19 @@ def _scan(node: ast.AST, env: dict[str, object], parameters: set, functions: set
         else:
             _scan(node.body, env, parameters, functions)
         return
+    if isinstance(node, ast.comprehension):
+        _scan(node.iter, env, parameters, functions)
+        rows = _clause_rows(node.iter)
+        targets = node.target.elts if isinstance(node.target, ast.Tuple) else [node.target]
+        if rows is not None and all(isinstance(target, ast.Name) for target in targets):
+            for row in rows:
+                inner = dict(env)
+                for target, value in zip(targets, row):
+                    inner[target.id] = value
+                _scan(node.ifs, inner, parameters, functions)
+        else:
+            _scan(node.ifs, env, parameters, functions)
+        return
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         _scan(node.body, dict(env), parameters, functions)
         return
@@ -784,3 +812,42 @@ def test_the_validated_switches_are_the_ones_the_generation_surface_reads() -> N
     assert parameters and functions, "the scan found no query sites; it has stopped reading them"
     assert parameters == set(harness_capabilities._GENERATION_PARAMETERS)
     assert functions == set(harness_capabilities._GENERATION_FUNCTIONS)
+
+
+_COMPREHENSION_QUERIES = """
+def _functions():
+    return {
+        name: {"type": "string"}
+        for module, name in (
+            ("memory", "intake"),
+            ("planning", "advise"),
+        )
+        if _function_enabled(module, "participant", name)
+    }
+
+
+def _parameters():
+    return {
+        name: {"type": "boolean"}
+        for name in ("systemPrompt", "stopWhen")
+        if _parameter_enabled("memory", name)
+    }
+"""
+
+
+def test_the_scan_reads_a_query_point_written_in_a_comprehension() -> None:
+    """A comprehension binds its own names; the scan has to bind them too.
+
+    The surface builds its schema with a dict comprehension, so a query in one
+    is read with names the scan never bound unless it binds the clause target.
+    """
+    parameters: set[tuple[str, str]] = set()
+    functions: set[tuple[str, str, str]] = set()
+
+    _scan(ast.parse(_COMPREHENSION_QUERIES), {}, parameters, functions)
+
+    assert parameters == {("memory", "systemPrompt"), ("memory", "stopWhen")}
+    assert functions == {
+        ("memory", "participant", "intake"),
+        ("planning", "participant", "advise"),
+    }
