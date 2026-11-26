@@ -359,11 +359,25 @@ async def test_a_reason_written_on_stderr_while_the_link_was_down_reaches_the_ru
     await _until((workdir / "pid.txt").exists)
     node = box.nodes._nodes["box"]
     (endpoint,) = node.channels.values()
+    # The launch has to have answered before the link is killed. The endpoint is
+    # registered with the pool before the daemon answers, and a launch that
+    # dies with the link takes its endpoint out of the pool instead of parking
+    # it: nothing is detached, and the next link has nothing to bring the
+    # agent back on.
+    await _until(lambda: endpoint.pid is not None)
+    # The detach is recorded rather than read off the endpoint, which carries
+    # it only until the next link brings the endpoint back.
+    detached: list[str] = []
+    detach = type(endpoint).detach
+
+    def record_detach(self, reason: str) -> None:
+        detached.append(reason)
+        detach(self, reason)
+
+    monkeypatch.setattr(type(endpoint), "detach", record_detach)
 
     os.kill(node.client._proc.pid, signal.SIGKILL)
-    # The heartbeat paces the detached signal, so the wait has to outlast a few
-    # heartbeat ticks under shard load, not just the link's own teardown.
-    await _until(lambda: endpoint.detached is not None, timeout=30)
+    await _until(lambda: detached)
     (workdir / "go").touch()
 
     with pytest.raises(RuntimeError, match=r"CLI agent 'where@box' exited 3: token expired$"):
