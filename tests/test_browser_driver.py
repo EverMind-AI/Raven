@@ -8,6 +8,7 @@ A real Chromium run belongs in tests/integration, not in the unit suite.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import time
 from typing import Any
@@ -1247,3 +1248,72 @@ async def test_the_url_reported_for_an_owner_is_where_its_call_lands(
     else:
         assert landed is pages[lands_on]
         assert reported == landed.url
+
+
+class _GatedPage(_ActingPage):
+    """A page whose goto holds until the test releases it."""
+
+    def __init__(self, url: str = "https://a.test", title: str = "A") -> None:
+        super().__init__(url, title)
+        self.hold = asyncio.Event()
+
+    async def goto(self, url: str, **kw: Any) -> None:
+        self.acts.append(("goto-start", url))
+        await self.hold.wait()
+        self.url = url
+        self.acts.append(("goto-end", url))
+
+
+async def _started(coro: Any) -> asyncio.Task:
+    task = asyncio.ensure_future(coro)
+    await asyncio.sleep(0.05)
+    return task
+
+
+async def test_two_owners_on_different_tabs_act_at_the_same_time() -> None:
+    """One agent's navigation must not hold another agent's click.
+
+    The act lock is the page's, not the driver's: two tabs have nothing to
+    serialize between them, and the single lock it used to be made a
+    30-second goto freeze a reader's click for the whole wait (#1393).
+    """
+    b = get_browser()
+    pA, pB = _GatedPage("https://a.test", "A"), _GatedPage("https://b.test", "B")
+    pB.hold.set()
+    _driving(b, [pA, pB])
+    b._s.owners["run:a"] = _Owner(pA, time.monotonic())
+    b._s.owners["run:b"] = _Owner(pB, time.monotonic())
+
+    first = await _started(b.goto("https://x.test/", owner="run:a"))
+    assert ("goto-start", "https://x.test/") in pA.acts, "the first act did not reach its page"
+    second = await _started(b.goto("https://y.test/", owner="run:b"))
+
+    assert second.done(), "the second tab's act waited on the first tab's hold"
+    pA.hold.set()
+    await asyncio.wait({first}, timeout=2)
+    assert first.done()
+    assert pB.acts == [("goto-start", "https://y.test/"), ("goto-end", "https://y.test/")]
+
+
+async def test_two_owners_on_one_tab_still_act_one_at_a_time() -> None:
+    """Per page is per act, not no lock: one tab is still one act at a time."""
+    b = get_browser()
+    page = _GatedPage()
+    _driving(b, [page])
+    b._s.owners["run:a"] = _Owner(page, time.monotonic())
+    b._s.owners["run:b"] = _Owner(page, time.monotonic())
+
+    first = await _started(b.goto("https://x.test/", owner="run:a"))
+    assert ("goto-start", "https://x.test/") in page.acts
+    second = await _started(b.goto("https://y.test/", owner="run:b"))
+
+    assert not second.done(), "one page is one act at a time"
+    page.hold.set()
+    await asyncio.wait({first, second}, timeout=2)
+    assert first.done() and second.done()
+    assert page.acts == [
+        ("goto-start", "https://x.test/"),
+        ("goto-end", "https://x.test/"),
+        ("goto-start", "https://y.test/"),
+        ("goto-end", "https://y.test/"),
+    ]

@@ -149,6 +149,23 @@ class BrowserBusyError(RuntimeError):
     """No tab can be given to this owner right now."""
 
 
+def _act_lock(page: Any) -> asyncio.Lock:
+    """The page's own one-act-at-a-time lock, made on first use.
+
+    Acting is serialized per page rather than per driver: two agents on two
+    tabs have nothing to serialize between them, and the single driver lock
+    let one agent's navigation hold another agent's click for its whole
+    timeout (#1393). The lock rides on the page object, so a closed or
+    reaped page takes it away; the get-then-set runs without an await in
+    between, so callers on one loop cannot split it.
+    """
+    lock = getattr(page, "_raven_act_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        page._raven_act_lock = lock
+    return lock
+
+
 # The elements a caller can actually act on, plus the few that carry the page's
 # structure. Everything else is noise in a snapshot.
 _SNAPSHOT_JS = """
@@ -238,7 +255,6 @@ class _State:
     browser: Any = None
     context: Any = None
     page: Any = None
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     cdp: Any = None
     on_frame: Any = None
     stream_quality: int = 55
@@ -272,7 +288,7 @@ class Browser:
         # calls close(), which swaps in a fresh state -- so a lock living there
         # would be replaced mid-launch and stop excluding anyone at exactly the
         # moment two callers are most likely to collide. Separate from
-        # `_s.lock`, which the navigation methods take after calling `_ensure`.
+        # `_act_lock(page)`, which the acting methods take after `_ensure`.
         self._launch_lock = asyncio.Lock()
 
     # ---- lifecycle ---------------------------------------------------------
@@ -859,7 +875,7 @@ class Browser:
         except NavigationRefusedError as exc:
             return await self._state(error=str(exc))
         page = await self._page_for(owner)
-        async with self._s.lock:
+        async with _act_lock(page):
             try:
                 await page.goto(target, timeout=NAV_TIMEOUT_MS, wait_until="domcontentloaded")
             except Exception as exc:
@@ -868,7 +884,7 @@ class Browser:
 
     async def go(self, direction: str, *, owner: str | None = None) -> dict[str, Any]:
         page = await self._page_for(owner)
-        async with self._s.lock:
+        async with _act_lock(page):
             try:
                 if direction == "back":
                     await page.go_back(timeout=NAV_TIMEOUT_MS)
@@ -1081,7 +1097,7 @@ class Browser:
         owner: str | None = None,
     ) -> dict[str, Any]:
         page = await self._page_for(owner)
-        async with self._s.lock:
+        async with _act_lock(page):
             try:
                 if ref:
                     loc = self._locate(page, ref)
@@ -1125,7 +1141,7 @@ class Browser:
         self, text: str, ref: str | None = None, submit: bool = False, *, owner: str | None = None
     ) -> dict[str, Any]:
         page = await self._page_for(owner)
-        async with self._s.lock:
+        async with _act_lock(page):
             try:
                 if ref:
                     await self._locate(page, ref).fill(text, timeout=ACT_TIMEOUT_MS)
@@ -1140,7 +1156,7 @@ class Browser:
 
     async def press(self, key: str, *, owner: str | None = None) -> dict[str, Any]:
         page = await self._page_for(owner)
-        async with self._s.lock:
+        async with _act_lock(page):
             try:
                 await page.keyboard.press(key)
                 page = await self._landed(page, owner)
@@ -1150,7 +1166,7 @@ class Browser:
 
     async def scroll(self, dx: int = 0, dy: int = 0, *, owner: str | None = None) -> dict[str, Any]:
         page = await self._page_for(owner)
-        async with self._s.lock:
+        async with _act_lock(page):
             try:
                 await page.mouse.wheel(dx, dy)
             except Exception as exc:
