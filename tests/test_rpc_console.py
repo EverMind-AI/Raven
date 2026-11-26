@@ -1673,14 +1673,14 @@ async def test_a_channel_whose_field_read_fails_is_not_drawn_as_configured(
     """
     from raven.config import update_channels
 
-    existed = update_channels.channel_field_specs
+    existed = update_channels.channel_field_values
 
-    def refuse(name: str):
+    def refuse(name: str, **kwargs):
         if name == "telegram":
             raise RuntimeError("this channel's schema cannot be flattened")
-        return existed(name)
+        return existed(name, **kwargs)
 
-    monkeypatch.setattr(update_channels, "channel_field_specs", refuse)
+    monkeypatch.setattr(update_channels, "channel_field_values", refuse)
 
     r = await console_module.channels_status({})
 
@@ -1701,14 +1701,14 @@ async def test_a_failed_field_read_replaces_the_row_rather_than_adding_one(
     """
     from raven.config import update_channels
 
-    existed = update_channels.channel_field_specs
+    existed = update_channels.channel_field_values
 
-    def refuse(name: str):
+    def refuse(name: str, **kwargs):
         if name == "telegram":
             raise RuntimeError("this channel's schema cannot be flattened")
-        return existed(name)
+        return existed(name, **kwargs)
 
-    monkeypatch.setattr(update_channels, "channel_field_specs", refuse)
+    monkeypatch.setattr(update_channels, "channel_field_values", refuse)
 
     r = await console_module.channels_status({})
 
@@ -1731,14 +1731,14 @@ async def test_a_failed_field_read_with_an_empty_message_still_marks_the_row(
     """
     from raven.config import update_channels
 
-    existed = update_channels.channel_field_specs
+    existed = update_channels.channel_field_values
 
-    def refuse(name: str):
+    def refuse(name: str, **kwargs):
         if name == "telegram":
             raise RuntimeError()
-        return existed(name)
+        return existed(name, **kwargs)
 
-    monkeypatch.setattr(update_channels, "channel_field_specs", refuse)
+    monkeypatch.setattr(update_channels, "channel_field_values", refuse)
 
     r = await console_module.channels_status({})
 
