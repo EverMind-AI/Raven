@@ -281,7 +281,13 @@ def test_a_grouped_effort_option_is_read_and_junk_entries_are_skipped() -> None:
 
 
 def _qoder_menus() -> dict:
-    """The two ``category: "model"`` entries Qoder 1.1.45 sends, effort first."""
+    """A synthetic pair of ``category: "model"`` entries, effort first.
+
+    The effort-first order is deliberate, not captured: no recorded Qoder
+    handshake fixes the order of its two entries, so this fixture only
+    reproduces the shape in which a positional read would take the effort
+    ladder as the model menu. It is not evidence of what Qoder sends.
+    """
     return {
         "configOptions": [
             {
@@ -318,8 +324,8 @@ def test_the_model_menu_is_the_entry_named_model_not_the_first_one_categorised_s
 
 def test_an_effort_option_mislabelled_as_model_is_still_read_as_effort() -> None:
     """Qoder 1.1.45 files ``reasoning_effort`` under ``category: "model"`` rather
-    than the protocol's ``thought_level``. Its id and name are what remain to
-    recognise it by; leaving it unread drops a ladder the agent does offer.
+    than the protocol's ``thought_level``. Its id is what remains to recognise
+    it by; leaving it unread drops a ladder the agent does offer.
     """
     option, current, choices = read_session_effort(_qoder_menus())
 
@@ -349,6 +355,55 @@ def test_an_effort_only_menu_leaves_the_model_menu_empty() -> None:
 
     assert (option, current) == ("reasoning_effort", "max")
     assert [c.value for c in choices] == ["high", "max", "none"]
+
+
+def test_a_model_menu_under_another_id_is_read_through_the_category_fallback() -> None:
+    """An agent may spell the model entry's id differently from ``model``.
+
+    ``category: "model"`` is then the only thing naming the entry, and the
+    fallback must take it while still skipping one whose id says it is effort.
+    Without the fallback the model menu reads empty and its current value is
+    lost.
+    """
+    renamed = {
+        "configOptions": [
+            {
+                "id": "model_menu",
+                "name": "Model",
+                "category": "model",
+                "currentValue": "gpt-x",
+                "options": [{"value": "gpt-x"}, {"value": "gpt-y"}],
+            }
+        ]
+    }
+
+    assert [c.value for c in _read_session_model_choices(renamed)] == ["gpt-x", "gpt-y"]
+    assert read_session_current_model(renamed) == "gpt-x"
+
+
+def test_a_model_menu_whose_label_mentions_effort_is_still_a_model_menu() -> None:
+    """A display name is not evidence about an entry's role.
+
+    The id ``model_menu`` is a plain machine name; the label "Effort-aware
+    model" describes the models, not an effort ladder. Reading the label as
+    effort left the model menu empty and surfaced the real model ids as effort
+    levels.
+    """
+    labelled = {
+        "configOptions": [
+            {
+                "id": "model_menu",
+                "name": "Effort-aware model",
+                "category": "model",
+                "currentValue": "gpt-x",
+                "options": [{"value": "gpt-x"}, {"value": "gpt-y"}],
+            }
+        ]
+    }
+
+    assert [c.value for c in _read_session_model_choices(labelled)] == ["gpt-x", "gpt-y"]
+    assert read_session_current_model(labelled) == "gpt-x"
+    assert read_session_effort(labelled) == ("", "", ())
 
 
 def test_a_mode_menu_of_effort_levels_is_offered_as_reasoning_effort() -> None:

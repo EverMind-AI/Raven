@@ -892,9 +892,15 @@ def _read_session_models(result: Any) -> tuple[str, ...]:
 
 
 def _looks_like_effort(entry: dict[str, Any]) -> bool:
-    """Whether an entry's id or name says it is a reasoning-effort menu."""
-    words = f"{entry.get('id') or ''} {entry.get('name') or ''}".lower()
-    return "effort" in words or "thought" in words
+    """Whether an entry's id says it is a reasoning-effort menu.
+
+    Only the id is read: it is the machine name (``reasoning_effort``,
+    ``thought_level``) and says what the entry is, while the name is a display
+    label -- an entry called "Effort-aware model" is still a model menu, so a
+    label is no evidence about the entry's role.
+    """
+    option_id = str(entry.get("id") or "").lower()
+    return "effort" in option_id or "thought" in option_id
 
 
 def _model_option(result: Any) -> dict[str, Any] | None:
@@ -927,9 +933,9 @@ def _is_effort_option(entry: dict[str, Any], model_entry: dict[str, Any] | None)
 
     ``thought_level`` is the category the protocol names for it. Qoder 1.1.45
     instead files ``reasoning_effort`` under ``category: "model"``, beside the
-    real model entry, so the id and name are the only signal left; a ``model``
-    entry that carries neither word is the model menu and must not be read as a
-    ladder of effort levels.
+    real model entry, so the id is the only signal left; a ``model`` entry whose
+    id carries neither word is the model menu and must not be read as a ladder
+    of effort levels.
     """
     if entry.get("category") == "thought_level":
         return True
@@ -990,7 +996,7 @@ def read_session_effort(result: Any) -> tuple[str, str, tuple[AcpEffortChoice, .
     why that agent's model list is the base models only: 1.14.31 packed the
     effort into ``model`` ids (``.../low``), and 1.19.4 moved it here. Qoder
     1.1.45 files ``reasoning_effort`` under ``category: "model"`` instead, which
-    :func:`_is_effort_option` recognises by its id and name.
+    :func:`_is_effort_option` recognises by its id.
 
     Empty everywhere when the agent advertises no such option, which is every
     agent measured before 1.19.4 and every one that has no reasoning effort to
