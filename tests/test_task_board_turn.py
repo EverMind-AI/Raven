@@ -293,6 +293,42 @@ async def test_a_dispatch_from_an_earlier_turn_is_not_placed_again(tmp_path):
     assert board.unassigned == [] and [len(g.steps) for g in board.groups] == [1]
 
 
+async def test_a_completed_board_is_summarized_before_the_update(tmp_path, monkeypatch):
+    from raven.agent.task_board import runner as board_runner
+
+    async def fake_retrieve(
+        board, query, *, session_dir, limit=5, embedder=None, generation=None, generation_now=None, write_lock=None
+    ):
+        return ["g_done"]
+
+    monkeypatch.setattr(board_runner, "retrieve_completed", fake_retrieve)
+    provider = Recording([LLMResponse(content=ANSWER), LLMResponse(content="Summary of the turn"), BOARD_REPLY])
+    agent = _agent(tmp_path, provider)
+    completed = TaskGroup(
+        "g_done",
+        "Done matter",
+        "Done summary",
+        "completed",
+        1,
+        2,
+        [ProgressStep("s1", "T0", None, "Done step", "detail", [])],
+    )
+    save_board(agent.sessions.session_dir(KEY), Board([completed], []))
+
+    await agent._process_message(_turn(), session_key=KEY)
+    await _drain(agent)
+
+    assert len(provider.requests) == 3
+    _turn_call, summary_call, update = provider.requests
+    assert summary_call["purpose"] == "task_board" and summary_call["tools"] == []
+    assert summary_call["effort"] == "none"
+    assert "Why is the page blank" in _text(summary_call["messages"][-1])
+    assert any((t.get("function") or {}).get("name") == "task_board" for t in update["tools"])
+    instruction = _text(update["messages"][-1])
+    assert "- g_done [completed] Done matter -- Done summary" in instruction
+    assert "    - Done step" in instruction
+
+
 @pytest.mark.parametrize(
     ("board", "channel", "asks_again"),
     [(True, "tui", False), (True, "weixin", True), (False, "tui", True)],

@@ -10,6 +10,7 @@ all may have nothing wrong with it, and is left where it is.
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from raven.agent.task_board.board import Board, board_from_dict, board_to_dict
 from raven.agent.task_board.notes import NOTES_FILENAME
 
 BOARD_FILENAME = "task_board.json"
+EMBEDDINGS_FILENAME = "task_board_embeddings.sqlite"
 
 
 def load_board(session_dir: Path) -> Board:
@@ -52,9 +54,38 @@ def save_board(session_dir: Path, board: Board) -> None:
     files.write_text(Path(session_dir) / BOARD_FILENAME, text)
 
 
+def _clear_vectors(path: Path) -> None:
+    connection = sqlite3.connect(path, timeout=1.0)
+    try:
+        table = connection.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'vec'").fetchone()
+        if table is not None:
+            connection.execute("DELETE FROM vec")
+            connection.commit()
+    finally:
+        connection.close()
+
+
+def remove_embeddings(session_dir: Path) -> None:
+    path = Path(session_dir) / EMBEDDINGS_FILENAME
+    try:
+        files.remove(path)
+    except OSError as exc:
+        # Windows refuses to unlink a file another handle holds open; clearing the rows
+        # is what the next recall needs, and the file can go at the next clear.
+        if not path.is_file():
+            return
+        try:
+            _clear_vectors(path)
+        except sqlite3.Error as clearing:
+            logger.warning(
+                "Task board recall cache {} stays with its rows: {}; clearing failed: {}", path, exc, clearing
+            )
+
+
 def reset_board(session_dir: Path) -> None:
     files.remove(Path(session_dir) / BOARD_FILENAME)
     files.remove(Path(session_dir) / NOTES_FILENAME)
+    remove_embeddings(session_dir)
 
 
 def copy_board(src: Path, dst: Path) -> None:

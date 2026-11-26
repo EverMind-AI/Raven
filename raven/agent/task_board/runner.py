@@ -35,6 +35,7 @@ import json
 import re
 import unicodedata
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
+from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
 from loguru import logger
@@ -53,6 +54,7 @@ from raven.agent.task_board.board import (
     salvage,
 )
 from raven.agent.task_board.dispatches import call_target
+from raven.agent.task_board.hybrid import RECALL_LIMIT, retrieve_completed
 from raven.agent.task_board.matters import candidates, matters_problems
 from raven.agent.task_board.service import TaskBoardService
 from raven.agent.task_board.tool import TOOL_NAME
@@ -63,10 +65,15 @@ MAX_ATTEMPTS = 3
 OPEN_STEPS_SHOWN = 2
 ASKED_SHOWN = 8
 TEMPLATE = "task_board_update"
+RECALL_TEMPLATE = "task_board_recall"
 MATTERS_TEMPLATE = "task_board_matters"
 MATTERS_OWNERS_TEMPLATE = "task_board_matters_owners"
 ASKED_TEMPLATE = "task_board_asked"
 CARRY_TEMPLATE = "task_board_carry"
+
+# The recall summary is mechanical; turning reasoning off measured no accuracy
+# loss and about half the latency.
+RECALL_SUMMARY_REASONING_EFFORT = "none"
 
 _PROSE = "Answer with a task_board call (action=update), not with text."
 _NOT_UPDATE = "Only action=update is accepted here; the board is already in the instruction above."
@@ -92,16 +99,50 @@ def should_run(status: str, dispatches: Sequence[Dispatch], *, silent: bool = Fa
     return status == "completed" and (bool(dispatches) or not silent)
 
 
-def _snapshot(board: Board) -> str:
+def _time_text(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _group_line(group: TaskGroup) -> str:
+    line = f"- {group.id} [{group.status}] {group.title}"
+    if group.summary:
+        line += f" -- {group.summary}"
+    return line + f" (created {_time_text(group.created_at)}, updated {_time_text(group.updated_at)})"
+
+
+def _step_lines(group: TaskGroup) -> list[str]:
+    return [f"    - {step.title}" for step in group.steps[-OPEN_STEPS_SHOWN:]]
+
+
+def _snapshot(board: Board, completed_ids: Sequence[str] = ()) -> str:
     if not board.groups:
         return "(the board is empty)"
+    by_id = {group.id: group for group in board.groups}
+    recalled: list[TaskGroup] = []
+    seen: set[str] = set()
+    for group_id in completed_ids:
+        group = by_id.get(group_id)
+        if group is None or group.status != "completed" or group.id in seen:
+            continue
+        seen.add(group.id)
+        recalled.append(group)
     lines: list[str] = []
     for group in sorted((g for g in board.groups if g.status != "completed"), key=lambda g: g.created_at):
-        lines.append(f"- {group.id} [{group.status}] {group.title}" + (f" -- {group.summary}" if group.summary else ""))
-        lines.extend(f"    - {step.title}" for step in group.steps[-OPEN_STEPS_SHOWN:])
-    done = sorted((g for g in board.groups if g.status == "completed"), key=lambda g: g.created_at)
-    if done:
-        lines.append("Completed: " + "; ".join(f"{g.id}: {g.title}" for g in done))
+        lines.append(_group_line(group))
+        lines.extend(_step_lines(group))
+    for group in recalled:
+        lines.append(_group_line(group))
+        lines.extend(_step_lines(group))
+    earlier = [group for group in board.groups if group.status == "completed" and group.id not in seen]
+    if earlier:
+        lines.append(
+            "Completed: "
+            + "; ".join(
+                f"{group.id}: {group.title}"
+                f" (created {_time_text(group.created_at)}, updated {_time_text(group.updated_at)})"
+                for group in sorted(earlier, key=lambda g: g.created_at)
+            )
+        )
     return "\n".join(lines)
 
 
@@ -396,16 +437,24 @@ def build_instruction(
     *,
     owners: Collection[str] = (),
     asked: Sequence[str] = (),
+    completed_ids: Sequence[str] = (),
+    now: str = "",
 ) -> str:
     """The post-turn instruction: the board record, the handles to place, the paragraph that
     lists the turn's ``candidates`` -- ``owners`` among them named first, on a line of their
     own -- and the questions the reply asked."""
+    now_line = f"Current time: {now}.\n\n" if now else ""
     return prompt(TEMPLATE).format(
-        board=_snapshot(board),
+        board=_snapshot(board, completed_ids),
         dispatches=_handles(board, dispatches),
         matters=_matters_paragraph(candidates, owners),
         asked=_asked_block(asked),
+        now_line=now_line,
     )
+
+
+def _recall_messages(words: str) -> list[dict]:
+    return [{"role": "user", "content": prompt(RECALL_TEMPLATE).format(transcript=words)}]
 
 
 def carry_candidates(before: Board, after: Board, turn_at: str) -> list[tuple[TaskGroup, TaskGroup]]:
@@ -575,6 +624,7 @@ async def _ask(
     candidates: list[str],
     words: str,
     questions: list[str],
+    completed_ids: Sequence[str] = (),
 ) -> tuple[dict[str, Any], bool, list[dict]] | None:
     """Up to MAX_ATTEMPTS asks; the arguments of an update the board accepted, whether
     they are a salvage, whose text past a limit stands, and the exchange the asks left
@@ -586,7 +636,15 @@ async def _ask(
     last update sent is salvaged: its work is placed and its steps written unless a fault
     lies there -- a fault in ``matters`` alone never stops it.
     """
-    instruction = build_instruction(board, dispatches, candidates, owners=owners, asked=questions)
+    instruction = build_instruction(
+        board,
+        dispatches,
+        candidates,
+        owners=owners,
+        asked=questions,
+        completed_ids=completed_ids,
+        now=_time_text(now_ms()),
+    )
     known = {group.id for group in board.groups}
     rows = list(window) + [{"role": "user", "content": instruction}]
     last: dict[str, Any] | None = None
@@ -759,6 +817,8 @@ async def run_post_turn(
     opening: str = "",
     mid_turn_messages: Sequence[dict] = (),
     answered_message_calls: Collection[str] = (),
+    summarize: Callable[[list[dict]], Awaitable[str]] | None = None,
+    retrieve: Callable[[Board, str], Awaitable[Sequence[str]]] | None = None,
 ) -> Board | None:
     """Keep the board for the turn that just ended; the board written, or ``None`` when no update was had.
 
@@ -771,7 +831,8 @@ async def run_post_turn(
 
     ``generation`` is the service's count of clears as the turn ended, read by
     the caller when it schedules this update: an update still waiting for the
-    queue when a clear lands belongs to the cleared conversation too.
+    queue when a clear lands belongs to the cleared conversation too, and the
+    recall's cache write is checked against the same count.
 
     ``delegated`` names the run whose result opened the turn -- read as the run the
     board placed when it descends from one -- and ``moved_on`` the groups the
@@ -795,6 +856,40 @@ async def run_post_turn(
             reply = _reply(reply_rows, answered_message_calls)
             heard = [_text(message.get("content")) for message in mid_turn_messages]
             searched = "\n".join([*([] if delegated else [opening]), *heard, *reply])
+            words = "\n".join([opening, *heard, *reply])
+            if retrieve is None:
+                session_dir = service.session_dir(session_key)
+
+                async def default_recall(board: Board, query: str) -> Sequence[str]:
+                    return await retrieve_completed(
+                        board,
+                        query,
+                        session_dir=session_dir,
+                        generation=generation,
+                        generation_now=lambda: service.generation(session_key),
+                        write_lock=service.lock(session_key),
+                    )
+
+                recall = default_recall
+            else:
+                recall = retrieve
+
+            query = words
+            if summarize is not None and any(group.status == "completed" for group in board.groups):
+                try:
+                    summary = (await summarize(_recall_messages(words))).strip()
+                    if summary:
+                        query = summary
+                except Exception as exc:
+                    logger.warning("Task board recall summary for {} failed: {}", session_key, exc)
+            if query.strip().upper().startswith("NO_WORK"):
+                query = ""
+            completed_ids: list[str] = []
+            if query:
+                try:
+                    completed_ids = list(await recall(board, query))[:RECALL_LIMIT]
+                except Exception as exc:
+                    logger.warning("Task board recall for {} failed: {}", session_key, exc)
             answer = await _ask(
                 board,
                 session_key=session_key,
@@ -806,8 +901,9 @@ async def run_post_turn(
                 now_ms=now_ms,
                 owners=owners,
                 candidates=candidates(board, owners, searched),
-                words="\n".join([opening, *heard, *reply]),
+                words=words,
                 questions=asked(reply),
+                completed_ids=completed_ids,
             )
         except Exception:
             logger.opt(exception=True).warning("Task board update for {} failed", session_key)

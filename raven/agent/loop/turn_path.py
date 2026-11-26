@@ -4324,7 +4324,11 @@ class TurnPathMixin:
         the other groups it may have moved.
         """
         from raven.agent.task_board.dispatches import delegated_handle, turn_dispatches
-        from raven.agent.task_board.runner import run_post_turn, should_run
+        from raven.agent.task_board.runner import (
+            RECALL_SUMMARY_REASONING_EFFORT,
+            run_post_turn,
+            should_run,
+        )
 
         board = self.task_board
         if board is None or outcome is None:
@@ -4360,6 +4364,19 @@ class TurnPathMixin:
                     reasoning_effort=effort,
                 )
 
+        async def summarize(rows: list[dict]) -> str:
+            with _llm_purpose("task_board"), usage_context.bind(key):
+                call_messages, _, call_model = await self.strategies.before_llm_call(rows, [], model)
+                response = await self.provider.chat_with_retry(
+                    messages=call_messages,
+                    tools=[],
+                    model=call_model,
+                    fallback_models=fallback_models,
+                    # A recall summary is mechanical, not the turn's own work.
+                    reasoning_effort=RECALL_SUMMARY_REASONING_EFFORT,
+                )
+            return "" if response.finish_reason == "error" else response.content or ""
+
         message_tool = self.tools.get("message")
         answered = message_tool.answered_calls_in_turn if isinstance(message_tool, MessageTool) else frozenset()
 
@@ -4380,6 +4397,7 @@ class TurnPathMixin:
                 opening=opening,
                 mid_turn_messages=[m for m in turn_added if m.get(_MID_TURN_USER_KEY)],
                 answered_message_calls=answered,
+                summarize=summarize,
             )
         )
         self._consolidation_tasks.add(task)

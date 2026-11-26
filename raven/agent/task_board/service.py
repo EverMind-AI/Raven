@@ -31,7 +31,7 @@ from raven.agent.task_board.board import (
 )
 from raven.agent.task_board.lineage import board_lineage
 from raven.agent.task_board.notes import Note, add_move_on, add_note, load_notes, note_line, save_notes
-from raven.agent.task_board.store import load_board, reset_board, save_board
+from raven.agent.task_board.store import load_board, remove_embeddings, reset_board, save_board
 
 if TYPE_CHECKING:
     from raven.session.manager import SessionManager
@@ -104,11 +104,13 @@ class TaskBoardService:
             logger.opt(exception=True).warning("Task board update for {} could not be announced", session_key)
 
     async def reset(self, session_key: str) -> None:
-        """Empty the board, as clearing the conversation does."""
+        """Empty the board and its derived recall cache, as clearing the conversation does."""
         async with self.lock(session_key):
             self._generation[session_key] = self.generation(session_key) + 1
             self._shown.pop(session_key, None)
-            save_notes(self.session_dir(session_key), [])
+            session_dir = self.session_dir(session_key)
+            save_notes(session_dir, [])
+            remove_embeddings(session_dir)
             await self.write(session_key, Board([], []))
 
     def on_session_deleted(self, session_key: str, removed: bool, *, session_dir: Path | None = None) -> None:
