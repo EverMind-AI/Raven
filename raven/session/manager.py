@@ -1354,11 +1354,17 @@ class SessionManager:
         path = self.session_path(key)
         if not path.is_file():
             return False
-        last, _count, _last_ts, _first, _preview = self._scan_file(path)
-        if last is None:
-            return False
-        merged = {**(last.get("metadata") or {}), **patch}
-        locked_append(path, [json.dumps({**last, "metadata": merged}, ensure_ascii=False)])
+        # The scan is the merge basis and the append lands it, so the same
+        # cross-process transaction the saves hold spans both: a record that
+        # lands in between would otherwise be rolled back by this merged copy
+        # of the older one -- its log_generation, its last_consolidated, its
+        # metadata keys.
+        with write_transaction(path):
+            last, _count, _last_ts, _first, _preview = self._scan_file(path)
+            if last is None:
+                return False
+            merged = {**(last.get("metadata") or {}), **patch}
+            locked_append(path, [json.dumps({**last, "metadata": merged}, ensure_ascii=False)])
         # The cached scan describes the file before this record. Drop it here
         # rather than trust the stamp, which can miss a same-size write on a
         # coarse clock.
@@ -1375,10 +1381,10 @@ class SessionManager:
             # whatever anybody wrote in between.
             cached._persisted_metadata.update(patch)
             # The cached copy's stamp is left where it was: this write is made for
-            # the key, not by the copy, and no lock spans the scan its record
-            # merges and the append. The file also carries the record this merged
-            # into, and a stale stamp is what makes the next save re-read it.
-            # Clean stays clean; a copy with changes of its own keeps them unsaved.
+            # the key, not by the copy. The file also carries the record this
+            # merged into, and a stale stamp is what makes the next save re-read
+            # it. Clean stays clean; a copy with changes of its own keeps them
+            # unsaved.
             if unchanged:
                 cached._clean_fingerprint = _fingerprint(cached)
         return True

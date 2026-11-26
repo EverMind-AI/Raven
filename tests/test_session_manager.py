@@ -4,6 +4,8 @@ import gc
 import json
 import os
 import re
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -137,6 +139,62 @@ def test_a_patch_stops_being_a_local_change_once_it_is_on_disk(tmp_path: Path):
     first.save(session)
 
     assert _last_metadata(first.session_path(key)).get("archived") is False
+
+
+def test_a_patch_waits_out_a_record_that_lands_while_it_reads(tmp_path: Path):
+    """A patch merges into the record the file holds when it writes, not when it started.
+
+    The scan that finds the merge basis and the append that lands the merged
+    record must sit in the same write transaction the saves hold. Without it,
+    a record appended in between -- another process's ordinary turn, carrying
+    its log_generation and last_consolidated -- was followed by this patch's
+    merged copy of the older record, and the last record on disk lost the
+    newer writer's fields.
+    """
+    from raven.utils.atomic_io import locked_append, write_transaction
+
+    key = "tui:20260610_100000_landed"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(key)
+    session.add_message("user", "hello")
+    mgr.save(session)
+    path = mgr.session_path(key)
+
+    newer = {
+        "_type": "metadata",
+        "key": key,
+        "created_at": session.created_at.isoformat(),
+        "updated_at": session.updated_at.isoformat(),
+        "metadata": {"title": "second writer"},
+        "last_consolidated": 7,
+        "log_id": 2,
+        "log_generation": 2,
+        "log_started_at": None,
+        "pending_clarification": None,
+    }
+    payload = json.dumps(newer, ensure_ascii=False)
+    held = threading.Event()
+
+    def other_writer() -> None:
+        with write_transaction(path):
+            held.set()
+            time.sleep(0.2)
+            locked_append(path, [payload])
+
+    lander = threading.Thread(target=other_writer)
+    lander.start()
+    assert held.wait(5.0)
+    assert mgr.append_metadata_patch(key, {"pinned": True}) is True
+    lander.join()
+
+    last_row: dict = {}
+    for text in path.read_text(encoding="utf-8").splitlines():
+        row = json.loads(text)
+        if row.get("_type") == "metadata":
+            last_row = row
+    assert last_row["log_generation"] == 2
+    assert last_row["metadata"]["title"] == "second writer"
+    assert last_row["metadata"]["pinned"] is True
 
 
 def test_a_save_does_not_resurrect_a_key_this_copy_cleared(tmp_path: Path):
