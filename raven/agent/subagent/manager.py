@@ -2353,6 +2353,8 @@ class SubagentManager:
         from raven.agent.subagent.watch_work import hoarded_code_note
 
         hoard_note = hoarded_code_note(result)
+        from raven.context_engine.segments.render import autonomy_guideline
+
         announce_content = f"""[Subagent '{task_summary}' {status_text}]
 
 Task: {asked}
@@ -2360,7 +2362,7 @@ Task: {asked}
 Result:
 {fenced_result}{record_line}
 
-{RESULT_REPORT_RULE} Do not report the task as done merely because this message arrived: judge what the run delivered from what the sub-agent itself says it did, and if that account does not show the work finished, say what is missing or ask the user how to proceed rather than presenting it as complete. Anything the sub-agent stated it could not do -- a missing input, an unmet precondition, a refusal, a gap it flagged -- is part of the outcome: pass it on in full. Keep technical details like the instance handle and task ids out of what you say to the user -- they stay available for your own later calls.{hoard_note}"""
+{RESULT_REPORT_RULE} Do not report the task as done merely because this message arrived: judge what the run delivered from what the sub-agent itself says it did, and if that account does not show the work finished, say what is missing or ask the user how to proceed rather than presenting it as complete. Anything the sub-agent stated it could not do -- a missing input, an unmet precondition, a refusal, a gap it flagged -- is part of the outcome: pass it on in full. Keep technical details like the instance handle and task ids out of what you say to the user -- they stay available for your own later calls. {autonomy_guideline()}{hoard_note}"""
 
         assert self._submit is not None
         mark: dict[str, Any] = {"kind": "spawn", "label": task_summary, "status": status}

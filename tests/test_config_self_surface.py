@@ -20,6 +20,7 @@ _NEXT_TURN_READERS: dict[str, tuple[str, str]] = {
     "agents.defaults.maxToolIterations": ("raven.config.live", "max_tool_iterations"),
     "agents.defaults.contextWindowTokens": ("raven.config.live", "context_window_tokens"),
     "agents.defaults.enablePersonalization": ("raven.config.live", "personalization_enabled"),
+    "agents.defaults.autonomyMode": ("raven.config.live", "autonomy_mode"),
     "routing.profile": ("raven.config.live", "routing_profile"),
     "providers.*.apiKey": ("raven.providers.resolving_provider", "ResolvingProvider"),
     "providers.*.apiBase": ("raven.providers.resolving_provider", "ResolvingProvider"),

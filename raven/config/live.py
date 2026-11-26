@@ -50,6 +50,8 @@ __all__ = [
     "hold_for_this_turn",
     "held",
     "context_window_tokens",
+    "AUTONOMY_MODES",
+    "autonomy_mode",
     "cron_default_timezone",
     "decision_for_skills",
     "decision_for_specialists",
@@ -593,6 +595,18 @@ def reasoning_effort(live: LiveConfig) -> str | None:
         if isinstance(value, str) and value:
             return value
     return None
+
+
+AUTONOMY_MODES = ("lite", "standard", "max")
+
+
+def autonomy_mode(live: LiveConfig) -> str:
+    """``agents.defaults.autonomyMode`` as the file has it; unknown or absent is ``standard``."""
+    for key in ("agents.defaults.autonomyMode", "agents.defaults.autonomy_mode"):
+        value = live.get(key)
+        if isinstance(value, str) and value.strip().lower() in AUTONOMY_MODES:
+            return value.strip().lower()
+    return "standard"
 
 
 def personalization_enabled(live: LiveConfig) -> bool | None:

@@ -218,6 +218,13 @@ SECTIONS: tuple[Section, ...] = (
                 note='value is {"provider": "<provider>", "model": "<model id>"}; takes over from this '
                 "session's next turn",
             ),
+            Setting(
+                "agents.defaults.autonomyMode",
+                "How far the agent goes before asking you: lite confirms first, standard asks only for irreversible or external actions, max runs end to end",
+                "enum",
+                _E.NEXT_TURN,
+                choices=("lite", "standard", "max"),
+            ),
             # The words are ``REASONING_EFFORTS``, the one list the console's
             # checker and the session's pick read too; null hands the choice
             # back to the provider's own default, as the settings page offers.
