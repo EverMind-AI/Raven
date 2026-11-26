@@ -3819,6 +3819,44 @@ def test_the_builtin_budget_follows_the_live_config(tmp_path, monkeypatch) -> No
     assert manager._builtin_max_iterations() == default
 
 
+def test_the_builtin_budget_is_held_for_the_turn(tmp_path, monkeypatch) -> None:
+    """A spawn dispatched mid-turn runs under the cap its turn started on, not
+    the file's value now. The turn scope holds the cap, and reading the live
+    file instead let one turn's spawn and the turn itself run under two
+    different ceilings."""
+    from raven.config.live import hold_for_this_turn
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    config = home / "config.json"
+    config.write_text(json.dumps({"agents": {"defaults": {"maxToolIterations": 9}}}))
+    manager = SubagentManager(provider=_StubProvider(), workspace=tmp_path)
+
+    with hold_for_this_turn(**{"agents.defaults.maxToolIterations": 5}):
+        assert manager._builtin_max_iterations() == 5
+    assert manager._builtin_max_iterations() == 9
+
+
+def test_the_builtin_budget_falls_back_to_the_loops_default(tmp_path, monkeypatch) -> None:
+    """With no key in the file, the budget is the number the loop itself falls
+    back to, not a second schema default: a loop built on another
+    ``TurnPolicy`` cap (or one whose file lost the key after boot) must not
+    hand its spawns a different ceiling. A negative is "no answer" to the
+    shared reader, so it lands on the same fallback."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    config = home / "config.json"
+    config.write_text("{}")
+    manager = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_iterations_fallback=lambda: 25)
+
+    assert manager._builtin_max_iterations() == 25
+
+    config.write_text(json.dumps({"agents": {"defaults": {"maxToolIterations": -5}}}))
+    assert manager._builtin_max_iterations() == 25
+
+
 async def test_a_run_out_of_rounds_says_its_answer_is_partial(tmp_path) -> None:
     """The wrap-up is worth having and it is still not the work: the tool budget
     ended the run, not the task. Handed back bare, a spawn records it completed

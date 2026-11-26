@@ -240,6 +240,11 @@ SESSION_ROUTES: dict[str, dict[str, str]] = {}
 #: Both vendors under one key: they are read from one section and a turn
 #: that spawns twice must not straddle an edit between the two spawns.
 _WEB_VENDORS_KEY = "tools.web.providers"
+#: The iteration cap a turn holds for its own length (``AgentLoop._turn_scope``
+#: sets it under this key). A spawn dispatched mid-turn must read the held value,
+#: or it would run under the file's current number while its parent runs under
+#: the one the turn started on.
+_CAP_KEY = "agents.defaults.maxToolIterations"
 
 
 class SubagentManager:
@@ -272,6 +277,7 @@ class SubagentManager:
         task_board: bool = False,
         long_run_notice_seconds: float = DEFAULT_LONG_RUN_NOTICE_SECONDS,
         control_reachable: Callable[[], bool] | None = None,
+        max_iterations_fallback: "Callable[[], int | None] | None" = None,
     ):
         from raven.config.schema import LLM_ERROR_RETRY_DELAYS_DEFAULT, ExecToolConfig
 
@@ -299,6 +305,11 @@ class SubagentManager:
         # rather than reached for: the manager has no loop reference, and a test
         # rig that passes none keeps the pre-tier behaviour exactly.
         self._session_tier = session_tier
+        # What the loop falls back to when the file names no cap. Injected for the
+        # same reason as the tier reader: the manager holds no loop, and the schema
+        # default is not the number a loop built with a different ``TurnPolicy``
+        # runs on. None means "no loop to ask", which keeps the schema default.
+        self._max_iterations_fallback = max_iterations_fallback
         # Spine submit, late-bound (the scheduler pins its home loop at
         # construction and is built inside each entry point's run loop; this
         # manager is built in AgentLoop.__init__ in the sync prologue). Wired via
@@ -468,18 +479,23 @@ class SubagentManager:
 
         The same knob the main loop reads (``agents.defaults.maxToolIterations``),
         so a built-in agent and the turn that dispatched it cannot run under two
-        ceilings. ``0`` or an explicit null is unbounded; an absent key keeps the
-        schema default the main loop falls back to.
+        ceilings. Read through ``held`` under the key the turn holds its cap
+        under: a spawn dispatched mid-turn keeps the number the turn started on
+        even if the file changed since. ``0`` or an explicit null is unbounded; an
+        absent key keeps the loop's own default.
         """
-        from raven.config.live import LiveConfig, max_tool_iterations
+        from raven.config.live import LiveConfig, held, max_tool_iterations
 
         if self._live_config is None:
             self._live_config = LiveConfig()
-        configured = max_tool_iterations(self._live_config)
+        configured = held(_CAP_KEY, lambda: max_tool_iterations(self._live_config))
         if configured is None:
-            from raven.config.schema import AgentDefaults
+            if self._max_iterations_fallback is not None:
+                configured = self._max_iterations_fallback()
+            else:
+                from raven.config.schema import AgentDefaults
 
-            configured = AgentDefaults.model_fields["max_tool_iterations"].default
+                configured = AgentDefaults.model_fields["max_tool_iterations"].default
         return configured if configured and configured > 0 else None
 
     def build_builtin_backend(self, row: "AgentRow", build: Any = None) -> "RavenLoopBackend":
