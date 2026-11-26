@@ -99,6 +99,13 @@ SIZE_TIMEOUT_S = 5
 # Raven when nobody is looking.
 STATUS_HOLD_S = 5
 
+# How long the relaunched Raven is watched before the upgrade is called good.
+# It is detached, so this helper sees its exit status and nothing else; a
+# launch its own checks refuse -- an unusable working directory is the usual
+# one -- exits within a few seconds. Long enough to catch that, short enough
+# that a healthy restart is not held up by it.
+RESTART_PROBE_S = 4
+
 WAITING_PAGE = (
     b'<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="3">'
     b"<title>Raven</title><p>Raven is upgrading...</p>"
@@ -685,9 +692,24 @@ def run(argv=None):
             return True
         try:
             kwargs = {} if sys.platform == "win32" else {"start_new_session": True}
-            subprocess.Popen(relaunch, **kwargs)
+            restarted = subprocess.Popen(relaunch, **kwargs)
         except OSError as exc:
             print(f"Could not restart Raven: {exc}.", file=sys.stderr)
+            return False
+        # The new process is detached, so its early exit is the only account
+        # this helper gets of a launch that did not take. The page's server is
+        # already gone by now -- it has to be, the new Raven binds the port --
+        # which leaves stderr and the exit status as the places to say it.
+        try:
+            exited = restarted.wait(timeout=RESTART_PROBE_S)
+        except subprocess.TimeoutExpired:
+            exited = None
+        if isinstance(exited, int) and exited != 0:
+            print(
+                f"Raven exited with status {exited} while restarting; if it was started from "
+                "the filesystem root or your home directory, start it from a project directory.",
+                file=sys.stderr,
+            )
             return False
         print("Raven restarted.")
         return True
