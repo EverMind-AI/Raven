@@ -607,8 +607,11 @@ def _configured_agent_home() -> Path:
     Only the raw workspace value is read here, and only its resolution is
     shared: that value is handed to ``Config.workspace_path`` so the default
     follows ``RAVEN_HOME`` and an explicitly configured path is expanded the
-    same way. A present-but-unreadable or malformed file falls back to the
-    default home rather than failing the start.
+    same way. A blank value is not treated as unset: it resolves to the current
+    directory exactly as ``Config.workspace_path`` does, because treating it as
+    unset would check one home while the engine ran on another. A
+    present-but-unreadable or malformed file falls back to the default home
+    rather than failing the start.
     """
     import json
 
@@ -622,7 +625,7 @@ def _configured_agent_home() -> Path:
             agents = raw.get("agents") if isinstance(raw, dict) else None
             defaults = agents.get("defaults") if isinstance(agents, dict) else None
             workspace = defaults.get("workspace") if isinstance(defaults, dict) else None
-            if isinstance(workspace, str) and workspace.strip():
+            if isinstance(workspace, str):
                 return Config.model_validate({"agents": {"defaults": {"workspace": workspace}}}).workspace_path
     return Config().workspace_path
 

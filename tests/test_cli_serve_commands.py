@@ -1749,11 +1749,13 @@ class TestTheChosenSurface:
         assert "gateway already running" not in out
         assert opened == ["http://127.0.0.1:18999/auth#z"]
 
-    def test_a_schema_invalid_config_falls_back_instead_of_failing_the_start(self, home: Path, monkeypatch) -> None:
+    def test_a_schema_invalid_config_does_not_break_the_launch_dir_check(self, home: Path, monkeypatch) -> None:
         """``load_config`` runs the config migrations -- which rewrite the file --
         and raises a bare schema ``ValueError``. A launch-directory check must do
         neither: a malformed ``agents.defaults`` falls back to the default home
-        and the check still runs to its own answer."""
+        and the check still runs to its own answer. The start itself still fails
+        later, in ``build_agent_loop``; what is pinned here is only that this
+        check neither raises the schema error nor touches the file."""
         from raven.config.loader import get_config_path, load_config
 
         home.mkdir(parents=True, exist_ok=True)
@@ -1775,10 +1777,98 @@ class TestTheChosenSurface:
         assert serve_commands._configured_agent_home() == home / "workspace"
         assert config_path.read_text(encoding="utf-8") == before, "the launch check ran config migrations"
 
+    def test_a_valid_config_that_needs_a_migration_is_not_rewritten(self, home: Path, monkeypatch) -> None:
+        """The schema-invalid file cannot pin this: the old reader raised before
+        it ever reached the migrations. A valid file that is behind the watermark
+        is what separates the two readers -- ``load_config`` rewrites it on the
+        way to resolving the home, and this check must resolve the same home
+        without touching it."""
+        import hashlib
+
+        from raven.config.loader import get_config_path
+
+        home.mkdir(parents=True, exist_ok=True)
+        config_path = get_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps({"agents": {"defaults": {"contextWindowTokens": 65536}}}), encoding="utf-8")
+        before = hashlib.sha256(config_path.read_bytes()).hexdigest()
+        project = home.parent / "project"
+        project.mkdir()
+        monkeypatch.chdir(project)
+
+        serve_commands._refuse_unusable_launch_dir()
+
+        assert serve_commands._configured_agent_home() == home / "workspace"
+        assert hashlib.sha256(config_path.read_bytes()).hexdigest() == before, "the launch check ran config migrations"
+
+    @pytest.mark.parametrize("workspace", ["", "   "])
+    def test_a_blank_workspace_resolves_as_the_config_resolves_it(
+        self, home: Path, monkeypatch, workspace: str
+    ) -> None:
+        """``Config.workspace_path`` reads a blank workspace as the current
+        directory, not as unset. Reading it as unset pointed this check at the
+        default home while ``build_engine`` ran on the current directory -- the
+        one state the check exists to refuse."""
+        from raven.config.loader import get_config_path, load_config
+
+        home.mkdir(parents=True, exist_ok=True)
+        config_path = get_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps({"agents": {"defaults": {"workspace": workspace}}}), encoding="utf-8")
+
+        assert serve_commands._configured_agent_home() == load_config().workspace_path
+
+    def test_an_invalid_json_file_falls_back_to_the_default_home(self, home: Path) -> None:
+        """A half-written file must not fail the launch check: the check's answer
+        is about the directory, and the schema error belongs to the build."""
+        from raven.config.loader import get_config_path
+
+        home.mkdir(parents=True, exist_ok=True)
+        config_path = get_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text('{"agents": ', encoding="utf-8")
+
+        assert serve_commands._configured_agent_home() == home / "workspace"
+
+    def test_an_explicit_workspace_is_expanded_like_the_config_expands_it(self, home: Path) -> None:
+        """A ``~`` in the configured workspace names the user's home, not a
+        directory literally called ``~``. The config expands it; so must this."""
+        from raven.config.loader import get_config_path
+
+        home.mkdir(parents=True, exist_ok=True)
+        config_path = get_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            json.dumps({"agents": {"defaults": {"workspace": "~/projects/thing"}}}), encoding="utf-8"
+        )
+
+        assert serve_commands._configured_agent_home() == Path("~/projects/thing").expanduser()
+
+    def test_a_config_path_that_cannot_be_read_falls_back_to_the_default_home(self, home: Path) -> None:
+        """An unreadable config is the same case as a malformed one: fall back,
+        because the check is about the directory and the file's problem is the
+        build's to report."""
+        from raven.config.loader import get_config_path
+
+        home.mkdir(parents=True, exist_ok=True)
+        config_path = get_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.mkdir()
+
+        assert serve_commands._configured_agent_home() == home / "workspace"
+
+    def test_the_lock_label_without_a_pid_names_a_gateway(self, home: Path, monkeypatch) -> None:
+        """When the holder's pid is not readable the line must still say who
+        holds the lock, without inventing a number."""
+        monkeypatch.setattr(serve_commands, "_live_gateway_pid", lambda: None)
+
+        assert serve_commands._gateway_lock_label() == "a gateway"
+
     def test_the_refusal_names_a_directory_the_session_could_use(self, home: Path, monkeypatch, capsys) -> None:
         """A refusal that only says "elsewhere" leaves the user to guess. The
-        per-channel root beside agent home is where the session would otherwise
-        live, so that is what the message offers."""
+        per-channel root beside agent home is a directory outside the agent home
+        that serve can be started from, so that is what the message offers -- not
+        where the session lands, which is the launch directory itself."""
         home.mkdir(parents=True, exist_ok=True)
         monkeypatch.chdir(home.parent)
 
