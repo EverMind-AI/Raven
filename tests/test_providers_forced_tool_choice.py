@@ -133,6 +133,78 @@ class TestTheRetry:
         assert out.finish_reason == "error"
 
 
+class TestTheStreamRetry:
+    async def test_a_refused_force_is_retried_once_under_auto_on_the_stream(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _RefuseThenAccept.bodies = []
+        monkeypatch.setattr(mod.httpx, "AsyncClient", _RefuseThenAccept)
+        provider = mod.OpenAIResponsesProvider(api_key="k", default_model="deepseek/deepseek-v4-pro")
+
+        deltas = [
+            delta
+            async for delta in provider.chat_stream(
+                [{"role": "user", "content": "hi"}],
+                tools=[{"type": "function", "function": {"name": "annotate_conversation", "parameters": {}}}],
+                tool_choice="required",
+            )
+        ]
+
+        sent = [b.get("tool_choice") for b in _RefuseThenAccept.bodies]
+        assert sent == ["required", "auto"], sent
+        assert deltas[-1].finish_reason != "error"
+        call = deltas[-1].tool_call_delta["tool_calls"][0]
+        assert call["function"]["name"] == "annotate_conversation"
+
+    async def test_the_stream_relaxation_happens_at_most_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A 400 that keeps naming tool_choice must not loop."""
+
+        class _AlwaysRefuse(_RefuseThenAccept):
+            def stream(self, _method: str, _url: str, **kwargs: Any) -> "_Response":
+                _AlwaysRefuse.bodies.append(dict(kwargs.get("json") or {}))
+                return _Response(forced=True)
+
+        _AlwaysRefuse.bodies = []
+        monkeypatch.setattr(mod.httpx, "AsyncClient", _AlwaysRefuse)
+        provider = mod.OpenAIResponsesProvider(api_key="k", default_model="deepseek/deepseek-v4-pro")
+
+        deltas = [
+            delta
+            async for delta in provider.chat_stream(
+                [{"role": "user", "content": "hi"}],
+                tools=[{"type": "function", "function": {"name": "t", "parameters": {}}}],
+                tool_choice="required",
+            )
+        ]
+
+        assert len(_AlwaysRefuse.bodies) == 2
+        assert deltas[-1].finish_reason == "error"
+
+    async def test_a_stream_500_that_mentions_tool_choice_is_not_relaxed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A gateway can echo the request body into a 5xx; that is not a refusal."""
+
+        class _ServerError(_RefuseThenAccept):
+            def stream(self, _method: str, _url: str, **kwargs: Any) -> "_Response":
+                _ServerError.bodies.append(dict(kwargs.get("json") or {}))
+                return _Response(forced=True, status=500)
+
+        _ServerError.bodies = []
+        monkeypatch.setattr(mod.httpx, "AsyncClient", _ServerError)
+        provider = mod.OpenAIResponsesProvider(api_key="k", default_model="deepseek/deepseek-v4-pro")
+
+        deltas = [
+            delta
+            async for delta in provider.chat_stream(
+                [{"role": "user", "content": "hi"}],
+                tools=[{"type": "function", "function": {"name": "t", "parameters": {}}}],
+                tool_choice="required",
+            )
+        ]
+
+        assert [b.get("tool_choice") for b in _ServerError.bodies] == ["required"]
+        assert deltas[-1].finish_reason == "error"
+
+
 class TestOnlyA400:
     async def test_a_500_that_mentions_tool_choice_is_not_relaxed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A gateway can echo the request body into a 5xx; that is not a refusal.

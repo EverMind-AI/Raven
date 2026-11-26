@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -11,9 +13,12 @@ from loguru import logger
 
 from raven.providers import forced_tool_choice
 from raven.providers.base import (
+    ChatDelta,
     ErrorClassification,
+    GenerationSettings,
     LLMProvider,
     LLMResponse,
+    ToolCallRequest,
     format_llm_error,
 )
 from raven.providers.call_timeout import call_timeout
@@ -23,7 +28,9 @@ from raven.providers.openai_codex_provider import (
     _convert_messages,
     _convert_tool_choice,
     _convert_tools,
+    _iter_sse,
 )
+from raven.providers.responses_stream import _ResponsesStreamState
 from raven.providers.usage import responses_usage
 
 _GPT_VERSION = re.compile(r"(?:^|/)gpt-(\d+)\.(\d+)(?:$|[-/])", re.IGNORECASE)
@@ -87,17 +94,17 @@ class OpenAIResponsesProvider(LLMProvider):
         del model
         return True
 
-    async def chat(
+    def _build_request(
         self,
         messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None = None,
-        model: str | None = None,
-        max_tokens: int | None = None,
-        temperature: float = 0.7,
-        reasoning_effort: str | None = None,
-        tool_choice: str | dict[str, Any] | None = None,
-    ) -> LLMResponse:
-        stored_model = model or self.default_model
+        tools: list[dict[str, Any]] | None,
+        stored_model: str,
+        max_tokens: int | None,
+        temperature: float,
+        reasoning_effort: str | None,
+        tool_choice: str | dict[str, Any] | None,
+    ) -> tuple[str, dict[str, Any], dict[str, str]]:
+        """The wire request ``chat`` and ``chat_stream`` both send."""
         instructions, input_items = _convert_messages(messages, openai_item_ids=self._provider_name == "openai")
         body: dict[str, Any] = {
             "model": self.wire_model_id(stored_model),
@@ -145,6 +152,53 @@ class OpenAIResponsesProvider(LLMProvider):
 
         url = f"{(self.api_base or _DEFAULT_BASE).rstrip('/')}/responses"
         headers = {"Accept": "text/event-stream", **self.extra_headers}
+        return url, body, headers
+
+    def _failure(self, exc: Exception, *, relaxed: bool) -> tuple[ErrorClassification, str]:
+        """The verdict and the reader-facing text for a failed call."""
+        classification = self.classify_error(exc)
+        if any(
+            marker in str(exc).lower()
+            for marker in (
+                "upstream_error",
+                "responses response incomplete",
+                "responses body ended before completion",
+            )
+        ):
+            # The tool-choice verdict rides along: it names a field to relax
+            # on the request, which holds whatever the failure is filed under.
+            classification = ErrorClassification(
+                "server",
+                retryable=True,
+                should_fallback=True,
+                refuses_forced_tool_choice=classification.refuses_forced_tool_choice,
+            )
+        if classification.category == "unknown" and not str(exc).strip():
+            classification = ErrorClassification("network", retryable=True)
+        if relaxed:
+            classification = forced_tool_choice.already_relaxed(classification)
+        return classification, format_llm_error(exc, classification, provider=self._provider_name)
+
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float = 0.7,
+        reasoning_effort: str | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> LLMResponse:
+        stored_model = model or self.default_model
+        url, body, headers = self._build_request(
+            messages,
+            tools,
+            stored_model,
+            max_tokens,
+            temperature,
+            reasoning_effort,
+            tool_choice,
+        )
         raw_usage: dict[str, Any] = {}
         relaxed = False
         try:
@@ -195,33 +249,127 @@ class OpenAIResponsesProvider(LLMProvider):
                 usage=responses_usage(raw_usage),
             )
         except Exception as exc:
-            classification = self.classify_error(exc)
-            if any(
-                marker in str(exc).lower()
-                for marker in (
-                    "upstream_error",
-                    "responses response incomplete",
-                    "responses body ended before completion",
-                )
-            ):
-                # The tool-choice verdict rides along: it names a field to relax
-                # on the request, which holds whatever the failure is filed under.
-                classification = ErrorClassification(
-                    "server",
-                    retryable=True,
-                    should_fallback=True,
-                    refuses_forced_tool_choice=classification.refuses_forced_tool_choice,
-                )
-            if classification.category == "unknown" and not str(exc).strip():
-                classification = ErrorClassification("network", retryable=True)
-            if relaxed:
-                classification = forced_tool_choice.already_relaxed(classification)
+            classification, message = self._failure(exc, relaxed=relaxed)
             return LLMResponse(
-                content=format_llm_error(exc, classification, provider=self._provider_name),
+                content=message,
                 finish_reason="error",
                 usage=responses_usage(raw_usage),
                 error_classification=classification,
             )
+
+    async def chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        max_tokens: object = LLMProvider._SENTINEL,
+        temperature: object = LLMProvider._SENTINEL,
+        reasoning_effort: object = LLMProvider._SENTINEL,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> AsyncIterator[ChatDelta]:
+        """Stream the SSE body one text chunk at a time.
+
+        ``chat`` reads that body to the end and returns the folded reply; here
+        each ``response.output_text.delta`` goes out as it arrives, so a turn's
+        words reach the reader while the call is still running. What only the
+        end can know -- the tool calls, the usage and the finish reason -- rides
+        the terminal delta. A refusal streams as the reply it is.
+        """
+        gen = getattr(self, "generation", None) or GenerationSettings()
+        if max_tokens is self._SENTINEL:
+            max_tokens = gen.max_tokens
+        if temperature is self._SENTINEL:
+            temperature = gen.temperature
+        if reasoning_effort is self._SENTINEL:
+            reasoning_effort = gen.reasoning_effort
+        stored_model = model or self.default_model
+        url, body, headers = self._build_request(
+            messages,
+            tools,
+            stored_model,
+            max_tokens if isinstance(max_tokens, int) else None,
+            temperature if isinstance(temperature, (int, float)) else 0.7,
+            reasoning_effort if isinstance(reasoning_effort, str) else None,
+            tool_choice,
+        )
+        raw_usage: dict[str, Any] = {}
+        relaxed = False
+        emitted = False
+        state: _ResponsesStreamState | None = None
+        try:
+            async with (
+                call_timeout(gen.timeout),
+                httpx.AsyncClient(timeout=httpx_timeout(gen) or gen.timeout, verify=self.tls_verify) as client,
+            ):
+                while True:
+                    async with client.stream(
+                        "POST",
+                        url,
+                        headers={"Authorization": f"Bearer {self.api_key}", **headers},
+                        json=body,
+                    ) as response:
+                        if response.status_code >= 400:
+                            detail = (await response.aread()).decode("utf-8", "replace")
+                            if response.status_code == 400 and not relaxed and _relax_forced_tool_choice(body, detail):
+                                relaxed = True
+                                logger.info(
+                                    "{} refused a forced tool choice; retrying with tool_choice=auto",
+                                    stored_model,
+                                )
+                                continue
+                            raise RuntimeError(f"HTTP {response.status_code}: {detail[:2000]}")
+                        # The same two bounds chat() reads: the idle cap is for a
+                        # stream that stopped mid-answer, the first byte for one
+                        # that never started.
+                        idle_timeout = getattr(gen, "stream_idle_timeout", None) or gen.timeout
+                        state = _ResponsesStreamState(raw_usage)
+                        async for event in _iter_sse(response, idle_timeout, stream_first_byte_budget(gen)):
+                            text_delta, refusal_delta = state.feed(event)
+                            if text_delta:
+                                emitted = True
+                                yield ChatDelta(content=text_delta)
+                            if refusal_delta:
+                                # A refusal is the reply, and the finish says so:
+                                # the terminal chunk after it only says ``stop``.
+                                emitted = True
+                                yield ChatDelta(content=refusal_delta, finish_reason="refusal")
+                        break
+            content, tool_calls, finish_reason = state.result() if state is not None else ("", [], "unknown")
+            # A body that named its words only on a terminal event still answers
+            # once: nothing has been shown yet, so it rides the terminal delta.
+            if content and not emitted:
+                yield ChatDelta(content=content)
+            yield ChatDelta(
+                content=None,
+                tool_call_delta=_tool_call_fragments(tool_calls) if tool_calls else None,
+                usage=responses_usage(raw_usage) or None,
+                finish_reason=finish_reason,
+            )
+        except Exception as exc:
+            classification, message = self._failure(exc, relaxed=relaxed)
+            yield ChatDelta(
+                content=message,
+                finish_reason="error",
+                usage=responses_usage(raw_usage) or None,
+                error_classification=classification,
+            )
+
+
+def _tool_call_fragments(tool_calls: list[ToolCallRequest]) -> dict[str, Any]:
+    """The terminal delta's tool calls in the fragment shape stream callers merge."""
+    return {
+        "tool_calls": [
+            {
+                "index": index,
+                "id": call.id,
+                "function": {
+                    "name": call.name,
+                    "arguments": json.dumps(call.arguments, ensure_ascii=False),
+                },
+            }
+            for index, call in enumerate(tool_calls)
+        ]
+    }
 
 
 def _uses_gpt56_profile(model: str) -> bool:
