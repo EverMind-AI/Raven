@@ -1,19 +1,19 @@
 {
   "rotationMs": 2500,
   "verbs": [
-    "circling",
-    "scouting",
-    "gathering",
-    "sifting",
-    "tracing",
-    "turning",
-    "weighing",
-    "prying",
-    "homing",
-    "tallying",
-    "caching",
-    "watching",
-    "perching",
-    "plotting"
+    "Circling",
+    "Scouting",
+    "Gathering",
+    "Sifting",
+    "Tracing",
+    "Turning",
+    "Weighing",
+    "Prying",
+    "Homing",
+    "Tallying",
+    "Caching",
+    "Watching",
+    "Perching",
+    "Plotting"
   ]
 }

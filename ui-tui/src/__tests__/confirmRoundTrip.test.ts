@@ -9,6 +9,7 @@ import type { Msg } from '../types.js'
 
 import { createGatewayEventHandler } from '../app/createGatewayEventHandler.js'
 import { getOverlayState, patchOverlayState, resetOverlayState } from '../app/overlayStore.js'
+import { STATUS } from '../app/statusText.js'
 import { resetTurnState } from '../app/turnStore.js'
 import { getUiState, patchUiState, resetUiState } from '../app/uiStore.js'
 import { buildConfirmRespond, tickCountdown } from '../lib/confirmCountdown.js'
@@ -76,7 +77,7 @@ describe('confirm round-trip', () => {
         prompt: 'Continue?',
         requestId: 'r1'
       })
-      expect(getUiState().status).toBe('confirm needed')
+      expect(getUiState().status).toBe(STATUS.confirmNeeded)
     })
   })
 
@@ -96,7 +97,7 @@ describe('confirm round-trip', () => {
         if (r) {
           // Mirrors useMainApp.answerConfirm's done callback exactly.
           patchOverlayState({ confirm: null })
-          patchUiState({ status: 'running…' })
+          patchUiState({ status: STATUS.running })
         }
       }
 
@@ -127,14 +128,14 @@ describe('confirm round-trip', () => {
         payload: { default: false, prompt: 'Continue?', request_id: 'r1' },
         type: 'confirm.request'
       } as any)
-      expect(getUiState().status).toBe('confirm needed')
+      expect(getUiState().status).toBe(STATUS.confirmNeeded)
 
       const rpc = vi.fn(async () => ({ ok: true }))
       await answerConfirm(rpc)(true)
 
       expect(getOverlayState().confirm).toBeNull()
-      expect(getUiState().status).not.toBe('confirm needed')
-      expect(getUiState().status).toBe('running…')
+      expect(getUiState().status).not.toBe(STATUS.confirmNeeded)
+      expect(getUiState().status).toBe(STATUS.running)
     })
   })
 

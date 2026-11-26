@@ -16,7 +16,7 @@ import { onFrameBytes, onFrameJson, browserSource } from '../features/browser/so
 import { open as approveSheet } from '../features/composer/approve'
 import { closeCredential, openCredential } from '../features/composer/credential'
 import { answerInChat, askInChat, focusChat, startTaskWith } from '../features/composer/startTaskWith'
-import { setSubagentRuns } from '../features/composer/store'
+import { setSubagentWork } from '../features/composer/store'
 import { connSource } from '../features/connections/source'
 import { cronSource } from '../features/cron/source'
 import { openDeskTask } from '../features/desk/store'
@@ -42,6 +42,7 @@ import * as settingsStore from '../features/settings/store'
 import { skillsToolsSource, watchMcp } from '../features/skillsTools/source'
 import * as skillsToolsStore from '../features/skillsTools/store'
 import { agentsSource, startAgentHeartbeat } from '../features/subagents/source'
+import * as subagents from '../features/subagents/store'
 import { onBoardEvent, refresh as refreshBoards } from '../features/tasks/boards'
 import { tasksSource } from '../features/tasks/source'
 import {
@@ -85,6 +86,7 @@ import * as visibility from '../state/visibility'
 import { redraw as redrawWorkdir, staged as stagedWorkdir } from '../state/workdir'
 import { onReset as onWsReset } from '../state/ws'
 import { installConnectionUI, onReconnect, surface } from './connection'
+import { orbsOf } from './subagentOrbs'
 import { showUpNote } from './updates'
 
 import type { ComposerSource } from '../features/composer/types'
@@ -388,16 +390,25 @@ export function installPushes(): void {
   void refreshBoards()
 }
 
-/** The composer's waiting row needs the tasks store's live count, and a sibling
-    domain is reached through this wiring rather than by an import edge. The
-    subscription also covers a session reset, which empties the rows before the
-    new conversation's read lands -- so the previous conversation's work never
-    keeps the row alive. Returns its unsubscribe, so a caller that installs it
-    alone can take it back. */
+/** The composer's waiting row needs the tasks store's live count and the
+    subagents running in it, and a sibling domain is reached through this
+    wiring rather than by an import edge. The subscription also covers a
+    session reset, which empties the rows before the new conversation's read
+    lands -- so the previous conversation's work never keeps the row alive.
+    The roster gives each orb its mark; it is otherwise loaded only by the
+    subagents page, so the first orb asks for it, and its arrival repaints.
+    Returns the unsubscribe, so a caller that installs it alone can take it back. */
 export function installSubagentRuns(): () => void {
-  const paint = (): void => { setSubagentRuns(runningTasks().length) }
+  const paint = (): void => {
+    const rows = runningTasks()
+    const orbs = orbsOf(rows, subagents.get().roster)
+    if (orbs.length && !subagents.get().roster.length && sources.subagents) subagents.refreshRoster()
+    setSubagentWork(rows.length, orbs)
+  }
   paint()
-  return subscribeTasks(paint)
+  const offTasks = subscribeTasks(paint)
+  const offRoster = subagents.subscribe(paint)
+  return () => { offTasks(); offRoster() }
 }
 
 /* ── the actions: controls whose answer belongs to the session ────────────── */

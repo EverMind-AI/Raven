@@ -18,6 +18,7 @@ import type { TurnEvent, TurnSendParams, TurnSendResult, TurnSubscribeParams } f
 import type { Msg } from '../types.js'
 
 import { createChatStream, type ChatStreamRpcClient } from '../app/chatStream.js'
+import { STATUS } from '../app/statusText.js'
 import { turnController } from '../app/turnController.js'
 import { getTurnState, resetTurnState } from '../app/turnStore.js'
 import { getUiState, patchUiState, resetUiState } from '../app/uiStore.js'
@@ -177,7 +178,7 @@ describe('createChatStream', () => {
     // long as it's not a stuck 'running').
     const ui = getUiState()
     expect(ui.busy).toBe(false)
-    expect(ui.status === 'ready' || ui.status === STOPPED_BARE).toBe(true)
+    expect(ui.status === STATUS.ready || ui.status === STOPPED_BARE).toBe(true)
   })
 
   it('cancel() routes through turn.cancel when a turn is in flight', async () => {
@@ -269,9 +270,10 @@ describe('createChatStream', () => {
     expect(sysCalls.some(m => m.includes('model not available'))).toBe(true)
     const ui = getUiState()
     expect(ui.busy).toBe(false)
-    // Status should reflect an error state — startsWith('error') or
-    // 'ready' if the controller has settled. The contract is "not stuck busy".
-    expect(ui.status).not.toBe('running…')
+    // Status should reflect an error state, or Ready if the controller has
+    // settled. The contract is "not stuck busy".
+    expect(ui.status).not.toBe(STATUS.running)
+    expect(ui.status === STATUS.ready || ui.status.startsWith(STATUS.error)).toBe(true)
   })
 
   it('blocks send while a turn is already active', async () => {

@@ -5,7 +5,9 @@ import verbSpec from '../../../../ui-shared/verbs.json'
 import { FileBadge, Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import * as lightbox from '../../state/lightbox'
+import { FeatherGlyph } from './FeatherGlyph'
 import * as store from './store'
+import { SubagentOrbs } from './SubagentOrbs'
 
 import type { Attachment, SlashCmd } from './types'
 import type { ReactElement } from 'react'
@@ -160,13 +162,6 @@ export function SlashList(): ReactElement {
 
 /* ── the live turn row ────────────────────────────────────────────────── */
 
-/* Decorative to a screen reader -- whatever it sits beside carries the meaning
-   in words, and three animated bars announced as anything would be noise on a
-   row that repaints four times a second. */
-function WorkGlyph(): ReactElement {
-  return <span className="wkg" aria-hidden="true"><i /><i /><i /></span>
-}
-
 /* The ticker's vocabularies, read from the same catalogue the TUI rotates in
    ui-shared/verbs.json: one edit moves both front ends. The word cycles every
    `rotationMs`, and the shared list is what keeps the two aligned. */
@@ -187,10 +182,16 @@ const VERB_ROTATION_MS = verbSpec.rotationMs
    changes every 2.5s must not be announced. */
 export function TurnLive({ afterPaint }: { afterPaint?: () => void }): ReactElement | null {
   useComposer()
-  /* `subagentRuns` is pushed into the composer store by app/install.ts from
-     the tasks store, so this row reacts to a run starting or settling without
-     importing the sibling domain. */
+  /* `subagentRuns` and `subagentOrbs` are pushed into the composer store by
+     app/install.ts from the tasks store, so this row reacts to a run starting
+     or settling without importing the sibling domain.
+
+     Both states draw the same three children in the same order -- the
+     feathers, the fixed-width text slot, the orbs -- so React keeps the canvas
+     and the orbs across the switch: the feathers do not restart and the orbs
+     do not replay their entrance, and the orbs sit at one x in either state. */
   const live = store.get().live
+  const orbs = store.get().subagentOrbs
   const [seed, setSeed] = useState(() => Math.floor(Math.random() * VERBS.length))
   useEffect(() => { if (afterPaint) afterPaint() })
   useEffect(() => {
@@ -201,9 +202,10 @@ export function TurnLive({ afterPaint }: { afterPaint?: () => void }): ReactElem
        row measures the sub-agents' remaining time, not the host's last turn. */
     if (!store.waitingForSubagents()) return null
     return (
-      <div className="turnlive cp-waiting" role="status">
-        <WorkGlyph />
-        <span>{t('gui.live.waiting_subagents')}</span>
+      <div className="turnlive" data-waiting="" role="status">
+        <FeatherGlyph />
+        <span className="cp-tslot"><span>{t('gui.live.waiting_subagents')}</span></span>
+        <SubagentOrbs orbs={orbs} />
       </div>
     )
   }
@@ -212,12 +214,15 @@ export function TurnLive({ afterPaint }: { afterPaint?: () => void }): ReactElem
   const clock = store.durText(ms)
   return (
     <div className="turnlive" aria-live="off" aria-label={t('gui.live.busy', { t: clock })}>
-      <WorkGlyph />
-      <span className="cp-tv">
-        <span className="cp-verb" key={verb} aria-hidden="true">{verb}</span>
-        <span className="cp-sep" aria-hidden="true">·</span>
-        <span className="lb">{clock}</span>
+      <FeatherGlyph />
+      <span className="cp-tslot">
+        <span className="cp-tv">
+          <span className="cp-verb" key={verb} aria-hidden="true">{verb}</span>
+          <span className="cp-sep" aria-hidden="true">·</span>
+          <span className="lb">{clock}</span>
+        </span>
       </span>
+      <SubagentOrbs orbs={orbs} />
     </div>
   )
 }

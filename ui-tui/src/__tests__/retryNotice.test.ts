@@ -16,6 +16,7 @@ import type { Msg } from '../types.js'
 
 import { createChatStream, type ChatStreamRpcClient } from '../app/chatStream.js'
 import { directKey, enterDirect, getDirectTranscript, resetDirectChat } from '../app/directChatStore.js'
+import { STATUS } from '../app/statusText.js'
 import { turnController } from '../app/turnController.js'
 import { getTurnState, resetTurnState } from '../app/turnStore.js'
 import { getUiState, resetUiState } from '../app/uiStore.js'
@@ -97,7 +98,7 @@ describe('a retry notice claims the status line instead of the transcript', () =
           : { type, payload: { text: 'the answer' } }
       )
 
-      expect(getUiState().status).toBe('running…')
+      expect(getUiState().status).toBe(STATUS.running)
     }
   )
 
@@ -106,7 +107,7 @@ describe('a retry notice claims the status line instead of the transcript', () =
 
     fake.__pushEvent({ type: 'notice', payload: { kind: 'action_blocked', detail: 'policy refused' } })
 
-    expect(getUiState().status).toBe('running…')
+    expect(getUiState().status).toBe(STATUS.running)
     expect(getTurnState().notice).toBe(`${BLOCKED}\npolicy refused`)
   })
 
@@ -120,7 +121,7 @@ describe('a retry notice claims the status line instead of the transcript', () =
 
     fake.__pushEvent({ type: 'token.delta', payload: { text: 'the answer' } })
 
-    expect(getUiState().status).toBe('running…')
+    expect(getUiState().status).toBe(STATUS.running)
   })
 
   it('keeps a tagged retry off the main transcript and out of the instance rows', async () => {

@@ -757,11 +757,18 @@ is a repaint and not a remount.
 **Delegated-work tail row**:
 `TurnLive` in `src/features/composer/ComposerPage.tsx`, mounted by
 `src/features/composer/mount.tsx` at the tail of `#stage`. While the host turn
-runs it carries the working glyph, the rotating verb and the clock; once the
-host has finished and a spawn or graph is still live it becomes one
-"waiting for subagents" row with the same glyph. The count is pushed into the
-composer store by `src/app/install.ts` from the tasks store, so the two
-domains keep their own graphs and no chip sits above the composer. The Desk's
+runs it carries the falling-feather glyph (`FeatherGlyph`), the rotating verb
+and the clock; once the host has finished and a spawn or graph is still live
+it becomes one "Waiting" row with the same glyph. In both states the
+subagents running right now sit after a fixed-width text slot as overlapping
+orbs (`SubagentOrbs`): as many as the row has room for -- measured from the
+stack to the right edge of the nearest ancestor with a box, which is the
+transcript column the desk's width reserve narrows -- and the rest folded into
+a `+N` chip. The running-task count, which
+decides whether the row shows, and the orbs, one per running spawn or graph
+node, are pushed into the composer store by `src/app/install.ts` from the tasks
+store and the subagents roster, so the domains keep their own graphs and no
+chip sits above the composer. The Desk's
 tasks tab remains the list of runs and where each pane is opened.
 _Avoid_: "dag sheet" -- there is no longer one. The run's durable record in the
 conversation is the trail's delegation card

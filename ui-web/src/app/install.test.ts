@@ -154,10 +154,11 @@ describe('the session-pointer reload (installActions)', () => {
     _resetForTests()
   })
 
-  /* The composer's waiting row reads a count, not the tasks store: this is
-     the edge that keeps the two domain graphs apart, so it has to carry both
-     a run that starts and the reset that empties the rows on a switch. */
-  it('pushes the running delegated count into the composer, and clears it on a reset', async () => {
+  /* The composer's waiting row reads a count and a list of orbs, not the
+     tasks store: this is the edge that keeps the two domain graphs apart, so
+     it has to carry both a run that starts and the reset that empties the
+     rows on a switch. */
+  it('pushes the running delegated count and its orbs into the composer, and clears both on a reset', async () => {
     const wiring = await harness()
     const { setSources } = await import('../state/sources')
     setSources({ composer: { slash: [] } } as unknown as Partial<Sources>)
@@ -165,13 +166,42 @@ describe('the session-pointer reload (installActions)', () => {
     wiring.installPushes()
     const tasks = await import('../features/tasks/store')
     const composer = await import('../features/composer/store')
-    const running = { kind: 'spawn', id: 'a', status: 'running' } as TaskRow
+    const running = {
+      kind: 'spawn', id: 'a', status: 'running', agent: 'Codex',
+      nodes: [{ node_id: 'n', agent: 'Codex', status: 'running', started_at: 1, depends_on: [], files: [] }],
+    } as unknown as TaskRow
 
     act(() => tasks.set({ ...tasks.get(), rows: [running], loaded: true }))
     expect(composer.get().subagentRuns).toBe(1)
+    expect(composer.get().subagentOrbs.map((o) => o.key)).toEqual(['a'])
 
     act(() => tasks.reset())
     expect(composer.get().subagentRuns).toBe(0)
+    expect(composer.get().subagentOrbs).toEqual([])
+  })
+
+  /* The roster is read by the subagents page, which may never have opened:
+     the tail row asks for it once orbs need a mark, and repaints when it lands. */
+  it('repaints marks when the roster lands', async () => {
+    const wiring = await harness()
+    const { setSources } = await import('../state/sources')
+    const roster = vi.fn(() => Promise.resolve([{ name: 'Codex', preset: 'codex' }]))
+    setSources({ composer: { slash: [] }, subagents: { roster } } as unknown as Partial<Sources>)
+
+    wiring.installPushes()
+    const tasks = await import('../features/tasks/store')
+    const composer = await import('../features/composer/store')
+    const running = {
+      kind: 'spawn', id: 'a', status: 'running', agent: 'Codex',
+      nodes: [{ node_id: 'n', agent: 'Codex', status: 'running', started_at: 1, depends_on: [], files: [] }],
+    } as unknown as TaskRow
+
+    act(() => tasks.set({ ...tasks.get(), rows: [running], loaded: true }))
+    expect(composer.get().subagentOrbs[0]?.preset).toBe(null)
+    expect(roster).toHaveBeenCalledTimes(1)
+
+    await vi.waitFor(() => expect(composer.get().subagentOrbs[0]?.preset).toBe('codex'))
+    expect(roster).toHaveBeenCalledTimes(1)
   })
 })
 

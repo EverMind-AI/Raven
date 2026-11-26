@@ -6,6 +6,7 @@ import { MOUSE_TRACKING } from '../config/env.js'
 import { ZERO } from '../domain/usage.js'
 import { applyDetectedBackground, DEFAULT_THEME, fromSkin, resolveCurrentDefaultTheme } from '../theme.js'
 import { DEFAULT_INDICATOR_STYLE, type UiState } from './interfaces.js'
+import { STATUS } from './statusText.js'
 
 const buildUiState = (): UiState => ({
   bgTasks: new Set(),
@@ -27,7 +28,7 @@ const buildUiState = (): UiState => ({
   // the user staring at a silent screen for 1-4 min. Toggle via /thinking.
   showReasoning: true,
   sid: null,
-  status: 'summoning raven…',
+  status: STATUS.summoning,
   statusBar: 'bottom',
   streaming: true,
   transcript: 'episodes',

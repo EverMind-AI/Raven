@@ -52,7 +52,7 @@ const WORDS: Record<string, Record<string, string>> = {
     'gui.live.busy': '进行中 {t}', 'gui.pill.bottom': '回到底部', 'gui.pill.prev': '上一条用户消息',
     'gui.att.note': '我给你的文件：', 'gui.att.pending': '还有文件在上传',
     'gui.att.pending_body': '{n} 个文件还没传完，传完再发。',
-    'gui.live.waiting_subagents': '等待子智能体返回',
+    'gui.live.waiting_subagents': '等待中',
   },
   en: {
     'gui.send': 'Send', 'gui.stop': 'Stop', 'gui.q.edit': 'Edit', 'gui.q.remove': 'Remove',
@@ -61,7 +61,7 @@ const WORDS: Record<string, Record<string, string>> = {
     'gui.pill.prev': 'previous user message',
     'gui.att.note': 'Files for you:', 'gui.att.pending': 'a file is still uploading',
     'gui.att.pending_body': '{n} still going; send once they land.',
-    'gui.live.waiting_subagents': 'waiting for subagents',
+    'gui.live.waiting_subagents': 'Waiting',
   },
 }
 
@@ -690,18 +690,19 @@ describe('the live turn row', () => {
     act(() => { store.drawTurnLive() })
     const row = document.querySelector('.turnlive') as HTMLElement
     expect(row).toBeTruthy()
-    expect(row.querySelectorAll('.wkg').length).toBe(1)
-    expect(row.querySelectorAll('.wkg i').length).toBe(3)
+    expect(row.querySelectorAll('canvas.cp-feather').length).toBe(1)
+    expect(row.querySelectorAll('.wkg').length).toBe(0)
+    expect(row.querySelectorAll('.cp-tslot').length).toBe(1)
     expect(row.querySelectorAll('.lb').length).toBe(1)
     expect(row.getAttribute('aria-live')).toBe('off')
     expect(stage.lastElementChild).toBe(host)
 
-    /* Ticking must not re-insert anything: re-inserting a node restarts its
-       CSS animation. */
-    const glyph = row.querySelector('.wkg')
+    /* Ticking must not re-insert anything: a new canvas would restart the
+       feathers from the top. */
+    const glyph = row.querySelector('canvas.cp-feather')
     act(() => { store.drawTurnLive() })
     expect(document.querySelector('.turnlive')).toBe(row)
-    expect(document.querySelector('.wkg')).toBe(glyph)
+    expect(document.querySelector('canvas.cp-feather')).toBe(glyph)
 
     turn.dispatch({ type: 'idle' })
     act(() => { store.drawTurnLive() })
@@ -778,7 +779,7 @@ describe('the live turn row', () => {
 describe('the waiting row after the host turn ends', () => {
   /* What app/install.ts pushes from the tasks store: how many delegated runs
      are still live. The component only reads the count. */
-  const setRuns = (n: number): void => { act(() => { store.setSubagentRuns(n) }) }
+  const setRuns = (n: number): void => { act(() => { store.setSubagentWork(n, []) }) }
   const startHost = (): void => {
     turn.dispatch({ type: 'stream', cancellable: true })
     act(() => { store.drawTurnLive() })
@@ -789,25 +790,57 @@ describe('the waiting row after the host turn ends', () => {
   }
   const row = (): HTMLElement | null => document.querySelector('.turnlive')
 
-  it('says waiting for subagents once the host is done and one is still running', () => {
+  it('says Waiting once the host is done and one is still running', () => {
     lang = 'en'
     wire()
     mountLive()
     startHost()
     setRuns(1)
-    expect(row()!.classList.contains('cp-waiting')).toBe(false)
+    expect(row()!.hasAttribute('data-waiting')).toBe(false)
 
     endHost()
     const waiting = row() as HTMLElement
-    expect(waiting.classList.contains('cp-waiting')).toBe(true)
+    expect(waiting.hasAttribute('data-waiting')).toBe(true)
     expect(waiting.getAttribute('role')).toBe('status')
-    expect(waiting.textContent).toBe('waiting for subagents')
-    expect(waiting.querySelectorAll('.wkg i')).toHaveLength(3)
+    expect(waiting.textContent).toBe('Waiting')
+    expect(waiting.querySelectorAll('canvas.cp-feather')).toHaveLength(1)
     /* A visual state only: the turn stays idle and uncancellable, so Escape
        has nothing to stop and the next message is not a mid-turn injection. */
     expect(turn.busy()).toBe(false)
     expect(turn.cancellable()).toBe(false)
     expect(store.liveVisible()).toBe(true)
+  })
+
+  it('waits with a word and the orbs once only subagents run', () => {
+    const orb = { key: 'c1', name: 'Codex', preset: 'codex', own: false, startedAt: Date.now() - 5000 }
+    for (const [language, word] of [['en', 'Waiting'], ['zh', '等待中']] as const) {
+      cleanup()
+      lang = language
+      wire()
+      mountLive()
+      endHost()
+      act(() => { store.setSubagentWork(1, [orb]) })
+      const waiting = row() as HTMLElement
+      expect(waiting.hasAttribute('data-waiting')).toBe(true)
+      expect(waiting.querySelector('.cp-tslot')!.textContent).toBe(word)
+      expect(waiting.querySelectorAll('.cp-orb')).toHaveLength(1)
+      expect(waiting.querySelector('.cp-orb .agent-mark img')!.getAttribute('data-agent')).toBe('codex')
+      act(() => { store.setSubagentWork(0, []) })
+    }
+  })
+
+  it('keeps the orbs at one x across both states', () => {
+    lang = 'en'
+    wire()
+    mountLive()
+    const orb = { key: 'c1', name: 'Codex', preset: 'codex', own: false, startedAt: Date.now() }
+    startHost()
+    act(() => { store.setSubagentWork(1, [orb]) })
+    const live = row() as HTMLElement
+    expect([...live.children].map((el) => el.className)).toEqual(['cp-feather', 'cp-tslot', 'cp-orbs'])
+    endHost()
+    const waiting = row() as HTMLElement
+    expect([...waiting.children].map((el) => el.className)).toEqual(['cp-feather', 'cp-tslot', 'cp-orbs'])
   })
 
   it('appears when a run starts after the host has already ended', () => {
@@ -818,7 +851,7 @@ describe('the waiting row after the host turn ends', () => {
     expect(row()).toBeNull()
 
     setRuns(1)
-    expect(row()!.textContent).toBe('waiting for subagents')
+    expect(row()!.textContent).toBe('Waiting')
   })
 
   it('leaves when the last subagent settles', () => {
@@ -873,10 +906,10 @@ describe('the waiting row after the host turn ends', () => {
     startHost()
     setRuns(1)
     endHost()
-    expect(row()!.classList.contains('cp-waiting')).toBe(true)
+    expect(row()!.hasAttribute('data-waiting')).toBe(true)
 
     startHost()
-    expect(row()!.classList.contains('cp-waiting')).toBe(false)
+    expect(row()!.hasAttribute('data-waiting')).toBe(false)
     expect(row()!.querySelector('.lb')).not.toBeNull()
   })
 })

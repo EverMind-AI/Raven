@@ -69,6 +69,7 @@ import {
 import { bindLiveAgentsRefresh, fetchLiveAgents } from './liveAgentsSync.js'
 import { $overlayState, getOverlayState, patchOverlayState } from './overlayStore.js'
 import { scrollWithSelectionBy } from './scroll.js'
+import { STATUS, statusColorOf } from './statusText.js'
 import { turnController } from './turnController.js'
 import { patchTurnState, useTurnSelector } from './turnStore.js'
 import { $uiState, getUiState, patchUiState } from './uiStore.js'
@@ -105,22 +106,6 @@ export const buildChatStreamHandle = (
   appendMessage: (msg: Msg) => void
 ): ChatStreamHandle | null =>
   rpcClient && sid ? createChatStream({ appendMessage, rpcClient, sessionKey: sid, sys }) : null
-
-const statusColorOf = (status: string, t: { error: string; muted: string; ok: string; warn: string }) => {
-  if (status === 'ready') {
-    return t.ok
-  }
-
-  if (status.startsWith('error')) {
-    return t.error
-  }
-
-  if (status === 'interrupted') {
-    return t.warn
-  }
-
-  return t.muted
-}
 
 /** What a picker selection becomes on the command line.
  *
@@ -877,7 +862,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
             })
             appendMessage({ role: 'user', text: answer })
           }
-          patchUiState({ status: 'running…' })
+          patchUiState({ status: STATUS.running })
         } else {
           sys('prompt cancelled')
         }
@@ -943,7 +928,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
     const next = composerActions.dequeue()
 
     if (next) {
-      patchUiState({ busy: true, status: 'running…' })
+      patchUiState({ busy: true, status: STATUS.running })
       sendQueued(next)
     }
   }, [ui.sid, ui.busy, composerActions, composerRefs, sendQueued])
@@ -1021,7 +1006,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
 
     const exitHandler = () => {
       turnController.reset()
-      patchUiState({ busy: false, sid: null, status: 'gateway exited' })
+      patchUiState({ busy: false, sid: null, status: STATUS.gatewayExited })
       turnController.pushActivity('gateway exited · /logs to inspect', 'error')
       sys('error: gateway exited')
     }
@@ -1131,7 +1116,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
         // ensuring a network failure cannot keep a rejected prompt interactive.
         patchOverlayState({ approval: null })
         patchTurnState({ outcome: 'denied' })
-        patchUiState({ status: 'running…' })
+        patchUiState({ status: STATUS.running })
       }
 
       rpc<ApprovalRespondResponse>(
@@ -1155,7 +1140,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
 
         patchOverlayState({ approval: null })
         patchTurnState({ outcome: `approved (${choice})` })
-        patchUiState({ status: 'running…' })
+        patchUiState({ status: STATUS.running })
       })
     },
     [rpc]
@@ -1169,7 +1154,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
 
       return respondWith('sudo.respond', { password: pw, request_id: overlay.sudo.requestId }, () => {
         patchOverlayState({ sudo: null })
-        patchUiState({ status: 'running…' })
+        patchUiState({ status: STATUS.running })
       })
     },
     [overlay.sudo, respondWith]
@@ -1183,7 +1168,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
 
       return respondWith('secret.respond', { request_id: overlay.secret.requestId, value }, () => {
         patchOverlayState({ secret: null })
-        patchUiState({ status: 'running…' })
+        patchUiState({ status: STATUS.running })
       })
     },
     [overlay.secret, respondWith]
@@ -1199,7 +1184,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
 
       return respondWith('confirm.respond', buildConfirmRespond(requestId, answer), () => {
         patchOverlayState({ confirm: null })
-        patchUiState({ status: 'running…' })
+        patchUiState({ status: STATUS.running })
       })
     },
     [overlay.confirm, respondWith]

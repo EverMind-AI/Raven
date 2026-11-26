@@ -31,6 +31,17 @@ import type { Attachment, ComposerSource, QueuedMessage, SlashCmd, TemplateRow }
  * rendering cannot diverge.
  */
 
+/* One running subagent as the waiting row draws it: a mark and a name.
+   `preset`/`own` are AgentMark's own props, resolved by the page's wiring
+   from the subagents roster. */
+export interface SubagentOrb {
+  key: string
+  name: string
+  preset: string | null
+  own: boolean
+  startedAt: number | null
+}
+
 export interface ComposerState {
   /* The open conversation's tray, mirrored for the views: what is staged
      belongs to `trays`, keyed like the text draft. */
@@ -47,10 +58,14 @@ export interface ComposerState {
      `liveT0` and ticking through `tick`. */
   live: boolean
   tick: number
-  /* How many delegated runs are still live, pushed in by app/install.ts from
-     the tasks store. Kept as a number here rather than importing the sibling
-     store: the page's wiring owns the one edge between the two domains. */
+  /* How many delegated runs are still live, and the subagents among them
+     that are running right now, pushed in by app/install.ts from the tasks
+     store. Kept as plain data here rather than importing the sibling store:
+     the page's wiring owns the one edge between the two domains. The count
+     decides whether the waiting row shows; the orbs only say who is at work,
+     so a graph between two waves keeps the row with no orb in it. */
   subagentRuns: number
+  subagentOrbs: SubagentOrb[]
   /* Bumped by every paint asked for through features/composer/mount.tsx. The
      views read the page's own arrays through the source, so one counter is the
      whole subscription. */
@@ -59,7 +74,7 @@ export interface ComposerState {
 
 const initial: ComposerState = {
   atts: [], queue: [], editing: null, slashOpen: false, slashRows: [], slashSel: 0,
-  live: false, tick: 0, subagentRuns: 0, v: 0,
+  live: false, tick: 0, subagentRuns: 0, subagentOrbs: [], v: 0,
 }
 
 const store = makeStore<ComposerState>({ ...initial })
@@ -620,14 +635,19 @@ export function setLiveAnchor(ms: number): void {
 
 export const liveMs = (): number => (liveT0 ? Date.now() - liveT0 : 0)
 
-/* The tasks store's live count, pushed in from the page's wiring
-   (app/install.ts) on every change and on a session reset. One-directional:
-   the composer never imports the tasks domain, and the two graphs stay out
-   of each other's closure. */
-export function setSubagentRuns(n: number): void {
-  if (get().subagentRuns === n) return
-  set({ subagentRuns: n })
+/* The tasks store's live count and running subagents, pushed in from the
+   page's wiring (app/install.ts) on every change and on a session reset.
+   One-directional: the composer never imports the tasks domain, and the two
+   graphs stay out of each other's closure. An unchanged push stores nothing,
+   so the row does not repaint on every tasks-store tick. */
+export function setSubagentWork(runs: number, orbs: SubagentOrb[]): void {
+  const s = get()
+  if (s.subagentRuns === runs && orbsKey(s.subagentOrbs) === orbsKey(orbs)) return
+  set({ subagentRuns: runs, subagentOrbs: orbs })
 }
+
+const orbsKey = (orbs: readonly SubagentOrb[]): string =>
+  orbs.map((o) => `${o.key}|${o.name}|${o.preset ?? ''}|${o.own ? 1 : 0}|${o.startedAt ?? ''}`).join('\n')
 
 /* Whether delegated work is still running after the host's turn ended. The
    host has said everything it is going to say, but Raven is not done: the

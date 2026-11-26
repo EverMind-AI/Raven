@@ -35,6 +35,7 @@ import { writePaintDump } from '../../../lib/perfPane.js'
 import { configureDetectedTerminalKeybindings, configureTerminalKeybindings } from '../../../lib/terminalSetup.js'
 import { enterDirect, getDirectChat, isDirectTarget, leaveDirect, rememberInstance } from '../../directChatStore.js'
 import { patchOverlayState } from '../../overlayStore.js'
+import { STATUS } from '../../statusText.js'
 import { patchUiState } from '../../uiStore.js'
 
 const flagFromArg = (arg: string, current: boolean): boolean | null => {
@@ -233,7 +234,7 @@ export const coreCommands: SlashCommand[] = [
       const requestedTitle = arg.trim()
 
       const commit = () => {
-        patchUiState({ status: 'forging session…' })
+        patchUiState({ status: STATUS.forging })
         ctx.session.newSession('New session started', requestedTitle || undefined)
       }
 

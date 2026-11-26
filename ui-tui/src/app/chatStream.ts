@@ -63,6 +63,7 @@ import {
 import { scheduleInstanceRefresh, settleDirectHistory } from './directChatSync.js'
 import { applyDagEvent, applySubagentStatus } from './liveAgentsStore.js'
 import { scheduleLiveAgentsRefresh } from './liveAgentsSync.js'
+import { errorStatus, STATUS } from './statusText.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
 import { getUiState, patchUiState } from './uiStore.js'
@@ -267,7 +268,7 @@ const dispatchDirect = (
       // server to stop the sub-agent; cleared globally, it would instead drop an
       // arm the main agent's own cancel had just placed.
       disarmEscape(target)
-      patchUiState({ status: 'ready' })
+      patchUiState({ status: STATUS.ready })
       // A direct turn moves its own instance's status too.
       scheduleInstanceRefresh()
       return
@@ -281,7 +282,7 @@ const dispatchDirect = (
         text: turnErrorLine(event.payload, keptOutput(getDirectTranscript(key)))
       })
       disarmEscape(target)
-      patchUiState({ status: 'ready' })
+      patchUiState({ status: STATUS.ready })
       // Kept, and now in the same words: the main view is where the user is
       // looking when a direct turn they left dies, and the settled read that
       // follows a turn's end replaces the instance's own rows, not this one.
@@ -401,7 +402,7 @@ const dispatch = (
       // running tool row reads as an unexplained pause.
       const phase = (event.payload as { phase?: string } | undefined)?.phase
       patchUiState({
-        status: phase === 'started' ? t('gui.perm.reviewing', 'AI is reviewing this action...') : 'running…'
+        status: phase === 'started' ? t('gui.perm.reviewing', 'AI is reviewing this action...') : STATUS.running
       })
       return
     }
@@ -550,7 +551,7 @@ const onMessageStart = (state: InternalState, ev: MessageStartEvent): void => {
   state.turns.set(MAIN_VIEW_KEY, ev.payload.turn_id)
   markRunning(null)
   turnController.startMessage()
-  patchUiState({ status: 'running…' })
+  patchUiState({ status: STATUS.running })
 }
 
 const onTokenDelta = (ev: TokenDeltaEvent): void => {
@@ -608,7 +609,7 @@ const onMessageComplete = (
     appendArtifacts(state, appendMessage)
   }
   state.artifacts = { changes: [], deliveries: [] }
-  patchUiState({ status: 'ready' })
+  patchUiState({ status: STATUS.ready })
 }
 
 const appendArtifacts = (state: InternalState, appendMessage?: (msg: Msg) => void): void => {
@@ -656,7 +657,7 @@ const onError = (
     sys(turnErrorLine(ev.payload))
   }
   turnController.recordError({ appendMessage })
-  patchUiState({ status: (died ? failedTurnLine('') : `error: ${message}`).slice(0, 80) })
+  patchUiState({ status: (died ? failedTurnLine('') : errorStatus(message)).slice(0, 80) })
   patchTurnState({ activity: [], outcome: '' })
 }
 
@@ -695,7 +696,7 @@ const restoreInputPrompt = (appendMessage?: (msg: Msg) => void, sys?: (msg: stri
       return
     }
 
-    patchUiState({ status: 'ready' })
+    patchUiState({ status: STATUS.ready })
   }, STATUS_COOLDOWN_MS)
 }
 
@@ -748,7 +749,7 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
 
       appendDirectMessage(key, { role: 'system', text: haltedLine(keptOutput(getDirectTranscript(key))) })
       disarmEscape(active)
-      patchUiState({ status: 'ready' })
+      patchUiState({ status: STATUS.ready })
 
       return
     }
