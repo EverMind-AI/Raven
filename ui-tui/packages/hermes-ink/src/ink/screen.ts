@@ -354,8 +354,9 @@ export class StylePool {
     let id = this.selectionBgCache.get(baseId)
 
     if (id === undefined) {
-      // Keep everything except bg (49m) and inverse (27m). Fg, bold, dim,
-      // italic, underline, strikethrough all preserved.
+      // Keep everything except bg (49m) and inverse (27m). Bold, dim, italic,
+      // underline and strikethrough are preserved; the fg is preserved too
+      // unless a selection foreground replaces it below.
       const kept = this.get(baseId).filter(c => c.endCode !== '\x1b[49m' && c.endCode !== '\x1b[27m')
 
       if (this.selectionFgCode) {
