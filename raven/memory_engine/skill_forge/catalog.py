@@ -354,17 +354,27 @@ class LocalSkillCatalog:
         ]
         all_always.sort(key=self._always_sort_key)
         cap = int(getattr(self._config, "always_max", 5) or 5)
-        if len(all_always) > cap:
-            kept = all_always[:cap]
-            dropped = all_always[cap:]
+        # ``always_max`` caps full bodies only: digests are never capped, matching
+        # ``load_always_block``. Dropping one here would hide the skill it advertises.
+        kept: list[SkillMeta] = []
+        dropped: list[SkillMeta] = []
+        full_count = 0
+        for m in all_always:
+            if getattr(m, "inject", "full") == "description":
+                kept.append(m)
+            elif full_count < cap:
+                full_count += 1
+                kept.append(m)
+            else:
+                dropped.append(m)
+        if dropped:
             log.warning(
-                "always skills (%d) exceed always_max (%d), dropped: %s",
-                len(all_always),
+                "always skills with inject: full (%d) exceed always_max (%d), dropped: %s",
+                full_count + len(dropped),
                 cap,
                 ", ".join(m.name for m in dropped),
             )
-            return kept
-        return all_always
+        return kept
 
     @classmethod
     def _always_sort_key(cls, meta: SkillMeta) -> tuple[int, str, str]:

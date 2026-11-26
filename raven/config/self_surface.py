@@ -628,6 +628,13 @@ SECTIONS: tuple[Section, ...] = (
             ),
             Setting("skillForge.enabled", "Mount the extra local skill directories", "bool", _E.RELOAD),
             Setting(
+                "skillForge.alwaysMax",
+                "Most always-on skills injected with their full body (description digests are never capped)",
+                "int",
+                _E.RELOAD,
+                low=1,
+            ),
+            Setting(
                 "skillForge.router.hub.enabled",
                 "Search the shared Skill Hub during conversations",
                 "bool",
