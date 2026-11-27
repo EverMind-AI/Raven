@@ -279,16 +279,19 @@ def _acp_host_override(cfg: Any, *, name: str) -> Any:
     """An acp row that takes a seed's slot, with the host defaults filled in.
 
     The config row brings the transport choice and nothing else: ``command``
-    defaults to this install's own ``raven acp``, ``env`` carries the host's
-    ``RAVEN_HOME`` (unless the row sets one) so the child engine reads the same
-    config and provider the host does, and a blank ``description`` gets the
-    host-raven line rather than leaving the roster entry with the in-process
-    description that no longer applies.
+    defaults to this install's own ``raven acp``. On this computer, ``env``
+    carries the host's ``RAVEN_HOME`` (unless the row sets one) so the child
+    engine reads the same config and provider the host does, and a blank
+    ``description`` gets the host-raven line rather than leaving the roster entry
+    with the in-process description that no longer applies.
 
-    ``RAVEN_HOME`` alone does not carry a host started with ``--config``: that
-    flag sets a path inside the loader and never touches the environment, so the
-    child derived its config from a home the host was not using and came up on a
-    different model and provider than the row promises.
+    On this computer, ``RAVEN_HOME`` does not carry a host started with
+    ``--config``: that flag sets a path inside the loader and never touches the
+    environment, so the child derived its config from a home the host was not
+    using and came up on a different model and provider than the row promises.
+    A row bound to a registered ``machine`` is started in that machine's login
+    environment, so this host's home is not added to its env; an explicit
+    ``RAVEN_HOME`` in the row is preserved as a remote path.
 
     Two things stop that from overriding a choice somebody made. The flag is
     appended only to a command this function generated -- a row that brought its
@@ -304,7 +307,9 @@ def _acp_host_override(cfg: Any, *, name: str) -> Any:
     home = raven_home()
     env = dict(getattr(cfg, "env", None) or {})
     row_named_its_own_home = HOME_ENV_VAR in env
-    env.setdefault(HOME_ENV_VAR, str(home))
+    remote = str(getattr(cfg, "machine", "") or "").strip()
+    if not remote:
+        env.setdefault(HOME_ENV_VAR, str(home))
     command = str(getattr(cfg, "command", "") or "").strip()
     if not command:
         command = host_raven_acp_command()

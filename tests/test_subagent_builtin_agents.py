@@ -373,6 +373,40 @@ class TestAnAcpRowCanReplaceTheSeed:
 
         assert merged[0].env["RAVEN_HOME"] == str(home)
 
+    def test_a_machine_row_does_not_inherit_the_host_raven_home(self, monkeypatch, tmp_path) -> None:
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "host"))
+        row = ThirdPartyAcpSubagentConfig.model_validate(
+            {
+                "name": GENERIC_AGENT,
+                "kind": "acp",
+                "machine": "box1",
+                "command": "/opt/remote-raven/bin/raven acp",
+            }
+        )
+
+        merged = merge_builtin_seeds([row])
+
+        assert merged[0].env == {}
+
+    def test_a_machine_row_keeps_its_declared_raven_home(self) -> None:
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        row = ThirdPartyAcpSubagentConfig.model_validate(
+            {
+                "name": GENERIC_AGENT,
+                "kind": "acp",
+                "machine": "box1",
+                "command": "/opt/remote-raven/bin/raven acp",
+                "env": {"RAVEN_HOME": "/remote/home"},
+            }
+        )
+
+        merged = merge_builtin_seeds([row])
+
+        assert merged[0].env == {"RAVEN_HOME": "/remote/home"}
+
     def test_a_declared_command_description_and_env_are_kept(self) -> None:
         from raven.config.schema import ThirdPartyAcpSubagentConfig
 
