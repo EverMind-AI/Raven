@@ -130,6 +130,21 @@ def home(tmp_path: Path, monkeypatch) -> Path:
     return tmp_path / "home"
 
 
+def _write_workspace_config(workspace: Path) -> None:
+    """Name an explicit workspace in this home's config file.
+
+    The launch-directory check reads the config file itself rather than going
+    through ``load_config``, so patching the loader pins nothing. The value is
+    meant to differ from the default ``<home>/workspace``: a reader that ignored
+    the file would fall back to that default rather than to this.
+    """
+    from raven.config.loader import get_config_path
+
+    path = get_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"agents": {"defaults": {"workspace": str(workspace)}}}), encoding="utf-8")
+
+
 class TestTheStateFileFollowsTheAgentHome:
     """`raven web` finds the engine through this file, so where it lands has to
     be the one answer the rest of raven gives. Read inline, `RAVEN_HOME` was
@@ -1137,13 +1152,10 @@ class TestTheSupervisor:
         lock comes back as serve, and serve cannot root sessions in this
         directory. A check made once, before the loop, would leave that second
         launch unguarded."""
-        from types import SimpleNamespace
-
-        home.mkdir(parents=True, exist_ok=True)
-        monkeypatch.chdir(home.parent)
-        monkeypatch.setattr(
-            "raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=home / "workspace")
-        )
+        workspace = home / "projects" / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        _write_workspace_config(workspace)
+        monkeypatch.chdir(workspace.parent)
         launches = iter([(["engine"], "gateway"), (["engine"], "gateway"), (["engine"], "serve")])
         monkeypatch.setattr(serve_commands, "_gateway_launch", lambda _port: next(launches))
         argv = self._run(monkeypatch, [1])
@@ -1514,14 +1526,13 @@ class TestTheSupervisor:
         self, home: Path, monkeypatch, capsys, call: str
     ) -> None:
         import subprocess
-        from types import SimpleNamespace
 
         monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda *_a, **_k: None)
         monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: True)
-        monkeypatch.chdir(home.parent)
-        monkeypatch.setattr(
-            "raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=home / "workspace")
-        )
+        workspace = home / "projects" / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        _write_workspace_config(workspace)
+        monkeypatch.chdir(workspace.parent)
         spawned: list[list[str]] = []
         monkeypatch.setattr(subprocess, "Popen", lambda argv, **_k: spawned.append(list(argv)))
 
@@ -1563,13 +1574,11 @@ class TestTheChosenSurface:
         assert f"raven {verb}" in out and cost in out
 
     def test_standalone_serve_refuses_the_same_directory(self, home: Path, monkeypatch, capsys) -> None:
-        from types import SimpleNamespace
-
         monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda *_a, **_k: None)
-        monkeypatch.chdir(home.parent)
-        monkeypatch.setattr(
-            "raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=home / "workspace")
-        )
+        workspace = home / "projects" / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        _write_workspace_config(workspace)
+        monkeypatch.chdir(workspace.parent)
         ran: list[object] = []
         monkeypatch.setattr(serve_commands.bounded_asyncio, "run", lambda coro: ran.append(coro) or coro.close())
 
@@ -1628,13 +1637,11 @@ class TestTheChosenSurface:
         reached web.log. The parent makes the same decision first, before
         anything is spawned."""
         import time
-        from types import SimpleNamespace
 
-        home.mkdir(parents=True, exist_ok=True)
-        monkeypatch.chdir(home.parent)
-        monkeypatch.setattr(
-            "raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=home / "workspace")
-        )
+        workspace = home / "projects" / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        _write_workspace_config(workspace)
+        monkeypatch.chdir(workspace.parent)
         monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: True)
         monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
         monkeypatch.setattr(serve_commands, "_read_web_state", lambda: None)
@@ -1661,13 +1668,10 @@ class TestTheChosenSurface:
         """The launch-directory rule is serve's, not the parent's. A gateway
         groups sessions by channel and may run from anywhere; refusing it here
         would take the page away from the only engine with the adapters."""
-        from types import SimpleNamespace
-
         home.mkdir(parents=True, exist_ok=True)
+        # No workspace is configured, so ``home.parent`` contains the default
+        # ``<home>/workspace``: this only passes if the rule is not applied here.
         monkeypatch.chdir(home.parent)
-        monkeypatch.setattr(
-            "raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=home / "workspace")
-        )
         monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: False)
         monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
         monkeypatch.setattr(serve_commands, "_read_web_state", lambda: None)
@@ -1685,12 +1689,8 @@ class TestTheChosenSurface:
         so a supervisor that stopped writing it would silently stop saying
         which one the page is on."""
         import subprocess
-        from types import SimpleNamespace
 
         home.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setattr(
-            "raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=home / "workspace")
-        )
         monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: True)
         seen: list[str] = []
 
@@ -1719,14 +1719,13 @@ class TestTheChosenSurface:
         directory inside the store the dispatch writes to, which is the case
         this check exists for."""
         import subprocess
-        from types import SimpleNamespace
 
-        workspace = home / "workspace"
+        workspace = home / "projects" / "workspace"
         (workspace / "sessions" / "project" / "chat").mkdir(parents=True)
         monkeypatch.chdir(workspace / "sessions" / "project" / "chat")
         monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda *_a, **_k: None)
         monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: True)
-        monkeypatch.setattr("raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path=workspace))
+        _write_workspace_config(workspace)
         monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: pytest.fail("spawned from the sessions store"))
 
         with pytest.raises(typer.Exit) as exit_info:
@@ -1749,6 +1748,219 @@ class TestTheChosenSurface:
         assert "attaching to the engine already running" in out
         assert "gateway already running" not in out
         assert opened == ["http://127.0.0.1:18999/auth#z"]
+
+    def test_a_schema_invalid_config_does_not_break_the_launch_dir_check(self, home: Path, monkeypatch) -> None:
+        """``load_config`` runs the config migrations -- which rewrite the file --
+        and raises a bare schema ``ValueError``. A launch-directory check must do
+        neither: a malformed ``agents.defaults`` falls back to the default home
+        and the check still runs to its own answer. The start itself still fails
+        later, but not in ``build_agent_loop``: that layer catches this same
+        ``ValueError`` and builds a stack with no agent loop, and the uncaught
+        one comes from ``build_app``'s ``load_config()``
+        (``raven/rpc/transports/ws.py:873``). What is pinned here is only that
+        this check neither raises the schema error nor touches the file."""
+        from raven.config.loader import get_config_path, load_config
+
+        home.mkdir(parents=True, exist_ok=True)
+        config_path = get_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps({"agents": {"defaults": "not-a-dict"}}), encoding="utf-8")
+        before = config_path.read_text(encoding="utf-8")
+        project = home.parent / "project"
+        project.mkdir()
+        monkeypatch.chdir(project)
+
+        # The old check's failure mode, pinned: this file is exactly what made
+        # `load_config` raise from outside the directory check's own try.
+        with pytest.raises(ValueError):
+            load_config()
+
+        serve_commands._refuse_unusable_launch_dir()
+
+        assert serve_commands._configured_agent_home() == home / "workspace"
+        assert config_path.read_text(encoding="utf-8") == before, "the launch check ran config migrations"
+
+    def test_a_valid_config_that_needs_a_migration_is_not_rewritten(self, home: Path, monkeypatch) -> None:
+        """The schema-invalid file cannot pin this: the old reader raised before
+        it ever reached the migrations. A valid file that is behind the watermark
+        is what separates the two readers -- ``load_config`` rewrites it on the
+        way to resolving the home, and this check must resolve the same home
+        without touching it."""
+        import hashlib
+
+        from raven.config.loader import get_config_path
+
+        home.mkdir(parents=True, exist_ok=True)
+        config_path = get_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps({"agents": {"defaults": {"contextWindowTokens": 65536}}}), encoding="utf-8")
+        before = hashlib.sha256(config_path.read_bytes()).hexdigest()
+        project = home.parent / "project"
+        project.mkdir()
+        monkeypatch.chdir(project)
+
+        serve_commands._refuse_unusable_launch_dir()
+
+        assert serve_commands._configured_agent_home() == home / "workspace"
+        assert hashlib.sha256(config_path.read_bytes()).hexdigest() == before, "the launch check ran config migrations"
+
+    @pytest.mark.parametrize("workspace", ["", "   "])
+    def test_a_blank_workspace_resolves_as_the_config_resolves_it(
+        self, home: Path, monkeypatch, workspace: str
+    ) -> None:
+        """``Config.workspace_path`` reads a blank workspace as the current
+        directory, not as unset. Reading it as unset pointed this check at the
+        default home while ``build_engine`` ran on the current directory -- the
+        one state the check exists to refuse."""
+        from raven.config.loader import get_config_path, load_config
+
+        home.mkdir(parents=True, exist_ok=True)
+        config_path = get_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps({"agents": {"defaults": {"workspace": workspace}}}), encoding="utf-8")
+
+        assert serve_commands._configured_agent_home() == load_config().workspace_path
+
+    def test_an_invalid_json_file_falls_back_to_the_default_home(self, home: Path) -> None:
+        """A half-written file must not fail the launch check: the check's answer
+        is about the directory, and the schema error belongs to the build."""
+        from raven.config.loader import get_config_path
+
+        home.mkdir(parents=True, exist_ok=True)
+        config_path = get_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text('{"agents": ', encoding="utf-8")
+
+        assert serve_commands._configured_agent_home() == home / "workspace"
+
+    def test_an_explicit_workspace_is_expanded_like_the_config_expands_it(self, home: Path) -> None:
+        """A ``~`` in the configured workspace names the user's home, not a
+        directory literally called ``~``. The config expands it; so must this."""
+        from raven.config.loader import get_config_path
+
+        home.mkdir(parents=True, exist_ok=True)
+        config_path = get_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            json.dumps({"agents": {"defaults": {"workspace": "~/projects/thing"}}}), encoding="utf-8"
+        )
+
+        assert serve_commands._configured_agent_home() == Path("~/projects/thing").expanduser()
+
+    def test_a_config_path_that_cannot_be_read_falls_back_to_the_default_home(self, home: Path) -> None:
+        """An unreadable config is the same case as a malformed one: fall back,
+        because the check is about the directory and the file's problem is the
+        build's to report."""
+        from raven.config.loader import get_config_path
+
+        home.mkdir(parents=True, exist_ok=True)
+        config_path = get_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.mkdir()
+
+        assert serve_commands._configured_agent_home() == home / "workspace"
+
+    def test_the_lock_label_without_a_pid_names_a_gateway(self, home: Path, monkeypatch) -> None:
+        """When the holder's pid is not readable the line must still say who
+        holds the lock, without inventing a number."""
+        monkeypatch.setattr(serve_commands, "_live_gateway_pid", lambda: None)
+
+        assert serve_commands._gateway_lock_label() == "a gateway"
+
+    def test_the_refusal_names_a_directory_the_session_could_use(self, home: Path, monkeypatch, capsys) -> None:
+        """A refusal that only says "elsewhere" leaves the user to guess. The
+        per-channel root beside agent home is a directory outside the agent home
+        that serve can be started from, so that is what the message offers -- not
+        where the session lands, which is the launch directory itself."""
+        home.mkdir(parents=True, exist_ok=True)
+        monkeypatch.chdir(home.parent)
+
+        with pytest.raises(typer.Exit) as exit_info:
+            serve_commands._refuse_unusable_launch_dir()
+
+        assert exit_info.value.exit_code == 1
+        err = capsys.readouterr().err
+        assert "start it from a project directory" in err
+        assert str(home / "tmp") in err
+
+    @pytest.mark.parametrize("workspace", ["", "   "])
+    def test_a_blank_workspace_suggests_an_absolute_usable_directory(
+        self, home: Path, monkeypatch, capsys, workspace: str
+    ) -> None:
+        """A blank or relative workspace that resolves to the launch directory
+        or below it -- the current directory for blank, a subdirectory for an
+        explicit relative path -- leaves the agent home relative, and a
+        suggestion derived straight from the relative value was relative too
+        ("raven-tmp", "   -tmp"): not the absolute directory the refusal
+        promises, and not one ``validate_override`` accepts as a working
+        directory. Resolving the home first makes the suggestion absolute and
+        acceptable for the same configured home."""
+        from raven.agent.workdir import validate_override
+        from raven.config.loader import get_config_path
+
+        home.mkdir(parents=True, exist_ok=True)
+        config_path = get_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps({"agents": {"defaults": {"workspace": workspace}}}), encoding="utf-8")
+        project = home.parent / "project"
+        project.mkdir()
+        monkeypatch.chdir(project)
+        agent_home = serve_commands._configured_agent_home()
+
+        with pytest.raises(typer.Exit) as exit_info:
+            serve_commands._refuse_unusable_launch_dir()
+
+        assert exit_info.value.exit_code == 1
+        err = capsys.readouterr().err
+        match = re.search(r"\(for example, (.+?)\)\.", err)
+        assert match is not None, err
+        suggested = Path(match.group(1))
+        assert suggested.is_absolute(), f"the suggestion is a relative path: {suggested}"
+        # The suggestion is one this config's own validation accepts: not the
+        # agent home, not inside it, and not one of its ancestors.
+        validate_override(suggested, agent_home)
+
+    def test_a_directory_the_refusal_names_can_itself_start_serve(self, home: Path, monkeypatch, capsys) -> None:
+        """The suggestion has to be a real place to start from, not just a
+        plausible string: changing into it makes the same check pass on the
+        same config. A workspace that resolves to the launch directory or below
+        it is excluded here -- blank included -- because that config re-derives
+        the agent home from wherever it runs, so no directory can satisfy it;
+        the blank case is pinned above instead."""
+        home.mkdir(parents=True, exist_ok=True)
+        monkeypatch.chdir(home.parent)
+
+        with pytest.raises(typer.Exit):
+            serve_commands._refuse_unusable_launch_dir()
+
+        err = capsys.readouterr().err
+        match = re.search(r"\(for example, (.+?)\)\.", err)
+        assert match is not None, err
+        suggested = Path(match.group(1))
+        assert suggested == home / "tmp"
+        suggested.mkdir(parents=True, exist_ok=True)
+
+        monkeypatch.chdir(suggested)
+        serve_commands._refuse_unusable_launch_dir()
+
+    def test_the_serve_line_names_the_lock_holder_and_the_directory(self, home: Path, monkeypatch) -> None:
+        """The fallback is not self-explanatory: the name says "serve" but not
+        that a gateway forced it, nor where sessions land. Both belong in the
+        line, because neither is visible from the engine's name."""
+        project = home.parent / "project"
+        project.mkdir(parents=True)
+        monkeypatch.chdir(project)
+        monkeypatch.setattr(serve_commands, "_live_gateway_pid", lambda: 4321)
+
+        line = serve_commands._surface_line("serve")
+
+        assert "a gateway (pid 4321)" in line
+        assert "already holds the instance lock" in line
+        assert "no IM channel adapters" in line
+        assert str(project.resolve()) in line
+        assert serve_commands._surface_line("gateway") == (
+            "raven web: raven gateway -- IM channel adapters run; sessions group by channel"
+        )
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX")

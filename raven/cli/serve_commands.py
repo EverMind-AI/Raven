@@ -595,6 +595,41 @@ def _refuse_incomplete_install(label: str = "raven serve") -> None:
     raise typer.Exit(INCOMPLETE_INSTALL_EXIT)
 
 
+def _configured_agent_home() -> Path:
+    """The agent home ``build_engine`` resolves against, read without config side effects.
+
+    Deliberately not ``load_config``: a load runs the config migrations, which
+    rewrite the file when it is behind the watermark, and raises for a file that
+    fails schema validation. A launch-directory check must not mutate a user's
+    config, nor fail with a schema error that has nothing to do with the
+    directory, merely because ``raven serve`` was started.
+
+    Only the raw workspace value is read here, and only its resolution is
+    shared: that value is handed to ``Config.workspace_path`` so the default
+    follows ``RAVEN_HOME`` and an explicitly configured path is expanded the
+    same way. A blank value is not treated as unset: it resolves to the current
+    directory exactly as ``Config.workspace_path`` does, because treating it as
+    unset would check one home while the engine ran on another. A
+    present-but-unreadable or malformed file falls back to the default home
+    rather than failing the start.
+    """
+    import json
+
+    from raven.config.loader import get_config_path
+    from raven.config.schema import Config
+
+    path = get_config_path()
+    if path.exists():
+        with suppress(OSError, ValueError):
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            agents = raw.get("agents") if isinstance(raw, dict) else None
+            defaults = agents.get("defaults") if isinstance(agents, dict) else None
+            workspace = defaults.get("workspace") if isinstance(defaults, dict) else None
+            if isinstance(workspace, str):
+                return Config.model_validate({"agents": {"defaults": {"workspace": workspace}}}).workspace_path
+    return Config().workspace_path
+
+
 def _refuse_unusable_launch_dir(label: str = "raven serve") -> None:
     """Refuse a launch directory ``validate_override`` would reject.
 
@@ -602,17 +637,21 @@ def _refuse_unusable_launch_dir(label: str = "raven serve") -> None:
     answer for that directory is the answer to whether it may serve at all.
     The message is the validation's own reason: a turn in a refused directory
     would not necessarily fail on its first dispatch, and promising that would
-    be a consequence this check cannot keep.
+    be a consequence this check cannot keep. It also names a directory the
+    session could actually use, so the refusal is actionable.
     """
-    from raven.agent.workdir import validate_override
-    from raven.config.loader import load_config
+    from raven.agent.workdir import default_channel_root, validate_override
 
-    workspace = load_config().workspace_path
+    agent_home = _configured_agent_home()
     try:
-        validate_override(Path.cwd(), workspace)
+        validate_override(Path.cwd(), agent_home)
     except ValueError as exc:
+        home = Path(agent_home).expanduser()
+        if not home.is_absolute():
+            home = home.resolve()
+        suggested = default_channel_root(home)
         typer.echo(
-            f"{label}: {exc}; start it from a project directory instead.",
+            f"{label}: {exc}; start it from a project directory instead (for example, {suggested}).",
             err=True,
         )
         raise typer.Exit(1) from None
@@ -928,6 +967,12 @@ def _live_gateway_pid() -> Optional[int]:
     return status.pid if status is not None and status.pid > 0 else None
 
 
+def _gateway_lock_label() -> str:
+    """Who holds the instance lock, named so a fallback line can explain itself."""
+    holder = _live_gateway_pid()
+    return f"a gateway (pid {holder})" if holder is not None else "a gateway"
+
+
 def _drop_stale_serve_state(recorded: int) -> None:
     """Say why a recorded pid proved not to be raven's, and clear its file.
 
@@ -1030,7 +1075,19 @@ _SURFACE_COST = {
 
 
 def _surface_line(surface: str) -> str:
-    """One line naming the engine and what choosing it costs."""
+    """One line naming the engine and what choosing it costs.
+
+    For ``serve`` the decision was forced: a gateway already holds the instance
+    lock, so this engine runs without channel adapters and roots sessions at
+    this directory rather than by channel. Both are said here because neither is
+    visible from the engine's name alone.
+    """
+    if surface == "serve":
+        return (
+            f"raven web: raven serve -- no IM channel adapters "
+            f"({_gateway_lock_label()} already holds the instance lock); "
+            f"sessions use {Path.cwd().resolve()}"
+        )
     return f"raven web: raven {surface} -- {_SURFACE_COST[surface]}"
 
 
