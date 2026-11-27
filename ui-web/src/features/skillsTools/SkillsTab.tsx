@@ -1,10 +1,12 @@
 /* Skills tab (Scheme C — Tactile Bento Studio): dot-grid Skill Hub hero bento,
- * 3-metric overview bento, filterable toolbar, and grouped two-tone tray cards
- * opening the centered SKILL.md modal.
+ * 3-scope overview bento (Built-in / Global / Project), filterable toolbar,
+ * project directory context bar, and grouped two-tone tray cards opening the
+ * centered SKILL.md modal.
  */
 import {
   AiContentGenerator01Icon,
   ArrowRight01Icon,
+  Folder01Icon,
   PlusSignIcon,
   Search01Icon,
   SparklesIcon,
@@ -14,6 +16,7 @@ import { Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import { skillTone } from './helpers'
 import { CardName, EmptyBox, IconTile, Pill, SearchBox, StatusDot, Switch } from './Parts'
+import { ProjectContextBar, ProjectEmptyCard } from './ProjectSection'
 import * as store from './store'
 
 import type { SkillRow, SkillScopeFilter } from './types'
@@ -23,13 +26,13 @@ const HUB_SWITCH = 'skillForge.router.hub.enabled'
 
 const isBuiltin = (s: SkillRow): boolean => s.source === 'builtin'
 
-function SkillCard({ row }: { row: SkillRow }): JSX.Element {
+function SkillCard({ row, projectDir }: { row: SkillRow; projectDir?: string }): JSX.Element {
   const off = row.blocked
   const cardCls = off ? 'skillsTools-tray-card skillsTools-is-off' : 'skillsTools-tray-card'
   const flip = (on: boolean): void => {
-    void store.run(`block:${row.name}`, () => store.source().blockSkill(row.name, !on), { remount: false })
+    void store.toggleSkillBlocked(row.name, !on)
   }
-  const open = (): void => { void store.openSkill(row.name) }
+  const open = (): void => { void store.openSkill(row.name, projectDir) }
   return (
     <div
       className={cardCls}
@@ -37,7 +40,7 @@ function SkillCard({ row }: { row: SkillRow }): JSX.Element {
     >
       <div className="skillsTools-tray-body">
         <div className="skillsTools-ctop">
-          <IconTile tone={skillTone(row.name)} size="sm">
+          <IconTile tone={projectDir ? 'teal' : skillTone(row.name)} size="sm">
             <Icon icon={AiContentGenerator01Icon} size={15} />
           </IconTile>
           <div className="skillsTools-cmeta">
@@ -45,6 +48,7 @@ function SkillCard({ row }: { row: SkillRow }): JSX.Element {
             <div className="skillsTools-ctags">
               {row.hub ? <Pill tone="hub">{t('gui.skillsTools.skills.hub_tag')}</Pill> : null}
               {row.always ? <Pill tone="neutral">{t('gui.skillsTools.skills.always')}</Pill> : null}
+              {projectDir ? <Pill tone="teal">.agents/skills</Pill> : null}
             </div>
           </div>
           <Switch on={!off} label={row.name} stop onChange={flip} />
@@ -65,33 +69,61 @@ function SkillCard({ row }: { row: SkillRow }): JSX.Element {
   )
 }
 
+function SectionHeading({ tone, label, count, sub }: {
+  tone: 'builtin' | 'global' | 'project'
+  label: string
+  count: string
+  sub: string
+}): JSX.Element {
+  return (
+    <div className="skillsTools-scope-head">
+      <span className="skillsTools-scope-dot" data-scope={tone} aria-hidden="true" />
+      <span className="skillsTools-scope-title">{label}</span>
+      <span className="skillsTools-scope-cnt">{count}</span>
+      <span className="skillsTools-scope-sub">{sub}</span>
+    </div>
+  )
+}
+
 export function SkillsTab(): JSX.Element {
   const s = store.get()
   const rows = s.snap.skills
   const q = s.skq.trim().toLowerCase()
   const builtinAll = rows.filter(isBuiltin)
-  const workspaceAll = rows.filter((r) => !isBuiltin(r))
-  const enabledAll = rows.filter((r) => !r.blocked).length
+  const globalAll = rows.filter((r) => !isBuiltin(r))
+  const hasProject = Boolean(s.projectDir)
+  const projectAll = hasProject && s.projectInfo ? s.projectInfo.skills : []
+  const totalAll = builtinAll.length + globalAll.length + projectAll.length
+  const enabledAll = [...builtinAll, ...globalAll, ...projectAll].filter((r) => !r.blocked).length
 
   const matches = (r: SkillRow): boolean =>
     !q || r.name.toLowerCase().includes(q) || (r.description || '').toLowerCase().includes(q)
 
-  const filters: Array<{ id: SkillScopeFilter; label: string; count: number }> = [
-    { id: 'all', label: t('gui.skillsTools.skills.filter_all'), count: rows.length },
-    { id: 'builtin', label: t('gui.skillsTools.skills.builtin'), count: builtinAll.length },
-    { id: 'workspace', label: t('gui.skillsTools.skills.workspace'), count: workspaceAll.length },
+  const builtinFiltered = builtinAll.filter(matches)
+  const globalFiltered = globalAll.filter(matches)
+  const projectFiltered = projectAll.filter(matches)
+
+  const filters: Array<{ id: SkillScopeFilter; label: string; count: string }> = [
+    { id: 'all', label: t('gui.skillsTools.skills.filter_all'), count: String(totalAll) },
+    { id: 'builtin', label: t('gui.skillsTools.skills.builtin'), count: String(builtinAll.length) },
+    { id: 'global', label: t('gui.skillsTools.skills.global'), count: String(globalAll.length) },
+    { id: 'project', label: t('gui.skillsTools.skills.project'), count: hasProject ? String(projectAll.length) : '—' },
   ]
 
-  const allGroups: Array<[string, SkillRow[]]> = []
-  if (s.skillFilter !== 'workspace') {
-    allGroups.push([t('gui.skillsTools.skills.builtin'), builtinAll.filter(matches)])
-  }
-  if (s.skillFilter !== 'builtin') {
-    allGroups.push([t('gui.skillsTools.skills.workspace'), workspaceAll.filter(matches)])
-  }
-  const groups = allGroups.filter(([, list]) => list.length > 0)
+  const showBuiltin = s.skillFilter === 'all' || s.skillFilter === 'builtin'
+  const showGlobal = s.skillFilter === 'all' || s.skillFilter === 'global'
+  const showProject = s.skillFilter === 'all' || s.skillFilter === 'project'
 
   const hubLabel = t('gui.skillsTools.skills.hub_title')
+  const countOf = (list: SkillRow[]): string => {
+    const onN = list.filter((r) => !r.blocked).length
+    return onN === list.length ? String(list.length) : t('gui.skillsTools.skills.on_of', { on: onN, total: list.length })
+  }
+
+  const noSearchHit = Boolean(q)
+    && (!showBuiltin || builtinFiltered.length === 0)
+    && (!showGlobal || globalFiltered.length === 0)
+    && (!showProject || projectFiltered.length === 0)
 
   return (
     <div className="skillsTools-pane">
@@ -116,29 +148,43 @@ export function SkillsTab(): JSX.Element {
         </div>
 
         <div className="skillsTools-summary-bento">
-          <div className="skillsTools-stat-cell">
-            <div className="skillsTools-stat-n">{enabledAll}/{rows.length}</div>
-            <div className="skillsTools-stat-l">{t('gui.skillsTools.skills.stat_enabled')}</div>
+          <div className="skillsTools-summary-top">
+            <span className="skillsTools-summary-active">
+              <StatusDot tone="ok" />
+              <span>{t('gui.skillsTools.skills.stat_enabled')}</span>
+            </span>
+            <span className="skillsTools-summary-ratio mono">{enabledAll} / {totalAll}</span>
           </div>
-          <div className="skillsTools-stat-cell">
-            <div className="skillsTools-stat-n">{builtinAll.length}</div>
-            <div className="skillsTools-stat-l">{t('gui.skillsTools.skills.stat_builtin')}</div>
-          </div>
-          <div className="skillsTools-stat-cell">
-            <div className="skillsTools-stat-n">{workspaceAll.length}</div>
-            <div className="skillsTools-stat-l">{t('gui.skillsTools.skills.stat_workspace')}</div>
+          <div className="skillsTools-summary-grid">
+            <div className="skillsTools-stat-cell">
+              <div className="skillsTools-stat-n">{builtinAll.length}</div>
+              <div className="skillsTools-stat-l">
+                <span className="skillsTools-scope-dot" data-scope="builtin" aria-hidden="true" />
+                <span>{t('gui.skillsTools.skills.builtin')}</span>
+              </div>
+            </div>
+            <div className="skillsTools-stat-cell">
+              <div className="skillsTools-stat-n">{globalAll.length}</div>
+              <div className="skillsTools-stat-l">
+                <span className="skillsTools-scope-dot" data-scope="global" aria-hidden="true" />
+                <span>{t('gui.skillsTools.skills.global')}</span>
+              </div>
+            </div>
+            <div className="skillsTools-stat-cell">
+              <div className={hasProject ? 'skillsTools-stat-n' : 'skillsTools-stat-n skillsTools-stat-dim'}>
+                {hasProject ? projectAll.length : '—'}
+              </div>
+              <div className="skillsTools-stat-l">
+                <span className="skillsTools-scope-dot" data-scope="project" aria-hidden="true" />
+                <span>{t('gui.skillsTools.skills.project')}</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
       <div className="skillsTools-toolbar">
-        <SearchBox
-          id="skillsTools-skq"
-          value={s.skq}
-          placeholder={t('gui.skillsTools.skills.search')}
-          onChange={(v) => store.set({ skq: v })}
-        />
-        <div className="skillsTools-filter-pills">
+        <div className="skillsTools-filter-pills" role="group" aria-label={t('gui.skillsTools.skills.filter_aria')}>
           {filters.map((f) => (
             <button
               key={f.id}
@@ -152,6 +198,12 @@ export function SkillsTab(): JSX.Element {
             </button>
           ))}
         </div>
+        <SearchBox
+          id="skillsTools-skq"
+          value={s.skq}
+          placeholder={t('gui.skillsTools.skills.search')}
+          onChange={(v) => store.set({ skq: v })}
+        />
         <button
           type="button"
           className="skillsTools-btn skillsTools-btn-primary skillsTools-toolbar-end"
@@ -162,25 +214,68 @@ export function SkillsTab(): JSX.Element {
         </button>
       </div>
 
-      {groups.map(([label, list]) => {
-        const onN = list.filter((r) => !r.blocked).length
-        const count = onN === list.length
-          ? String(list.length)
-          : t('gui.skillsTools.skills.on_of', { on: onN, total: list.length })
-        return (
-          <section key={label} className="skillsTools-sec">
-            <div className="skillsTools-eyebrow">
-              <span>{label}</span>
-              <span className="skillsTools-eyebrow-n">{count}</span>
-            </div>
-            <div className="skillsTools-grid">
-              {list.map((row) => <SkillCard key={row.name} row={row} />)}
-            </div>
-          </section>
-        )
-      })}
+      {showBuiltin && builtinFiltered.length > 0 ? (
+        <section className="skillsTools-sec">
+          <SectionHeading
+            tone="builtin"
+            label={t('gui.skillsTools.skills.builtin')}
+            count={countOf(builtinFiltered)}
+            sub={t('gui.skillsTools.skills.builtin_sub')}
+          />
+          <div className="skillsTools-grid">
+            {builtinFiltered.map((row) => <SkillCard key={row.name} row={row} />)}
+          </div>
+        </section>
+      ) : null}
 
-      {groups.length === 0 ? (
+      {showGlobal && globalFiltered.length > 0 ? (
+        <section className="skillsTools-sec">
+          <SectionHeading
+            tone="global"
+            label={t('gui.skillsTools.skills.global')}
+            count={countOf(globalFiltered)}
+            sub={t('gui.skillsTools.skills.global_sub')}
+          />
+          <div className="skillsTools-grid">
+            {globalFiltered.map((row) => <SkillCard key={row.name} row={row} />)}
+          </div>
+        </section>
+      ) : null}
+
+      {showProject && (!q || projectFiltered.length > 0 || s.skillFilter === 'project') ? (
+        <section className="skillsTools-sec">
+          <SectionHeading
+            tone="project"
+            label={t('gui.skillsTools.skills.project')}
+            count={hasProject ? countOf(projectFiltered) : '—'}
+            sub={t('gui.skillsTools.skills.project_sub')}
+          />
+          {hasProject ? (
+            <>
+              <ProjectContextBar />
+              {s.projectErr ? (
+                <div className="skillsTools-err" role="alert">{s.projectErr}</div>
+              ) : s.projectLoading ? (
+                <div className="skillsTools-note">{t('gui.skillsTools.loading')}</div>
+              ) : projectFiltered.length > 0 ? (
+                <div className="skillsTools-grid">
+                  {projectFiltered.map((row) => (
+                    <SkillCard key={`project:${row.name}`} row={row} projectDir={s.projectDir || undefined} />
+                  ))}
+                </div>
+              ) : (
+                <EmptyBox icon={<Icon icon={Folder01Icon} size={22} />}>
+                  {q ? t('gui.skillsTools.skills.none') : t('gui.skillsTools.skills.project_none')}
+                </EmptyBox>
+              )}
+            </>
+          ) : (
+            <ProjectEmptyCard />
+          )}
+        </section>
+      ) : null}
+
+      {noSearchHit ? (
         <EmptyBox icon={<Icon icon={Search01Icon} size={22} />}>
           {t('gui.skillsTools.skills.none')}
         </EmptyBox>

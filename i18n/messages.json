@@ -14233,6 +14233,50 @@
       "en": "Built-in",
       "zh": "内置"
     },
+    "gui.skillsTools.skills.builtin_sub": {
+      "en": "Included with Raven",
+      "zh": "Raven 内置"
+    },
+    "gui.skillsTools.skills.dir_back": {
+      "en": "Back",
+      "zh": "返回"
+    },
+    "gui.skillsTools.skills.dir_blocked": {
+      "en": "This folder cannot be selected",
+      "zh": "该目录不可选择"
+    },
+    "gui.skillsTools.skills.dir_drives": {
+      "en": "Drives",
+      "zh": "磁盘"
+    },
+    "gui.skillsTools.skills.dir_empty": {
+      "en": "No subfolders",
+      "zh": "没有子目录"
+    },
+    "gui.skillsTools.skills.dir_home": {
+      "en": "Home directory",
+      "zh": "主目录"
+    },
+    "gui.skillsTools.skills.dir_loading": {
+      "en": "Loading folders…",
+      "zh": "正在加载目录…"
+    },
+    "gui.skillsTools.skills.dir_open_remote": {
+      "en": "Browse folders…",
+      "zh": "浏览文件夹…"
+    },
+    "gui.skillsTools.skills.dir_typed": {
+      "en": "Folder path",
+      "zh": "目录路径"
+    },
+    "gui.skillsTools.skills.dir_up": {
+      "en": "Parent folder",
+      "zh": "上一级目录"
+    },
+    "gui.skillsTools.skills.dir_use": {
+      "en": "Use this folder",
+      "zh": "使用此目录"
+    },
     "gui.skillsTools.skills.disabled": {
       "en": "Off",
       "zh": "已关闭"
@@ -14240,6 +14284,18 @@
     "gui.skillsTools.skills.filter_all": {
       "en": "All",
       "zh": "全部"
+    },
+    "gui.skillsTools.skills.filter_aria": {
+      "en": "Filter skills by scope",
+      "zh": "按来源筛选技能"
+    },
+    "gui.skillsTools.skills.global": {
+      "en": "Global",
+      "zh": "全局"
+    },
+    "gui.skillsTools.skills.global_sub": {
+      "en": "Available across all conversations",
+      "zh": "所有对话通用"
     },
     "gui.skillsTools.skills.hub_badge": {
       "en": "110k+ community skills",
@@ -14250,8 +14306,8 @@
       "zh": "Skill Hub"
     },
     "gui.skillsTools.skills.hub_sub": {
-      "en": "While on, Raven sends text from your session to the Skill Hub when it looks for a skill.",
-      "zh": "开启时，Raven 查找技能会把会话中的文字发送到 Skill Hub。"
+      "en": "While on, Raven automatically searches skills in EverMind Skill Hub.",
+      "zh": "开启时，Raven 会自动在 EverMind Skill Hub 中搜索技能。"
     },
     "gui.skillsTools.skills.hub_tag": {
       "en": "Skill Hub",
@@ -14273,6 +14329,62 @@
       "en": "Open {file}",
       "zh": "打开 {file}"
     },
+    "gui.skillsTools.skills.project": {
+      "en": "Project",
+      "zh": "项目"
+    },
+    "gui.skillsTools.skills.project_browse": {
+      "en": "Choose another folder…",
+      "zh": "选择其他文件夹…"
+    },
+    "gui.skillsTools.skills.project_browse_unavailable": {
+      "en": "Folder browser unavailable",
+      "zh": "目录浏览器不可用"
+    },
+    "gui.skillsTools.skills.project_change": {
+      "en": "Change folder",
+      "zh": "切换目录"
+    },
+    "gui.skillsTools.skills.project_choose": {
+      "en": "Choose project folder",
+      "zh": "选择项目目录"
+    },
+    "gui.skillsTools.skills.project_current": {
+      "en": "Current session",
+      "zh": "当前会话"
+    },
+    "gui.skillsTools.skills.project_empty_desc": {
+      "en": "Pick a local project folder to inspect and toggle skills under its .agents/skills directory.",
+      "zh": "选择一个本地项目文件夹，扫描并管理其 .agents/skills 中的技能。"
+    },
+    "gui.skillsTools.skills.project_empty_title": {
+      "en": "Select a project directory",
+      "zh": "选择项目目录以查看项目技能"
+    },
+    "gui.skillsTools.skills.project_foot_note": {
+      "en": "Project-scoped file · edit or remove in your repository",
+      "zh": "项目目录技能 · 请在对应代码仓库中编辑或移除"
+    },
+    "gui.skillsTools.skills.project_none": {
+      "en": "No project skills found under .agents/skills for this folder",
+      "zh": "当前项目目录的 .agents/skills 下未发现项目技能"
+    },
+    "gui.skillsTools.skills.project_recent": {
+      "en": "Recent projects:",
+      "zh": "最近项目："
+    },
+    "gui.skillsTools.skills.project_recent_title": {
+      "en": "Recent project folders",
+      "zh": "最近使用的项目目录"
+    },
+    "gui.skillsTools.skills.project_sub": {
+      "en": "Only in the selected project",
+      "zh": "仅对所选项目生效"
+    },
+    "gui.skillsTools.skills.project_switch": {
+      "en": "Project skills",
+      "zh": "项目技能"
+    },
     "gui.skillsTools.skills.safety": {
       "en": "Safety {n}",
       "zh": "安全分 {n}"
@@ -14281,17 +14393,9 @@
       "en": "Search skills",
       "zh": "搜索技能"
     },
-    "gui.skillsTools.skills.stat_builtin": {
-      "en": "Built-in",
-      "zh": "内置技能"
-    },
     "gui.skillsTools.skills.stat_enabled": {
       "en": "Active",
       "zh": "已启用"
-    },
-    "gui.skillsTools.skills.stat_workspace": {
-      "en": "Workspace",
-      "zh": "工作区"
     },
     "gui.skillsTools.skills.trig_auto": {
       "en": "Installed automatically",
@@ -14316,10 +14420,6 @@
     "gui.skillsTools.skills.uninstall_title": {
       "en": "Uninstall {name}?",
       "zh": "卸载 {name}？"
-    },
-    "gui.skillsTools.skills.workspace": {
-      "en": "Workspace",
-      "zh": "工作区"
     },
     "gui.skillsTools.tabs.aria": {
       "en": "Skills & Tools sections",

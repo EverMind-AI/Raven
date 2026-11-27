@@ -137,6 +137,16 @@ export interface ToolRow {
 }
 
 export type SkillRow = ExtSkillRow
+export interface ProjectSkillRow extends SkillRow {
+  path: string
+}
+export interface ProjectSkillsInfo {
+  projectDir: string
+  boundary: string
+  roots: string[]
+  enabled: boolean
+  skills: ProjectSkillRow[]
+}
 export type SkillDetail = NonNullable<ResultOf<'skills.manage'>['info']>
 export type ArchivedSession = ResultOf<'session.list'>['sessions'][number]
 /* The EverOS Cloud card's data: settings.everosCloud's own shape. */
@@ -160,6 +170,8 @@ export interface SettingsSnapshot {
   /* The Skill Hub source as the runtime reads it, answered by settings.get:
      the loader's migrations and boolean rules decide it, not the raw file. */
   skillHub: { on: boolean }
+  /* Whether project-scoped .agents/skills discovery is enabled on disk. */
+  projectSkillsOn?: boolean
   /* The deck engine's picture search as the runtime would resolve it,
      answered by settings.get: the vendor it would use, whether a key
      resolves, and whether that vendor is a Serper fallback. */
@@ -287,8 +299,9 @@ export interface SettingsSource {
   archived(): Promise<ArchivedSession[]>
   restore(id: string): Promise<void>
   removeSession(id: string): Promise<void>
-  inspectSkill(name: string): Promise<SkillDetail>
-  openSkillFile(name: string, file: string): Promise<void>
+  inspectSkill(name: string, projectDir?: string): Promise<SkillDetail>
+  openSkillFile(name: string, file: string, projectDir?: string): Promise<void>
+  projectSkills?(projectDir: string): Promise<ProjectSkillsInfo>
   /* One of raven's own locations in the host's file manager: the config file
      shown selected, agent home opened. Named rather than sent as a path -- the
      gateway resolves both itself, so this reaches nothing else. */

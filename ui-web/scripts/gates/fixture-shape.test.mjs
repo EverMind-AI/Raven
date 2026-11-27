@@ -332,6 +332,7 @@ describe('the offline fixture library', () => {
        settings page calls both writes, so the fixture's answers to them are
        part of the library and are held to the contract here too. */
     for (const action of ['block', 'unblock']) await walk('skills.manage', { action, query: 'SQL style guide' })
+    await walk('skills.manage', { action: 'project_list', project_dir: '/home/me/work/notes' })
     const unsent = [...declared].filter((at) => !sent.has(at)).sort()
     expect(unsent.filter((at) => !UNSENT.has(at)), 'send the field, or add it to UNSENT under its method')
       .toEqual([])

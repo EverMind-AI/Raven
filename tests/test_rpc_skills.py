@@ -343,3 +343,92 @@ async def test_open_of_an_unknown_skill_is_a_typed_error() -> None:
         await skills_manage(
             {"action": "open", "query": "nobody", "file": "SKILL.md"}, agent_loop_factory=_factory(_Registry([]))
         )
+
+
+async def test_project_list_inspect_and_open_follow_project_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.config import loader as config_loader
+    from raven.rpc.errors import ConfigValidationError
+    from raven.rpc.methods import console as console_module
+    from raven.rpc.models import SkillsManageResult
+
+    agent_home = tmp_path / "agent_home"
+    agent_home.mkdir()
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps({"skillForge": {"blocklist": ["blocked-proj"], "projectSkills": {"enabled": True}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_loader, "get_config_path", lambda: cfg)
+
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    sub = repo / "packages" / "web"
+    sub.mkdir(parents=True)
+    for name, body in (
+        ("alpha-skill", "---\nname: alpha-skill\ndescription: Project helper\n---\n# Alpha\n\nDetails.\n"),
+        ("blocked-proj", "---\nname: blocked-proj\ndescription: Blocked one\n---\n# Blocked\n"),
+    ):
+        sdir = repo / ".agents" / "skills" / name
+        sdir.mkdir(parents=True)
+        (sdir / "SKILL.md").write_text(body, encoding="utf-8")
+        (sdir / "notes.md").write_text("notes\n", encoding="utf-8")
+
+    loop = type("_Loop", (), {"context": None, "workspace": agent_home, "_skill_hub_client": None})()
+    factory = lambda: loop  # noqa: E731
+
+    listed = await skills_manage({"action": "project_list", "project_dir": str(sub)}, agent_loop_factory=factory)
+    SkillsManageResult.model_validate(listed)
+    assert listed["project_dir"] == str(sub.resolve())
+    assert listed["boundary"] == str(repo.resolve())
+    assert listed["project_skills_enabled"] is True
+    assert [(s["name"], s["blocked"], s["source"]) for s in listed["project_skills"]] == [
+        ("alpha-skill", False, "project"),
+        ("blocked-proj", True, "project"),
+    ]
+
+    inspected = await skills_manage(
+        {"action": "inspect", "query": "alpha-skill", "project_dir": str(sub)},
+        agent_loop_factory=factory,
+    )
+    SkillsManageResult.model_validate(inspected)
+    assert inspected["info"]["category"] == "project"
+    assert inspected["info"]["files"] == ["SKILL.md", "notes.md"]
+    assert "# Alpha" in str(inspected["info"]["body"])
+
+    opened: list[Path] = []
+    monkeypatch.setattr(console_module, "_open_with_system", lambda target, app="": opened.append(target))
+    assert await skills_manage(
+        {"action": "open", "query": "alpha-skill", "file": "notes.md", "project_dir": str(sub)},
+        agent_loop_factory=factory,
+    ) == {"opened": True}
+    assert opened == [(repo / ".agents" / "skills" / "alpha-skill" / "notes.md").resolve()]
+
+    with pytest.raises(ConfigValidationError):
+        await skills_manage(
+            {"action": "open", "query": "alpha-skill", "file": "../blocked-proj/SKILL.md", "project_dir": str(sub)},
+            agent_loop_factory=factory,
+        )
+
+    with pytest.raises(ConfigValidationError, match="existing directory"):
+        await skills_manage({"action": "project_list", "project_dir": str(tmp_path / "missing")}, agent_loop_factory=factory)
+
+
+async def test_settings_set_project_skills_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven.config import loader as config_loader
+    from raven.config import update as config_update
+    from raven.rpc.methods.console import settings_get, settings_set
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(config_loader, "get_config_path", lambda: cfg)
+    monkeypatch.setattr(config_update, "get_config_path", lambda: cfg)
+
+    before = await settings_get({})
+    assert before["project_skills_on"] is True
+
+    res = await settings_set({"key": "skillForge.projectSkills.enabled", "value": False})
+    assert res == {"applied": True, "previous": True}
+    after = await settings_get({})
+    assert after["project_skills_on"] is False

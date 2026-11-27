@@ -20,6 +20,7 @@ import {
   webKeyReady,
   webVendor,
 } from '../settings/source'
+import { workspaceSource } from '../workspace/source'
 
 import type { SkillsToolsSource } from './types'
 
@@ -44,8 +45,11 @@ export const skillsToolsSource: SkillsToolsSource = {
   set: (key, value) => settingsSource.set(key, value),
   everosSet: (section, model, provider, protocol) => settingsSource.everosSet(section, model, provider, protocol),
   addModel: (slug, model, tags) => settingsSource.provider('add_model', { slug, model, ...tags }),
-  inspectSkill: (name) => settingsSource.inspectSkill(name),
-  openSkillFile: (name, file) => settingsSource.openSkillFile(name, file),
+  inspectSkill: (name, projectDir) => settingsSource.inspectSkill(name, projectDir),
+  openSkillFile: (name, file, projectDir) => settingsSource.openSkillFile(name, file, projectDir),
+  projectSkills: (projectDir) => settingsSource.projectSkills!(projectDir),
+  listDirs: (path) => workspaceSource.dirs!(path),
+  pickDir: () => workspaceSource.pickDir!(),
   uninstallSkill: (name) => settingsSource.uninstallSkill(name),
   blockSkill: (name, blocked) => settingsSource.blockSkill(name, blocked),
   serverDetail: (name) => settingsSource.serverDetail(name),

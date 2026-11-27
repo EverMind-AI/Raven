@@ -75,7 +75,7 @@ export function StatusDot({ tone }: { tone: 'ok' | 'bad' | 'warn' | 'off' }): JS
 }
 
 export function Pill({ tone = 'neutral', children }: {
-  tone?: 'neutral' | 'hub' | 'ok' | 'bad' | 'warn' | 'mono'
+  tone?: 'neutral' | 'hub' | 'ok' | 'bad' | 'warn' | 'mono' | 'teal' | 'blue'
   children: ReactNode
 }): JSX.Element {
   return <span className="skillsTools-pill" data-tone={tone}>{children}</span>
@@ -263,12 +263,18 @@ export function WaitView({ tab }: { tab: SkillsToolsTab }): JSX.Element {
             </div>
           </div>
           <div className="skillsTools-summary-bento skillsTools-wcard">
-            {[0, 1, 2].map((i) => (
-              <div key={i} className="skillsTools-stat-cell">
-                <WBar w="48%" h={18} />
-                <WBar w="66%" h={10} />
-              </div>
-            ))}
+            <div className="skillsTools-summary-top">
+              <WBar w="32%" h={11} />
+              <WBar w="18%" h={11} />
+            </div>
+            <div className="skillsTools-summary-grid">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="skillsTools-stat-cell">
+                  <WBar w="48%" h={18} />
+                  <WBar w="66%" h={10} />
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       ) : null}

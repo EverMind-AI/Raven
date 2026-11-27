@@ -4965,6 +4965,7 @@ details[open] summary { margin-bottom: 8px; }
 .detail[data-owner="skillsTools"] .dpanel { width: min(560px, calc(100vw - 32px)); max-height: min(82vh, 720px); }
 .detail[data-owner="skillsTools"][data-fill="true"] .dpanel { width: min(680px, calc(100vw - 32px)); height: min(80vh, 740px); }
 .detail[data-owner="skillsTools"] .body { padding: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.detail[data-owner="skillsTools"] header:has(b:empty) { top: 21px; right: 16px; }
 /* A card whose body is fetched when it opens gets a settled box instead of one
    that sizes to its content: it went 63px (a line of loading text) -> 640px
    (the card), and a skeleton of any fixed height only moves that jump
@@ -4980,7 +4981,7 @@ details[open] summary { margin-bottom: 8px; }
 .detail header b { flex: 1; font-size: 13.5px; }
 /* When the body carries its own pmdhead identity block, the header title is
    left empty and the row collapses to a floating close control. */
-.detail header:has(b:empty) { position: absolute; top: 12px; right: 12px; padding: 0; z-index: 1; }
+.detail header:has(b:empty) { position: absolute; top: 12px; right: 12px; padding: 0; z-index: 2; }
 .detail header:has(b:empty) b { display: none; }
 .detail .body { overflow-y: auto; padding: 18px 22px 24px; display: grid; gap: 18px; min-height: 0; }
 .dx {

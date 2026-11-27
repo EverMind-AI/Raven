@@ -98,8 +98,56 @@ export function createSkillhub(env: FixtureEnv, ext: ExtFixture): SkillhubFixtur
           for (const s of ext.skills) if (s.name === name) s.blocked = blocked
           return { name, blocked, blocklist: [...blocklist] }
         }
+        if (p.action === 'project_list') {
+          const dir = p.project_dir || '/home/me/work/notes'
+          const projectSkills = [
+            {
+              name: 'modern-web-guidance',
+              description: 'Search modern HTML/CSS and client-side JS best practices before editing web UI.',
+              source: 'project',
+              path: `${dir}/.agents/skills/modern-web-guidance/SKILL.md`,
+              always: false,
+              hub: false,
+              hub_id: '',
+              blocked: blocklist.includes('modern-web-guidance'),
+            },
+            {
+              name: 'repo-release-check',
+              description: 'Verify repo lint gates, i18n catalogue sync, and visual snapshots before opening a PR.',
+              source: 'project',
+              path: `${dir}/.agents/skills/repo-release-check/SKILL.md`,
+              always: false,
+              hub: false,
+              hub_id: '',
+              blocked: blocklist.includes('repo-release-check'),
+            },
+          ]
+          return {
+            project_dir: dir,
+            boundary: dir,
+            roots: [`${dir}/.agents/skills`],
+            project_skills_enabled: true,
+            project_skills: projectSkills,
+          }
+        }
         if (p.action === 'open') return { opened: true }
         if (p.action === 'inspect') {
+          if (p.project_dir) {
+            return {
+              info: {
+                name: p.query || 'modern-web-guidance',
+                description: 'Project-scoped skill loaded from .agents/skills.',
+                category: 'project',
+                path: `${p.project_dir}/.agents/skills/${p.query || 'modern-web-guidance'}/SKILL.md`,
+                body: `# ${p.query || 'modern-web-guidance'}\n\nProject-scoped skill loaded from \`.agents/skills\`.\n`,
+                files: ['SKILL.md'],
+                always: false,
+                hub: false,
+                hub_id: '',
+                install: null,
+              },
+            }
+          }
           const s = ext.skills.find((x) => x.name === p.query)
           if (!s) return { info: {} }
           return {

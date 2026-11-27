@@ -20,7 +20,7 @@ from pydantic import ValidationError
 from pydantic.alias_generators import to_camel
 
 from raven.config.keys import key_as_written
-from raven.config.live import skill_hub_on
+from raven.config.live import project_skills_on, skill_hub_on
 from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import CronConfig
 from raven.utils.atomic_io import atomic_update
@@ -392,6 +392,37 @@ def set_skill_hub_enabled(enabled: bool, *, config_path: Path | None = None) -> 
     previous = atomic_update(path, _apply)
     logger.info(
         "config/update: skill hub source switched {} (was {})",
+        "on" if enabled else "off",
+        previous,
+    )
+    return previous
+
+
+def set_project_skills_enabled(enabled: bool, *, config_path: Path | None = None) -> bool:
+    """Turn the project skills source (``.agents/skills``) on or off; returns the previous state."""
+    path = config_path or get_config_path()
+
+    def _apply(_text: str | None) -> tuple[str, bool]:
+        data = read_raw_or_raise(path)
+        previous = project_skills_on(data)
+        sf_key = key_as_written(data, "skillForge", top_level=True)
+        section = data.get(sf_key)
+        if section is not None and not isinstance(section, dict):
+            raise ValueError(f"{sf_key} must be an object or null")
+        if section is None:
+            section = data[sf_key] = {}
+        ps_key = key_as_written(section, "projectSkills")
+        ps_block = section.get(ps_key)
+        if ps_block is not None and not isinstance(ps_block, dict):
+            raise ValueError(f"{sf_key}.{ps_key} must be an object or null")
+        if ps_block is None:
+            ps_block = section[ps_key] = {}
+        ps_block["enabled"] = enabled
+        return json.dumps(data, indent=2, ensure_ascii=False), previous
+
+    previous = atomic_update(path, _apply)
+    logger.info(
+        "config/update: project skills source switched {} (was {})",
         "on" if enabled else "off",
         previous,
     )
@@ -1041,6 +1072,7 @@ __all__ = [
     "set_playbook_disabled",
     "enable_skill_hub_if_unset",
     "set_skill_hub_enabled",
+    "set_project_skills_enabled",
     "initialize_a2a_server",
     "set_a2a_server_enabled",
 ]
