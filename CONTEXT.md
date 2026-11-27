@@ -535,9 +535,11 @@ workstation, another machine entirely — and the host's whole part in that is
 keeping the registry and handing it over: a launcher points the agent's
 `RAVEN_CONNECTIONS` at the owner's store rather than copying rows into the
 agent's own home, and a sub-agent inherits `RAVEN_HOME` so it resolves the
-same file. Which machine a job lands on, and whether it can run at all, is
-settled inside the agent that runs it, with one exception: an agent entry that
-names a `machine`, of any kind. An `acp` or `cli` entry is started there by the
+same file. That inheritance is local: an entry that names a `machine` runs in
+that machine's login environment and receives no host `RAVEN_HOME` unless the
+row declares one itself. Which machine a job lands on, and whether it can run
+at all, is settled inside the agent that runs it, with one exception: an agent
+entry that names a `machine`, of any kind. An `acp` or `cli` entry is started there by the
 machine's **Raven node**, reached over the one ssh link the host keeps to the machine
 (`raven/node/client.py`) -- a link that may go and come back while the agent runs on;
 an `openai` entry's endpoint is reached from that machine through an ssh tunnel the
