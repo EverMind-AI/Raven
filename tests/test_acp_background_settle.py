@@ -17,7 +17,8 @@ from raven.acp_client import acp_agent, background_settle
 from raven.acp_client.acp_agent import _SESSION_STATE, AcpAgentBackend, _TurnCollector
 from raven.acp_client.background_settle import BackgroundSettle, wake_marker
 from raven.acp_client.capabilities import CapabilitySnapshot, snapshot_fingerprint
-from raven.acp_client.pool import _SessionRouter, close_pool, get_pool
+from raven.acp_client.pool import AcpConnectionPool, _SessionRouter, close_pool, get_pool
+from raven.acp_client.protocol import AcpBusyError, AcpTimeoutError
 from raven.acp_client.unprompted import UnpromptedRecorder
 from raven.agent.subagent import activity
 from raven.agent.subagent.backends import build_third_party_backend
@@ -748,3 +749,137 @@ async def test_a_quiet_settle_survives_the_idle_close(tmp_path, monkeypatch):
     assert "still had background work running" in out
     assert "connection" not in out
     assert await get_pool().close_idle(0.01) == [backend.name], "the run left its connection marked in use"
+
+
+async def test_cancel_during_requires_action_sends_cancel_and_keeps_the_binding(tmp_path, monkeypatch):
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    backend = _stateful("settle-cancel-action", registry, ACP_STUB_SETTLE="forever_action")
+    collectors: list[_TurnCollector] = []
+    _seen_by_settle(monkeypatch, collectors)
+    run = asyncio.create_task(
+        backend.run("go", task_id="t", workspace=tmp_path, session_key="s", instance="work", executor=None)
+    )
+    deadline = time.monotonic() + 10
+    while not (collectors and collectors[0].settle.state == "requires_action" and collectors[0].settle.answered):
+        assert time.monotonic() < deadline and not run.done(), "the run never entered requires_action"
+        await asyncio.sleep(0.05)
+
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+
+    bound = await registry.lookup("s", "settle-cancel-action", "work", kind="acp")
+    assert bound is not None
+    for _ in range(40):
+        if f"stub: session/cancel {bound}" in _stderr(backend):
+            break
+        await asyncio.sleep(0.05)
+    assert f"stub: session/cancel {bound}" in _stderr(backend)
+
+
+async def test_queued_wake_turns_do_not_glue_closing_text_or_transcript():
+    raw_result = (0.0, background_settle.RAW_MESSAGE_METHOD, {"message": {"type": "result", "subtype": "success"}})
+    frames = [
+        (0.0, background_settle.RAW_MESSAGE_METHOD, {"message": _state("running")}),
+        _chunk("started"),
+        raw_result,
+        (0.0, "answer", {}),
+        (0.0, background_settle.RAW_MESSAGE_METHOD, {"message": _state("idle")}),
+        (0.0, background_settle.RAW_MESSAGE_METHOD, {"message": _state("running")}),
+        _chunk("event: PING_1"),
+        raw_result,
+        _chunk("event: PING_2"),
+        raw_result,
+        (0.0, background_settle.RAW_MESSAGE_METHOD, {"message": _state("idle")}),
+    ]
+    collector, _ = await _feed(frames)
+    assert collector.reply == "event: PING_2"
+    assert collector.closing_text == "event: PING_2"
+    assistant_contents = [m["content"] for m in collector.messages() if m["role"] == "assistant"]
+    assert assistant_contents == ["started", "event: PING_1"]
+
+
+async def test_immediate_wake_after_answer_separates_closing_text_and_transcript():
+    raw_result = (0.0, background_settle.RAW_MESSAGE_METHOD, {"message": {"type": "result", "subtype": "success"}})
+    frames = [
+        _chunk("started"),
+        (0.0, "answer", {}),
+        _chunk("final: done"),
+        raw_result,
+    ]
+    collector, _ = await _feed(frames)
+    assert collector.reply == "final: done"
+    assert collector.closing_text == "final: done"
+    assert [m["content"] for m in collector.messages() if m["role"] == "assistant"] == ["started"]
+
+
+async def test_measured_bash_monitor_trace_keeps_queued_wakes_separate_in_messages():
+    collector, _ = await _feed(CLAUDE_SETTLE_BASH_MONITOR)
+    assistant_contents = [m["content"] for m in collector.messages() if m["role"] == "assistant"]
+    assert "event: PING_1" in assistant_contents
+    assert "event: PING_2" in assistant_contents
+    assert all("PING_1event" not in content for content in assistant_contents)
+
+
+def test_empty_raw_result_usage_does_not_mask_prompt_answer_counts():
+    settle = BackgroundSettle(_never_monitor)
+    settle.apply({"type": "result", "usage": {}}, 1.0)
+    assert settle.usage_counts() is None
+    settle.apply({"type": "result", "usage": {"input_tokens": 0, "output_tokens": 0}}, 2.0)
+    assert settle.usage_counts() == {
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "cachedReadTokens": 0,
+        "cachedWriteTokens": 0,
+        "totalTokens": 0,
+    }
+
+
+async def test_collector_falls_back_to_answered_usage_when_raw_result_usage_is_empty():
+    collector, _ = await _feed(
+        [(0.0, background_settle.RAW_MESSAGE_METHOD, {"message": {"type": "result", "usage": {}}})]
+    )
+    answered = {"inputTokens": 12, "outputTokens": 34}
+    assert collector.turn_counts(answered) == answered
+
+
+async def test_responsiveness_skips_probing_while_a_session_is_held():
+    probed: list[str] = []
+
+    async def probe(timeout: float) -> bool:
+        probed.append("probed")
+        return False
+
+    settling = SimpleNamespace(
+        client=SimpleNamespace(prompting=False, idle_seconds=9999.0, probe=probe, name="claude"),
+        holds_a_session=lambda: True,
+    )
+    assert await AcpConnectionPool._responsive(settling) is True
+    assert probed == []
+
+
+async def test_session_open_timeout_during_settle_reports_busy_without_dropping_pool(monkeypatch):
+    class _SlowClient:
+        prompting = False
+
+        async def request(self, method: str, params: dict[str, Any], timeout: float | None = None) -> dict[str, Any]:
+            raise AcpTimeoutError(f"{method} timed out", method=method)
+
+    backend = _settle_backend("settle-busy")
+    dropped: list[str] = []
+
+    async def drop(name: str) -> None:
+        dropped.append(name)
+
+    monkeypatch.setattr(backend.pool, "drop", drop)
+    with pytest.raises(AcpBusyError):
+        await backend._open_session(
+            _SlowClient(),
+            cwd="/work",
+            skey="s",
+            handle="h",
+            budget=5.0,
+            mcp_servers=[],
+            in_flight=lambda: True,
+        )
+    assert dropped == []

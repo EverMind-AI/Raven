@@ -93,3 +93,29 @@ def test_a_steer_row_is_marked_so_a_reader_can_tell_it_from_a_prompt() -> None:
     msgs = tr.rows([tr.say("on it"), tr.user("the docs first", at="t1")])
     steer = next(m for m in msgs if m["role"] == "user")
     assert steer == {"role": "user", "content": "the docs first", "steer": True, "timestamp": "t1"}
+
+
+def test_a_message_break_flushes_the_preceding_assistant_message() -> None:
+    rows = tr.rows(
+        [
+            tr.thought("first thought", at="2026-08-26T10:00:00"),
+            tr.say("first message"),
+            tr.message_break(at="2026-08-26T10:00:05"),
+            tr.say("second message"),
+        ],
+        in_flight_answer="second message",
+        in_flight_answer_at="2026-08-26T10:00:06",
+    )
+    assert rows == [
+        {
+            "role": "assistant",
+            "content": "first message",
+            "reasoning_content": "first thought",
+            "timestamp": "2026-08-26T10:00:00",
+        },
+        {
+            "role": "assistant",
+            "content": "second message",
+            "timestamp": "2026-08-26T10:00:06",
+        },
+    ]

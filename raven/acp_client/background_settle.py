@@ -145,12 +145,17 @@ class BackgroundSettle:
     def _add_usage(self, usage: Any) -> None:
         if not isinstance(usage, dict):
             return
+        parsed = {
+            ours: int(value)
+            for theirs, ours in _USAGE_FIELDS
+            if isinstance((value := usage.get(theirs)), (int, float)) and not isinstance(value, bool)
+        }
+        if not parsed:
+            return
         if self._usage is None:
             self._usage = {ours: 0 for _, ours in _USAGE_FIELDS}
-        for theirs, ours in _USAGE_FIELDS:
-            value = usage.get(theirs)
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                self._usage[ours] += int(value)
+        for ours, value in parsed.items():
+            self._usage[ours] += value
 
 
 def wake_marker(agent: str, ended: list[str]) -> str:

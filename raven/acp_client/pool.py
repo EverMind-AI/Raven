@@ -940,7 +940,8 @@ class AcpConnectionPool:
         both idle and long silent pays for one probe round trip.
         """
         client = existing.client
-        if getattr(client, "prompting", False):
+        holds = getattr(existing, "holds_a_session", None)
+        if getattr(client, "prompting", False) or (callable(holds) and holds()):
             return True
         if client.idle_seconds < _STALE_AFTER_S:
             return True

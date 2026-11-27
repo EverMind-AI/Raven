@@ -22,7 +22,8 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      answering ``final: done``. ``bash_monitor``: also a Monitor task that
                      never ends. ``idle_end``: the wake comes 0.5 s after the task's end.
                      ``idle_end_nowake``: no wake. ``forever``: the task never ends and the
-                     state stays ``running``. ``forever_spent``: as ``forever``, with a wake
+                     state stays ``running``. ``forever_action``: as ``forever``, with the state
+                     at ``requires_action``. ``forever_spent``: as ``forever``, with a wake
                      turn's ``result`` (7 in, 11 out) after the answer. ``dies``: as ``forever``, then the process
                      exits 0.5 s after the answer. ``no_state``: no raw message at all.
                      ``burst``: the task's end and a wake turn answering ``final: burst``,
@@ -593,8 +594,8 @@ def settle_prompt(request_id, session_id: str, scenario: str) -> None:
         _result(session_id)
         _state(session_id, "idle")
         return
-    if scenario in ("forever", "forever_spent", "dies"):
-        _state(session_id, "running")
+    if scenario in ("forever", "forever_action", "forever_spent", "dies"):
+        _state(session_id, "requires_action" if scenario == "forever_action" else "running")
         if scenario == "forever_spent":
             _result(session_id, 7, 11)
         if scenario == "dies":

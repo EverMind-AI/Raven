@@ -466,6 +466,7 @@ class _TurnCollector:
         # A wake queued behind the prompted turn can run with no `idle` between
         # them, so nothing else would end the answered message.
         self._tool_ran = True
+        self._turn.mark_break()
 
     def _raw_message(self, params: dict[str, Any]) -> None:
         message = params.get("message")
@@ -474,6 +475,7 @@ class _TurnCollector:
             # Wake turns queued back to back share one `running` and get no
             # marker of their own; each one's text is still its own message.
             self._tool_ran = True
+            self._turn.mark_break()
         if wake is not None:
             self.events.append({"t": "user", "text": wake_marker(self._agent, wake), "at": self._now()})
             self._tool_ran = True
@@ -862,7 +864,7 @@ class _TurnCollector:
         """
         said: list[str] = []
         for ev in reversed(self.events):
-            if ev["t"] in ("call", "user"):
+            if ev["t"] in ("call", "user", "break"):
                 break
             if ev["t"] == "say":
                 said.append(ev["text"])
@@ -958,6 +960,8 @@ class _TurnCollector:
                 events.append(turn_rows.thought(ev["text"], at=at))
             elif kind == "user":
                 events.append(turn_rows.user(ev["text"], at=at))
+            elif kind == "break":
+                events.append(turn_rows.message_break(at=at))
             elif kind == "call":
                 acp_call: ToolCall = ev["call"]
                 events.append(
@@ -1909,6 +1913,7 @@ class AcpAgentBackend:
                     session_model=session_model,
                     session_effort=session_effort,
                     session_meta=dialect_for(connection.initialize).session_open_meta(),
+                    in_flight=connection.holds_a_session,
                 )
                 if journal is not None:
                     # Inside the marked range on purpose, so the per-call copy of the
@@ -2398,9 +2403,10 @@ class AcpAgentBackend:
                     pass
                 collector.settle_changed.clear()
         except asyncio.CancelledError:
-            # Only a turn that is running has anything to cancel, and a run on a
-            # machine this process is leaving goes on there, as on the prompt path.
-            if settle.state == "running" and not (on_machine and remote.leaving()):
+            # A turn that is running or waiting on an action has work to cancel,
+            # and a run on a machine this process is leaving goes on there, as on
+            # the prompt path.
+            if settle.state in ("running", "requires_action") and not (on_machine and remote.leaving()):
                 try:
                     await client.notify("session/cancel", {"sessionId": session_id})
                 except Exception:  # noqa: BLE001 - the cancel being raised is what matters
@@ -2649,6 +2655,7 @@ class AcpAgentBackend:
         session_model: str | None = None,
         session_effort: str | None = None,
         session_meta: dict[str, Any] | None = None,
+        in_flight: Callable[[], bool] | None = None,
     ) -> tuple[str, bool]:
         """The session to prompt, and whether it continues an earlier one."""
 
@@ -2661,7 +2668,7 @@ class AcpAgentBackend:
             try:
                 return await client.request(method, params, timeout=budget)
             except AcpTimeoutError:
-                if getattr(client, "prompting", False):
+                if getattr(client, "prompting", False) or (in_flight is not None and in_flight()):
                     raise AcpBusyError(
                         f"acp agent {self.name!r}: {method} waited {budget:.0f}s behind a turn "
                         f"already running on this agent's one connection. The agent is busy, not "
