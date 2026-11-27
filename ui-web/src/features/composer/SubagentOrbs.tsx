@@ -14,10 +14,10 @@ import type { SubagentOrb } from './store'
 /* page.css's geometry for `.cp-orbs` (--d, --ov and the hover spread) and
    `.cp-more`: an orb's diameter, how far each overlaps the one before it,
    how far the hover spread opens, and the fold chip's width. */
-const D = 20
-const OVERLAP = 6
-const SPREAD = -3
-const CHIP = D + 5
+const D = 30
+const OVERLAP = 9
+const SPREAD = -4.5
+const CHIP = D + 7.5
 /* page.css's `.cp-orb` width/opacity transition; the leaving orb is dropped
    once it has collapsed. */
 const LEAVE_MS = 280
@@ -29,8 +29,8 @@ interface Slot { orb: SubagentOrb; phase: Phase }
    their own order, each leaving orb kept just after the neighbour it sat
    behind. A key that comes back while leaving is the same orb again. */
 
-/** How many orbs to draw in `room` px: n orbs take 6 + 14n, so all of them
- *  while that fits, otherwise as many as leave room for the +N chip (19 px
+/** How many orbs to draw in `room` px: n orbs take 9 + 21n, so all of them
+ *  while that fits, otherwise as many as leave room for the +N chip (28.5 px
  *  more), and never fewer than one. */
 export function orbsThatFit(total: number, room: number): number {
   const step = D - OVERLAP

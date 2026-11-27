@@ -49,8 +49,8 @@ describe('the orb stack', () => {
   it('shows every orb the row has room for, and folds only the rest', () => {
     room = 85
     render(<SubagentOrbs orbs={many(6)} />)
-    expect(orbEls()).toHaveLength(4)
-    expect(document.querySelector('.cp-more')?.textContent).toBe('+2')
+    expect(orbEls()).toHaveLength(2)
+    expect(document.querySelector('.cp-more')?.textContent).toBe('+4')
   })
 
   it('shows them all, with no fold, when they all fit', () => {
@@ -63,7 +63,7 @@ describe('the orb stack', () => {
   it('unfolds and folds again as the row widens and narrows', () => {
     room = 85
     render(<SubagentOrbs orbs={many(9)} />)
-    expect(orbEls()).toHaveLength(4)
+    expect(orbEls()).toHaveLength(2)
     room = 200
     act(() => { resized?.() })
     expect(orbEls()).toHaveLength(9)
@@ -71,15 +71,15 @@ describe('the orb stack', () => {
     room = 60
     act(() => { resized?.() })
     act(() => { vi.advanceTimersByTime(280) })
-    expect(orbEls()).toHaveLength(2)
-    expect(document.querySelector('.cp-more')?.textContent).toBe('+7')
+    expect(orbEls()).toHaveLength(1)
+    expect(document.querySelector('.cp-more')?.textContent).toBe('+8')
   })
 
   it('opens on hover only as far as the row allows', () => {
     room = 104
     render(<SubagentOrbs orbs={many(7)} />)
     const stack = document.querySelector('.cp-orbs') as HTMLElement
-    expect(stack.style.getPropertyValue('--ov-open')).toBe('6px')
+    expect(stack.style.getPropertyValue('--ov-open')).toBe('7.8px')
   })
 
   it('names every running subagent for a screen reader', () => {
@@ -124,7 +124,7 @@ describe('the orb stack', () => {
   })
 
   it('slides a folded orb in when one leaves', () => {
-    room = 85
+    room = 120
     const six = many(6)
     const { rerender } = render(<SubagentOrbs orbs={six} />)
     act(() => { vi.advanceTimersByTime(FRAME) })
@@ -156,15 +156,15 @@ describe('the orb stack', () => {
 })
 
 describe('how many orbs fit', () => {
-  /* n orbs at 20 px overlapping by 6 take 6 + 14n; the +N chip adds 19. */
-  it('draws them all while 6 + 14n fits', () => {
+  /* n orbs at 30 px overlapping by 9 take 9 + 21n; the +N chip adds 28.5. */
+  it('draws them all while 9 + 21n fits', () => {
     expect(orbsThatFit(7, 200)).toBe(7)
-    expect(orbsThatFit(5, 76)).toBe(5)
+    expect(orbsThatFit(5, 114)).toBe(5)
   })
 
   it('leaves room for the chip once they do not', () => {
-    expect(orbsThatFit(5, 75)).toBe(3)
-    expect(orbsThatFit(7, 80)).toBe(3)
+    expect(orbsThatFit(5, 113)).toBe(3)
+    expect(orbsThatFit(7, 120)).toBe(3)
   })
 
   it('keeps one face however narrow the row', () => {
@@ -173,10 +173,10 @@ describe('how many orbs fit', () => {
   })
 
   it('opens the hover spread only as far as the room allows', () => {
-    expect(openOverlap(7, false, 200)).toBe(-3)
-    expect(openOverlap(7, false, 104)).toBe(6)
-    expect(openOverlap(7, false, 122)).toBe(3)
-    expect(openOverlap(3, true, 200)).toBe(-3)
-    expect(openOverlap(1, false, 10)).toBe(-3)
+    expect(openOverlap(7, false, 240)).toBe(-4.5)
+    expect(openOverlap(7, false, 104)).toBe(9)
+    expect(openOverlap(7, false, 200)).toBeCloseTo(1.67, 2)
+    expect(openOverlap(3, true, 200)).toBe(-4.5)
+    expect(openOverlap(1, false, 10)).toBe(-4.5)
   })
 })
