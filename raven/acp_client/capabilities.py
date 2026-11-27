@@ -25,6 +25,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import shutil
 import time
 from collections.abc import Sequence
@@ -898,6 +899,72 @@ def _read_session_models(result: Any) -> tuple[str, ...]:
     return tuple(str(m["modelId"]) for m in models if isinstance(m, dict) and isinstance(m.get("modelId"), str))
 
 
+_ID_SEGMENT = re.compile(r"[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])")
+_EFFORT_SEGMENTS = {"effort", "efforts", "thought", "thoughts"}
+_NEGATORS = {"no", "none", "without", "disable", "disabled", "off"}
+
+
+def _looks_like_effort(entry: dict[str, Any]) -> bool:
+    """Whether an entry's id says it is a reasoning-effort menu.
+
+    Only the id is read: it is the machine name (``reasoning_effort``,
+    ``thought_level``) and says what the entry is, while the name is a display
+    label -- an entry called "Effort-aware model" is still a model menu, so a
+    label is no evidence about the entry's role. The words count only as whole
+    id segments, not as substrings: ``effortless`` and ``thoughtful-menu`` are
+    model ids that merely happen to contain them, while the plural ``efforts``
+    and ``thoughts`` are segments of their own. A segment directly preceded by
+    a negator states that effort is absent rather than offering levels, so
+    ``no_effort_needed`` stays a model id.
+    """
+    segments = [segment.lower() for segment in _ID_SEGMENT.split(str(entry.get("id") or "")) if segment]
+    for index, segment in enumerate(segments):
+        if segment in _EFFORT_SEGMENTS:
+            if index > 0 and segments[index - 1] in _NEGATORS:
+                continue
+            return True
+    return False
+
+
+def _model_option(result: Any) -> dict[str, Any] | None:
+    """The ``configOptions`` entry that is the model menu, or ``None``.
+
+    ``category: "model"`` alone does not name one entry: Qoder 1.1.45
+    categorises its ``reasoning_effort`` option the same way, so a reader that
+    takes the first match records the effort ladder as the model menu as soon
+    as the agent reorders its options. The id does name one -- ``model`` is what
+    every agent measured here uses, and what raven's own ACP surface sends --
+    so it wins when present. The category match stays the fallback for an
+    agent that spells the id differently, minus any entry that says it is
+    effort: an agent can pin its model and still offer a ladder.
+    """
+    options = _dict(result).get("configOptions")
+    if not isinstance(options, list):
+        return None
+    entries = [o for o in options if isinstance(o, dict) and o.get("category") == "model"]
+    for entry in entries:
+        if entry.get("id") == "model":
+            return entry
+    for entry in entries:
+        if not _looks_like_effort(entry):
+            return entry
+    return None
+
+
+def _is_effort_option(entry: dict[str, Any], model_entry: dict[str, Any] | None) -> bool:
+    """Whether this ``configOptions`` entry is the reasoning-effort menu.
+
+    ``thought_level`` is the category the protocol names for it. Qoder 1.1.45
+    instead files ``reasoning_effort`` under ``category: "model"``, beside the
+    real model entry, so the id is the only signal left; a ``model`` entry whose
+    id carries neither word is the model menu and must not be read as a ladder
+    of effort levels.
+    """
+    if entry.get("category") == "thought_level":
+        return True
+    return entry is not model_entry and entry.get("category") == "model" and _looks_like_effort(entry)
+
+
 def _read_session_model_choices(result: Any) -> tuple[AcpModelChoice, ...]:
     """The models a ``session/new`` result offers, from its config options.
 
@@ -905,7 +972,8 @@ def _read_session_model_choices(result: Any) -> tuple[AcpModelChoice, ...]:
     ``category: "model"`` -- NOT ``models.availableModels``, which is older
     material that the agents this host actually drives do not send. Reading the
     old key alone is how a survey of live handshakes came back empty while every
-    one of them was advertising a full menu.
+    one of them was advertising a full menu. Which entry that is, when more than
+    one wears the category, is :func:`_model_option`'s question.
 
     The entry's ``options`` are either choices or groups of choices, and both
     shapes are taken: the agent decides whether its list is worth bucketing.
@@ -919,13 +987,7 @@ def _read_session_model_choices(result: Any) -> tuple[AcpModelChoice, ...]:
     dropped rather than guessed at, because an invented id is one a reader would
     be offered and the agent would then refuse.
     """
-    options = _dict(result).get("configOptions")
-    if not isinstance(options, list):
-        return ()
-    entry = next(
-        (o for o in options if isinstance(o, dict) and o.get("category") == "model"),
-        None,
-    )
+    entry = _model_option(result)
     if entry is None:
         return ()
 
@@ -955,7 +1017,9 @@ def read_session_effort(result: Any) -> tuple[str, str, tuple[AcpEffortChoice, .
     ``thought_level`` (OpenCode 1.19.4: id ``effort``, values ``low``, ``high``,
     ``max``, ``default``). It is a **separate** option from ``model``, which is
     why that agent's model list is the base models only: 1.14.31 packed the
-    effort into ``model`` ids (``.../low``), and 1.19.4 moved it here.
+    effort into ``model`` ids (``.../low``), and 1.19.4 moved it here. Qoder
+    1.1.45 files ``reasoning_effort`` under ``category: "model"`` instead, which
+    :func:`_is_effort_option` recognises by its id.
 
     Empty everywhere when the agent advertises no such option, which is every
     agent measured before 1.19.4 and every one that has no reasoning effort to
@@ -967,8 +1031,9 @@ def read_session_effort(result: Any) -> tuple[str, str, tuple[AcpEffortChoice, .
     options = _dict(result).get("configOptions")
     if not isinstance(options, list):
         return "", "", ()
+    model_entry = _model_option(result)
     for entry in options:
-        if not isinstance(entry, dict) or entry.get("category") != "thought_level":
+        if not isinstance(entry, dict) or not _is_effort_option(entry, model_entry):
             continue
         found: list[AcpEffortChoice] = []
 
@@ -1004,9 +1069,9 @@ def read_session_current_model(result: Any) -> str:
     """The model a session response says that session is on right now.
 
     The sibling of :func:`_read_session_model_choices`, reading ``currentValue``
-    off the same ``category: "model"`` entry -- and deliberately NOT stored on a
-    capability snapshot, for the reason the choices reader gives: on a probe it
-    is the state of a throwaway session rather than a fact about the agent.
+    off the same entry :func:`_model_option` names -- and deliberately NOT stored
+    on a capability snapshot, for the reason the choices reader gives: on a probe
+    it is the state of a throwaway session rather than a fact about the agent.
 
     It IS a fact about the session that reported it, though, which is what makes
     it worth reading on a live route in: it is the model that session had before
@@ -1014,11 +1079,7 @@ def read_session_current_model(result: Any) -> str:
     when the agent reported none, which a caller must read as "cannot restore"
     rather than as a model.
     """
-    options = _dict(result).get("configOptions")
-    if not isinstance(options, list):
-        return ""
-    entry = next((o for o in options if isinstance(o, dict) and o.get("category") == "model"), None)
-    current = _dict(entry).get("currentValue")
+    current = _dict(_model_option(result)).get("currentValue")
     return current if isinstance(current, str) else ""
 
 

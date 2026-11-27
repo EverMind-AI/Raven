@@ -43,6 +43,8 @@ from raven.acp_client.capabilities import (
     AcpModelChoice,
     CapabilitySnapshot,
     SnapshotStore,
+    _read_session_model_choices,
+    read_session_current_model,
     read_session_effort,
     relearn_session_menus,
     snapshot_fingerprint,
@@ -276,6 +278,246 @@ def test_a_grouped_effort_option_is_read_and_junk_entries_are_skipped() -> None:
     )
     assert (option, current) == ("effort", "low")
     assert choices == (AcpEffortChoice(value="high", name="High"),)
+
+
+def _qoder_menus() -> dict:
+    """A synthetic pair of ``category: "model"`` entries, effort first.
+
+    Every Qoder 1.1.45 handshake captured so far lists ``mode``, ``model``,
+    ``reasoning_effort`` -- model first, effort second -- but that order is not
+    treated as a guarantee. This fixture reverses it deliberately to reproduce
+    the shape in which a positional read would take the effort ladder as the
+    model menu. It is not evidence of what Qoder sends.
+    """
+    return {
+        "configOptions": [
+            {
+                "id": "reasoning_effort",
+                "name": "Reasoning Effort",
+                "category": "model",
+                "currentValue": "max",
+                "options": [{"value": "high"}, {"value": "max"}, {"value": "none"}],
+            },
+            {
+                "id": "model",
+                "name": "Model",
+                "category": "model",
+                "currentValue": "deepseek/deepseek-v4-pro-pg",
+                "options": [
+                    {"value": "deepseek/deepseek-v4-pro-pg", "name": "DeepSeek-V4-Pro (DeepSeek)"},
+                ],
+            },
+        ]
+    }
+
+
+def test_the_model_menu_is_the_entry_named_model_not_the_first_one_categorised_so() -> None:
+    """Qoder 1.1.45 sends its reasoning-effort ladder as a second entry with
+    ``category: "model"``. The id is what tells the two apart; reading by
+    position turns the effort levels into the model menu the moment the agent
+    reorders its options, and the stored current model becomes an effort level.
+    """
+    qoder_shaped = _qoder_menus()
+
+    assert [c.value for c in _read_session_model_choices(qoder_shaped)] == ["deepseek/deepseek-v4-pro-pg"]
+    assert read_session_current_model(qoder_shaped) == "deepseek/deepseek-v4-pro-pg"
+
+
+def test_an_effort_option_mislabelled_as_model_is_still_read_as_effort() -> None:
+    """Qoder 1.1.45 files ``reasoning_effort`` under ``category: "model"`` rather
+    than the protocol's ``thought_level``. Its id is what remains to recognise
+    it by; leaving it unread drops a ladder the agent does offer.
+    """
+    option, current, choices = read_session_effort(_qoder_menus())
+
+    assert (option, current) == ("reasoning_effort", "max")
+    assert [c.value for c in choices] == ["high", "max", "none"]
+    assert [(c.value, c.name) for c in choices] == [("high", ""), ("max", ""), ("none", "")]
+
+    plain_model = {
+        "configOptions": [
+            {"id": "model", "name": "Model", "category": "model", "currentValue": "m", "options": [{"value": "m"}]}
+        ]
+    }
+    assert read_session_effort(plain_model) == ("", "", ()), "a model entry is not an effort menu"
+
+
+def test_an_effort_only_menu_leaves_the_model_menu_empty() -> None:
+    """An agent can pin its model and still offer an effort ladder. Qoder files
+    that ladder under ``category: "model"``, so a category fallback with no model
+    entry beside it must not turn the ladder into the model menu.
+    """
+    effort_only = {"configOptions": [_qoder_menus()["configOptions"][0]]}
+
+    assert _read_session_model_choices(effort_only) == ()
+    assert read_session_current_model(effort_only) == ""
+
+    option, current, choices = read_session_effort(effort_only)
+
+    assert (option, current) == ("reasoning_effort", "max")
+    assert [c.value for c in choices] == ["high", "max", "none"]
+
+
+def test_a_model_menu_under_another_id_is_read_through_the_category_fallback() -> None:
+    """An agent may spell the model entry's id differently from ``model``.
+
+    ``category: "model"`` is then the only thing naming the entry, and the
+    fallback must take it while still skipping one whose id says it is effort.
+    Without the fallback the model menu reads empty and its current value is
+    lost.
+    """
+    renamed = {
+        "configOptions": [
+            {
+                "id": "model_menu",
+                "name": "Model",
+                "category": "model",
+                "currentValue": "gpt-x",
+                "options": [{"value": "gpt-x"}, {"value": "gpt-y"}],
+            }
+        ]
+    }
+
+    assert [c.value for c in _read_session_model_choices(renamed)] == ["gpt-x", "gpt-y"]
+    assert read_session_current_model(renamed) == "gpt-x"
+
+
+def test_a_model_menu_whose_label_mentions_effort_is_still_a_model_menu() -> None:
+    """A display name is not evidence about an entry's role.
+
+    The id ``model_menu`` is a plain machine name; the label "Effort-aware
+    model" describes the models, not an effort ladder. Reading the label as
+    effort left the model menu empty and surfaced the real model ids as effort
+    levels.
+    """
+    labelled = {
+        "configOptions": [
+            {
+                "id": "model_menu",
+                "name": "Effort-aware model",
+                "category": "model",
+                "currentValue": "gpt-x",
+                "options": [{"value": "gpt-x"}, {"value": "gpt-y"}],
+            }
+        ]
+    }
+
+    assert [c.value for c in _read_session_model_choices(labelled)] == ["gpt-x", "gpt-y"]
+    assert read_session_current_model(labelled) == "gpt-x"
+    assert read_session_effort(labelled) == ("", "", ())
+
+
+@pytest.mark.parametrize("option_id", ["thoughtful-menu", "effortless"])
+def test_a_model_menu_whose_id_contains_effort_as_a_substring_is_still_a_model_menu(option_id: str) -> None:
+    """The id words must be whole segments, not substrings.
+
+    ``thoughtful-menu`` and ``effortless`` are model ids whose spelling happens
+    to contain ``thought`` or ``effort``. Matching the substring skipped the
+    model entry and surfaced its model ids as effort levels, which the same ids
+    did not do before the id-only rule.
+    """
+    shaped = {
+        "configOptions": [
+            {
+                "id": option_id,
+                "name": "Model",
+                "category": "model",
+                "currentValue": "gpt-x",
+                "options": [{"value": "gpt-x"}, {"value": "gpt-y"}],
+            }
+        ]
+    }
+
+    assert [c.value for c in _read_session_model_choices(shaped)] == ["gpt-x", "gpt-y"]
+    assert read_session_current_model(shaped) == "gpt-x"
+    assert read_session_effort(shaped) == ("", "", ())
+
+
+@pytest.mark.parametrize("option_id", ["efforts", "thoughts"])
+def test_a_plural_effort_id_is_read_as_effort(option_id: str) -> None:
+    """The plural is a whole segment, not a word to ignore.
+
+    An agent spelling its ladder ``efforts`` or ``thoughts`` advertises the same
+    option as the singular forms, which the segment rule matched alone. The
+    plural remains a whole segment, so recognising it does not reopen the
+    ``effortless`` substring case.
+    """
+    plural = {
+        "configOptions": [
+            {
+                "id": option_id,
+                "name": "Reasoning",
+                "category": "model",
+                "currentValue": "high",
+                "options": [{"value": "low"}, {"value": "high"}],
+            }
+        ]
+    }
+
+    option, current, choices = read_session_effort(plural)
+    assert (option, current) == (option_id, "high")
+    assert [c.value for c in choices] == ["low", "high"]
+
+
+def test_an_id_that_negates_effort_is_still_a_model_menu() -> None:
+    """A negated effort word names the absence of effort, not a ladder.
+
+    ``no_effort_needed`` is a model id: reading its ``effort`` segment as a
+    ladder skipped the model entry and left the model menu empty. The negator
+    immediately before the word is what tells the two apart; the measured ids
+    ``effort``, ``reasoning_effort`` and ``thought_level`` have none there.
+    """
+    negated = {
+        "configOptions": [
+            {
+                "id": "no_effort_needed",
+                "name": "Model",
+                "category": "model",
+                "currentValue": "gpt-x",
+                "options": [{"value": "gpt-x"}, {"value": "gpt-y"}],
+            }
+        ]
+    }
+
+    assert [c.value for c in _read_session_model_choices(negated)] == ["gpt-x", "gpt-y"]
+    assert read_session_current_model(negated) == "gpt-x"
+    assert read_session_effort(negated) == ("", "", ())
+
+
+def test_a_name_only_effort_hint_is_not_an_effort_signal() -> None:
+    """The label is not a signal, even when the id carries neither word.
+
+    An entry with id ``reasoning`` and name "Reasoning effort" is deliberately
+    not read as an effort menu: no measured agent has that shape, and reading
+    the name would restore the display-label false positive the id-only rule
+    exists to avoid. Beside a real ``model`` entry the model menu stays intact;
+    on its own the category fallback still takes it as the model menu.
+    """
+    name_only = {
+        "id": "reasoning",
+        "name": "Reasoning effort",
+        "category": "model",
+        "currentValue": "high",
+        "options": [{"value": "high"}, {"value": "max"}, {"value": "none"}],
+    }
+    model = {
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "currentValue": "gpt-x",
+        "options": [{"value": "gpt-x"}],
+    }
+    beside_model = {"configOptions": [name_only, model]}
+
+    assert read_session_effort(beside_model) == ("", "", ())
+    assert [c.value for c in _read_session_model_choices(beside_model)] == ["gpt-x"]
+    assert read_session_current_model(beside_model) == "gpt-x"
+
+    alone = {"configOptions": [name_only]}
+
+    assert read_session_effort(alone) == ("", "", ())
+    assert [c.value for c in _read_session_model_choices(alone)] == ["high", "max", "none"]
+    assert read_session_current_model(alone) == "high"
 
 
 def test_a_mode_menu_of_effort_levels_is_offered_as_reasoning_effort() -> None:
