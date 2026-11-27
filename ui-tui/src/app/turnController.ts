@@ -38,6 +38,7 @@ import {
 import { disarmEscape } from './directChatStore.js'
 import { resetFlowOverlays } from './overlayStore.js'
 import { pushSnapshot } from './spawnHistoryStore.js'
+import { STATUS } from './statusText.js'
 import { archiveDoneTodos, getTurnState, patchTurnState, resetTurnState } from './turnStore.js'
 import { getUiState, patchUiState } from './uiStore.js'
 
@@ -422,7 +423,7 @@ class TurnController {
 
     this.statusTimer = setTimeout(() => {
       this.statusTimer = null
-      patchUiState({ status: 'ready' })
+      patchUiState({ status: STATUS.ready })
     }, INTERRUPT_COOLDOWN_MS)
   }
 

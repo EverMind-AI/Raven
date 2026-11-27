@@ -66,7 +66,7 @@ describe('SessionPanel', () => {
 describe('StartupLoader', () => {
   it('renders a spinner frame and the first startup message', () => {
     const { lastFrame } = render(<StartupLoader t={DEFAULT_THEME} />)
-    expect(lastFrame()).toContain('summoning raven')
+    expect(lastFrame()).toContain('Summoning raven')
     expect(lastFrame()).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)
   })
 })

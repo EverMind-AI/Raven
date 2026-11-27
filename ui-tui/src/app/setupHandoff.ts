@@ -9,6 +9,7 @@ import type { SetupStatusResponse } from '../gatewayTypes.js'
 import type { LaunchResult } from '../lib/externalCli.js'
 import type { SlashHandlerContext } from './interfaces.js'
 
+import { STATUS } from './statusText.js'
 import { patchUiState } from './uiStore.js'
 
 export interface RunExternalSetupOptions {
@@ -23,7 +24,7 @@ export async function runExternalSetup({ args, ctx, done, launcher, suspend }: R
   const { gateway, session, transcript } = ctx
 
   transcript.sys(`launching \`raven ${args.join(' ')}\`…`)
-  patchUiState({ status: 'setup running…' })
+  patchUiState({ status: STATUS.setupRunning })
 
   let result: LaunchResult = { code: null }
 
@@ -33,14 +34,14 @@ export async function runExternalSetup({ args, ctx, done, launcher, suspend }: R
 
   if (result.error) {
     transcript.sys(`error launching raven: ${result.error}`)
-    patchUiState({ status: 'setup required' })
+    patchUiState({ status: STATUS.setupRequired })
 
     return
   }
 
   if (result.code !== 0) {
     transcript.sys(`raven ${args[0]} exited with code ${result.code}`)
-    patchUiState({ status: 'setup required' })
+    patchUiState({ status: STATUS.setupRequired })
 
     return
   }
@@ -49,7 +50,7 @@ export async function runExternalSetup({ args, ctx, done, launcher, suspend }: R
 
   if (setup?.provider_configured === false) {
     transcript.sys('still no provider configured')
-    patchUiState({ status: 'setup required' })
+    patchUiState({ status: STATUS.setupRequired })
 
     return
   }

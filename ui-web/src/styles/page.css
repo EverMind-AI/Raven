@@ -3053,10 +3053,12 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 
 /* ── the work indicator ───────────────────────────────────────────────────
    One glyph for "this is happening now", in every place that used to say it in
-   its own words: the turn's own row, a sub-agent's row and its open transcript,
-   a command still running. Several vocabularies for one fact made them read as
-   different kinds of event; they are the same fact, and the clock beside the
-   glyph is what says how long it has been true.
+   its own words: a sub-agent's row and its open transcript, an instance that
+   is starting, a command still running. Several vocabularies for one fact made
+   them read as different kinds of event; they are the same fact, and the clock
+   beside the glyph is what says how long it has been true. The turn's own row
+   at the transcript tail draws falling feathers instead (`.cp-feather` below):
+   it is the one place with room for more than a few pixels of glyph.
 
    `currentColor`, not a fixed amber: the same three dots have to sit in an
    amber turn row and a muted panel row without a variant each.
@@ -3085,7 +3087,7 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
    word rotates on a fixed cadence through the catalogue shared with the TUI
    (ui-shared/verbs.json) instead of switching on stream state -- the phase a
    turn is in is not something the reader acts on, while how long it has been
-   running is. The glyph says the turn is alive and the clock proves it.
+   running is. The feathers say the turn is alive and the clock proves it.
 
    The verb sits in a fixed-width slot so the clock never shifts as the
    catalogue moves between short and long entries (`min-width` is the longest
@@ -3104,17 +3106,100 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
   font-family: var(--mono); font-size: 11px; color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
-.turnlive .wkg { color: var(--amber); }
-/* The same row after the host turn has ended, when only the work it delegated
-   is still out. Moss, not amber: the host is no longer the thing that is
-   alive. It keeps the one working glyph and its reduced-motion fallback. */
-.turnlive.cp-waiting .wkg { color: var(--moss); }
+/* The words sit in a slot as wide as their widest spelling -- the longest
+   verb, the separator and the widest clock (`59m 59s`) -- so the orbs after it
+   keep one x while the word rotates, the clock grows and the row turns into
+   its waiting state. The same row after the host turn has ended, when only
+   the work it delegated is still out, says so in one word; the orbs beside it
+   say who is still at work. */
+.turnlive .cp-tslot { display: inline-flex; align-items: baseline; flex: none; min-width: calc(17ch + 12px); }
 .turnlive .cp-tv { display: inline-flex; align-items: baseline; gap: 6px; }
 .turnlive .cp-verb { display: inline-block; flex: none; min-width: 9ch; animation: tvfade .22s ease-out; }
 .turnlive .cp-sep { opacity: .5; }
 @media (prefers-reduced-motion: reduce) {
   .turnlive .cp-verb { animation: none; }
 }
+
+/* The waiting row's glyph (features/composer/FeatherGlyph.tsx): feathers that
+   fall one after another through a canvas a little taller than the row. The
+   negative margins let it spill above and below without growing the row, and
+   the radial mask lets each feather fade in and out instead of being sliced
+   at the canvas edge. Taking ~30px of the row's width keeps the text at the
+   same x the dots used to leave room for plus the glyph's own breadth. */
+.cp-feather {
+  display: block; flex: none; width: 40px; height: 46px; margin: -13px -4px -13px -6px;
+  -webkit-mask: radial-gradient(closest-side, #000 62%, transparent 100%);
+  mask: radial-gradient(closest-side, #000 62%, transparent 100%);
+}
+
+/* The running subagents on the waiting row (features/composer/SubagentOrbs.tsx).
+   Each orb is the agent's own mark on the light plate every mark sits on,
+   shaded as a sphere. Neighbours overlap by a third, and the overlap is cut
+   out of the later orb rather than ringed in a ground colour, so the seam
+   reads on the wash in either theme. `--ov` is registered so the hover spread
+   moves the cut-outs with the spacing; an engine without @property jumps to
+   the spread instead of easing into it.
+
+   An orb that starts or leaves collapses to the width of one overlap, not to
+   nothing, and keeps its own margin: the next orb's negative margin then
+   cancels it exactly, so the neighbours slide to where they will rest and
+   never past the stack's start. Margins are not transitioned -- they change
+   only when an orb becomes or stops being the first, and that change has to
+   land at once or the stack bounces. While an orb collapses, the orb after it
+   drops its cut-out: the collapsing orb sits on top and covers the seam, and a
+   cut-out aimed at a shrinking neighbour would leave a bite out of thin air. The label
+   on hover is the page's shared pill (`data-tip`, state/tooltip.ts). */
+@property --ov { syntax: '<length>'; inherits: true; initial-value: 9px; }
+.cp-orbs {
+  --d: 30px; --ov: 9px; --gap: 2.25px;
+  position: relative; display: inline-flex; align-items: center; flex: none;
+  transition: --ov .24s cubic-bezier(.3, .7, .4, 1);
+}
+/* SubagentOrbs sets --ov-open: the full spread, or less where the row would
+   otherwise end before the stack does. */
+.cp-orbs:hover { --ov: var(--ov-open, -4.5px); }
+.cp-orb {
+  position: relative; flex: none; width: var(--d); height: var(--d);
+  transition: width .28s cubic-bezier(.3, .7, .4, 1), opacity .2s ease, scale .28s cubic-bezier(.3, .7, .4, 1);
+}
+.cp-orb + .cp-orb { margin-left: calc(-1 * var(--ov)); }
+/* Making room comes first: an orb coming in (or out of the fold) widens at
+   once and fades in only once its neighbours have mostly moved. A transition
+   takes the delay of the state it heads for, so a leaving orb -- headed for
+   [data-leave] -- still fades and shrinks together. */
+.cp-orb:not([data-leave]) { transition-delay: 0s, .14s, .14s; }
+.cp-orb:nth-child(1) { z-index: 6; }
+.cp-orb:nth-child(2) { z-index: 5; }
+.cp-orb:nth-child(3) { z-index: 4; }
+.cp-orb:nth-child(4) { z-index: 3; }
+.cp-orb:nth-child(5) { z-index: 2; }
+.cp-orb:hover { z-index: 9; }
+.cp-orb[data-enter], .cp-orb[data-leave] { width: max(0px, var(--ov)); opacity: 0; scale: .4; }
+.cp-ball {
+  position: absolute; inset: 0; border-radius: 50%; display: grid; place-items: center; overflow: hidden;
+  background:
+    radial-gradient(circle at 34% 26%, rgba(255, 255, 255, .98) 0, rgba(255, 255, 255, .95) 16%, rgba(255, 255, 255, 0) 52%),
+    radial-gradient(circle at 50% 50%, rgba(107, 95, 76, 0) 55%, rgba(107, 95, 76, .18) 100%),
+    var(--mark-plate);
+  box-shadow: inset 0 0 0 .5px rgba(70, 56, 34, .14), inset 0 -1.5px 2.5px rgba(70, 56, 34, .14);
+}
+/* The sphere is the plate, so the mark inside drops its own. */
+.cp-ball > .agent-mark { width: 18px; height: 18px; border: 0; border-radius: 0px; background: none; }
+.cp-ball > .agent-mark img, .cp-ball > .agent-mark svg { width: 100%; height: 100%; }
+.cp-orb + .cp-orb .cp-ball {
+  -webkit-mask: radial-gradient(circle at calc(var(--d) / 2 - (var(--d) - var(--ov))) 50%,
+    transparent calc(var(--d) / 2 + var(--gap)), #000 calc(var(--d) / 2 + var(--gap) + .6px));
+  mask: radial-gradient(circle at calc(var(--d) / 2 - (var(--d) - var(--ov))) 50%,
+    transparent calc(var(--d) / 2 + var(--gap)), #000 calc(var(--d) / 2 + var(--gap) + .6px));
+}
+.cp-orb[data-enter] + .cp-orb .cp-ball, .cp-orb[data-leave] + .cp-orb .cp-ball { -webkit-mask: none; mask: none; }
+/* The fold: as tall as an orb, a little wider, its count clear of the cut-out. */
+.cp-orb.cp-more { width: calc(var(--d) + 7.5px); }
+.cp-more .cp-ball {
+  border-radius: 999px; justify-items: end; padding-right: 7.5px;
+  background: var(--raised); box-shadow: inset 0 0 0 .5px var(--line);
+}
+.cp-more .cp-ball > span { font: 600 13.5px/1 var(--mono); color: var(--muted); letter-spacing: -.04em; }
 
 .queued { margin-bottom: 9px; display: grid; gap: 3px; }
 .dock-in .queued { margin: 0; padding: 0 18px; }

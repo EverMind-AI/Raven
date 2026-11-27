@@ -32,6 +32,7 @@ import { resetDirectChat } from './directChatStore.js'
 import { resetFolds } from './foldStore.js'
 import { resetLiveAgents } from './liveAgentsStore.js'
 import { patchOverlayState } from './overlayStore.js'
+import { STATUS } from './statusText.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
 import { getUiState, patchUiState } from './uiStore.js'
@@ -230,7 +231,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
 
       if (setup?.provider_configured === false) {
         panel(SETUP_REQUIRED_TITLE, buildSetupRequiredSections())
-        patchUiState({ status: 'setup required' })
+        patchUiState({ status: STATUS.setupRequired })
 
         return
       }
@@ -244,7 +245,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       }
 
       if (!r) {
-        return patchUiState({ status: 'ready' })
+        return patchUiState({ status: STATUS.ready })
       }
 
       const info = r.info ?? null
@@ -257,7 +258,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       patchUiState({
         info,
         sid: r.session_id,
-        status: info?.version ? 'ready' : 'starting agent…',
+        status: info?.version ? STATUS.ready : STATUS.startingAgent,
         usage: usageFrom(info)
       })
 
@@ -322,13 +323,13 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       const epoch = resumeEpochRef.current
 
       patchOverlayState({ picker: false })
-      patchUiState({ status: 'resuming…' })
+      patchUiState({ status: STATUS.resuming })
 
       rpc<SetupStatusResponse>('setup.status', {})
         .then(setup => {
           if (setup?.provider_configured === false) {
             panel(SETUP_REQUIRED_TITLE, buildSetupRequiredSections())
-            patchUiState({ status: 'setup required' })
+            patchUiState({ status: STATUS.setupRequired })
 
             return
           }
@@ -348,7 +349,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
               if (!r) {
                 sys('error: invalid response: session.resume')
 
-                return patchUiState({ status: 'ready' })
+                return patchUiState({ status: STATUS.ready })
               }
 
               resetSession()
@@ -382,7 +383,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
               patchUiState({
                 info: r.info ?? null,
                 sid: r.session_id,
-                status: 'ready',
+                status: STATUS.ready,
                 usage: usageFrom(r.info ?? null)
               })
               setTimeout(() => scrollRef.current?.scrollToBottom(), 0)
@@ -393,7 +394,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
         // step after it and left the status line saying it was still resuming.
         .catch((e: unknown) => {
           sys(`error: ${rpcErrorMessage(e)}`)
-          patchUiState({ status: 'ready' })
+          patchUiState({ status: STATUS.ready })
         })
     },
     [closeSession, colsRef, gw, panel, resetSession, rpc, scrollRef, setHistoryItems, setSessionStartedAt, sys]

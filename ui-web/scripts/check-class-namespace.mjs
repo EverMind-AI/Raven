@@ -184,7 +184,7 @@ const SHARED = new Set([
 const LEGACY_SHARED = {
   a: 3, btn: 2, cap: 2, chgs: 2, cmd: 2, ct: 2, d: 4, foot: 2, k: 2,
   gap: 2, 'ghost-ic': 3, hd: 2, key: 2, lb: 3, n: 2, rm: 2, row: 2,
-  shot: 3, sk: 2, skel: 2, step: 2, sz: 2, tipdn: 2, v: 3, w: 2, wkg: 3,
+  shot: 3, sk: 2, skel: 2, step: 2, sz: 2, tipdn: 2, v: 3, w: 2, wkg: 2,
   wsnote: 2,
 }
 

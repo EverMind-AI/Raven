@@ -27,6 +27,7 @@ import {
   resetDirectChat
 } from '../app/directChatStore.js'
 import { bindInstanceRefresh, resetInstanceRefresh, scheduleInstanceRefresh } from '../app/directChatSync.js'
+import { STATUS } from '../app/statusText.js'
 import { turnController } from '../app/turnController.js'
 import { resetTurnState } from '../app/turnStore.js'
 import { getUiState, patchUiState, resetUiState } from '../app/uiStore.js'
@@ -349,7 +350,7 @@ describe('createChatStream — cancel preserves streamed content', () => {
     fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-2' } })
     vi.advanceTimersByTime(2000)
 
-    expect(getUiState().status).not.toBe('ready')
+    expect(getUiState().status).not.toBe(STATUS.ready)
     expect(getUiState().busy).toBe(true)
     vi.useRealTimers()
   })
@@ -370,7 +371,7 @@ describe('createChatStream — cancel preserves streamed content', () => {
 
     vi.advanceTimersByTime(2000)
 
-    expect(getUiState().status).toBe('ready')
+    expect(getUiState().status).toBe(STATUS.ready)
     vi.useRealTimers()
   })
 

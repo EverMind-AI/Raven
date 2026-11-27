@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GatewayRpc } from '../app/interfaces.js'
 
 import { getOverlayState, patchOverlayState, resetOverlayState } from '../app/overlayStore.js'
+import { STATUS } from '../app/statusText.js'
 import { getUiState, patchUiState, resetUiState } from '../app/uiStore.js'
 import { performDeleteWithFallback, useSessionLifecycle, writeActiveSessionFile } from '../app/useSessionLifecycle.js'
 import { hydrateDagRuns, toTranscriptMessages } from '../domain/messages.js'
@@ -538,7 +539,7 @@ describe('useSessionLifecycle resumeById staleness guard', () => {
     actionsRef.current!.resumeById('session-b')
 
     await vi.waitFor(() => expect(getUiState().sid).toBe('session-b'))
-    expect(getUiState().status).toBe('ready')
+    expect(getUiState().status).toBe(STATUS.ready)
     expect(sys).toHaveBeenCalledWith(expect.stringContaining(LEFT_BEHIND))
 
     app.unmount()
@@ -560,7 +561,7 @@ describe('useSessionLifecycle resumeById staleness guard', () => {
 
     actionsRef.current!.resumeById('session-b')
 
-    await vi.waitFor(() => expect(getUiState().status).toBe('ready'))
+    await vi.waitFor(() => expect(getUiState().status).toBe(STATUS.ready))
     expect(sys).toHaveBeenCalledWith('error: gateway went away')
 
     app.unmount()

@@ -22,12 +22,13 @@ import { topLevelSubagents } from '../lib/subagentTree.js'
 import { formatToolCall, stripAnsi } from '../lib/text.js'
 import { applyDelegationStatus, getDelegationState } from './delegationStore.js'
 import { getOverlayState, patchOverlayState } from './overlayStore.js'
+import { STATUS } from './statusText.js'
 import { turnController } from './turnController.js'
 import { applySkinTheme, getUiState, patchUiState } from './uiStore.js'
 
 const NO_PROVIDER_RE = /\bNo (?:LLM|inference) provider configured\b/i
 
-const statusFromBusy = () => (getUiState().busy ? 'running…' : 'ready')
+const statusFromBusy = () => (getUiState().busy ? STATUS.running : STATUS.ready)
 
 const dropBgTask = (taskId: string) =>
   patchUiState(state => {
@@ -207,7 +208,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
       .catch((e: unknown) => turnController.pushActivity(`command catalog unavailable: ${rpcErrorMessage(e)}`, 'info'))
 
     if (STARTUP_RESUME_ID) {
-      patchUiState({ status: 'resuming…' })
+      patchUiState({ status: STATUS.resuming })
       resumeById(STARTUP_RESUME_ID)
       scheduleStartupPrompt()
 
@@ -223,7 +224,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
     rpc<ConfigFullResponse>('config.get', { key: 'full' })
       .then(cfg => {
         if (!cfg?.config?.display?.tui_auto_resume_recent) {
-          patchUiState({ status: 'forging session…' })
+          patchUiState({ status: STATUS.forging })
           newSession()
           scheduleStartupPrompt()
 
@@ -234,20 +235,20 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
           const target = r?.session_id
 
           if (target) {
-            patchUiState({ status: 'resuming most recent…' })
+            patchUiState({ status: STATUS.resumingRecent })
             resumeById(target)
             scheduleStartupPrompt()
 
             return
           }
 
-          patchUiState({ status: 'forging session…' })
+          patchUiState({ status: STATUS.forging })
           newSession()
           scheduleStartupPrompt()
         })
       })
       .catch(() => {
-        patchUiState({ status: 'forging session…' })
+        patchUiState({ status: STATUS.forging })
         newSession()
         scheduleStartupPrompt()
       })
@@ -278,7 +279,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         patchUiState(state => ({
           ...state,
           info,
-          status: state.status === 'starting agent…' ? 'ready' : state.status,
+          status: state.status === STATUS.startingAgent ? STATUS.ready : state.status,
           usage: info.usage ? { ...state.usage, ...info.usage } : state.usage
         }))
 
@@ -421,7 +422,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         const { cwd, python, stderr_tail: stderrTail } = ev.payload ?? {}
         const trace = python || cwd ? ` · ${String(python || '')} ${String(cwd || '')}`.trim() : ''
 
-        setStatus('gateway startup timeout')
+        setStatus(STATUS.startupTimeout)
         turnController.pushActivity(`gateway startup timed out${trace} · /logs to inspect`, 'error')
 
         // Surface the most useful stderr lines inline so users can tell
@@ -447,7 +448,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
       }
 
       case 'gateway.protocol_error':
-        setStatus('protocol warning')
+        setStatus(STATUS.protocolWarning)
         restoreStatusAfter(4000)
 
         if (!turnController.protocolWarned) {
@@ -532,7 +533,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
             total: ev.payload.total
           }
         })
-        setStatus('waiting for input…')
+        setStatus(STATUS.waitingInput)
 
         return
       case 'clarify.closed': {
@@ -564,7 +565,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
             ...(ev.payload.suggested_pattern ? { suggestedPattern: String(ev.payload.suggested_pattern) } : {})
           }
         })
-        setStatus('approval needed')
+        setStatus(STATUS.approvalNeeded)
 
         return
       }
@@ -589,13 +590,13 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
             requestId: ev.payload.request_id
           }
         })
-        setStatus('confirm needed')
+        setStatus(STATUS.confirmNeeded)
 
         return
 
       case 'sudo.request':
         patchOverlayState({ sudo: { requestId: ev.payload.request_id } })
-        setStatus('sudo password needed')
+        setStatus(STATUS.sudoNeeded)
 
         return
 
@@ -603,7 +604,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         patchOverlayState({
           secret: { envVar: ev.payload.env_var, prompt: ev.payload.prompt, requestId: ev.payload.request_id }
         })
-        setStatus('secret input needed')
+        setStatus(STATUS.secretNeeded)
 
         return
 
@@ -735,7 +736,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
           }
         }
 
-        setStatus('ready')
+        setStatus(STATUS.ready)
 
         if (ev.payload?.usage) {
           patchUiState(state => ({ ...state, usage: { ...state.usage, ...ev.payload!.usage } }))
@@ -760,13 +761,13 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
           if (NO_PROVIDER_RE.test(message)) {
             panel(SETUP_REQUIRED_TITLE, buildSetupRequiredSections())
-            setStatus('setup required')
+            setStatus(STATUS.setupRequired)
 
             return
           }
 
           sys(`error: ${message}`)
-          setStatus('ready')
+          setStatus(STATUS.ready)
         }
     }
   }

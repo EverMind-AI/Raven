@@ -87,8 +87,8 @@ export function orderAgentGroups(roster: SubagentRow[], instances: InstanceRow[]
 }
 
 /* A run's state, as ONE element in the row's leading column. In flight that
-   is the work glyph -- the same one the turn's own row wears; finished, it is
-   the status dot. */
+   is the work glyph -- the same one the agent pane's tail wears; finished, it
+   is the status dot. */
 function Mark({ status }: { status?: string }): JSX.Element {
   if (status !== 'run') return <span className={'dot ' + store.agentDot(status)} />
   return (

@@ -1886,7 +1886,7 @@
       "zh": "共 {n} 次"
     },
     "gui.cron.running_x": {
-      "en": "running \"{name}\" now",
+      "en": "Running \"{name}\" now",
       "zh": "正在补跑「{name}」"
     },
     "gui.cron.save": {
@@ -2706,7 +2706,7 @@
       "zh": "实用 {u} · 鲁棒 {r} · 安全 {s}"
     },
     "gui.hub.reading": {
-      "en": "reading...",
+      "en": "Reading...",
       "zh": "读取中…"
     },
     "gui.hub.remove": {
@@ -2750,7 +2750,7 @@
       "en": "Use the \"{name}\" skill to help me: "
     },
     "gui.hub.working": {
-      "en": "working...",
+      "en": "Working...",
       "zh": "处理中…"
     },
     "gui.hubcat.AI-ML": {
@@ -2894,8 +2894,16 @@
       "zh": "输出中 · {t}"
     },
     "gui.live.waiting_subagents": {
-      "en": "waiting for subagents",
-      "zh": "等待子智能体返回"
+      "en": "Waiting",
+      "zh": "等待中"
+    },
+    "gui.live.orbs_label_one": {
+      "en": "1 subagent running: {names}",
+      "zh": "1 个子智能体在运行：{names}"
+    },
+    "gui.live.orbs_label_n": {
+      "en": "{n} subagents running: {names}",
+      "zh": "{n} 个子智能体在运行：{names}"
     },
     "gui.mem.down": {
       "zh": "长期记忆当前写不进去，这段时间的内容不会被记住。",
@@ -3142,7 +3150,7 @@
       "en": "Skills"
     },
     "gui.meter.running": {
-      "en": "running",
+      "en": "Running",
       "zh": "运行中"
     },
     "gui.meter.usage": {
@@ -7694,7 +7702,7 @@
       "zh": "未授权"
     },
     "gui.pb.cred_authorizing": {
-      "en": "waiting for the browser...",
+      "en": "Waiting for the browser...",
       "zh": "等待浏览器授权…"
     },
     "gui.pb.cred_open_link": {
@@ -7942,23 +7950,23 @@
       "zh": "{title}（{n}）· Enter 打开"
     },
     "gui.panel.loading_subagents": {
-      "en": "loading subagents...",
+      "en": "Loading subagents...",
       "zh": "正在加载子智能体…"
     },
     "gui.panel.loading_skills": {
-      "en": "loading skills...",
+      "en": "Loading skills...",
       "zh": "正在加载技能…"
     },
     "gui.panel.loading_sessions": {
-      "en": "loading sessions...",
+      "en": "Loading sessions...",
       "zh": "正在加载会话…"
     },
     "gui.panel.loading_models": {
-      "en": "loading models...",
+      "en": "Loading models...",
       "zh": "正在加载模型…"
     },
     "gui.panel.loading": {
-      "en": "loading...",
+      "en": "Loading...",
       "zh": "正在加载…"
     },
     "gui.panel.installing": {
@@ -8014,11 +8022,11 @@
       "zh": "回放 {i}/{n}"
     },
     "gui.panel.queued_none": {
-      "en": "queued - nothing has run yet",
+      "en": "Queued - nothing has run yet",
       "zh": "排队中 · 还没有开始"
     },
     "gui.panel.waiting_first": {
-      "en": "waiting for the first step...",
+      "en": "Waiting for the first step...",
       "zh": "正在等待第一步…"
     },
     "gui.panel.no_step_record": {
@@ -8078,15 +8086,15 @@
       "zh": "基线 对比 候选 · esc/q 关闭"
     },
     "gui.panel.boot_summon": {
-      "en": "summoning raven...",
+      "en": "Summoning raven...",
       "zh": "正在唤醒 raven…"
     },
     "gui.panel.boot_loop": {
-      "en": "building agent loop...",
+      "en": "Building agent loop...",
       "zh": "正在搭建智能体循环…"
     },
     "gui.panel.boot_tools": {
-      "en": "loading tools & skills...",
+      "en": "Loading tools & skills...",
       "zh": "正在加载工具与技能…"
     },
     "gui.panel.no_active_session": {
@@ -10082,11 +10090,11 @@
       "zh": "被中断"
     },
     "gui.dag.st_pending": {
-      "en": "waiting",
+      "en": "Waiting",
       "zh": "等待中"
     },
     "gui.dag.st_running": {
-      "en": "running",
+      "en": "Running",
       "zh": "正在运行"
     },
     "gui.dag.st_skipped": {
@@ -11438,7 +11446,7 @@
       "zh": "已跑 {n} 轮"
     },
     "gui.pb.stint_live": {
-      "en": "running",
+      "en": "Running",
       "zh": "进行中"
     },
     "gui.pb.stint_waiting": {
@@ -11470,7 +11478,7 @@
       "zh": "已回答"
     },
     "gui.pb.stint_unanswered": {
-      "en": "waiting",
+      "en": "Waiting",
       "zh": "等待中"
     },
     "gui.pb.stint_tree": {
@@ -11646,7 +11654,7 @@
       "zh": "继续"
     },
     "gui.pb.stint_status_running": {
-      "en": "running",
+      "en": "Running",
       "zh": "进行中"
     },
     "gui.pb.stint_status_paused": {

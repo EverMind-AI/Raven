@@ -22,6 +22,7 @@ import { asRpcResult } from '../lib/rpc.js'
 import { hasInterpolation, INTERPOLATION_RE } from '../protocol/interpolation.js'
 import { expandSnips } from '../protocol/paste.js'
 import { appendDirectMessage, directKey, getDirectChat, sendingPausedReason } from './directChatStore.js'
+import { STATUS } from './statusText.js'
 import { turnController } from './turnController.js'
 import { getUiState, patchUiState } from './uiStore.js'
 
@@ -138,7 +139,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
           }
         }
 
-        patchUiState({ busy: true, status: 'running…' })
+        patchUiState({ busy: true, status: STATUS.running })
         turnController.bufRef = ''
         turnController.interrupted = false
 
@@ -152,23 +153,23 @@ export function useSubmission(opts: UseSubmissionOptions) {
           typed.send(submitText).catch((e: Error) => {
             if (isSessionBusyError(e)) {
               composerActions.enqueue(submitText)
-              patchUiState({ busy: true, status: 'queued for next turn' })
+              patchUiState({ busy: true, status: STATUS.queuedNext })
               return sys(`queued: "${submitText.slice(0, 50)}${submitText.length > 50 ? '…' : ''}"`)
             }
             notifyHere(`error: ${e.message}`)
-            patchUiState({ status: 'ready' })
+            patchUiState({ status: STATUS.ready })
           })
         } else {
           gw.request<PromptSubmitResponse>('prompt.submit', { session_id: sid, text: submitText }).catch((e: Error) => {
             if (isSessionBusyError(e)) {
               composerActions.enqueue(submitText)
-              patchUiState({ busy: true, status: 'queued for next turn' })
+              patchUiState({ busy: true, status: STATUS.queuedNext })
 
               return sys(`queued: "${submitText.slice(0, 50)}${submitText.length > 50 ? '…' : ''}"`)
             }
 
             sys(`error: ${e.message}`)
-            patchUiState({ busy: false, status: 'ready' })
+            patchUiState({ busy: false, status: STATUS.ready })
           })
         }
       }
@@ -214,7 +215,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
   const shellExec = useCallback(
     (cmd: string) => {
       appendMessage({ role: 'user', text: `!${cmd}` })
-      patchUiState({ busy: true, status: 'running…' })
+      patchUiState({ busy: true, status: STATUS.running })
 
       gw.request<ShellExecResponse>('shell.exec', { command: cmd })
         .then(raw => {
@@ -235,14 +236,14 @@ export function useSubmission(opts: UseSubmissionOptions) {
           }
         })
         .catch((e: Error) => sys(`error: ${e.message}`))
-        .finally(() => patchUiState({ busy: false, status: 'ready' }))
+        .finally(() => patchUiState({ busy: false, status: STATUS.ready }))
     },
     [appendMessage, gw, sys]
   )
 
   const interpolate = useCallback(
     (text: string, then: (result: string) => void) => {
-      patchUiState({ status: 'interpolating…' })
+      patchUiState({ status: STATUS.interpolating })
       const matches = [...text.matchAll(new RegExp(INTERPOLATION_RE.source, 'g'))]
 
       Promise.all(
