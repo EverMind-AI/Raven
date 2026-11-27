@@ -23,6 +23,7 @@ import httpx
 import pytest
 from httpcore._backends.auto import AutoBackend
 
+from raven.security.network import judge_resolved_url as _real_resolved_judge
 from raven.security.network import judge_url_target as _real_judge
 from raven.security.network import validate_url_target as _real_validate
 from raven_ppt.contracts import Project
@@ -1002,20 +1003,18 @@ async def test_the_first_hop_connects_to_the_address_the_judge_saw(rebinding_dns
     assert attempts == [(public, 443)], f"the connection must go to the judged address, got {attempts}"
 
 
-@pytest.mark.asyncio
-async def test_every_redirect_hop_connects_to_the_address_its_judge_saw(
-    rebinding_dns, monkeypatch, tmp_path: Path
-) -> None:
-    """A second hop resolves for itself, so it has to be pinned for itself too.
+@pytest.fixture()
+def redirecting_source():
+    """A loopback origin whose first hop answers `302 Location: http://rebind.test/next`.
 
-    The first hop is public on both lookups; only the redirect target's
-    connection is answered with loopback. A fix that pins the first hop alone
-    still follows that redirect inward.
+    Both the pinning case and the hop-liveness case need a real redirect rather
+    than a mock handler, so the origin lives here once. `served` records the paths
+    asked for, which is what tells "the redirect was followed" from "the second
+    request never went out".
     """
-    public = rebinding_dns
     served: list[str] = []
 
-    class Redirects(BaseHTTPRequestHandler):
+    class Source(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             served.append(self.path)
             if self.path == "/start":
@@ -1032,10 +1031,30 @@ async def test_every_redirect_hop_connects_to_the_address_its_judge_saw(
         def log_message(self, *_args) -> None:
             pass
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Redirects)
-    local_port = server.server_address[1]
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Source)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    try:
+        yield server, served
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_every_redirect_hop_connects_to_the_address_its_judge_saw(
+    rebinding_dns, redirecting_source, monkeypatch, tmp_path: Path
+) -> None:
+    """A second hop resolves for itself, so it has to be pinned for itself too.
+
+    The first hop is public on both lookups; only the redirect target's
+    connection is answered with loopback. A fix that pins the first hop alone
+    still follows that redirect inward.
+    """
+    public = rebinding_dns
+    server, served = redirecting_source
+    local_port = server.server_address[1]
     attempts: list[tuple] = []
     real_connect = AutoBackend.connect_tcp
 
@@ -1046,12 +1065,8 @@ async def test_every_redirect_hop_connects_to_the_address_its_judge_saw(
         return await real_connect(backend, "127.0.0.1", local_port, **kwargs)
 
     monkeypatch.setattr(AutoBackend, "connect_tcp", recording_connect)
-    try:
-        body = await _run(PptFetchTool(tmp_path), url="http://rebind.test/start")
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+
+    body = await _run(PptFetchTool(tmp_path), url="http://rebind.test/start")
 
     assert body["ok"] is True, body
     assert served == ["/start", "/next"], served
@@ -1080,6 +1095,34 @@ async def test_a_pinned_hop_still_answers_as_the_name_it_was_given(fetch_routed)
 # ---------------------------------------------------------------------------
 
 
+async def _ticks_while_running(judging: threading.Event, action) -> tuple[dict, int]:
+    """Await `action` while counting the loop turns a sibling coroutine gets.
+
+    The count is taken only while `judging` is set, so it measures the loop
+    during the call under test and not during the rest of the fetch.
+    """
+    ticks = 0
+
+    async def ticker() -> None:
+        nonlocal ticks
+        while True:
+            if judging.is_set():
+                ticks += 1
+            await asyncio.sleep(0.01)
+
+    task = asyncio.create_task(ticker())
+    await asyncio.sleep(0)
+    try:
+        result = await action
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    return result, ticks
+
+
 @pytest.mark.asyncio
 async def test_the_hop_judge_does_not_block_the_event_loop(fetch, monkeypatch) -> None:
     """A slow resolver must not freeze the turns this process is serving.
@@ -1091,7 +1134,6 @@ async def test_the_hop_judge_does_not_block_the_event_loop(fetch, monkeypatch) -
     flight, however long the judge takes.
     """
     judging = threading.Event()
-    ticks_while_judging = 0
     tool = fetch(_png())
 
     def slow_judge(_url):
@@ -1103,26 +1145,59 @@ async def test_the_hop_judge_does_not_block_the_event_loop(fetch, monkeypatch) -
     monkeypatch.setattr("raven.security.network.judge_url_target", slow_judge)
     monkeypatch.setattr("raven.security.network.judge_resolved_url", slow_judge)
 
-    async def ticker() -> None:
-        nonlocal ticks_while_judging
-        while True:
-            if judging.is_set():
-                ticks_while_judging += 1
-            await asyncio.sleep(0.01)
-
-    task = asyncio.create_task(ticker())
-    await asyncio.sleep(0)
-    try:
-        body = await _run(tool, url="https://example.com/figure")
-    finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+    body, ticks_while_judging = await _ticks_while_running(judging, _run(tool, url="https://example.com/figure"))
 
     assert body["ok"] is True, body
     assert ticks_while_judging > 1, (
         "the event loop must keep running while the judge resolves; "
+        f"a sibling coroutine got only {ticks_while_judging} turns"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_later_hop_judge_does_not_block_the_event_loop(
+    rebinding_dns, redirecting_source, monkeypatch, tmp_path: Path
+) -> None:
+    """A redirect hop is judged on the same await as the first, not on the loop.
+
+    The case above stops at hop 0, where `judge_url_target` is chosen. Every later
+    hop takes `judge_resolved_url` through the same line, so a fix that only waits
+    off the loop for the first lookup still freezes every session's turn while a
+    redirect's name resolves. This drives a real 302 and sleeps inside the second
+    hop's judge.
+    """
+    server, served = redirecting_source
+    local_port = server.server_address[1]
+    judging = threading.Event()
+
+    def slow_on_the_redirect(url):
+        if not url.endswith("/next"):
+            return _real_judge(url)
+        judging.set()
+        try:
+            time.sleep(0.2)
+        finally:
+            judging.clear()
+        return _real_resolved_judge(url)
+
+    monkeypatch.setattr("raven.security.network.judge_url_target", slow_on_the_redirect)
+    monkeypatch.setattr("raven.security.network.judge_resolved_url", slow_on_the_redirect)
+    real_connect = AutoBackend.connect_tcp
+
+    async def routing_connect(backend, host, port, **kwargs):
+        if port != 80:
+            return await real_connect(backend, host, port, **kwargs)
+        return await real_connect(backend, "127.0.0.1", local_port, **kwargs)
+
+    monkeypatch.setattr(AutoBackend, "connect_tcp", routing_connect)
+
+    body, ticks_while_judging = await _ticks_while_running(
+        judging, _run(PptFetchTool(tmp_path), url="http://rebind.test/start")
+    )
+
+    assert body["ok"] is True, body
+    assert served == ["/start", "/next"], served
+    assert ticks_while_judging > 1, (
+        "the event loop must keep running while a redirect hop is judged; "
         f"a sibling coroutine got only {ticks_while_judging} turns"
     )

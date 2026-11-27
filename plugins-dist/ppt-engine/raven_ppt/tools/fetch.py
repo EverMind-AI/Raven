@@ -394,9 +394,9 @@ class PptFetchTool(Tool):
         judge can read. The chain is bounded because it has to end.
 
         The first hop is judged once more than the others because `_fetch_one`
-        has already called `validate_url_target` on it; that verdict is thrown
-        away, while this loop needs the addresses it was made on to pin the
-        connection.
+        has already called `validate_url_target` on it; that verdict is used to
+        refuse the fetch, but it discards the addresses, and this loop needs them
+        to pin the connection.
 
         Each hop connects to the address its judge resolved, because judging one
         answer and connecting to a second one is the window rebinding uses: a name
@@ -405,9 +405,10 @@ class PptFetchTool(Tool):
         handed to `_pin_request`, so the connection target is one of them while
         Host and SNI still carry the site's name.
         """
-        # `_pin_request` is private in core on purpose: this plugin ships from the
-        # same tree, so it follows the helper's shape rather than asking core to
-        # publish a streaming-aware variant that would be the same function.
+        # `_pin_request` is underscore-private in core, not a published API. This
+        # plugin is first-party and ships from the same tree at the same version,
+        # so it calls the helper directly and accepts the private coupling. The
+        # coupling is this caller's choice; core does not promise the name lasts.
         from raven.security.network import _pin_request, judge_resolved_url, judge_url_target
 
         async with httpx.AsyncClient(
