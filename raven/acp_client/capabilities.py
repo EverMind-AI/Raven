@@ -893,6 +893,8 @@ def _read_session_models(result: Any) -> tuple[str, ...]:
 
 
 _ID_SEGMENT = re.compile(r"[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])")
+_EFFORT_SEGMENTS = {"effort", "efforts", "thought", "thoughts"}
+_NEGATORS = {"no", "none", "without", "disable", "disabled", "off"}
 
 
 def _looks_like_effort(entry: dict[str, Any]) -> bool:
@@ -903,10 +905,18 @@ def _looks_like_effort(entry: dict[str, Any]) -> bool:
     label -- an entry called "Effort-aware model" is still a model menu, so a
     label is no evidence about the entry's role. The words count only as whole
     id segments, not as substrings: ``effortless`` and ``thoughtful-menu`` are
-    model ids that merely happen to contain them.
+    model ids that merely happen to contain them, while the plural ``efforts``
+    and ``thoughts`` are segments of their own. A segment directly preceded by
+    a negator states that effort is absent rather than offering levels, so
+    ``no_effort_needed`` stays a model id.
     """
-    option_id = str(entry.get("id") or "")
-    return any(segment.lower() in {"effort", "thought"} for segment in _ID_SEGMENT.split(option_id))
+    segments = [segment.lower() for segment in _ID_SEGMENT.split(str(entry.get("id") or "")) if segment]
+    for index, segment in enumerate(segments):
+        if segment in _EFFORT_SEGMENTS:
+            if index > 0 and segments[index - 1] in _NEGATORS:
+                continue
+            return True
+    return False
 
 
 def _model_option(result: Any) -> dict[str, Any] | None:

@@ -433,6 +433,57 @@ def test_a_model_menu_whose_id_contains_effort_as_a_substring_is_still_a_model_m
     assert read_session_effort(shaped) == ("", "", ())
 
 
+@pytest.mark.parametrize("option_id", ["efforts", "thoughts"])
+def test_a_plural_effort_id_is_read_as_effort(option_id: str) -> None:
+    """The plural is a whole segment, not a word to ignore.
+
+    An agent spelling its ladder ``efforts`` or ``thoughts`` advertises the same
+    option as the singular forms, which the segment rule matched alone. The
+    plural remains a whole segment, so recognising it does not reopen the
+    ``effortless`` substring case.
+    """
+    plural = {
+        "configOptions": [
+            {
+                "id": option_id,
+                "name": "Reasoning",
+                "category": "model",
+                "currentValue": "high",
+                "options": [{"value": "low"}, {"value": "high"}],
+            }
+        ]
+    }
+
+    option, current, choices = read_session_effort(plural)
+    assert (option, current) == (option_id, "high")
+    assert [c.value for c in choices] == ["low", "high"]
+
+
+def test_an_id_that_negates_effort_is_still_a_model_menu() -> None:
+    """A negated effort word names the absence of effort, not a ladder.
+
+    ``no_effort_needed`` is a model id: reading its ``effort`` segment as a
+    ladder skipped the model entry and left the model menu empty. The negator
+    immediately before the word is what tells the two apart; the measured ids
+    ``effort``, ``reasoning_effort`` and ``thought_level`` have none there.
+    """
+    negated = {
+        "configOptions": [
+            {
+                "id": "no_effort_needed",
+                "name": "Model",
+                "category": "model",
+                "currentValue": "gpt-x",
+                "options": [{"value": "gpt-x"}, {"value": "gpt-y"}],
+            }
+        ]
+    }
+
+    assert [c.value for c in _read_session_model_choices(negated)] == ["gpt-x", "gpt-y"]
+    assert read_session_current_model(negated) == "gpt-x"
+    assert read_session_effort(negated) == ("", "", ())
+
+
 def test_a_name_only_effort_hint_is_not_an_effort_signal() -> None:
     """The label is not a signal, even when the id carries neither word.
 
