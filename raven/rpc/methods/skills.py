@@ -70,6 +70,111 @@ def _all_local(agent_loop_factory: "AgentLoopFactory | None") -> list[Any]:
     return list(_registry(agent_loop_factory).list_all())
 
 
+def _agent_home(agent_loop_factory: "AgentLoopFactory | None") -> Path:
+    loop = _loop(agent_loop_factory)
+    ws = getattr(loop, "workspace", None) if loop is not None else None
+    if ws is not None:
+        return Path(ws).resolve()
+    from raven.config.loader import load_config
+
+    return load_config().workspace_path.resolve()
+
+
+def _blocklist(agent_loop_factory: "AgentLoopFactory | None") -> frozenset[str]:
+    loop = _loop(agent_loop_factory)
+    catalog = getattr(getattr(loop, "context", None), "skills", None) if loop is not None else None
+    if catalog is not None and hasattr(catalog, "blocklist"):
+        return frozenset(catalog.blocklist)
+    from raven.config.loader import get_config_path, read_raw_or_raise
+    from raven.skill_hub.policy import normalize_blocklist
+
+    try:
+        raw = read_raw_or_raise(get_config_path())
+    except Exception:
+        return frozenset()
+    sf = raw.get("skillForge") if isinstance(raw.get("skillForge"), dict) else raw.get("skill_forge")
+    items = sf.get("blocklist") if isinstance(sf, dict) and isinstance(sf.get("blocklist"), list) else []
+    return normalize_blocklist([str(x) for x in items if isinstance(x, str)])
+
+
+def _resolve_project_dir(project_dir: str) -> Path:
+    raw = project_dir.strip()
+    if not raw:
+        raise ConfigValidationError("project_dir is required")
+    p = Path(raw).expanduser()
+    try:
+        if not p.is_dir():
+            raise ConfigValidationError(f"project_dir is not an existing directory: {raw}")
+        return p.resolve()
+    except OSError as exc:
+        raise ConfigValidationError(f"project_dir unreadable: {exc}") from exc
+
+
+def _project_skills_for_dir(project_dir: str, factory: "AgentLoopFactory | None") -> tuple[Path, Any, list[Any]]:
+    from raven.memory_engine import project_skill_roots, read_project_skills
+
+    resolved = _resolve_project_dir(project_dir)
+    roots = project_skill_roots(resolved, agent_home=_agent_home(factory))
+    metas = read_project_skills(roots) if roots is not None else []
+    return resolved, roots, metas
+
+
+def _safe_project_files(skill_dir: Path, roots: Any) -> list[str]:
+    if not skill_dir.is_dir():
+        return []
+    root = skill_dir.resolve()
+    out: list[str] = []
+    for p in sorted(skill_dir.iterdir(), key=lambda x: x.name):
+        if p.name.startswith("."):
+            continue
+        try:
+            resolved = p.resolve()
+        except (OSError, RuntimeError):
+            continue
+        if not resolved.is_file() or not resolved.is_relative_to(root):
+            continue
+        if roots is not None:
+            if not resolved.is_relative_to(roots.boundary):
+                continue
+            if any(resolved.is_relative_to(g) for g in roots.guarded):
+                continue
+        out.append(p.name)
+    return out
+
+
+async def _action_project_list(project_dir: str, factory: "AgentLoopFactory | None") -> dict:
+    """List project skills discovered under ``.agents/skills`` for a chosen project directory."""
+    from raven.config.live import project_skills_on
+    from raven.config.loader import get_config_path, read_raw_or_raise
+    from raven.skill_hub.policy import is_blocked
+
+    resolved, roots, metas = await asyncio.to_thread(_project_skills_for_dir, project_dir, factory)
+    blocked_now = _blocklist(factory)
+    try:
+        enabled = project_skills_on(read_raw_or_raise(get_config_path()))
+    except Exception:
+        enabled = False
+    return {
+        "project_dir": str(resolved),
+        "boundary": str(roots.boundary) if roots is not None else str(resolved),
+        "roots": [str(r) for r in roots.dirs] if roots is not None else [],
+        "project_skills_enabled": enabled,
+        "project_skills": [
+            {
+                "name": m.name,
+                "description": (m.description or "")[:200],
+                "source": "project",
+                "path": str(m.path),
+                "always": False,
+                "hub": False,
+                "hub_id": "",
+                "blocked": is_blocked(blocked_now, m.name),
+            }
+            for m in metas
+        ],
+    }
+
+
 async def _action_list(_query: str, _page: int, factory: "AgentLoopFactory | None") -> dict:
     """Skill names grouped by origin -- the panel renders one section per group."""
     grouped: dict[str, list[str]] = {}
@@ -78,12 +183,41 @@ async def _action_list(_query: str, _page: int, factory: "AgentLoopFactory | Non
     return {"skills": {group: sorted(names) for group, names in sorted(grouped.items())}}
 
 
-async def _action_inspect(query: str, _page: int, factory: "AgentLoopFactory | None") -> dict:
+async def _action_inspect(
+    query: str,
+    _page: int,
+    factory: "AgentLoopFactory | None",
+    project_dir: str = "",
+) -> dict:
     """One skill's metadata.
 
     An unknown name returns an empty ``info`` rather than an error: the client
     reads a missing ``info.name`` as "unknown skill" and says so itself.
     """
+    if project_dir:
+        _, roots, metas = await asyncio.to_thread(_project_skills_for_dir, project_dir, factory)
+        meta = next((m for m in metas if m.name == query), None)
+        if meta is None:
+            lowered = query.lower()
+            meta = next((m for m in metas if m.name.lower() == lowered), None)
+        if meta is None:
+            return {"info": {}}
+        skill_dir = _skill_dir(meta)
+        body_path = Path(meta.path)
+        return {
+            "info": {
+                "name": meta.name,
+                "description": meta.description,
+                "category": "project",
+                "path": str(meta.path),
+                "body": body_path.read_text(encoding="utf-8") if body_path.is_file() else "",
+                "files": _safe_project_files(skill_dir, roots),
+                "always": False,
+                "hub": False,
+                "hub_id": "",
+                "install": None,
+            }
+        }
     registry = _registry(factory)
     meta = registry.get(query)
     if meta is None:
@@ -156,21 +290,34 @@ def _install_meta(skill_dir: Path) -> dict | None:
     }
 
 
-async def _action_open(query: str, factory: "AgentLoopFactory | None", file: str) -> dict:
+async def _action_open(
+    query: str,
+    factory: "AgentLoopFactory | None",
+    file: str,
+    project_dir: str = "",
+) -> dict:
     """Open one file of a skill with the desktop's opener, on the gateway host.
 
     Only files inside the skill's own directory: the skill name picks the
     directory, ``file`` is relative to it, and a path that resolves outside is
     refused before anything is launched.
     """
-    registry = _registry(factory)
-    meta = registry.get(query)
+    roots = None
+    if project_dir:
+        _, roots, metas = await asyncio.to_thread(_project_skills_for_dir, project_dir, factory)
+        meta = next((m for m in metas if m.name == query), None)
+    else:
+        registry = _registry(factory)
+        meta = registry.get(query)
     if meta is None:
         raise ConfigValidationError(f"unknown skill {query!r}")
     root = _skill_dir(meta).resolve()
     target = (root / (file or "SKILL.md")).resolve()
     if not target.is_relative_to(root) or not target.is_file():
         raise ConfigValidationError("file must be a file inside the skill directory")
+    if roots is not None:
+        if not target.is_relative_to(roots.boundary) or any(target.is_relative_to(g) for g in roots.guarded):
+            raise ConfigValidationError("file must be a file inside the skill directory")
     from raven.rpc.methods import console
 
     console._open_with_system(target)
@@ -293,9 +440,22 @@ async def skills_manage(
 ) -> dict:
     """``skills.manage`` -- dispatch on ``action``."""
     action = str(params.get("action") or "").strip().lower()
+    project_dir = str(params.get("project_dir") or "").strip()
+    if action == "project_list":
+        return await _action_project_list(project_dir, agent_loop_factory)
+    if action == "inspect":
+        return await _action_inspect(
+            str(params.get("query") or "").strip(),
+            1,
+            agent_loop_factory,
+            project_dir=project_dir,
+        )
     if action == "open":
         return await _action_open(
-            str(params.get("query") or "").strip(), agent_loop_factory, str(params.get("file") or "")
+            str(params.get("query") or "").strip(),
+            agent_loop_factory,
+            str(params.get("file") or ""),
+            project_dir=project_dir,
         )
     if action in ("block", "unblock"):
         return await _action_block(str(params.get("query") or "").strip(), action == "block")

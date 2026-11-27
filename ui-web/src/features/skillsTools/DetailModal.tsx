@@ -438,15 +438,17 @@ function SkillInstallLine({ d }: { d: SkillDetail }): JSX.Element | null {
   return parts.length ? <div className="skillsTools-skmeta">{parts.join(' · ')}</div> : null
 }
 
-function SkillModal({ name }: { name: string }): JSX.Element {
+function SkillModal({ name, projectDir }: { name: string; projectDir?: string }): JSX.Element {
   const s = store.get()
-  const row = s.snap.skills.find((r) => r.name === name)
+  const row = projectDir
+    ? s.projectInfo?.skills.find((r) => r.name === name)
+    : s.snap.skills.find((r) => r.name === name)
   const d = s.skillDetail
   const off = row ? row.blocked : false
   const inst = d && (d.install as { version?: string } | null)
 
   const flip = (on: boolean): void => {
-    void store.run(`block:${name}`, () => store.source().blockSkill(name, !on), { remount: false })
+    void store.toggleSkillBlocked(name, !on)
   }
 
   const uninstall = (): void => {
@@ -462,21 +464,25 @@ function SkillModal({ name }: { name: string }): JSX.Element {
     )
   }
 
+  const scopeTone = projectDir ? 'teal' : row?.source === 'builtin' ? 'neutral' : 'blue'
+  const scopeLabel = projectDir
+    ? t('gui.skillsTools.skills.project')
+    : row?.source === 'builtin'
+      ? t('gui.skillsTools.skills.builtin')
+      : t('gui.skillsTools.skills.global')
+
   return (
     <div className="skillsTools-sheet" role="document" aria-label={name}>
       <div className="skillsTools-dglow" aria-hidden="true" />
       <div className="skillsTools-dhead">
-        <IconTile tone={skillTone(name)} size="lg">
+        <IconTile tone={projectDir ? 'teal' : skillTone(name)} size="lg">
           <Icon icon={AiContentGenerator01Icon} size={20} />
         </IconTile>
         <div className="skillsTools-dmeta">
           <h3 className="mono">{String(d?.name || name)}</h3>
           <div className="skillsTools-ctags">
-            {row ? (
-              <Pill tone="neutral">
-                {row.source === 'builtin' ? t('gui.skillsTools.skills.builtin') : t('gui.skillsTools.skills.workspace')}
-              </Pill>
-            ) : null}
+            {row || projectDir ? <Pill tone={scopeTone}>{scopeLabel}</Pill> : null}
+            {projectDir ? <Pill tone="mono">{store.folderBaseName(projectDir)}</Pill> : null}
             {inst?.version ? <Pill tone="mono">{inst.version}</Pill> : null}
             {d?.always ? <Pill tone="hub">{t('gui.skillsTools.skills.always')}</Pill> : null}
           </div>
@@ -504,13 +510,14 @@ function SkillModal({ name }: { name: string }): JSX.Element {
                     className="skillsTools-fbtn"
                     title={t('gui.skillsTools.skills.open_file', { file: f })}
                     aria-label={t('gui.skillsTools.skills.open_file', { file: f })}
-                    onClick={() => void store.source().openSkillFile(name, f)}
+                    onClick={() => void store.source().openSkillFile(name, f, projectDir)}
                   >
                     <Icon icon={LinkSquare02Icon} size={12} />
                   </button>
                 </span>
               ))}
             </div>
+            {projectDir && d.path ? <div className="skillsTools-skmeta mono">{String(d.path)}</div> : null}
             <SkillInstallLine d={d} />
             <div
               className="skillsTools-md prose"
@@ -521,11 +528,13 @@ function SkillModal({ name }: { name: string }): JSX.Element {
       </div>
 
       <div className="skillsTools-dfoot">
-        {row?.hub ? (
+        {!projectDir && row?.hub ? (
           <button type="button" className="skillsTools-btn skillsTools-btn-danger" onClick={uninstall}>
             <Icon icon={Delete02Icon} size={14} />
             <span>{t('gui.skillsTools.skills.uninstall')}</span>
           </button>
+        ) : projectDir ? (
+          <span className="skillsTools-skmeta">{t('gui.skillsTools.skills.project_foot_note')}</span>
         ) : null}
         <span className="skillsTools-grow" />
         <button type="button" className="skillsTools-btn" onClick={() => store.closeDetail()}>
@@ -819,7 +828,7 @@ export function DetailModal(): JSX.Element | null {
   const content = modal.kind === 'tool'
     ? <ToolModal key={`tool:${modal.id}:${s.epoch}`} id={modal.id} />
     : modal.kind === 'skill'
-      ? <SkillModal key={`skill:${modal.name}`} name={modal.name} />
+      ? <SkillModal key={`skill:${modal.name}:${modal.projectDir || ''}`} name={modal.name} projectDir={modal.projectDir} />
       : modal.kind === 'mcp'
         ? <McpModal key={`mcp:${modal.name}`} name={modal.name} />
         : <PluginModal key={`plugin:${modal.name}`} name={modal.name} />

@@ -227,6 +227,7 @@ export function createSettings(env: FixtureEnv, ext: ExtFixture): SettingsFixtur
         config_path: '~/.raven/config.json',
         raven_version: '0.1.0',
         skill_hub_on: hubOn(config),
+        project_skills_on: pick(config, 'skillForge.projectSkills.enabled') !== false,
         picture_search: pictureSearchOf(config),
       }),
       'settings.set': (p) => {

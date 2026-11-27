@@ -62,6 +62,10 @@ if TYPE_CHECKING:
         SkillForgeRouter,
     )
     from raven.memory_engine.skill_forge.catalog import render_skill_body
+    from raven.memory_engine.skill_forge.project_skills import (
+        project_skill_roots,
+        read_project_skills,
+    )
     from raven.memory_engine.skill_forge.types import RouterHit
     from raven.memory_engine.skill_local.registry import (
         SkillRegistry,
@@ -93,6 +97,8 @@ __all__ = [
     "parse_behaviors",
     "parse_episode_line",
     "parse_user_md_sections",
+    "project_skill_roots",
+    "read_project_skills",
     "render_folded_block",
     "render_skill_body",
     "slice_after_day",
@@ -124,6 +130,8 @@ _FACE: dict[str, str] = {
     "parse_behaviors": "raven.memory_engine.consolidate.behaviors",
     "parse_episode_line": "raven.memory_engine.consolidate.consolidator",
     "parse_user_md_sections": "raven.memory_engine.consolidate.consolidator",
+    "project_skill_roots": "raven.memory_engine.skill_forge.project_skills",
+    "read_project_skills": "raven.memory_engine.skill_forge.project_skills",
     "render_folded_block": "raven.memory_engine.consolidate.behaviors",
     "render_skill_body": "raven.memory_engine.skill_forge.catalog",
     "slice_after_day": "raven.memory_engine.consolidate.behaviors",

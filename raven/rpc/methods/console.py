@@ -687,7 +687,7 @@ async def settings_get(params: dict, *, agent_loop_factory=None) -> dict:
     del agent_loop_factory  # the answer no longer depends on the serving loop
     from importlib.metadata import version as pkg_version
 
-    from raven.config.live import skill_hub_on
+    from raven.config.live import project_skills_on, skill_hub_on
     from raven.config.loader import get_config_path, read_raw_or_raise
 
     path = get_config_path()
@@ -703,6 +703,7 @@ async def settings_get(params: dict, *, agent_loop_factory=None) -> dict:
     # through the loader's migrations and its boolean rules, and a copy of
     # either in the page drifts from it.
     hub_on = skill_hub_on(raw)
+    proj_on = project_skills_on(raw)
     from raven.agent.subagent.vendored_agents import picture_search_report, product_secret
     from raven.agent.tools.web import SEARCH_PROVIDERS
     from raven.config.loader import load_config
@@ -733,6 +734,7 @@ async def settings_get(params: dict, *, agent_loop_factory=None) -> dict:
         "config_path": str(path),
         "raven_version": ver,
         "skill_hub_on": hub_on,
+        "project_skills_on": proj_on,
         "picture_search": {
             "vendor": vendor if ready else "",
             "ready": ready,
@@ -811,6 +813,17 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
 
         try:
             previous = set_skill_hub_enabled(value)
+        except ValueError as exc:
+            raise ConfigValidationError(str(exc)) from exc
+        return {"applied": True, "previous": previous}
+
+    if key == "skillForge.projectSkills.enabled":
+        if not isinstance(value, bool):
+            raise ConfigValidationError("enabled must be a boolean")
+        from raven.config.update import set_project_skills_enabled
+
+        try:
+            previous = set_project_skills_enabled(value)
         except ValueError as exc:
             raise ConfigValidationError(str(exc)) from exc
         return {"applied": True, "previous": previous}

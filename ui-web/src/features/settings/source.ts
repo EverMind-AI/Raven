@@ -44,6 +44,7 @@ let RAW: Record<string, unknown> = {}
 
 let configPathLive = '~/.raven/config.json'
 let skillHub = { on: false }
+let projectSkillsOn = true
 /* The deck engine's picture search as the runtime would resolve it, answered by
    settings.get rather than inferred from the raw config: the vendor's env var
    and the deck lane's own .env are effective credentials the file cannot show. */
@@ -145,6 +146,7 @@ export async function loadSettings(): Promise<void> {
   RAW = (r.settings || {}) as Record<string, unknown>
   configPathLive = r.config_path || configPathLive
   skillHub = { on: r.skill_hub_on === true }
+  projectSkillsOn = r.project_skills_on !== false
   /* A gateway that predates the field sends none, and an absent answer must
      not read as "deck generation cannot run". */
   pictureSearch = r.picture_search ? { ...r.picture_search } : { vendor: '', ready: true, fallback: false }
@@ -177,7 +179,7 @@ export async function loadSettingsWithProviders(): Promise<void> {
 }
 
 export const settingsSnapshot = (): SettingsSnapshot => ({
-  raw: RAW, configPath: configPathLive, skillHub, pictureSearch, everos: everosLive, everosCloud: everosCloudLive,
+  raw: RAW, configPath: configPathLive, skillHub, projectSkillsOn, pictureSearch, everos: everosLive, everosCloud: everosCloudLive,
   // Both default-scoped on purpose: the settings page describes what new
   // conversations start on, so pairing the default model with the visible
   // session's provider badged the wrong row whenever the two scopes differ.
@@ -359,10 +361,35 @@ export const settingsSource: SettingsSource = {
   restore: (id) => run(gateway().call('session.archive', { session_id: id, archived: false })
     .then(() => loadSessions())),
   removeSession: (id) => run(gateway().call('session.delete', { session_id: id }).then(() => undefined)),
-  inspectSkill: (name) => run(gateway().call('skills.manage', { action: 'inspect', query: name })
-    .then((r) => (r.info || {}) as SkillDetail)),
-  openSkillFile: (name, file) => run(gateway().call('skills.manage', { action: 'open', query: name, file })
-    .then(() => undefined)),
+  inspectSkill: (name, projectDir) => run(
+    gateway().call('skills.manage', projectDir
+      ? { action: 'inspect', query: name, project_dir: projectDir }
+      : { action: 'inspect', query: name })
+      .then((r) => (r.info || {}) as SkillDetail),
+  ),
+  openSkillFile: (name, file, projectDir) => run(
+    gateway().call('skills.manage', projectDir
+      ? { action: 'open', query: name, file, project_dir: projectDir }
+      : { action: 'open', query: name, file })
+      .then(() => undefined),
+  ),
+  projectSkills: (projectDir) => gateway().call('skills.manage', { action: 'project_list', project_dir: projectDir })
+    .then((r) => ({
+      projectDir: r.project_dir || projectDir,
+      boundary: r.boundary || r.project_dir || projectDir,
+      roots: Array.isArray(r.roots) ? r.roots : [],
+      enabled: r.project_skills_enabled !== false,
+      skills: (r.project_skills || []).map((item) => ({
+        name: String(item.name || ''),
+        description: String(item.description || ''),
+        source: 'project',
+        path: String(item.path || ''),
+        always: false,
+        hub: false,
+        hub_id: '',
+        blocked: item.blocked === true,
+      })),
+    })),
   revealPlace: (place) => run(gateway().call('fs.reveal', { place }).then(() => undefined)),
   uninstallSkill: (name) => run(gateway().call('skillhub.remove', { name }).then(afterExt)),
   /* The name goes over as the registry spells it; the gateway's writer trims

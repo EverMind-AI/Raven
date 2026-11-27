@@ -7,18 +7,25 @@ import type {
   AgentPluginRow,
   AuthField,
   McpDetail,
+  ProjectSkillRow,
+  ProjectSkillsInfo,
   SettingsSnapshot,
   SkillDetail,
   SkillRow,
   ToolRow,
 } from '../settings/types'
+import type { DirListing, DirPick } from '../workspace/types'
 
 export type {
   AgentPluginList,
   AgentPluginRow,
   AuthField,
+  DirListing,
+  DirPick,
   McpDetail,
   McpSnapshot,
+  ProjectSkillRow,
+  ProjectSkillsInfo,
   SettingsSnapshot,
   SkillDetail,
   SkillRow,
@@ -27,10 +34,10 @@ export type {
 
 export type SkillsToolsTab = 'skills' | 'tools' | 'mcp' | 'plugins'
 
-export type SkillScopeFilter = 'all' | 'builtin' | 'workspace'
+export type SkillScopeFilter = 'all' | 'builtin' | 'global' | 'project'
 
 export type DetailTarget =
-  | { kind: 'skill'; name: string }
+  | { kind: 'skill'; name: string; projectDir?: string }
   | { kind: 'tool'; id: string }
   | { kind: 'mcp'; name: string }
   | { kind: 'plugin'; name: string }
@@ -40,8 +47,11 @@ export interface SkillsToolsSource {
   set(key: string, value: unknown): Promise<SettingsSnapshot>
   everosSet(section: string, model: string | null, provider?: string, protocol?: string): Promise<SettingsSnapshot>
   addModel(slug: string, model: string, tags: Record<string, unknown>): Promise<SettingsSnapshot>
-  inspectSkill(name: string): Promise<SkillDetail>
-  openSkillFile(name: string, file: string): Promise<void>
+  inspectSkill(name: string, projectDir?: string): Promise<SkillDetail>
+  openSkillFile(name: string, file: string, projectDir?: string): Promise<void>
+  projectSkills?(projectDir: string): Promise<ProjectSkillsInfo>
+  listDirs?(path?: string): Promise<DirListing>
+  pickDir?(): Promise<DirPick>
   uninstallSkill(name: string): Promise<SettingsSnapshot>
   blockSkill(name: string, blocked: boolean): Promise<SettingsSnapshot>
   serverDetail(name: string): Promise<McpDetail>

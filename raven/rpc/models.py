@@ -4932,6 +4932,13 @@ class SettingsGetResult(_Strict):
             "enabled=false turns it off, and the default is on."
         ),
     )
+    project_skills_on: bool = Field(
+        default=True,
+        description=(
+            "Whether project-scoped .agents/skills discovery is on, read the way the runtime reads the config: "
+            "enabled=false turns it off, and the default is on."
+        ),
+    )
     picture_search: PictureSearchStatus = Field(
         ...,
         description=(
@@ -7243,10 +7250,17 @@ class ShellExecResult(_Strict):
 
 
 class SkillsManageParams(_Strict):
-    action: str = Field(..., description="One of list, inspect, search, browse, install, open, block, unblock.")
+    action: str = Field(
+        ...,
+        description="One of list, inspect, search, browse, install, open, block, unblock, project_list.",
+    )
     query: str | None = None
     page: int | None = None
     file: str | None = Field(default=None, description="`open`: a file name relative to the skill's directory.")
+    project_dir: str | None = Field(
+        default=None,
+        description="`project_list` / `inspect` / `open`: project directory to discover `.agents/skills` from.",
+    )
 
 
 class SkillsManageResult(_Strict):
@@ -7264,6 +7278,15 @@ class SkillsManageResult(_Strict):
     name: str | None = None
     blocked: bool | None = Field(default=None, description="`block`/`unblock`: the state that was written.")
     blocklist: list[str] | None = Field(default=None, description="`block`/`unblock`: the list after the write.")
+    project_dir: str | None = Field(default=None, description="`project_list`: resolved project directory.")
+    boundary: str | None = Field(default=None, description="`project_list`: resolved git root or project boundary.")
+    roots: list[str] | None = Field(default=None, description="`project_list`: discovered `.agents/skills` roots.")
+    project_skills_enabled: bool | None = Field(
+        default=None, description="`project_list`: whether `skillForge.projectSkills.enabled` is currently on."
+    )
+    project_skills: list[dict[str, JsonValue]] | None = Field(
+        default=None, description="`project_list`: discovered project skill rows."
+    )
 
 
 class SubagentInterruptParams(_Strict):

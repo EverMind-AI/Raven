@@ -6138,6 +6138,10 @@ export interface SettingsGetResult {
    */
   skill_hub_on: boolean;
   /**
+   * Whether project-scoped .agents/skills discovery is on, read the way the runtime reads the config: enabled=false turns it off, and the default is on.
+   */
+  project_skills_on?: boolean;
+  /**
    * The deck engine's picture search as the runtime would resolve it now: the vendor it would use and whether a key resolves, environment and product-folder credentials included.
    */
   picture_search: {
@@ -8599,7 +8603,7 @@ export interface ShellExecResult {
  */
 export interface SkillsManageParams {
   /**
-   * One of list, inspect, search, browse, install, open, block, unblock.
+   * One of list, inspect, search, browse, install, open, block, unblock, project_list.
    */
   action: string;
   query?: string;
@@ -8608,6 +8612,10 @@ export interface SkillsManageParams {
    * `open`: a file name relative to the skill's directory.
    */
   file?: string | null;
+  /**
+   * `project_list` / `inspect` / `open`: project directory to discover `.agents/skills` from.
+   */
+  project_dir?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -8658,6 +8666,30 @@ export interface SkillsManageResult {
    * `block`/`unblock`: the list after the write.
    */
   blocklist?: string[] | null;
+  /**
+   * `project_list`: resolved project directory.
+   */
+  project_dir?: string | null;
+  /**
+   * `project_list`: resolved git root or project boundary.
+   */
+  boundary?: string | null;
+  /**
+   * `project_list`: discovered `.agents/skills` roots.
+   */
+  roots?: string[] | null;
+  /**
+   * `project_list`: whether `skillForge.projectSkills.enabled` is currently on.
+   */
+  project_skills_enabled?: boolean | null;
+  /**
+   * `project_list`: discovered project skill rows.
+   */
+  project_skills?:
+    | {
+        [k: string]: JsonValue;
+      }[]
+    | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
