@@ -97,47 +97,32 @@ def test_a_row_without_a_directory_is_no_record(tmp_path: Path) -> None:
     assert BindingStore(path).get("acp-1") is None
 
 
-def test_a_read_waits_for_the_writer_holding_the_file_rather_than_racing_its_replace(tmp_path: Path) -> None:
-    """Reads take the file's lock, as the writes already do.
+def test_a_read_that_lands_in_the_writer_swap_window_is_retried_and_still_answers(tmp_path: Path, monkeypatch) -> None:
+    """A read rides out the writer's os.replace window with retries, not a lock.
 
-    A read that skips the lock can land on the writer's os.replace window,
-    which on Windows fails its open with PermissionError -- the failure the
-    suite saw once on the Windows shard, where the daemon was mid-write
-    while a poll asked the store. Holding the same lock is what makes the
-    read see one file or the other, never the swap.
+    A poll can open the store file while the writer is mid-replace; on
+    Windows that open raises PermissionError instead of showing either
+    file -- the failure that turned the Windows ACP stdio shard red. The
+    read retries that one error and answers from the settled file; taking
+    the write side's exclusive lock instead would stall the very writer
+    the poll was asking about, a full second per collision there.
     """
-    import threading
-
-    from raven.utils.atomic_io import write_transaction
+    import pathlib
 
     path = tmp_path / "claude.json"
     store = BindingStore(path)
     store.put(Binding(session_id="acp-1", cwd="/w", mirasim_key="sess-1"))
 
-    inside = threading.Event()
-    release = threading.Event()
+    real_read = pathlib.Path.read_text
+    windows_open_errors = []
 
-    def writer() -> None:
-        with write_transaction(path):
-            inside.set()
-            release.wait(2)
+    def flaky_open(self, *args, **kwargs):
+        if self == path and len(windows_open_errors) < 2:
+            windows_open_errors.append(self)
+            raise PermissionError(13, "Permission denied")
+        return real_read(self, *args, **kwargs)
 
-    held = threading.Thread(target=writer, name="store-test-writer")
-    held.start()
-    assert inside.wait(2), "the writer did not get the lock"
-    try:
-        seen: list[dict] = []
-
-        def reader() -> None:
-            seen.append(store._live())
-
-        read = threading.Thread(target=reader, name="store-test-reader")
-        read.start()
-        read.join(0.2)
-        assert read.is_alive(), "the read is waiting for the writer's window, not racing it"
-        release.set()
-        read.join(2)
-        assert not read.is_alive() and [b.cwd for b in seen[0].values()] == ["/w"]
-    finally:
-        release.set()
-        held.join(2)
+    monkeypatch.setattr(pathlib.Path, "read_text", flaky_open)
+    found = store.get("acp-1")
+    assert found is not None and found.cwd == "/w"
+    assert len(windows_open_errors) == 2

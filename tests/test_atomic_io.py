@@ -489,3 +489,48 @@ class TestReplaceRetry:
         with pytest.raises(FileNotFoundError):
             atomic_replace(path, "new")
         assert calls["n"] == 1
+
+
+def test_read_text_with_retry_rides_out_the_swap_window(tmp_path: Path, monkeypatch):
+    """A read that opens inside a writer's os.replace window fails with
+    PermissionError on Windows; retrying that one error is what lets the
+    reader answer without taking the write side's exclusive lock, which
+    there costs a full second per collision."""
+    from raven.utils import atomic_io
+
+    path = tmp_path / "state.json"
+    path.write_text("settled", encoding="utf-8")
+    real_read = Path.read_text
+    calls = {"n": 0}
+
+    def flaky_read(self, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise PermissionError(13, "Permission denied")
+        return real_read(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", flaky_read)
+    monkeypatch.setattr(atomic_io, "_REPLACE_BACKOFF", 0.001)
+
+    assert atomic_io.read_text_with_retry(path) == "settled"
+    assert calls["n"] == 3
+
+
+def test_read_text_with_retry_keeps_a_missing_file_an_answer(tmp_path: Path, monkeypatch):
+    """Absence is not a transient swap state: FileNotFoundError passes
+    through on the first attempt, so the caller's own handling is not
+    delayed by a retry loop."""
+    from raven.utils import atomic_io
+
+    calls = {"n": 0}
+    real_read = Path.read_text
+
+    def counting_read(self, *args, **kwargs):
+        calls["n"] += 1
+        return real_read(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting_read)
+
+    with pytest.raises(FileNotFoundError):
+        atomic_io.read_text_with_retry(tmp_path / "absent.json")
+    assert calls["n"] == 1
