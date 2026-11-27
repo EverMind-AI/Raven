@@ -961,6 +961,28 @@ async def test_a_report_gets_its_page_in_the_working_directory_and_the_reply_nam
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("trail", ["", _WARNED_TRAIL], ids=["no-trail", "trail"])
+@pytest.mark.parametrize("ending", ["", "\n", "\n\n\n", " \n"], ids=["bare", "newline", "newlines", "space"])
+async def test_a_streaming_surface_receives_the_page_line_whatever_the_reply_ends_with(
+    tmp_path, monkeypatch, trail, ending
+):
+    """The reply went out as deltas, so only what extends it reaches a streaming surface:
+    trimming its trailing newlines to append the line would leave that surface nothing."""
+    from raven.agent.loop._shared import _appended_by_hook
+
+    monkeypatch.setattr(flow_module, "ledger_path", lambda: "ledger")
+    monkeypatch.setattr(flow_module, "build_appendix", lambda *a: (trail, {"emitted": bool(trail)}))
+    reply = _REPORT.rstrip("\n") + ending
+    with workdir.bind(tmp_path):
+        sent, _ = await _send(_frame(tmp_path), reply)
+    (page,) = tmp_path.glob("*.html")
+    tail = _appended_by_hook(reply, sent)
+    assert tail.endswith(page_line(str(page)))
+    assert trail.strip() in tail
+    assert "\n\n\n\n" not in tail
+
+
+@pytest.mark.asyncio
 async def test_the_same_report_writes_the_same_file(tmp_path, _no_trail):
     with workdir.bind(tmp_path):
         first, _ = await _send(_frame(tmp_path), _REPORT)

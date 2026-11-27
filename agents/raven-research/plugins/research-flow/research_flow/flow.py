@@ -153,6 +153,18 @@ def _turn_cargo(
     return cargo
 
 
+def _appended(reply: str, sep: str, tail: str) -> str:
+    """``tail`` after ``reply``, the reply's own text untouched.
+
+    The reply has gone out as deltas, and a streaming surface is sent only what extends
+    it, so trimming its trailing newlines would lose the tail there. The separator
+    gives up as many leading newlines as the reply already ends with.
+    """
+    ends = len(reply) - len(reply.rstrip("\n"))
+    leads = len(sep) - len(sep.lstrip("\n"))
+    return reply + sep[min(ends, leads) :] + tail
+
+
 def _closes_with_sources(cfg: FlowConfig) -> bool:
     """Whether the report closes with its list of sources: the page's report, as ``TurnFrame`` has it."""
     return (
@@ -573,7 +585,7 @@ class TurnFrame(Gate):
                     # Rides on the outbound reply only: the persisted transcript
                     # never carries it, so no model reads it this turn or as
                     # history next turn.
-                    final_content = final_content.rstrip() + "\n" + appendix
+                    final_content = _appended(final_content, "\n", appendix)
                     changed = True
                     # And the rendered trail parked where a HOST can reach it.
                     # The line above is the whole of the appendix's distribution
@@ -608,7 +620,7 @@ class TurnFrame(Gate):
                 # to the end and nothing above it changed: the reply has gone out as
                 # deltas, and only a tail reaches a streaming surface.
                 lead = "\n\n" if trail_text else "\n\n---\n\n"
-                final_content = final_content.rstrip() + lead + page_line(page_path, removed)
+                final_content = _appended(final_content, lead, page_line(page_path, removed))
                 changed = True
         elif self._page is not None and research:
             # The contract promises the page for a reply that is the report. A research

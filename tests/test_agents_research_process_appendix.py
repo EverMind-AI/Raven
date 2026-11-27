@@ -235,7 +235,7 @@ def test_the_appendix_never_reaches_the_model():
     # "first occurrence" anchor silently retargets to whichever line mentions it soonest.
     seam = src.index("appendix, trail = build_appendix")
     tail = src[seam : seam + 1200]
-    assert 'final_content = final_content.rstrip() + "\\n" + appendix' in tail
+    assert 'final_content = _appended(final_content, "\\n", appendix)' in tail
     assert "add_assistant_message" not in tail, (
         "the appendix must not be persisted as a message - that is the feedback path"
     )
