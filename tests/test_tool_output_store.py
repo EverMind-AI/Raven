@@ -12,6 +12,7 @@ import pytest
 from raven.security.trust import fence_span, wrap_untrusted
 from raven.session.refs import TOOL_RESULT_TRUNCATION_MARKER, is_truncated
 from raven.session.tool_output import (
+    TOOL_OUTPUT_PREFIX,
     ToolOutputLimits,
     bound_tool_result,
     direction_for,
@@ -667,6 +668,32 @@ def test_windows_existing_wide_tool_output_directory_is_tightened(tmp_path: Path
     assert len(files) == 1
     assert str(files[0].resolve()) in bounded
     _windows_assert_owner_only_dacl([directory])
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows NTFS DACLs")
+def test_windows_existing_wide_tool_output_directory_tightens_preexisting_child_file(
+    tmp_path: Path,
+) -> None:
+    """Tightening a wide tool-output dir preserves owner reads on old files and denies non-owners."""
+    import subprocess
+
+    subprocess.run(
+        ["icacls", str(tmp_path), "/grant", "*S-1-1-0:(OI)(CI)F"],
+        check=True,
+        capture_output=True,
+    )
+    directory = tool_output_dir(tmp_path)
+    directory.mkdir()
+    legacy = directory / f"{TOOL_OUTPUT_PREFIX}legacy.txt"
+    legacy.write_text("legacy", encoding="utf-8")
+
+    bounded = bound_tool_result(wrap_untrusted(LONG_BODY, source="exec"), tmp_path, limits=BYTES)
+
+    new_files = [p for p in _files(tmp_path) if p != legacy]
+    assert len(new_files) == 1
+    assert str(new_files[0].resolve()) in bounded
+    assert legacy.read_text(encoding="utf-8") == "legacy"
+    _windows_assert_owner_only_dacl([directory, legacy, new_files[0]])
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows CreateFileW CREATE_NEW")

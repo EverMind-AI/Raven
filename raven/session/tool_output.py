@@ -346,7 +346,10 @@ def _win32_owner_security() -> tuple[Any, Any, Any, Any, Any]:  # pragma: no cov
     if not sid_str:
         raise OSError("could not resolve current Windows user SID")
     descriptor = ctypes.c_void_p()
-    sddl = f"D:P(A;;FA;;;{sid_str})"
+    # Include (OI)(CI) so tightening an existing directory also updates
+    # inherited ACEs on pre-existing child files rather than stripping them to
+    # an empty DACL.
+    sddl = f"D:P(A;OICI;FA;;;{sid_str})"
     if not advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW(
         sddl, _SDDL_REVISION_1, ctypes.byref(descriptor), None
     ):
