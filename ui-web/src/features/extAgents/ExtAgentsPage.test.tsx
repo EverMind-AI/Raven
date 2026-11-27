@@ -792,6 +792,7 @@ describe('a card', () => {
   it('says who it is in one line: the catalogue for a known agent, the probe or the transport otherwise', async () => {
     install([
       row({ name: 'claude_code' }),
+      row({ name: 'antigravity', preset: 'antigravity' }),
       row({ name: 'Raven-Code', preset: undefined, vendored: true, configured: false }),
       row({ name: 'homemade', preset: undefined, configured: true, enabled: false, probe_status: 'attention', probe_detail: 'found, untested' }),
       row({ name: 'plain', preset: undefined, configured: true, enabled: true }),
@@ -799,6 +800,7 @@ describe('a card', () => {
     ])
     await mount()
     expect(lineOf('claude_code')).toBe('gui.agent.short_claude_code')
+    expect(lineOf('antigravity')).toBe('gui.agent.short_antigravity')
     expect(lineOf('Raven-Code')).toBe('gui.agent.short_raven_code')
     expect(lineOf('homemade')).toBe('found, untested')
     expect(lineOf('plain')).toBe('gui.agent.kind_acp')
@@ -993,11 +995,11 @@ describe('connecting', () => {
       },
     })
     await mount()
-    /* Twenty-one and not the agent catalogue's twenty-nine: the nine Mirasim presets
+    /* Twenty-two and not the agent catalogue's thirty: the nine Mirasim presets
        are one card while none of them has been opened out, so the skeleton has
        to draw one cell for them or the grid jumps by eight when the roster
        lands -- which is the whole reason this count is pinned. */
-    expect(document.querySelectorAll('.extAgents-wcard').length).toBe(21)
+    expect(document.querySelectorAll('.extAgents-wcard').length).toBe(22)
     expect(document.querySelector('.extAgents-grid')!.getAttribute('aria-busy')).toBe('true')
     expect(document.querySelector('.extAgents-empty')).toBeNull()
     /* Every tab waits with the roster: the machines are a module of their own now, not a tab. */

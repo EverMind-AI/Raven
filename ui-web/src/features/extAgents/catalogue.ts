@@ -99,6 +99,7 @@ const CATALOGUE: Record<string, CatalogueEntry> = {
     cmd: 'curl -fsSL https://openclaw.ai/install.sh | bash',
   },
   mirothinker: { short: 'gui.agent.short_mirothinker', brand: 'MiroMind', site: 'platform.miromind.ai' },
+  antigravity: { short: 'gui.agent.short_antigravity', brand: 'Google' },
   github_copilot: {
     short: 'gui.agent.short_github_copilot',
     brand: 'GitHub',
