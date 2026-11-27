@@ -412,7 +412,9 @@ async def test_project_list_inspect_and_open_follow_project_boundary(
         )
 
     with pytest.raises(ConfigValidationError, match="existing directory"):
-        await skills_manage({"action": "project_list", "project_dir": str(tmp_path / "missing")}, agent_loop_factory=factory)
+        await skills_manage(
+            {"action": "project_list", "project_dir": str(tmp_path / "missing")}, agent_loop_factory=factory
+        )
 
 
 async def test_settings_set_project_skills_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

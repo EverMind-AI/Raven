@@ -111,7 +111,7 @@ def _resolve_project_dir(project_dir: str) -> Path:
 
 
 def _project_skills_for_dir(project_dir: str, factory: "AgentLoopFactory | None") -> tuple[Path, Any, list[Any]]:
-    from raven.memory_engine.skill_forge.project_skills import project_skill_roots, read_project_skills
+    from raven.memory_engine import project_skill_roots, read_project_skills
 
     resolved = _resolve_project_dir(project_dir)
     roots = project_skill_roots(resolved, agent_home=_agent_home(factory))

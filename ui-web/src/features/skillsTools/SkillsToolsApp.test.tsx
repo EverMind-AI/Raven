@@ -266,10 +266,23 @@ describe('SkillsToolsApp', () => {
     expect(screen.getByText('gui.skillsTools.skills.project_empty_title')).toBeTruthy()
 
     await act(async () => { fireEvent.click(screen.getByText('gui.skillsTools.skills.project_choose')) })
+    expect(document.querySelector('.skillsTools-proj-pop')).toBeTruthy()
+    await act(async () => { fireEvent.mouseDown(document.querySelector('.skillsTools-proj-pop')!) })
+    expect(document.querySelector('.skillsTools-proj-pop')).toBeTruthy()
+    await act(async () => { fireEvent.mouseDown(document.body) })
+    expect(document.querySelector('.skillsTools-proj-pop')).toBeNull()
+
+    await act(async () => { fireEvent.click(screen.getByText('gui.skillsTools.skills.project_choose')) })
     await act(async () => { fireEvent.click(screen.getByText('gui.skillsTools.skills.dir_use')) })
 
     expect(calls).toContainEqual(['projectSkills', '/work/raven'])
     expect(screen.getByText('proj-lint')).toBeTruthy()
+
+    const changeBtn = document.querySelector<HTMLButtonElement>('.skillsTools-proj-picker > .skillsTools-btn')!
+    await act(async () => { fireEvent.click(changeBtn) })
+    expect(document.querySelector('.skillsTools-proj-pop')).toBeTruthy()
+    await act(async () => { fireEvent.mouseDown(document.querySelector('.skillsTools-proj-name')!) })
+    expect(document.querySelector('.skillsTools-proj-pop')).toBeNull()
 
     const projToggle = document.querySelector<HTMLButtonElement>('.skillsTools-proj-toggle .skillsTools-swi')!
     await act(async () => { fireEvent.click(projToggle) })

@@ -161,7 +161,8 @@ function PickerPopover({ currentDir }: { currentDir: string | null }): JSX.Eleme
     if (!s.pickerOpen) return
     const onPointer = (e: MouseEvent): void => {
       const target = e.target as Node | null
-      if (popRef.current && target && !popRef.current.closest('.skillsTools-proj-picker')) {
+      const root = popRef.current?.closest('.skillsTools-proj-picker') ?? popRef.current
+      if (root && target && !root.contains(target)) {
         store.closePicker()
       }
     }
