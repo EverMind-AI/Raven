@@ -583,6 +583,10 @@ PRODUCT_SUPERSEDED_PROFILES: dict[str, str] = {
     # search to the iteration cap now writes earlier, and the report clause changed, so
     # the label moves.
     "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window-close-skim",
+    # 2026-11-27: the outline style opens a question about how an event came about or
+    # unfolded on its dated chronology, as it opens a survey on an overview table. The
+    # report clause changed, so the label moves.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window-close-skim": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window-close-skim-chrono",
     # The interim label this branch's 2026-09-07 batches ran under before it rebased onto
     # the cite-rank clause and the dr@3.7 rung; never shipped, retired so those bench
     # configs still load.

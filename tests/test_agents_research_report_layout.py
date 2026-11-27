@@ -259,6 +259,11 @@ def test_the_outline_style_asks_for_a_title_numbers_a_lead_table_and_bold_to_ski
     # Principles, not a rulebook: a survey opens on its comparison table, the form follows
     # the content, and the bold alone carries the findings.
     assert "the first numbered section sets\n   them side by side in one table" in outline
+    # A question about how an event unfolded opens on its dated chronology instead.
+    assert "how an event came about or how it has unfolded, the first numbered section gives its chronology" in (
+        " ".join(outline.split())
+    )
+    assert "chronology" not in prose
     assert "table where the reader compares items across the same\n   measures" in outline
     assert "so that the bold alone gives the report's findings" in " ".join(outline.split())
     # Bold goes by what a paragraph holds - names, figures, a short verdict - never by

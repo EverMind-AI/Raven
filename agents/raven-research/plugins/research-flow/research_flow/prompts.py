@@ -492,7 +492,11 @@ _OUTLINE_STYLE_EDITS = (
    methods, paradigms, products or works, the first numbered section sets
    them side by side in one table before any is taken up - a row for each,
    its columns what the reader compares them by: what it is, its
-   representative work, its key result, where it fits. Give the content the
+   representative work, its key result, where it fits. When the question
+   asks how an event came about or how it has unfolded, the first numbered
+   section gives its chronology before any part is analyzed - a dated list,
+   one event to an item, oldest first, each dated as its source dates it and
+   citing that source. Give the content the
    form it has: a table where the reader compares items across the same
    measures, a list where a section names parallel items, prose for why
    something holds and what it leads to. Bold for a reader who skims, by
