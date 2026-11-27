@@ -212,10 +212,6 @@ _HELD_FILES_KEY = "dr_held_report_files"
 # the markdown ones: an HTML twin of the report the turn wrote by hand gives way to its page.
 _REPORT_PAGES_KEY = "dr_report_pages"
 
-# The name the turn's dispatcher gave its task, kept from the inbound request to turn
-# end: the page of a report that has no title of its own is titled by it.
-_TASK_NAME_KEY = "dr_task_name"
-
 
 @dataclass
 class ToolHandles:
@@ -355,8 +351,6 @@ class TurnFrame(Gate):
         record = self._store.load(ctx.session_key)
         if self._report_file:
             ctx.metadata[_HELD_FILES_KEY] = still_held(record.report_files)
-        if self._page is not None and (name := getattr(ctx.turn_request, "task_summary", None)):
-            ctx.metadata[_TASK_NAME_KEY] = name
         if self._conversation:
             self._consume_pending_clarify(ctx.session_key, record, text)
         content = text
@@ -487,7 +481,6 @@ class TurnFrame(Gate):
         report_paths = ctx.metadata.pop(_REPORT_FILES_KEY, None)
         held = ctx.metadata.pop(_HELD_FILES_KEY, None) or {}
         own_pages = ctx.metadata.pop(_REPORT_PAGES_KEY, None) or []
-        task_name = str(ctx.metadata.pop(_TASK_NAME_KEY, None) or "")
         # The gates' own counters first, the turn-level ones over them - the
         # order the fork stamped them in, and the one that lets a turn-level key
         # win a name collision.
@@ -596,7 +589,6 @@ class TurnFrame(Gate):
                 report,
                 beside=synced.get("path") if synced.get("synced") or synced.get("kept") else None,
                 own=own_pages,
-                task=task_name,
             )
             removed: str | None = None
             if page_path and self._page.removes_file and observers["report_page"].get("follows") == "file":

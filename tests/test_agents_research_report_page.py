@@ -97,22 +97,6 @@ def test_the_title_of_the_report_file_is_used_when_the_reply_has_none():
 
 
 @pytest.mark.asyncio
-async def test_a_report_with_no_title_is_titled_by_the_task_its_dispatcher_named(tmp_path, _no_trail):
-    """A real page went out untitled, and the agent that delivered it rewrote its ``<title>`` by script."""
-    request = SimpleNamespace(task_summary="Vite or\n webpack")
-    frame, facts = _frame(tmp_path), {}
-    with workdir.bind(tmp_path):
-        await frame.before_user_inbound(
-            AgentHookContext(session_key="cli:t", turn_request=request, inbound_content="compare them", metadata=facts)
-        )
-        await _send(frame, _REPORT, facts=facts)
-    (page,) = tmp_path.glob("*.html")
-    html = page.read_text(encoding="utf-8")
-    assert "<h1>Vite or webpack</h1>" in html and "<title>Vite or webpack</title>" in html
-    assert "dr_task_name" not in facts
-
-
-@pytest.mark.asyncio
 async def test_a_title_of_the_reports_own_stands_over_the_tasks_name(tmp_path):
     writer = ReportPage(_cfg().report_page)
     with workdir.bind(tmp_path):
