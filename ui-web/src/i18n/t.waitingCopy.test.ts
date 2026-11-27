@@ -48,6 +48,7 @@ describe('the waiting copy', () => {
 
   it('says Waiting on the tail row', () => {
     expect(ui['gui.live.waiting_subagents']?.en).toBe('Waiting')
-    expect(ui['gui.live.orbs_label']?.en).toBe('{n} subagents running: {names}')
+    expect(ui['gui.live.orbs_label_one']?.en).toBe('1 subagent running: {names}')
+    expect(ui['gui.live.orbs_label_n']?.en).toBe('{n} subagents running: {names}')
   })
 })

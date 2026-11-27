@@ -144,7 +144,10 @@ export function SubagentOrbs({ orbs }: { orbs: readonly SubagentOrb[] }): ReactE
 
   const more = orbs.length - fit
   if (!slots.length && !more) return null
-  const label = t('gui.live.orbs_label', { n: orbs.length, names: orbs.map((o) => o.name).join(', ') })
+  const names = orbs.map((o) => o.name).join(', ')
+  const label = orbs.length === 1
+    ? t('gui.live.orbs_label_one', { names })
+    : t('gui.live.orbs_label_n', { n: orbs.length, names })
   const open = { '--ov-open': `${Math.round(openOverlap(fit, more > 0, room) * 10) / 10}px` } as CSSProperties
   return (
     <span className="cp-orbs" role="img" aria-label={label} ref={attach} style={open}>

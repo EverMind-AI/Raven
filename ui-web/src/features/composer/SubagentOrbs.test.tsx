@@ -88,8 +88,14 @@ describe('the orb stack', () => {
     const stack = document.querySelector('.cp-orbs') as HTMLElement
     expect(stack.getAttribute('role')).toBe('img')
     expect(stack.getAttribute('aria-label')).toBe(
-      t('gui.live.orbs_label', { n: 6, names: orbs.map((o) => o.name).join(', ') }),
+      t('gui.live.orbs_label_n', { n: 6, names: orbs.map((o) => o.name).join(', ') }),
     )
+  })
+
+  it('names a lone subagent without pluralising the count', () => {
+    render(<SubagentOrbs orbs={[orb('c', 'Codex')]} />)
+    const stack = document.querySelector('.cp-orbs') as HTMLElement
+    expect(stack.getAttribute('aria-label')).toBe('1 subagent running: Codex')
   })
 
   it('tips each orb with its name and elapsed time', () => {

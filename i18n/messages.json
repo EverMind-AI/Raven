@@ -2897,7 +2897,11 @@
       "en": "Waiting",
       "zh": "等待中"
     },
-    "gui.live.orbs_label": {
+    "gui.live.orbs_label_one": {
+      "en": "1 subagent running: {names}",
+      "zh": "1 个子智能体在运行：{names}"
+    },
+    "gui.live.orbs_label_n": {
       "en": "{n} subagents running: {names}",
       "zh": "{n} 个子智能体在运行：{names}"
     },
