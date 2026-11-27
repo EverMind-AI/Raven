@@ -614,6 +614,77 @@ async def test_a_machine_full_of_agents_refuses_the_next_in_one_sentence(tmp_pat
     assert pool.live() == ["box"] and pool._nodes["box"].channels == {}
 
 
+@pytest.mark.parametrize(
+    "lost",
+    [
+        pytest.param(AcpConnectionError("the ssh ended", returncode=255, stderr=""), id="the-link-ended"),
+        pytest.param(AcpTimeoutError("no answer", method=protocol.AGENT_LAUNCH), id="no-answer-came"),
+    ],
+)
+async def test_a_launch_whose_answer_is_lost_is_not_a_launch_that_did_not_happen(tmp_path, lost):
+    """The node starts the agent before it answers, so a lost answer leaves one running.
+
+    The endpoint stays in the pool for the link that comes back to claim, and
+    the caller is still told the launch failed -- the two are not the same
+    question. A refusal is the opposite case and pops its endpoint: there the
+    node answered, so it started nothing.
+    """
+    pool = NodePool()
+    _live(pool, tmp_path, raises=lost)
+
+    with pytest.raises(NodeError, match="did not answer|could not be reached"):
+        await pool.open_channel("box", name="echo@box", command="agent", cwd="~", env={})
+
+    (parked,) = pool._parked["box"]
+    assert parked.agent == "echo@box" and parked.detached is not None
+    assert parked.returncode is None, "an agent the machine may still run is not settled here"
+    assert "box" not in pool._nodes, "the link it was launched on is gone"
+
+    # The link is back: the parked endpoint is claimed onto a channel of the
+    # new one, by task, which is all the host has to name it with.
+    asked: list[tuple[str, dict[str, Any]]] = []
+    back = _Client(result={})
+
+    async def record(method: str, params: dict[str, Any], *, timeout: float) -> Any:
+        asked.append((method, params))
+        return {}
+
+    back.request = record  # type: ignore[method-assign]
+    pool._nodes["box"] = _Node(back, _box("box"), tmp_path / "back.log", {"limits": {"agents": 8}}, {})
+
+    await pool._reattach("box")
+
+    assert [(method, params["task"]) for method, params in asked] == [(protocol.AGENT_ATTACH, parked.task)]
+    assert pool._parked.get("box", []) == [] and list(pool._nodes["box"].channels.values()) == [parked]
+    assert parked.detached is None
+
+
+@pytest.mark.parametrize(
+    "lost",
+    [
+        pytest.param(AcpTimeoutError("no answer", method=protocol.AGENT_ATTACH), id="no-answer-came"),
+        pytest.param(AcpConnectionError("the ssh ended", returncode=255, stderr=""), id="the-link-ended"),
+    ],
+)
+async def test_a_pick_up_whose_answer_is_lost_keeps_the_task_it_names(tmp_path, lost):
+    """A task the caller names is one the machine runs, whatever the answer did.
+
+    The endpoint waits for the link that comes back rather than leaving the
+    task on the machine with nothing here holding it. A task the machine no
+    longer knows is the other case, and that one ends its endpoint.
+    """
+    pool = NodePool(backoff_s=())
+    _live(pool, tmp_path, raises=lost)
+
+    with pytest.raises(NodeError):
+        await pool.attach("box", "echo@box-1", name="echo@box")
+
+    (parked,) = pool._parked["box"]
+    assert parked.task == "echo@box-1" and parked.returncode is None
+    assert parked.detached is not None and "box" not in pool._nodes
+    await pool.close_all()
+
+
 async def test_a_cancel_while_the_launch_is_answered_still_ends_what_it_started(tmp_path):
     pool = NodePool()
     client = _live(pool, tmp_path, client=_HeldLaunch(result={"pid": 4242}))
