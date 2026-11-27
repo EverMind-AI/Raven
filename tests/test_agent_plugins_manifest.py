@@ -3,7 +3,10 @@
 The vendored schema at ``schemas/agent-plugins/1.0.0/plugin.schema.json`` is
 an unmodified snapshot of the official one, so it is the yardstick: this
 file asks the official validator and ``read_manifest`` the same question
-about the same documents and compares the answers.
+about the same documents and compares the answers. The same corpus also
+pins the present-value contract: a value the document presents survives
+the read unchanged, an empty string stays an empty string, and a field the
+author omitted stays unset.
 """
 
 from __future__ import annotations
@@ -354,25 +357,52 @@ def test_the_only_departures_from_the_official_schema_are_the_documented_ones(
 _EXPECTED_VALUES = tuple(case for case in _CASES if case.expected)
 
 
-def _value_at(manifest: AgentPluginManifest, path: str) -> Any:
+def _has_empty_string(value: Any) -> bool:
+    if isinstance(value, str):
+        return value == ""
+    if isinstance(value, dict):
+        return any(_has_empty_string(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_empty_string(item) for item in value)
+    return False
+
+
+def test_every_loading_document_with_an_empty_string_declares_expected_values() -> None:
+    """A document with a present empty value must pin that the value survives.
+
+    ``_EXPECTED_VALUES`` selects its cases by the presence of ``case.expected``,
+    so a dropped map would silently shorten the value half of the corpus
+    while the acceptance half stayed green.
+    """
+    unpinned = [
+        case.label for case in _CASES if case.ours_accepts and _has_empty_string(case.document) and not case.expected
+    ]
+    assert not unpinned, f"cases with an empty string but no expected map: {unpinned}"
+
+
+def _value_at(manifest: AgentPluginManifest, path: str, label: str) -> Any:
     value: Any = manifest
+    walked: list[str] = []
     for part in path.split("."):
+        assert value is not None, f"{label}: {path} walks through {'.'.join(walked) or 'the manifest'}, which is None"
         value = getattr(value, part)
+        walked.append(part)
     return value
 
 
 @pytest.mark.parametrize("case", _EXPECTED_VALUES, ids=[case.label for case in _EXPECTED_VALUES])
-def test_read_manifest_keeps_each_present_value_verbatim(case: _Case, tmp_path: Path) -> None:
+def test_read_manifest_keeps_present_values_and_leaves_absent_ones_unset(case: _Case, tmp_path: Path) -> None:
     """A value the document presents survives the read unchanged.
 
     The parity test above settles only whether a document loads. A loader
     that turned ``""`` into ``None`` would accept the same documents while
     losing the difference between a field the author wrote empty and one
-    the author omitted.
+    the author omitted. A field the author omitted stays ``None`` rather
+    than becoming an empty string.
     """
     manifest, _ = read_manifest(_manifest_file(tmp_path, case.document))
     for path, expected in case.expected:
-        assert _value_at(manifest, path) == expected, path
+        assert _value_at(manifest, path, case.label) == expected, path
 
 
 # ---------------------------------------------------------------------------
@@ -436,11 +466,12 @@ def test_an_unknown_top_level_field_loads_and_is_reported(tmp_path: Path) -> Non
     assert "futureField" in notes[0]
 
 
-def test_a_non_object_extensions_field_loads_and_is_reported(tmp_path: Path) -> None:
+@pytest.mark.parametrize("extensions", [["a"], None], ids=["list", "null"])
+def test_a_non_object_extensions_field_loads_and_is_reported(tmp_path: Path, extensions: Any) -> None:
     manifest, notes = read_manifest(
         _manifest_file(
             tmp_path,
-            {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "extensions": ["a"]},
+            {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "extensions": extensions},
         )
     )
     assert manifest.name == "acme"
