@@ -1887,14 +1887,14 @@ class TestTheChosenSurface:
     def test_a_blank_workspace_suggests_an_absolute_usable_directory(
         self, home: Path, monkeypatch, capsys, workspace: str
     ) -> None:
-        """A workspace that stays relative after expansion -- blank, which is
-        the current directory, as much as an explicit relative path -- leaves
-        the agent home relative, and a suggestion derived straight from the
-        relative value was relative too ("raven-tmp", "   -tmp"): not the
-        absolute directory the refusal promises, and not one
-        ``validate_override`` accepts as a working directory. Resolving the
-        home first makes the suggestion absolute and acceptable for the same
-        configured home."""
+        """A blank or relative workspace that resolves to the launch directory
+        or below it -- the current directory for blank, a subdirectory for an
+        explicit relative path -- leaves the agent home relative, and a
+        suggestion derived straight from the relative value was relative too
+        ("raven-tmp", "   -tmp"): not the absolute directory the refusal
+        promises, and not one ``validate_override`` accepts as a working
+        directory. Resolving the home first makes the suggestion absolute and
+        acceptable for the same configured home."""
         from raven.agent.workdir import validate_override
         from raven.config.loader import get_config_path
 
@@ -1923,10 +1923,10 @@ class TestTheChosenSurface:
     def test_a_directory_the_refusal_names_can_itself_start_serve(self, home: Path, monkeypatch, capsys) -> None:
         """The suggestion has to be a real place to start from, not just a
         plausible string: changing into it makes the same check pass on the
-        same config. A workspace that stays relative after expansion is excluded
-        here -- blank included -- because that config re-derives the agent home
-        from wherever it runs, so no directory can satisfy it; the blank case is
-        pinned above instead."""
+        same config. A workspace that resolves to the launch directory or below
+        it is excluded here -- blank included -- because that config re-derives
+        the agent home from wherever it runs, so no directory can satisfy it;
+        the blank case is pinned above instead."""
         home.mkdir(parents=True, exist_ok=True)
         monkeypatch.chdir(home.parent)
 
