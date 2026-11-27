@@ -1789,6 +1789,31 @@ async def test_an_unstreamed_resend_that_writes_its_call_as_text_shows_its_words
     assert final == "the answer"
 
 
+class _ReplacesHeld(_HoldsDrafts):
+    """Ends the turn on a reply of its own in place of the one the model wrote."""
+
+    async def after_iteration(self, ctx):
+        from raven.agent.hook import HookDecision
+
+        return HookDecision(short_circuit_result="the **answer**")
+
+
+@pytest.mark.asyncio
+async def test_a_reply_a_hook_replaced_reaches_the_reader_as_replaced(workspace, monkeypatch):
+    """A streamed turn sends no closing text, so the held draft is all the reader gets: it carries
+    the reply the turn keeps, not the one the hook replaced."""
+    _served(monkeypatch, [_finished_stream("the answer")])
+    _recorded_sleeps(monkeypatch)
+    sink = _Sink()
+
+    final, _used, messages, _outcome = await _litellm_agent(workspace, hooks=[_ReplacesHeld()])._run_agent_loop(
+        _seed(), on_token_delta=sink.delta
+    )
+
+    assert final == "the **answer**" and messages[-1]["content"] == "the **answer**"
+    assert "".join(sink.text) == "the **answer**"
+
+
 @pytest.mark.asyncio
 async def test_the_unstreamed_resend_leaves_the_model_switch_to_the_loop(workspace, monkeypatch):
     """The provider's own chain walks the fallbacks on an error; the streamed turn's switch is the loop's,

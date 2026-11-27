@@ -3061,6 +3061,10 @@ class TurnPathMixin:
                             draft.discard()
                         continue
                     if draft is not None:
+                        # A reply a hook replaced reaches the reader as replaced: a streamed
+                        # turn sends no closing text, so what is held is all the reader gets.
+                        if isinstance(decision.short_circuit_result, str):
+                            draft.restate(decision.short_circuit_result)
                         await draft.release()
                     await _settle_silence(silence_gate, silent=ends_silent, dropped_marker=dropped_marker)
                     _land_hook_note(decision)
