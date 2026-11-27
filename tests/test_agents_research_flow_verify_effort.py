@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -182,5 +183,6 @@ def test_a_captured_review_request_lands_beside_the_turns_work_and_only_when_ask
     request = json.loads(saved.read_text(encoding="utf-8"))
     assert "Draft answer:" in request["user"] and request["system"] and request["tools"]
     # The request carries the evidence the turn read: owner-only, like the state the flow keeps.
-    assert saved.stat().st_mode & 0o777 == 0o600
-    assert (tmp_path / ".review-requests").stat().st_mode & 0o777 == 0o700
+    if os.name != "nt":
+        assert saved.stat().st_mode & 0o777 == 0o600
+        assert (tmp_path / ".review-requests").stat().st_mode & 0o777 == 0o700

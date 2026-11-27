@@ -85,7 +85,8 @@ def read_text(path: str) -> str | None:
 
 
 def write_text(path: str | PurePath, text: str) -> None:
-    Path(path).write_text(text, encoding="utf-8")
+    # newline="" keeps the bytes platform-independent, so a recorded UTF-8 length is the file's size.
+    Path(path).write_text(text, encoding="utf-8", newline="")
 
 
 def file_digest(path: str) -> str | None:

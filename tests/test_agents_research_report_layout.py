@@ -8,6 +8,7 @@ markdown file the turn saved, so the chat reply and the file are one report.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -534,7 +535,17 @@ async def test_the_report_reader_parses_what_the_real_file_tools_return(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_an_unchanged_rewrite_names_its_own_path_whatever_the_path_holds(tmp_path):
+@pytest.mark.parametrize(
+    "decoy",
+    [
+        "notes.md already holds x/r.md",
+        pytest.param(
+            "a.md already holds exactly these 3 bytes, so nothing was written./r.md",
+            marks=pytest.mark.skipif(os.name == "nt", reason="Windows cannot name a directory ending in a dot"),
+        ),
+    ],
+)
+async def test_an_unchanged_rewrite_names_its_own_path_whatever_the_path_holds(tmp_path, decoy):
     """A directory name holding the unchanged line's own words must not end the path early:
     the reader would name ``notes.md`` beside it, a file no tool call wrote."""
     from raven.agent.tools.filesystem import WriteFileTool
@@ -542,15 +553,11 @@ async def test_an_unchanged_rewrite_names_its_own_path_whatever_the_path_holds(t
     write = WriteFileTool(tmp_path)
     (tmp_path / "notes.md").write_text("## Entries\nthe user's own\n", encoding="utf-8")
     messages = []
-    for decoy in (
-        "notes.md already holds x/r.md",
-        "a.md already holds exactly these 3 bytes, so nothing was written./r.md",
-    ):
-        path = tmp_path / decoy
-        for _ in range(2):
-            result = await write.execute(path=str(path), content="## Entries\n")
-            messages.append(_tool("write_file", str(getattr(result, "model_text", result))))
-        assert written_markdown(messages[-1:]) == [str(path)]
+    path = tmp_path / decoy
+    for _ in range(2):
+        result = await write.execute(path=str(path), content="## Entries\n")
+        messages.append(_tool("write_file", str(getattr(result, "model_text", result))))
+    assert written_markdown(messages[-1:]) == [str(path)]
 
 
 def test_an_append_counts_only_for_a_file_this_turn_wrote_whole():
