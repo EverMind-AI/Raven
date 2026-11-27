@@ -688,6 +688,27 @@ def test_a_summary_reply_never_replaces_the_longer_report_it_describes(tmp_path)
     assert record["reply_chars"] < record["file_chars"]
 
 
+def test_a_tidy_that_raises_never_fails_the_sync(tmp_path):
+    """The reply has gone out: deep markdown exhausting the recursion limit in the tidy is
+    recorded, and the file is synced or kept as it would be untidied."""
+
+    def tidy(text, held):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    report = tmp_path / "a.md"
+    report.write_text(_DRAFT, encoding="utf-8")
+    record = sync_report_file([str(report)], _EN, tidy=tidy)
+    assert record["synced"] is True and record["tidy_raised"] == "RecursionError"
+    assert report.read_text(encoding="utf-8") == _EN
+
+    longer = tmp_path / "r.md"
+    full = _EN + "\n".join(f"finding {i}: a long paragraph of evidence" for i in range(40))
+    longer.write_text(full, encoding="utf-8")
+    kept = sync_report_file([str(longer)], _EN, tidy=tidy)
+    assert kept["kept"] is True and kept["tidy_raised"] == "RecursionError"
+    assert longer.read_text(encoding="utf-8") == full
+
+
 def test_the_files_title_survives_a_reply_that_has_none(tmp_path):
     """The chat reply opens at the quote; the file the model wrote opened with its title."""
     report = tmp_path / "r.md"

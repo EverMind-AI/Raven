@@ -30,6 +30,8 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path, PurePath
 from typing import Any
 
+from loguru import logger
+
 from raven.security.trust import unwrap_untrusted
 from research_flow.support.process_appendix import _URL_RE as _CITED_URL_RE
 from research_flow.support.process_appendix import _clean as _clean_url
@@ -384,6 +386,16 @@ def title_line(text: str) -> str | None:
     return first if first.startswith("# ") else None
 
 
+def _tidied(tidy: Tidy, text: str, held: str | None, record: dict[str, Any]) -> tuple[str, dict[str, int]]:
+    """``tidy`` applied, or ``text`` as it was when tidying raised: the file is still synced, untidied."""
+    try:
+        return tidy(text, held)
+    except Exception as exc:  # noqa: BLE001 - deep markdown can exhaust the recursion limit
+        logger.opt(exception=True).warning("report-file: tidying raised; the file is synced as written")
+        record["tidy_raised"] = type(exc).__name__
+        return text, {}
+
+
 def sync_report_file(paths: list[str], reply: str, *, tidy: Tidy | None = None) -> dict[str, Any]:
     """Write ``reply`` over the turn's report file; the observer payload, or ``{}``.
 
@@ -421,7 +433,7 @@ def sync_report_file(paths: list[str], reply: str, *, tidy: Tidy | None = None) 
     held_text = (read_text(chosen) or "").strip()
     counts: dict[str, int] = {}
     if tidy is not None:
-        text, counts = tidy(text, held_text)
+        text, counts = _tidied(tidy, text, held_text, record)
     title = title_line(held_text)
     if title and not title_line(text):
         text = f"{title}\n\n{text}"
@@ -433,7 +445,7 @@ def sync_report_file(paths: list[str], reply: str, *, tidy: Tidy | None = None) 
         record["kept"] = True
         if tidy is not None:
             kept, _ = file_text(held_text, str(target))
-            kept, counts = tidy(kept, None)
+            kept, counts = _tidied(tidy, kept, None, record)
             record.update(counts)
             if kept != held_text:
                 try:
