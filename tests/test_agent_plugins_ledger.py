@@ -9,6 +9,8 @@ touches anything it should not.
 
 from __future__ import annotations
 
+import builtins
+import io
 import json
 import os
 import shutil
@@ -499,6 +501,133 @@ def test_a_save_leaves_no_file_beside_the_ledger(tmp_path: Path) -> None:
     ledger.save()
 
     assert sorted(entry.name for entry in tmp_path.iterdir() if entry.is_file()) == ["ledger.json"]
+
+
+def test_the_ledger_swap_uses_replace_because_rename_cannot_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The file written beside the ledger becomes the ledger by ``os.replace``.
+
+    Writing the next ledger beside the old one is only half of what keeps a
+    concurrent reader whole; the swap is the other half. A save that copied
+    the new bytes into the target would rewrite the very file a reader is
+    looking at, so the entry on disk must move from the file written beside
+    the ledger to the ledger itself in one step.
+
+    The pin is on ``os.replace`` rather than on the rename family in general
+    because the two are not equivalent for this save: it overwrites a ledger
+    that already exists, and ``os.rename`` raises ``FileExistsError`` on
+    Windows whenever the destination exists, while ``os.replace`` overwrites
+    it on every platform.
+    """
+    path = tmp_path / "ledger.json"
+    ledger = PackageLedger(path)
+    _record_install(ledger, tmp_path)
+    ledger.save()
+    before = path.read_bytes()
+
+    replacements: list[tuple[Path, Path, bytes]] = []
+    original_replace = os.replace
+
+    def recording_replace(
+        source: str | os.PathLike[str],
+        destination: str | os.PathLike[str],
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        source_path = Path(source)
+        try:
+            source_bytes = source_path.read_bytes()
+        except FileNotFoundError as exc:
+            raise AssertionError(
+                f"the source file was gone before replace, expected it to still exist: {source_path}"
+            ) from exc
+        replacements.append((source_path, Path(destination), source_bytes))
+        original_replace(source, destination, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+
+    monkeypatch.setattr(os, "replace", recording_replace)
+
+    ledger.forget(PACKAGE_NAME, workspace=tmp_path)
+    ledger.save()
+
+    after = path.read_bytes()
+    assert len(replacements) >= 1
+    swaps = [
+        (source, destination, source_bytes)
+        for source, destination, source_bytes in replacements
+        if destination == path
+        and source.parent == path.parent
+        and source != path
+        and source_bytes != before
+        and source_bytes == after
+        and not source.exists()
+    ]
+    assert swaps, (
+        "no replacement swapped the freshly written sibling onto the ledger: "
+        f"{[(str(source), str(destination)) for source, destination, _ in replacements]}"
+    )
+
+
+def test_a_save_never_opens_the_ledger_for_writing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ledger on disk is replaced, never rewritten through an open handle.
+
+    A reader that shares the file sees every byte a write puts through an
+    open handle, so a save must put its bytes somewhere else and only then
+    move the result over the ledger. This guard raises when a save opens the
+    ledger for writing through ``Path.open``, ``builtins.open``, ``io.open``
+    or ``os.open``; it cannot see a write to a descriptor opened before the
+    guard went up, nor a raw ``os.write`` on such a descriptor, nor a writer
+    that bound its own alias before the guard went up, such as one that did
+    ``from io import open``.
+    """
+    path = tmp_path / "ledger.json"
+    ledger = PackageLedger(path)
+    _record_install(ledger, tmp_path)
+    ledger.save()
+    before = path.read_text(encoding="utf-8")
+
+    original_path_open = Path.open
+    original_open = builtins.open
+    original_os_open = os.open
+
+    def opens_for_writing(mode: str) -> bool:
+        return any(flag in mode for flag in "wax+")
+
+    def guarded_path_open(self: Path, mode: str = "r", *args: object, **kwargs: object) -> object:
+        if self == path and opens_for_writing(mode):
+            raise AssertionError(f"the save opened the ledger for writing ({mode})")
+        return original_path_open(self, mode, *args, **kwargs)
+
+    def guarded_open(file: object, mode: str = "r", *args: object, **kwargs: object) -> object:
+        if isinstance(file, (str, os.PathLike)) and Path(file) == path and opens_for_writing(mode):
+            raise AssertionError(f"the save opened the ledger for writing ({mode})")
+        return original_open(file, mode, *args, **kwargs)
+
+    write_flags = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_TRUNC | os.O_CREAT
+
+    def guarded_os_open(
+        file: str | os.PathLike[str] | int,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if isinstance(file, (str, os.PathLike)) and Path(file) == path and flags & write_flags:
+            raise AssertionError(f"the save opened the ledger with os.open for writing (flags={flags:#o})")
+        return original_os_open(file, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(Path, "open", guarded_path_open)
+    monkeypatch.setattr(builtins, "open", guarded_open)
+    monkeypatch.setattr(io, "open", guarded_open)
+    monkeypatch.setattr(os, "open", guarded_os_open)
+
+    ledger.forget(PACKAGE_NAME, workspace=tmp_path)
+    ledger.save()
+
+    after = path.read_text(encoding="utf-8")
+    assert after != before
+    assert json.loads(after)["workspaces"] == {}
 
 
 def test_a_damaged_v2_entry_loads_as_an_unverified_record(tmp_path: Path) -> None:
