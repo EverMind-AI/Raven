@@ -163,16 +163,20 @@ def _closes_with_sources(cfg: FlowConfig) -> bool:
 
 
 def _wrap_up_salvage(
-    cfg: FlowConfig, finalizer: ForcedFinalizeGate | None, ctx: Any
+    cfg: FlowConfig, finalizer: ForcedFinalizeGate | None, ctx: Any, facts: Callable[[], dict[str, Any]]
 ) -> Callable[[list[dict]], Awaitable[str | None]] | None:
-    """The salvage the loop asks when a budget-cut turn's wrap-up comes back empty."""
+    """The salvage the loop asks when a budget-cut turn's wrap-up comes back empty.
+
+    Its counters go to ``facts()``, the turn's participant facts the turn stamp exports,
+    looked up at call time: the participant is seated only after this is built.
+    """
     if finalizer is None or not cfg.force_finalize.wrap_up_salvage:
         return None
-    session_key, question, metadata = ctx.session_key, ctx.inbound_content or "", ctx.metadata
+    session_key, question = ctx.session_key, ctx.inbound_content or ""
 
     async def salvage(messages: list[dict]) -> str | None:
         return await finalizer.wrap_up(
-            GateCtx(session_key=session_key, messages=messages, turn_question=question, metadata=metadata)
+            GateCtx(session_key=session_key, messages=messages, turn_question=question, metadata=facts())
         )
 
     return salvage
@@ -1186,6 +1190,11 @@ class ResearchFlowParticipant(AgentParticipant):
         self._facts: dict[str, Any] = {}
         self._ran: dict[tuple[str, int], tuple[StepView, HookDecision]] = {}
 
+    @property
+    def facts(self) -> dict[str, Any]:
+        """This turn's private facts: every phase's ``GateCtx.metadata``, and what ``archive`` exports."""
+        return self._facts
+
     def _ctx(self, step: StepView, *, inbound: str | None = None, outbound: str | None = None) -> GateCtx:
         facts = self._facts
         # The three loop readings the chain consults, refreshed from the step.
@@ -1362,10 +1371,14 @@ class ResearchFlowHook(ParticipantHook):
                 slot.cfg,
                 text,
                 sources=_closes_with_sources(slot.cfg),
-                salvage=_wrap_up_salvage(slot.cfg, slot.finalizer, ctx),
+                salvage=_wrap_up_salvage(slot.cfg, slot.finalizer, ctx, lambda: self._turn_facts(ctx)),
             )
         )
         return await super().before_user_inbound(ctx)
+
+    def _turn_facts(self, ctx: Any) -> dict[str, Any]:
+        participant = self._seat(ctx).participant
+        return participant.facts if isinstance(participant, ResearchFlowParticipant) else ctx.metadata
 
 
 __all__ = [

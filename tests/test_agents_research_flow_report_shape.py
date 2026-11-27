@@ -41,6 +41,7 @@ from research_flow.gates.report_shape import (  # noqa: E402
     strip_reminder,
 )
 from research_flow.state import SessionStore  # noqa: E402
+from research_flow.support.turn_observers import turn_observers  # noqa: E402
 
 from raven.agent.loop import TURN_BUDGETS_KEY, turn_synthesis  # noqa: E402
 from raven.agent.loop.main import AgentLoop  # noqa: E402
@@ -542,7 +543,8 @@ async def test_the_wrap_up_carries_the_products_effort_cap_and_salvage(tmp_path)
 
     cfg.force_finalize.wrap_up_salvage = True
     ctx = AgentHookContext(session_key="cli:t", inbound_content="who founded X?")
-    await ResearchFlowHook(cfg, provider, ToolHandles(), SessionStore(tmp_path)).before_user_inbound(ctx)
+    hook = ResearchFlowHook(cfg, provider, ToolHandles(), SessionStore(tmp_path))
+    await hook.before_user_inbound(ctx)
     answer = await turn_synthesis(ctx.metadata).salvage(
         [{"role": "user", "content": "who founded X?"}, {"role": "tool", "name": "web_fetch", "content": "X page"}]
     )
@@ -550,6 +552,10 @@ async def test_the_wrap_up_carries_the_products_effort_cap_and_salvage(tmp_path)
     assert answer == "Best-supported answer, from https://example.org/a"
     assert "who founded X?" in provider.calls[0]["messages"][-1]["content"]
     assert "X page" in provider.calls[0]["messages"][-1]["content"]
+    # The counters land where the turn stamp exports from, not on the loop's dict.
+    assert "force_finalize" not in ctx.metadata
+    stamped = turn_observers(hook.participant.facts)["force_finalize"]
+    assert stamped["wrap_up_hits"] == 1 and stamped["synthesized"] is True
 
 
 @pytest.mark.asyncio
