@@ -539,7 +539,7 @@ def test_the_ledger_swap_uses_replace_because_rename_cannot_overwrite(
         source_path = Path(source)
         try:
             source_bytes = source_path.read_bytes()
-        except OSError as exc:
+        except FileNotFoundError as exc:
             raise AssertionError(
                 f"the source file was gone before replace, expected it to still exist: {source_path}"
             ) from exc
@@ -577,7 +577,9 @@ def test_a_save_never_opens_the_ledger_for_writing(tmp_path: Path, monkeypatch: 
     move the result over the ledger. This guard raises when a save opens the
     ledger for writing through ``Path.open``, ``builtins.open``, ``io.open``
     or ``os.open``; it cannot see a write to a descriptor opened before the
-    guard went up, nor a raw ``os.write`` on such a descriptor.
+    guard went up, nor a raw ``os.write`` on such a descriptor, nor a writer
+    that bound its own alias before the guard went up, such as one that did
+    ``from io import open``.
     """
     path = tmp_path / "ledger.json"
     ledger = PackageLedger(path)
