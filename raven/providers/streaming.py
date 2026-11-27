@@ -866,7 +866,8 @@ def _finalize_tool_calls(slots: list[dict[str, Any]]) -> list[ToolCallRequest]:
             # it is the only evidence of what the model actually emitted.
             args = {RAW_ARGUMENTS_KEY: args_text}
             repaired = True
-        args = object_arguments(args, args_text)
+        args, parked = object_arguments(args, args_text)
+        repaired = repaired or parked
         result.append(
             ToolCallRequest(
                 id=slot["id"] or "",

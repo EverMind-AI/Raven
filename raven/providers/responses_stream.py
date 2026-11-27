@@ -104,7 +104,8 @@ class _ResponsesStreamState:
                     except Exception:
                         args = json_repair.loads(args_raw)
                         repaired = True
-                    args = object_arguments(args, args_raw)
+                    args, parked = object_arguments(args, args_raw)
+                    repaired = repaired or parked
                     self.tool_calls.append(
                         ToolCallRequest(
                             id=f"{call_id}|{buf.get('id') or item.get('id') or 'fc_0'}",

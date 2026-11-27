@@ -233,7 +233,8 @@ class AzureOpenAIProvider(LLMProvider):
                         except Exception:
                             args = json_repair.loads(args)
                             repaired = True
-                    args = object_arguments(args, sent)
+                    args, parked = object_arguments(args, sent)
+                    repaired = repaired or parked
 
                     tool_calls.append(
                         ToolCallRequest(

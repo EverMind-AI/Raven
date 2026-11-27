@@ -908,7 +908,8 @@ class LiteLLMProvider(LiteLLMShape):
                 except Exception:
                     args = json_repair.loads(args)
                     repaired = True
-            args = object_arguments(args, sent)
+            args, parked = object_arguments(args, sent)
+            repaired = repaired or parked
 
             provider_specific_fields = getattr(tc, "provider_specific_fields", None) or None
             function_provider_specific_fields = getattr(tc.function, "provider_specific_fields", None) or None

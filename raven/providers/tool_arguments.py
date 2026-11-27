@@ -14,11 +14,16 @@ from typing import Any
 from raven.contracts.tool import RAW_ARGUMENTS_KEY
 
 
-def object_arguments(decoded: Any, sent: Any) -> dict[str, Any]:
-    """``decoded`` when it is an object; otherwise ``sent`` parked as text."""
+def object_arguments(decoded: Any, sent: Any) -> tuple[dict[str, Any], bool]:
+    """``decoded`` when it is an object; otherwise ``sent`` parked as text.
+
+    The flag says whether it was parked: a parked call is one whose arguments did not
+    arrive as a set, which the caller must record as a repair so the registry refuses it
+    rather than running the tool on the parked key.
+    """
     if isinstance(decoded, dict):
-        return decoded
-    return {RAW_ARGUMENTS_KEY: sent if isinstance(sent, str) else json.dumps(sent, ensure_ascii=False)}
+        return decoded, False
+    return {RAW_ARGUMENTS_KEY: sent if isinstance(sent, str) else json.dumps(sent, ensure_ascii=False)}, True
 
 
 __all__ = ["object_arguments"]
