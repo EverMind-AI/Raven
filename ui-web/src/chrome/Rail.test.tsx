@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as imported from '../features/imported/store'
 import * as settings from '../features/settings/store'
+import * as skillsTools from '../features/skillsTools/store'
 import * as boards from '../features/tasks/boards'
 import { t } from '../i18n/t'
 import * as hub from '../state/hub'
@@ -35,6 +36,7 @@ const note = (name: string) => async () => {
   opened.list.push(name)
 }
 vi.spyOn(hub, 'open').mockImplementation(note('hub'))
+vi.spyOn(skillsTools, 'open').mockImplementation(note('skillsTools'))
 vi.spyOn(settings, 'open').mockImplementation(note('settings'))
 
 /* Nothing: the page root renders the grid, the column and the collapse's twin,
@@ -80,7 +82,7 @@ describe('the rail', () => {
     render()
     for (const id of [
       'railBtn', 'findBtn',
-      'newBtn', 'agentsBtn', 'importedBtn',
+      'newBtn', 'agentsBtn', 'skillsToolsBtn', 'importedBtn',
       'sfind', 'sclr', 'list',
       'upnote', 'importRow', 'meBtn', 'railGrip',
     ]) {
@@ -124,7 +126,7 @@ describe('the rail', () => {
     /* The group's row is the strip's last, and the import row is inside the
        panel that row opens rather than in the strip itself. */
     expect(Array.from(nav.children).map((b) => b.id || b.className)).toEqual([
-      'newBtn', 'agentsBtn', 'knowledgeBtn', 'boardsBtn', 'chrome-navfly-anch',
+      'newBtn', 'agentsBtn', 'skillsToolsBtn', 'knowledgeBtn', 'boardsBtn', 'chrome-navfly-anch',
     ])
     const button = el('importedBtn') as HTMLButtonElement
     const idle = button.textContent
@@ -168,12 +170,12 @@ describe('the rail', () => {
      all, is invisible to a test that clicks a single one. */
   it('opens the page each row names', () => {
     render()
-    for (const id of ['agentsBtn', 'meBtn']) {
+    for (const id of ['agentsBtn', 'skillsToolsBtn', 'meBtn']) {
       act(() => {
         el(id).click()
       })
     }
-    expect(opened.list).toEqual(['hub', 'settings'])
+    expect(opened.list).toEqual(['hub', 'skillsTools', 'settings'])
   })
 
   /* A React onClick leaves no trace on the element -- the root delegates every

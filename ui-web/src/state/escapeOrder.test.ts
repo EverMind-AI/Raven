@@ -61,6 +61,7 @@ const LAYER_IDS = [
   '#chrome-navfly',
   '#extAgentsPage',
   '#connectionsPage',
+  '#skillsToolsPage',
   '#knowledgePage',
   '#tasksBoardPage',
   'setIsOpen()',
@@ -93,6 +94,7 @@ const PAGE = [
   '<div class="trajectory-details"><button id="trajFocus"></button></div></div>',
   '<section class="page" id="extAgentsPage" data-open="false"></section>',
   '<section class="page" id="connectionsPage" data-open="false"></section>',
+  '<section class="page" id="skillsToolsPage" data-open="false"></section>',
   '<section class="page" id="knowledgePage" data-open="false"></section>',
   '<section class="page" id="tasksBoardPage" data-open="false"></section>',
   '<aside class="detail" id="detail" data-open="false"><div class="body" id="dBody"></div></aside>',
@@ -150,10 +152,11 @@ const LAYERS: Record<string, { up: () => void; taken: () => boolean }> = {
   '#chrome-navfly': { up: flag('chrome-navfly'), taken: called(spies.navflyClose) },
   '#extAgentsPage': { up: flag('extAgentsPage'), taken: called(spies.extAgentsClose) },
   '#connectionsPage': { up: flag('connectionsPage'), taken: called(spies.pageShow) },
+  '#skillsToolsPage': { up: flag('skillsToolsPage'), taken: called(spies.pageShow) },
   /* Closed by `page.show(null)` rather than by a verb of the domain's -- the
      same generic close connections has, because the import-direction gate
      pins the upward edges and will not take a new one; the task board stops
-     its poll off the page switch, so it has no verb to call either. The three
+     its poll off the page switch, so it has no verb to call either. The four
      pages therefore answer by the same spy, which is why PAIRS below leaves
      their pairs out. */
   '#knowledgePage': { up: flag('knowledgePage'), taken: called(spies.pageShow) },
@@ -273,8 +276,11 @@ describe('the Escape priority order', () => {
      the page can be in either way: `page.show` opens one page and clears the
      rest, so two pages are never up at once outside this fixture. */
   const SHARED_CLOSE: ReadonlyArray<readonly [string, string]> = [
+    ['#connectionsPage', '#skillsToolsPage'],
     ['#connectionsPage', '#knowledgePage'],
     ['#connectionsPage', '#tasksBoardPage'],
+    ['#skillsToolsPage', '#knowledgePage'],
+    ['#skillsToolsPage', '#tasksBoardPage'],
     ['#knowledgePage', '#tasksBoardPage'],
   ]
   const shared = (a: string, b: string): boolean =>
@@ -282,13 +288,14 @@ describe('the Escape priority order', () => {
   const pairs = LAYER_IDS.flatMap((first, i) =>
     LAYER_IDS.slice(i + 1).filter((second) => !shared(first, second)).map((second) => ({ first, second })))
 
-  it('has a hundred and fifty pairs to answer for, every pair but the three that share a close', () => {
-    expect(pairs).toHaveLength(150)
+  it('has a hundred and sixty-five pairs to answer for, every pair but the six that share a close', () => {
+    expect(pairs).toHaveLength(165)
   })
 
-  it('reaches the three pages that share a close in table order', () => {
+  it('reaches the four pages that share a close in table order', () => {
     const ids = escapeOrder.ESCAPE_ORDER.map((layer) => layer.id)
-    expect(ids.indexOf('#connectionsPage')).toBeLessThan(ids.indexOf('#knowledgePage'))
+    expect(ids.indexOf('#connectionsPage')).toBeLessThan(ids.indexOf('#skillsToolsPage'))
+    expect(ids.indexOf('#skillsToolsPage')).toBeLessThan(ids.indexOf('#knowledgePage'))
     expect(ids.indexOf('#knowledgePage')).toBeLessThan(ids.indexOf('#tasksBoardPage'))
   })
 

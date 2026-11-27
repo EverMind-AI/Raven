@@ -12,8 +12,8 @@ import { useSyncExternalStore } from 'react'
 
 import { t } from '../../../i18n/t'
 import { Card, Chip, Row, Rov, Spin } from '../Fields'
-import { KeyRow } from '../pages/Tools'
 import * as store from '../store'
+import { KeyRow } from '../WebFields'
 
 import type { EverosCloudInfo } from '../types'
 import type { JSX } from 'react'

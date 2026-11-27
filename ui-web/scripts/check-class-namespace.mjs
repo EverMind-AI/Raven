@@ -285,6 +285,7 @@ const LEGACY_LOCAL = {
   /* Down one: an empty group is its heading alone, so `.grp-empty` is gone. */
   rail: 9,
   settings: 0,
+  skillsTools: 0,
   /* Up one the same way: `.chev` was shared with the schedules island's run
      list, whose rows carry a prefixed stamp and note now instead of the
      page's own names. */
@@ -352,6 +353,7 @@ const LEGACY_EXPR = {
   onboard: 0,
   rail: 2,
   settings: 0,
+  skillsTools: 0,
   /* Down from 5: `.task` moved to `LEGACY_LOCAL` and `.hl` went, with the
      hover pairing the composer strip no longer has a side for. Down from 3
      when a node's record moved to the transcript's renderer: `.live`, the

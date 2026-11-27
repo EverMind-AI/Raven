@@ -45,6 +45,7 @@ import { manifest as model } from './model/manifest'
 import { manifest as onboard } from './onboard/manifest'
 import { manifest as rail } from './rail/manifest'
 import { manifest as settings } from './settings/manifest'
+import { manifest as skillsTools } from './skillsTools/manifest'
 import { manifest as subagents } from './subagents/manifest'
 import { manifest as tasks } from './tasks/manifest'
 import { manifest as trajectory } from './trajectory/manifest'
@@ -78,7 +79,7 @@ export interface DomainManifest {
   readonly cssPrefix?: string
 }
 
-/** The twenty-two, alphabetically: nothing reads them in an order. */
+/** The twenty-three, alphabetically: nothing reads them in an order. */
 export const MANIFESTS: readonly DomainManifest[] = [
   browser,
   composer,
@@ -97,6 +98,7 @@ export const MANIFESTS: readonly DomainManifest[] = [
   onboard,
   rail,
   settings,
+  skillsTools,
   subagents,
   tasks,
   trajectory,

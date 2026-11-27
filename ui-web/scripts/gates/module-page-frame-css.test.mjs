@@ -71,9 +71,10 @@ function frameOf(id) {
 }
 
 describe('the module pages', () => {
-  it('are the four pages src/state/pages.ts declares', () => {
+  it('are the five pages src/state/pages.ts declares', () => {
     expect(PAGE_IDS).toContain('tasksBoardPage')
-    expect(PAGE_IDS).toHaveLength(4)
+    expect(PAGE_IDS).toContain('skillsToolsPage')
+    expect(PAGE_IDS).toHaveLength(5)
   })
 
   const board = frameOf('tasksBoardPage')

@@ -94,6 +94,7 @@ describe('the page root', () => {
       'setModal', 'snav', 'snavList', 'setTitle', 'setSub', 'setClose', 'spanels',
       'railShow', 'split', 'menu', 'toasts',
       'extAgentsPage', 'extAgentsBody', 'connectionsPage', 'connectionsBody',
+      'skillsToolsPage', 'skillsToolsBody',
       'memoryBody', 'cronBody',
     ]) {
       expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
@@ -110,7 +111,7 @@ describe('the page root', () => {
     render()
     for (const id of [
       'dBody', 'snavList', 'spanels',
-      'extAgentsBody', 'connectionsBody', 'memoryBody', 'cronBody',
+      'extAgentsBody', 'connectionsBody', 'skillsToolsBody', 'memoryBody', 'cronBody',
     ]) {
       expect(document.getElementById(id)!.childNodes, id).toHaveLength(0)
     }

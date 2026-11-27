@@ -28,6 +28,7 @@ import type { ModelSource } from '../features/model/types'
 import type { OnboardSource } from '../features/onboard/types'
 import type { RailSource } from '../features/rail/types'
 import type { SettingsSource } from '../features/settings/types'
+import type { SkillsToolsSource } from '../features/skillsTools/types'
 import type { SubagentsSource } from '../features/subagents/types'
 import type { TasksSource } from '../features/tasks/types'
 import type { TrajectorySource } from '../features/trajectory/types'
@@ -69,6 +70,7 @@ export interface Sources {
   prose: ProseSource
   rail: RailSource
   settings: SettingsSource
+  skillsTools: SkillsToolsSource
   subagents: SubagentsSource
   tasks: TasksSource
   tier: TierSource

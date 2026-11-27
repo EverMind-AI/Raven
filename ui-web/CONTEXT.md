@@ -359,13 +359,29 @@ children -- and every table that names a page derives from them:
 `chrome/Rail.tsx`'s nav strip, `features/rail/store.ts`'s marks and
 `src/test/regions.test.ts`'s goldens. Adding a page is adding a row.
 
-Four rows today -- the **connections hub**'s two (the agents Raven hands work
-to and the channels it can be reached from), the knowledge base and the **Task
-Board page** -- because a place and a setting are different things: those are
-where a reader goes TO, while schedules and memory are set up once and then left
-alone, so those two are **settings sections** instead.
+Five rows today -- the **connections hub**'s two (the agents Raven hands work
+to and the channels it can be reached from), the **Skills & Tools page**, the
+knowledge base and the **Task Board page** -- because a place and a setting are
+different things: those are where a reader goes TO, while schedules and memory
+are set up once and then left alone, so those two are **settings sections**
+instead.
 _Avoid_: "page" for the whole document, or for a dialog -- the settings dialog
 and the model picker are overlays, not module pages.
+
+**Skills & Tools page** (`features/skillsTools/`):
+The module page opened from `#skillsToolsBtn` beside Connectors (`skillsToolsPage`),
+combining four capability tabs in one header switcher: **Skills** (Skill Hub
+toggle, scope filters, and installed skill inspection), **Tools** (configurable
+web/media tool cards plus the full switchable tool matrix over
+`tools.disabledTools`), **MCP** (the MCP servers configured in
+`tools.mcpServers`, each with its switch, credential, and connection state;
+servers contributed by an **Agent Plugin Package** stay on Plugins), and
+**Plugins** (the **Agent Plugin Packages** returned by `agent_plugins.list`,
+with `agent_plugins.set_mcp` and host CLI import commands). Clicking a card or
+details control opens a centered card in the shared `#detail` drawer under
+owner `skillsTools`.
+_Avoid_: calling the MCP tab "plugins" -- that label belongs to the Plugins tab
+for Agent Plugin Packages, not PlugHub plugins or kernel Plugins.
 
 **Connections hub**:
 The two module pages the rail's one `agentsBtn` row opens -- `extAgentsPage`
@@ -380,7 +396,7 @@ _Avoid_: "agent hub" for the whole -- that is the agents module, one of its two.
 
 **Settings section**:
 One row of `features/settings/store.ts`'s `SECTIONS`: a pane of the settings
-dialog. Ten of the twelve are that domain's own components. The other two --
+dialog. Six of the eight are that domain's own components. The other two --
 schedules and memory -- are another domain's island, rooted in a box
 `src/App.tsx` renders beside `#spanels` and named by that store's `HOSTED`,
 because a React root inside the settings island's own tree would be unmounted
@@ -391,24 +407,6 @@ registers what arriving at it costs on `state/settings.ts`'s `onEnter`, and
 what leaving it costs on `onLeave`.
 _Avoid_: "page" for one -- a page is a row of `state/pages.ts` and has a rail
 button.
-
-**MCP section** (`features/settings/pages/Mcp.tsx`):
-The settings section that lists the MCP servers configured in
-`tools.mcpServers`, each with its switch (`plug.toggle`), its credential and
-the connection manager's state. The servers an **Agent Plugin Package** (Runtime
-`CONTEXT.md`) contributes are not among its rows.
-_Avoid_: "plugins" for it -- the section carried that label until the Plugins
-section below took it.
-
-**Plugins section** (`features/settings/pages/Plugins.tsx`):
-The settings section that lists the **Agent Plugin Packages** this host can see
-(`agent_plugins.list`). Its one write is `agent_plugins.set_mcp`, which adds a
-package to `agentPlugins.mcpPackages` or takes it out; the running generation
-keeps the package servers it was assembled with, so a row whose `allowed` and
-`live` disagree reads "needs restart". Importing and removing a package's
-skills stay with `raven agent-plugins`, which take a path on the host's disk.
-_Avoid_: reading it as PlugHub's plugins or as kernel **Plugins** -- neither is
-listed here.
 
 **Manifest**:
 `features/<domain>/manifest.ts` -- what one domain declares about itself: its

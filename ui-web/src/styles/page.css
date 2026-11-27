@@ -4877,6 +4877,9 @@ details[open] summary { margin-bottom: 8px; }
 .detail[data-owner="connections"] .dpanel { width: min(520px, calc(100vw - 32px)); height: min(500px, 78vh); }
 .detail[data-owner="extAgents"] .body,
 .detail[data-owner="connections"] .body { padding: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.detail[data-owner="skillsTools"] .dpanel { width: min(560px, calc(100vw - 32px)); max-height: min(82vh, 720px); }
+.detail[data-owner="skillsTools"][data-fill="true"] .dpanel { width: min(680px, calc(100vw - 32px)); height: min(80vh, 740px); }
+.detail[data-owner="skillsTools"] .body { padding: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 /* A card whose body is fetched when it opens gets a settled box instead of one
    that sizes to its content: it went 63px (a line of loading text) -> 640px
    (the card), and a skeleton of any fixed height only moves that jump
@@ -7252,7 +7255,7 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
    page does (scripts/gates/module-page-frame-css): a reader moves between the
    pages on the rail far more than between a page and the chat, and edges that
    moved with every page read as drift. */
-#extAgentsPage .wrap, #connectionsPage .wrap { max-width: none; }
+#extAgentsPage .wrap, #connectionsPage .wrap, #skillsToolsPage .wrap { max-width: none; }
 /* The task board is a workspace too: its columns are the content, and the
    reading column's cap left a wide window's sides empty while they squeezed
    into the middle. */

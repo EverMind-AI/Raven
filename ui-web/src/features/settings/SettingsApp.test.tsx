@@ -86,8 +86,7 @@ describe('settings root', () => {
     const nav = document.querySelectorAll('#snavList .settings-nitem')
     expect([...nav].map((b) => b.textContent)).toEqual([
       'gui.settings.nav.general', 'gui.settings.nav.usage', 'gui.settings.nav.provider',
-      'gui.settings.nav.model', 'gui.settings.nav.skills', 'gui.settings.nav.tools',
-      'gui.settings.nav.mcp', 'gui.settings.nav.plugins', 'gui.settings.nav.cron',
+      'gui.settings.nav.model', 'gui.settings.nav.cron',
       'gui.settings.nav.memory', 'gui.settings.nav.archive', 'gui.settings.nav.about',
     ])
     expect(nav[0]!.getAttribute('aria-current')).toBe('true')
@@ -98,16 +97,16 @@ describe('settings root', () => {
   it('a nav pick switches the section, the title and the current mark', async () => {
     install()
     await mount('general')
-    await act(async () => { fireEvent.click(screen.getByText('gui.settings.nav.tools')) })
-    expect(document.getElementById('setTitle')!.textContent).toBe('gui.settings.nav.tools')
-    expect(document.querySelector('.settings-panel')!.getAttribute('data-section')).toBe('tools')
-    expect(document.querySelectorAll('#snavList [aria-current="true"]')[0]!.textContent).toBe('gui.settings.nav.tools')
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.nav.model')) })
+    expect(document.getElementById('setTitle')!.textContent).toBe('gui.settings.nav.model')
+    expect(document.querySelector('.settings-panel')!.getAttribute('data-section')).toBe('model')
+    expect(document.querySelectorAll('#snavList [aria-current="true"]')[0]!.textContent).toBe('gui.settings.nav.model')
   })
 
   it('every section renders from the fixture snapshot without a load of its own failing', async () => {
     install()
     await mount('general')
-    for (const id of ['usage', 'provider', 'model', 'skills', 'tools', 'mcp', 'plugins', 'archive', 'about'] as const) {
+    for (const id of ['usage', 'provider', 'model', 'archive', 'about'] as const) {
       await act(async () => { store.setTab(id) })
       /* A card or a flat labelled block: the provider pane is the prototype's
          own flat sections, and every other section is still cards. */

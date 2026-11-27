@@ -6,7 +6,7 @@ import * as page from '../../state/page'
 import * as settings from '../../state/settings'
 import { answerInChat, askInChat, focusChat, startTaskWith } from './startTaskWith'
 
-const PAGES = ['extAgentsPage', 'connectionsPage', 'knowledgePage', 'tasksBoardPage']
+const PAGES = ['extAgentsPage', 'connectionsPage', 'skillsToolsPage', 'knowledgePage', 'tasksBoardPage']
 
 /* The page as the two verbs reach it: the field, the draft row's button, the
    shell mark and the sections page.show writes, and the drawer it closes. The

@@ -23,8 +23,8 @@
 
 import { makeStore } from './store'
 
-/** The five islands that share the drawer. */
-export type DetailOwner = 'memory' | 'plugins' | 'skills' | 'extAgents' | 'connections'
+/** The islands that share the drawer. */
+export type DetailOwner = 'memory' | 'plugins' | 'skills' | 'extAgents' | 'connections' | 'skillsTools'
 
 export type DetailState = {
   readonly owner: DetailOwner | null
@@ -37,7 +37,7 @@ export type DetailState = {
   readonly gen: number
 }
 
-const CLOSE_ORDER: readonly DetailOwner[] = ['plugins', 'skills', 'memory', 'extAgents', 'connections']
+const CLOSE_ORDER: readonly DetailOwner[] = ['plugins', 'skills', 'skillsTools', 'memory', 'extAgents', 'connections']
 
 /* Kept in step with `.detail`'s opacity transition in page.css. A little
    longer than the transition, so the drop lands after the last painted frame
@@ -47,9 +47,16 @@ const FADE_MS = 260
 const store = makeStore<DetailState>({ owner: null, open: false, fill: false, title: null, gen: 0 })
 const closers = new Map<DetailOwner, () => void>()
 const hosts = new Map<DetailOwner, HTMLDivElement>()
+const pendingDrops = new Set<ReturnType<typeof window.setTimeout>>()
 
 /** Which card the drawer holds; `set` is every open, close and drop. */
-export const { get, set, subscribe, _resetForTests } = store
+export const { get, set, subscribe } = store
+
+export function _resetForTests(): void {
+  for (const id of pendingDrops) window.clearTimeout(id)
+  pendingDrops.clear()
+  store._resetForTests()
+}
 
 /** What an owner runs when the drawer closes: drop its card, after the fade. */
 export function onClose(owner: DetailOwner, fn: () => void): void {
@@ -65,10 +72,12 @@ export function onClose(owner: DetailOwner, fn: () => void): void {
  * past.
  */
 export function dropAfterFade(drop: () => void, stale: () => boolean): void {
-  window.setTimeout(() => {
+  const id = window.setTimeout(() => {
+    pendingDrops.delete(id)
     if (stale()) return
     drop()
   }, FADE_MS)
+  pendingDrops.add(id)
 }
 
 /* One host per owner, made on first ask and never replaced: every open
@@ -81,7 +90,9 @@ export function host(owner: DetailOwner): HTMLDivElement {
   let el = hosts.get(owner)
   if (!el) {
     el = document.createElement('div')
-    if (owner === 'memory' || owner === 'extAgents' || owner === 'connections') el.style.display = 'contents'
+    if (owner === 'memory' || owner === 'extAgents' || owner === 'connections' || owner === 'skillsTools') {
+      el.style.display = 'contents'
+    }
     hosts.set(owner, el)
   }
   return el

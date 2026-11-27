@@ -1,7 +1,7 @@
-"""The settings page's tool groups cover the tools the agent loop registers.
+"""The Skills & Tools page's tool groups cover the tools the agent loop registers.
 
-``ui-web/src/features/settings/toolGroups.json`` is the page's table: eight
-groups by tool name, read by the Tools page. A tool the loop registers and the
+``ui-web/src/features/skillsTools/toolGroups.json`` is the page's table: nine
+groups by tool name, read by the Tools tab. A tool the loop registers and the
 table omits would have no switch anywhere, so the table is diffed here against
 a loop built with every switchable tool the bare wiring can register; the few
 the page deliberately does not switch are named in ``UNSWITCHABLE``.
@@ -19,7 +19,7 @@ from raven.agent.tools.media_gen import ImageGenerateTool, SpeechGenerateTool, V
 from raven.config.schema import TaskBoardConfig, ToolSearchConfig
 from raven.providers.base import LLMProvider, LLMResponse
 
-GROUPS = Path(__file__).resolve().parents[1] / "ui-web" / "src" / "features" / "settings" / "toolGroups.json"
+GROUPS = Path(__file__).resolve().parents[1] / "ui-web" / "src" / "features" / "skillsTools" / "toolGroups.json"
 
 # Tools the loop registers only once something outside a bare loop is wired:
 # a cron service, the playbook engine, the multimodal memory section, a

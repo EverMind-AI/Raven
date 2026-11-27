@@ -177,6 +177,25 @@ describe('the shared detail drawer', () => {
       vi.advanceTimersByTime(300)
       expect(detail.get().owner).toBe('memory')
     })
+
+    it('cancels pending fade callbacks on _resetForTests so a later open at the same gen survives', async () => {
+      const detail = await load()
+      const dropped = vi.fn()
+      detail.onClose('skillsTools', () => {
+        const gen = detail.get().gen
+        detail.dropAfterFade(dropped, () => detail.get().gen !== gen)
+      })
+      detail.open('skillsTools')
+      expect(detail.get().gen).toBe(1)
+      detail.close()
+      detail._resetForTests()
+      detail.open('skillsTools')
+      expect(detail.get().gen).toBe(1)
+      vi.advanceTimersByTime(300)
+      expect(detail.get().owner).toBe('skillsTools')
+      expect(detail.get().open).toBe(true)
+      expect(dropped).not.toHaveBeenCalled()
+    })
   })
 
   it('writes nothing when the page has no drawer to write to', async () => {

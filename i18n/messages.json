@@ -5541,128 +5541,494 @@
       "en": "The preset for {name} now reaches it over {to}. The entry is removed and added back from that preset, so handles from runs already in flight stop resolving.",
       "zh": "{name} 的预设改成走 {to} 了 · 会先移除再按新预设装回来，已经在跑的会话句柄会失效"
     },
-    "gui.agent.on_machine": {"en": "On the registered machine {id}", "zh": "在登记机器 {id} 上"},
-    "gui.machine.register": {"en": "Register a machine", "zh": "登记机器"},
-    "gui.machine.none": {"en": "No machine is registered yet. Register one, then install the node on it.", "zh": "还没有登记机器。先登记一台，再在它上面安装节点。"},
-    "gui.machine.state_connected": {"en": "{n} agents running", "zh": "{n} 个 Agent 在跑"},
-    "gui.machine.state_idle": {"en": "Link up, no agent running", "zh": "链路在，没有 Agent 在跑"},
-    "gui.machine.state_lost": {"en": "Link down; agents wait", "zh": "链路断了，Agent 在等"},
-    "gui.machine.state_off": {"en": "Not connected; the link opens when work is sent", "zh": "未连接（派活时自动连上）"},
-    "gui.machine.state_error": {"en": "Error", "zh": "出错"},
-    "gui.machine.node_version": {"en": "Node {v}", "zh": "节点 {v}"},
-    "gui.machine.node_none": {"en": "Node not installed", "zh": "节点未安装"},
-    "gui.machine.install": {"en": "Install node", "zh": "安装节点"},
-    "gui.machine.installing": {"en": "Installing the node", "zh": "正在安装节点"},
-    "gui.machine.install_ok": {"en": "Node installed", "zh": "节点已安装"},
-    "gui.machine.install_bad": {"en": "The install did not finish", "zh": "安装没有完成"},
-    "gui.machine.doctor": {"en": "Check", "zh": "体检"},
-    "gui.machine.probe": {"en": "Test link", "zh": "测试链路"},
-    "gui.machine.problems": {"en": "Doctor", "zh": "体检结果"},
-    "gui.machine.no_problems": {"en": "Nothing to report", "zh": "没有问题"},
-    "gui.machine.transport_ssh": {"en": "ssh", "zh": "ssh"},
-    "gui.machine.f_transport": {"en": "Connection", "zh": "连接方式"},
-    "gui.machine.f_node": {"en": "Node", "zh": "节点"},
-    "gui.machine.node_bare_none": {"en": "Not installed", "zh": "未安装"},
-    "gui.machine.transport_local": {"en": "This computer", "zh": "这台电脑"},
-    "gui.machine.paths": {"en": "Work directories", "zh": "工作目录"},
-    "gui.machine.paths_none": {"en": "None listed", "zh": "没有列出"},
-    "gui.machine.f_name": {"en": "Name", "zh": "名称"},
-    "gui.machine.f_id": {"en": "Id (short; never renamed)", "zh": "id（短名，以后不改）"},
-    "gui.machine.f_host": {"en": "Address", "zh": "地址"},
-    "gui.machine.f_port": {"en": "Port", "zh": "端口"},
-    "gui.machine.f_user": {"en": "User", "zh": "用户名"},
-    "gui.machine.f_auth": {"en": "Login", "zh": "登录方式"},
-    "gui.machine.auth_key": {"en": "Key", "zh": "密钥"},
-    "gui.machine.auth_password": {"en": "Password", "zh": "密码"},
-    "gui.machine.auth_stored": {"en": "Password (kept on this computer)", "zh": "密码（保存在本机）"},
-    "gui.machine.f_key": {"en": "Private key path", "zh": "私钥路径"},
-    "gui.machine.key_note": {"en": "Only the path is stored. The key never leaves this computer.", "zh": "只记录路径，私钥不离开这台电脑。"},
-    "gui.machine.f_password": {"en": "Password", "zh": "密码"},
-    "gui.machine.password_note": {"en": "The password is kept on this computer, readable by your account alone, and handed to ssh on every connection: never on a command line, never in a log. The first connection records the machine's host key and then sends the password, so on a network you do not trust, ssh once from a terminal and check the fingerprint before registering. When the machine's password changes, remove the machine and register it again.", "zh": "密码保存在这台电脑上，只有你的账号能读；每次连接时读出来交给 ssh，不进命令行、不进日志。第一次连接会先记下机器的主机密钥再送出密码，所以在不信任的网络上，先在终端里 ssh 一次核对指纹，再登记。机器改了密码，先移除这台机器再重新登记。"},
-    "gui.machine.auth_note": {"en": "No ssh alias is written for it; an agent reads and writes its files through Raven's own file tools. When its password changes, remove the machine and register it again.", "zh": "没有写 ssh 别名；Agent 读写它上面的文件走 Raven 的文件工具。机器改了密码，先移除这台机器再重新登记。"},
-    "gui.machine.f_paths": {"en": "Work directories on the machine, one per line (optional)", "zh": "机器上的工作目录，每行一个（可不填）"},
-    "gui.machine.add_hint": {"en": "An ssh login, with a key or with a password. The machine's host key is recorded at the first contact and checked after.", "zh": "用密钥或密码 ssh 登录。第一次连接时记下它的主机密钥，之后每次核对。"},
-    "gui.machine.add_do": {"en": "Reach it once and register", "zh": "连一次并登记"},
-    "gui.machine.adding": {"en": "Reaching the machine", "zh": "正在连接机器"},
-    "gui.machine.add_bad": {"en": "Not registered", "zh": "没有登记"},
-    "gui.machine.where": {"en": "Runs on", "zh": "运行在"},
-    "gui.machine.where_here": {"en": "This computer", "zh": "本机"},
-    "gui.machine.remote_cwd": {"en": "Working directory on the machine", "zh": "机器上的工作目录"},
-    "gui.machine.where_none": {"en": "No machine is registered; see the Machines tab.", "zh": "还没有登记机器，见“机器”标签。"},
-    "gui.machine.needs_node": {"en": "Install the node first", "zh": "先安装节点"},
-    "gui.machine.needs_update": {"en": "Update the node first", "zh": "先更新节点"},
-    "gui.machine.node_stale": {"en": "Node {v}, needs updating", "zh": "节点 {v}，需要更新"},
-    "gui.machine.node_here": {"en": "This computer", "zh": "本机"},
-    "gui.machine.update": {"en": "Update node", "zh": "更新节点"},
-    "gui.machine.f_node_dir": {"en": "Install into (optional)", "zh": "安装到（可不填）"},
-    "gui.machine.node_dir_hint": {"en": "Where the node lives on the machine: ~/.raven-node unless its home disk has no room.", "zh": "节点在机器上的存放目录：默认 ~/.raven-node，只有主目录所在磁盘放不下时才需要改。"},
-    "gui.machine.install_bad_hint": {"en": "Fix what the line says, then press Install node again: the next try clears what this one left of the node first.", "zh": "按这一行的提示处理后，再点一次「安装节点」：下一次会先清掉这次没装完的节点。"},
-    "gui.machine.remove_do": {"en": "Remove machine", "zh": "移除机器"},
-    "gui.machine.remove_body": {"en": "{name} ({id}) is taken out of the registry and its ssh alias goes with it. Agent entries that run there have to be disconnected first. The node installed on the machine stays there.", "zh": "{name}（{id}）会从登记表里去掉，ssh 别名一起去掉；在它上面跑的 Agent 条目要先断开。装在机器上的节点会留在那里。"},
-    "gui.machine.remove_body_password": {"en": "{name} ({id}) is taken out of the registry and the password kept here for it is deleted. Agent entries that run there have to be disconnected first. The node installed on the machine stays there.", "zh": "{name}（{id}）会从登记表里去掉，为它保存的密码一起删掉；在它上面跑的 Agent 条目要先断开。装在机器上的节点会留在那里。"},
-    "gui.machine.removing": {"en": "Removing", "zh": "正在移除"},
-    "gui.machine.removed": {"en": "{name} was removed", "zh": "已移除 {name}"},
-    "gui.machine.load_bad": {"en": "The machine list could not be read", "zh": "机器列表读不出来"},
-    "gui.machine.file_problems": {"en": "The registry file", "zh": "登记表文件"},
-    "gui.machine.why_unreachable": {"en": "The machine could not be reached: check the address and port, and that the machine is on and reachable from this computer.", "zh": "连不上这台机器：检查地址和端口，确认机器开着、从这台电脑能连到它。"},
-    "gui.machine.why_login": {"en": "The machine refused the login. With a key: check the user name and the private key path, and that the key's public half is on the machine. With a password: check it, and that the machine accepts password logins at all.", "zh": "机器拒绝了登录。用密钥时：检查用户名和私钥路径，确认对应的公钥已经放到机器上。用密码时：检查密码，并确认这台机器允许密码登录。"},
-    "gui.machine.why_prompt": {"en": "The machine asked something the kept password does not answer -- a one-time code, another account's password, or a password prompt that names a host other than the registered one -- so the password was not sent: see the line below.", "zh": "机器问的不是这个账号自己的密码提示（比如一次性验证码、别的账号的密码，或者提示里的主机不是登记的那台），所以没有发送密码：详见下一行。"},
-    "gui.machine.why_hostkey": {"en": "The machine's host key differs from the one on record: check the machine before trusting it again, then take the old line out of ~/.ssh/known_hosts.", "zh": "机器的主机密钥和记录的不一样：先确认机器没问题，再把 ~/.ssh/known_hosts 里的旧记录删掉。"},
-    "gui.machine.why_timeout": {"en": "The machine did not answer in time: check that it is on and that the port is open.", "zh": "机器没有按时应答：确认机器开着、端口放行。"},
-    "gui.machine.why_nossh": {"en": "ssh is not installed on this computer: install OpenSSH, then try again.", "zh": "这台电脑没有 ssh：装好 OpenSSH 再试。"},
-    "gui.machine.why_platform": {"en": "This computer is Windows, where registering with a password is not available: pick Key, put the key's public half on the machine, and give the private key's path here.", "zh": "这台电脑是 Windows，不能用密码登记：改选「密钥」，把公钥放到机器上，再在这里填私钥路径。"},
-    "gui.machine.why_duplicate": {"en": "That id is taken: pick another, or remove the machine listed under it first.", "zh": "这个 id 已经有机器在用：换一个，或者先移除原来那台。"},
-    "gui.machine.why_invalid": {"en": "A field is missing or cannot be used: see the line below.", "zh": "有字段缺失或不能用：见下一行。"},
-    "gui.machine.why_registry": {"en": "The registry file cannot be changed: fix it first, as the line below says.", "zh": "登记表文件改不了：先按下一行的提示处理。"},
-    "gui.machine.install_bad_said": {"en": "The install did not finish: {said}", "zh": "安装没有完成：{said}"},
-    "gui.machine.remove_named": {"en": "Not removed: {agents} still run on this machine; disconnect them first, in the Connected tab.", "zh": "没有移除：{agents} 还在用这台机器，先到「已接入」里断开它们。"},
-    "gui.machine.remove_running": {"en": "Not removed: agents are running on this machine; wait for them to finish, or stop them first. {said}", "zh": "没有移除：还有 Agent 正在这台机器上跑，等它们跑完或先停掉。{said}"},
-    "gui.machine.remove_bad_said": {"en": "Not removed: {said}", "zh": "没有移除：{said}"},
-    "gui.machine.err_no_node": {"en": "No Raven node on it yet: press Install node. {said}", "zh": "机器上还没有节点，点「安装节点」。{said}"},
-    "gui.machine.err_stale_node": {"en": "Its node is another Raven's: press Update node. {said}", "zh": "节点是另一个版本的 Raven 装的，点「更新节点」。{said}"},
-    "gui.machine.agents_here": {"en": "Agents on this machine", "zh": "这台机器上的 Agent"},
-    "gui.machine.agents_here_none": {"en": "None yet", "zh": "还没有"},
-    "gui.machine.agents_line": {"en": "{n} on this machine: {names}", "zh": "这台机器上有 {n} 个 Agent：{names}"},
-    "gui.machine.agents_line_none": {"en": "No agent connected here yet", "zh": "还没有 Agent 接到这里"},
-    "gui.machine.next_title": {"en": "Next", "zh": "下一步"},
-    "gui.machine.next_body": {"en": "Connect an agent that runs on this machine. The agent itself has to be installed and signed in there; Raven's node only starts it.", "zh": "接一个跑在这台机器上的 Agent。Agent 本身要在那台机器上装好并登录，Raven 的节点只负责启动它。"},
-    "gui.machine.connect_here": {"en": "Connect an agent on this machine", "zh": "在这台机器上接入 Agent"},
-    "gui.machine.connect_title": {"en": "Connect an agent on {name}", "zh": "在 {name} 上接入 Agent"},
-    "gui.machine.connect_hint": {"en": "It is started there once first, as proof, and written only when it answers.", "zh": "先在那台机器上真跑一句作证明，答了才写入。"},
-    "gui.machine.f_preset": {"en": "Agent", "zh": "Agent"},
-    "gui.machine.preset_connected_here": {"en": "{name} (connected on this computer; this adds one on the machine)", "zh": "{name}（本机已接入，再接一份到机器）"},
-    "gui.machine.preset_on_machine": {"en": "{name} (already connected on this machine)", "zh": "{name}（已接在这台机器上）"},
-    "gui.machine.preset_off_entry": {"en": "{name} (connected on this machine as {entry}, switched off)", "zh": "{name}（已接在这台机器上，已断开：{entry}）"},
-    "gui.machine.off_suffix": {"en": "{name} (switched off)", "zh": "{name}（已断开）"},
-    "gui.machine.reconnect_do": {"en": "Reconnect", "zh": "重新接入"},
-    "gui.machine.reconnect_hint": {"en": "The entry is switched back on: it is started there once first, as proof.", "zh": "把这条条目重新启用：先在那台机器上真跑一句作证明。"},
-    "gui.machine.reconnected_said": {"en": "{name} is connected again; it is on the Agents page.", "zh": "已重新接入 {name}，到「智能体」页可以看到。"},
-    "gui.machine.preset_connecting": {"en": "{name} (being connected on this machine right now)", "zh": "{name}（正在接到这台机器上）"},
-    "gui.machine.connecting": {"en": "Starting it on the machine", "zh": "正在机器上启动它"},
-    "gui.machine.connecting_for": {"en": "Starting it on the machine, {s}s so far", "zh": "正在机器上启动它，已等 {s} 秒"},
-    "gui.machine.connecting_hint": {"en": "The node on the machine starts it, then it has to answer one test message: a few seconds to a minute as a rule, ten minutes at most. Cancel asks it to stop, and this form says whether anything was written.", "zh": "机器上的节点先启动它，再等它答一句测试消息：一般几秒到一分钟，最多等 10 分钟。点「取消」会请求停掉这一跑，这里会说有没有写入。"},
-    "gui.machine.cancelling": {"en": "Stopping", "zh": "正在停止"},
-    "gui.machine.connect_cancelled_head": {"en": "Cancelled", "zh": "已取消"},
-    "gui.machine.connect_cancelled": {"en": "Cancelled; nothing was written. It can be connected again.", "zh": "已取消，没有写入。可以再接一次。"},
-    "gui.machine.connect_timeout_head": {"en": "No answer", "zh": "没有等到答复"},
-    "gui.machine.connect_timeout": {"en": "No answer in ten minutes, so the form asked the run to stop. See the Agents page for whether it connected; if not, connect again.", "zh": "等了 10 分钟没有答复，已请求停止。到「智能体」页看它有没有接上；没有的话再接一次。"},
-    "gui.machine.connect_late_for": {"en": "Too late to cancel; waiting for it to finish, {s}s so far", "zh": "已经来不及取消，正在等它收尾，已等 {s} 秒"},
-    "gui.machine.connect_late_hint": {"en": "There was nothing left to stop: it had already answered, or had not started yet, so it may still be written. This form says how it ends.", "zh": "已经没有可停的了：它要么已经答过，要么还没开始，所以仍可能写入。结束后这里会说结果。"},
-    "gui.machine.connect_missed_head": {"en": "Not stopped", "zh": "没能停下"},
-    "gui.machine.connect_missed": {"en": "It was past the point where it could be cancelled, so it may have been written. See the Agents page for whether it connected; if not, connect again.", "zh": "已经过了能取消的时候，可能已经写入。到「智能体」页看它有没有接上；没有的话再接一次。"},
-    "gui.machine.connect_unconfirmed_head": {"en": "Cancel not confirmed", "zh": "取消未确认"},
-    "gui.machine.connect_unconfirmed": {"en": "The stop gave no answer, so it may still be written. See the Agents page for whether it connected; if not, connect again.", "zh": "停止请求没有答复，所以仍可能写入。到「智能体」页看它有没有接上；没有的话再接一次。"},
-    "gui.machine.connected_said": {"en": "{name} is connected; it is on the Agents page.", "zh": "已接入 {name}，到「智能体」页可以看到。"},
-    "gui.machine.connect_bad": {"en": "Not connected", "zh": "没有接入"},
-    "gui.machine.connect_bad_named": {"en": "Not connected: {name}", "zh": "没有接入 {name}"},
-    "gui.machine.connect_do": {"en": "Connect", "zh": "接入"},
-    "gui.machine.presets_none": {"en": "Nothing to connect: every agent that can run on a machine is already connected on this one.", "zh": "没有可接的：能跑在机器上的 Agent 都已经接在这台机器上了。"},
-    "gui.machine.presets_loading": {"en": "Reading the agents", "zh": "正在读取 Agent 列表"},
-    "gui.machine.presets_pending": {"en": "Something is still being connected on this machine; the choices come back when it ends.", "zh": "这台机器上还有接入在进行，结束后再选。"},
-    "gui.machine.keys_found": {"en": "Found on this computer and filled in; pick another or type a path.", "zh": "已填入这台电脑上找到的密钥，也可以换一把或自己填路径。"},
-    "gui.machine.keys_none": {"en": "No ssh key was found on this computer. Type a path, or pick Password: Raven then keeps the password on this computer and logs in with it.", "zh": "这台电脑上没找到 ssh 密钥。可以自己填路径，或改选「密码」：Raven 会把密码保存在本机，每次用它登录。"},
-    "gui.machine.missing_but_machine": {"en": "Not installed on this computer, but it can run on a registered machine where it is installed and signed in.", "zh": "本机没装也可以跑在一台登记机器上，那台机器上要装好并登录它。"},
-    "gui.machine.connect_on": {"en": "Connect on {name}", "zh": "接入到 {name}"},
+    "gui.agent.on_machine": {
+      "en": "On the registered machine {id}",
+      "zh": "在登记机器 {id} 上"
+    },
+    "gui.machine.register": {
+      "en": "Register a machine",
+      "zh": "登记机器"
+    },
+    "gui.machine.none": {
+      "en": "No machine is registered yet. Register one, then install the node on it.",
+      "zh": "还没有登记机器。先登记一台，再在它上面安装节点。"
+    },
+    "gui.machine.state_connected": {
+      "en": "{n} agents running",
+      "zh": "{n} 个 Agent 在跑"
+    },
+    "gui.machine.state_idle": {
+      "en": "Link up, no agent running",
+      "zh": "链路在，没有 Agent 在跑"
+    },
+    "gui.machine.state_lost": {
+      "en": "Link down; agents wait",
+      "zh": "链路断了，Agent 在等"
+    },
+    "gui.machine.state_off": {
+      "en": "Not connected; the link opens when work is sent",
+      "zh": "未连接（派活时自动连上）"
+    },
+    "gui.machine.state_error": {
+      "en": "Error",
+      "zh": "出错"
+    },
+    "gui.machine.node_version": {
+      "en": "Node {v}",
+      "zh": "节点 {v}"
+    },
+    "gui.machine.node_none": {
+      "en": "Node not installed",
+      "zh": "节点未安装"
+    },
+    "gui.machine.install": {
+      "en": "Install node",
+      "zh": "安装节点"
+    },
+    "gui.machine.installing": {
+      "en": "Installing the node",
+      "zh": "正在安装节点"
+    },
+    "gui.machine.install_ok": {
+      "en": "Node installed",
+      "zh": "节点已安装"
+    },
+    "gui.machine.install_bad": {
+      "en": "The install did not finish",
+      "zh": "安装没有完成"
+    },
+    "gui.machine.doctor": {
+      "en": "Check",
+      "zh": "体检"
+    },
+    "gui.machine.probe": {
+      "en": "Test link",
+      "zh": "测试链路"
+    },
+    "gui.machine.problems": {
+      "en": "Doctor",
+      "zh": "体检结果"
+    },
+    "gui.machine.no_problems": {
+      "en": "Nothing to report",
+      "zh": "没有问题"
+    },
+    "gui.machine.transport_ssh": {
+      "en": "ssh",
+      "zh": "ssh"
+    },
+    "gui.machine.f_transport": {
+      "en": "Connection",
+      "zh": "连接方式"
+    },
+    "gui.machine.f_node": {
+      "en": "Node",
+      "zh": "节点"
+    },
+    "gui.machine.node_bare_none": {
+      "en": "Not installed",
+      "zh": "未安装"
+    },
+    "gui.machine.transport_local": {
+      "en": "This computer",
+      "zh": "这台电脑"
+    },
+    "gui.machine.paths": {
+      "en": "Work directories",
+      "zh": "工作目录"
+    },
+    "gui.machine.paths_none": {
+      "en": "None listed",
+      "zh": "没有列出"
+    },
+    "gui.machine.f_name": {
+      "en": "Name",
+      "zh": "名称"
+    },
+    "gui.machine.f_id": {
+      "en": "Id (short; never renamed)",
+      "zh": "id（短名，以后不改）"
+    },
+    "gui.machine.f_host": {
+      "en": "Address",
+      "zh": "地址"
+    },
+    "gui.machine.f_port": {
+      "en": "Port",
+      "zh": "端口"
+    },
+    "gui.machine.f_user": {
+      "en": "User",
+      "zh": "用户名"
+    },
+    "gui.machine.f_auth": {
+      "en": "Login",
+      "zh": "登录方式"
+    },
+    "gui.machine.auth_key": {
+      "en": "Key",
+      "zh": "密钥"
+    },
+    "gui.machine.auth_password": {
+      "en": "Password",
+      "zh": "密码"
+    },
+    "gui.machine.auth_stored": {
+      "en": "Password (kept on this computer)",
+      "zh": "密码（保存在本机）"
+    },
+    "gui.machine.f_key": {
+      "en": "Private key path",
+      "zh": "私钥路径"
+    },
+    "gui.machine.key_note": {
+      "en": "Only the path is stored. The key never leaves this computer.",
+      "zh": "只记录路径，私钥不离开这台电脑。"
+    },
+    "gui.machine.f_password": {
+      "en": "Password",
+      "zh": "密码"
+    },
+    "gui.machine.password_note": {
+      "en": "The password is kept on this computer, readable by your account alone, and handed to ssh on every connection: never on a command line, never in a log. The first connection records the machine's host key and then sends the password, so on a network you do not trust, ssh once from a terminal and check the fingerprint before registering. When the machine's password changes, remove the machine and register it again.",
+      "zh": "密码保存在这台电脑上，只有你的账号能读；每次连接时读出来交给 ssh，不进命令行、不进日志。第一次连接会先记下机器的主机密钥再送出密码，所以在不信任的网络上，先在终端里 ssh 一次核对指纹，再登记。机器改了密码，先移除这台机器再重新登记。"
+    },
+    "gui.machine.auth_note": {
+      "en": "No ssh alias is written for it; an agent reads and writes its files through Raven's own file tools. When its password changes, remove the machine and register it again.",
+      "zh": "没有写 ssh 别名；Agent 读写它上面的文件走 Raven 的文件工具。机器改了密码，先移除这台机器再重新登记。"
+    },
+    "gui.machine.f_paths": {
+      "en": "Work directories on the machine, one per line (optional)",
+      "zh": "机器上的工作目录，每行一个（可不填）"
+    },
+    "gui.machine.add_hint": {
+      "en": "An ssh login, with a key or with a password. The machine's host key is recorded at the first contact and checked after.",
+      "zh": "用密钥或密码 ssh 登录。第一次连接时记下它的主机密钥，之后每次核对。"
+    },
+    "gui.machine.add_do": {
+      "en": "Reach it once and register",
+      "zh": "连一次并登记"
+    },
+    "gui.machine.adding": {
+      "en": "Reaching the machine",
+      "zh": "正在连接机器"
+    },
+    "gui.machine.add_bad": {
+      "en": "Not registered",
+      "zh": "没有登记"
+    },
+    "gui.machine.where": {
+      "en": "Runs on",
+      "zh": "运行在"
+    },
+    "gui.machine.where_here": {
+      "en": "This computer",
+      "zh": "本机"
+    },
+    "gui.machine.remote_cwd": {
+      "en": "Working directory on the machine",
+      "zh": "机器上的工作目录"
+    },
+    "gui.machine.where_none": {
+      "en": "No machine is registered; see the Machines tab.",
+      "zh": "还没有登记机器，见“机器”标签。"
+    },
+    "gui.machine.needs_node": {
+      "en": "Install the node first",
+      "zh": "先安装节点"
+    },
+    "gui.machine.needs_update": {
+      "en": "Update the node first",
+      "zh": "先更新节点"
+    },
+    "gui.machine.node_stale": {
+      "en": "Node {v}, needs updating",
+      "zh": "节点 {v}，需要更新"
+    },
+    "gui.machine.node_here": {
+      "en": "This computer",
+      "zh": "本机"
+    },
+    "gui.machine.update": {
+      "en": "Update node",
+      "zh": "更新节点"
+    },
+    "gui.machine.f_node_dir": {
+      "en": "Install into (optional)",
+      "zh": "安装到（可不填）"
+    },
+    "gui.machine.node_dir_hint": {
+      "en": "Where the node lives on the machine: ~/.raven-node unless its home disk has no room.",
+      "zh": "节点在机器上的存放目录：默认 ~/.raven-node，只有主目录所在磁盘放不下时才需要改。"
+    },
+    "gui.machine.install_bad_hint": {
+      "en": "Fix what the line says, then press Install node again: the next try clears what this one left of the node first.",
+      "zh": "按这一行的提示处理后，再点一次「安装节点」：下一次会先清掉这次没装完的节点。"
+    },
+    "gui.machine.remove_do": {
+      "en": "Remove machine",
+      "zh": "移除机器"
+    },
+    "gui.machine.remove_body": {
+      "en": "{name} ({id}) is taken out of the registry and its ssh alias goes with it. Agent entries that run there have to be disconnected first. The node installed on the machine stays there.",
+      "zh": "{name}（{id}）会从登记表里去掉，ssh 别名一起去掉；在它上面跑的 Agent 条目要先断开。装在机器上的节点会留在那里。"
+    },
+    "gui.machine.remove_body_password": {
+      "en": "{name} ({id}) is taken out of the registry and the password kept here for it is deleted. Agent entries that run there have to be disconnected first. The node installed on the machine stays there.",
+      "zh": "{name}（{id}）会从登记表里去掉，为它保存的密码一起删掉；在它上面跑的 Agent 条目要先断开。装在机器上的节点会留在那里。"
+    },
+    "gui.machine.removing": {
+      "en": "Removing",
+      "zh": "正在移除"
+    },
+    "gui.machine.removed": {
+      "en": "{name} was removed",
+      "zh": "已移除 {name}"
+    },
+    "gui.machine.load_bad": {
+      "en": "The machine list could not be read",
+      "zh": "机器列表读不出来"
+    },
+    "gui.machine.file_problems": {
+      "en": "The registry file",
+      "zh": "登记表文件"
+    },
+    "gui.machine.why_unreachable": {
+      "en": "The machine could not be reached: check the address and port, and that the machine is on and reachable from this computer.",
+      "zh": "连不上这台机器：检查地址和端口，确认机器开着、从这台电脑能连到它。"
+    },
+    "gui.machine.why_login": {
+      "en": "The machine refused the login. With a key: check the user name and the private key path, and that the key's public half is on the machine. With a password: check it, and that the machine accepts password logins at all.",
+      "zh": "机器拒绝了登录。用密钥时：检查用户名和私钥路径，确认对应的公钥已经放到机器上。用密码时：检查密码，并确认这台机器允许密码登录。"
+    },
+    "gui.machine.why_prompt": {
+      "en": "The machine asked something the kept password does not answer -- a one-time code, another account's password, or a password prompt that names a host other than the registered one -- so the password was not sent: see the line below.",
+      "zh": "机器问的不是这个账号自己的密码提示（比如一次性验证码、别的账号的密码，或者提示里的主机不是登记的那台），所以没有发送密码：详见下一行。"
+    },
+    "gui.machine.why_hostkey": {
+      "en": "The machine's host key differs from the one on record: check the machine before trusting it again, then take the old line out of ~/.ssh/known_hosts.",
+      "zh": "机器的主机密钥和记录的不一样：先确认机器没问题，再把 ~/.ssh/known_hosts 里的旧记录删掉。"
+    },
+    "gui.machine.why_timeout": {
+      "en": "The machine did not answer in time: check that it is on and that the port is open.",
+      "zh": "机器没有按时应答：确认机器开着、端口放行。"
+    },
+    "gui.machine.why_nossh": {
+      "en": "ssh is not installed on this computer: install OpenSSH, then try again.",
+      "zh": "这台电脑没有 ssh：装好 OpenSSH 再试。"
+    },
+    "gui.machine.why_platform": {
+      "en": "This computer is Windows, where registering with a password is not available: pick Key, put the key's public half on the machine, and give the private key's path here.",
+      "zh": "这台电脑是 Windows，不能用密码登记：改选「密钥」，把公钥放到机器上，再在这里填私钥路径。"
+    },
+    "gui.machine.why_duplicate": {
+      "en": "That id is taken: pick another, or remove the machine listed under it first.",
+      "zh": "这个 id 已经有机器在用：换一个，或者先移除原来那台。"
+    },
+    "gui.machine.why_invalid": {
+      "en": "A field is missing or cannot be used: see the line below.",
+      "zh": "有字段缺失或不能用：见下一行。"
+    },
+    "gui.machine.why_registry": {
+      "en": "The registry file cannot be changed: fix it first, as the line below says.",
+      "zh": "登记表文件改不了：先按下一行的提示处理。"
+    },
+    "gui.machine.install_bad_said": {
+      "en": "The install did not finish: {said}",
+      "zh": "安装没有完成：{said}"
+    },
+    "gui.machine.remove_named": {
+      "en": "Not removed: {agents} still run on this machine; disconnect them first, in the Connected tab.",
+      "zh": "没有移除：{agents} 还在用这台机器，先到「已接入」里断开它们。"
+    },
+    "gui.machine.remove_running": {
+      "en": "Not removed: agents are running on this machine; wait for them to finish, or stop them first. {said}",
+      "zh": "没有移除：还有 Agent 正在这台机器上跑，等它们跑完或先停掉。{said}"
+    },
+    "gui.machine.remove_bad_said": {
+      "en": "Not removed: {said}",
+      "zh": "没有移除：{said}"
+    },
+    "gui.machine.err_no_node": {
+      "en": "No Raven node on it yet: press Install node. {said}",
+      "zh": "机器上还没有节点，点「安装节点」。{said}"
+    },
+    "gui.machine.err_stale_node": {
+      "en": "Its node is another Raven's: press Update node. {said}",
+      "zh": "节点是另一个版本的 Raven 装的，点「更新节点」。{said}"
+    },
+    "gui.machine.agents_here": {
+      "en": "Agents on this machine",
+      "zh": "这台机器上的 Agent"
+    },
+    "gui.machine.agents_here_none": {
+      "en": "None yet",
+      "zh": "还没有"
+    },
+    "gui.machine.agents_line": {
+      "en": "{n} on this machine: {names}",
+      "zh": "这台机器上有 {n} 个 Agent：{names}"
+    },
+    "gui.machine.agents_line_none": {
+      "en": "No agent connected here yet",
+      "zh": "还没有 Agent 接到这里"
+    },
+    "gui.machine.next_title": {
+      "en": "Next",
+      "zh": "下一步"
+    },
+    "gui.machine.next_body": {
+      "en": "Connect an agent that runs on this machine. The agent itself has to be installed and signed in there; Raven's node only starts it.",
+      "zh": "接一个跑在这台机器上的 Agent。Agent 本身要在那台机器上装好并登录，Raven 的节点只负责启动它。"
+    },
+    "gui.machine.connect_here": {
+      "en": "Connect an agent on this machine",
+      "zh": "在这台机器上接入 Agent"
+    },
+    "gui.machine.connect_title": {
+      "en": "Connect an agent on {name}",
+      "zh": "在 {name} 上接入 Agent"
+    },
+    "gui.machine.connect_hint": {
+      "en": "It is started there once first, as proof, and written only when it answers.",
+      "zh": "先在那台机器上真跑一句作证明，答了才写入。"
+    },
+    "gui.machine.f_preset": {
+      "en": "Agent",
+      "zh": "Agent"
+    },
+    "gui.machine.preset_connected_here": {
+      "en": "{name} (connected on this computer; this adds one on the machine)",
+      "zh": "{name}（本机已接入，再接一份到机器）"
+    },
+    "gui.machine.preset_on_machine": {
+      "en": "{name} (already connected on this machine)",
+      "zh": "{name}（已接在这台机器上）"
+    },
+    "gui.machine.preset_off_entry": {
+      "en": "{name} (connected on this machine as {entry}, switched off)",
+      "zh": "{name}（已接在这台机器上，已断开：{entry}）"
+    },
+    "gui.machine.off_suffix": {
+      "en": "{name} (switched off)",
+      "zh": "{name}（已断开）"
+    },
+    "gui.machine.reconnect_do": {
+      "en": "Reconnect",
+      "zh": "重新接入"
+    },
+    "gui.machine.reconnect_hint": {
+      "en": "The entry is switched back on: it is started there once first, as proof.",
+      "zh": "把这条条目重新启用：先在那台机器上真跑一句作证明。"
+    },
+    "gui.machine.reconnected_said": {
+      "en": "{name} is connected again; it is on the Agents page.",
+      "zh": "已重新接入 {name}，到「智能体」页可以看到。"
+    },
+    "gui.machine.preset_connecting": {
+      "en": "{name} (being connected on this machine right now)",
+      "zh": "{name}（正在接到这台机器上）"
+    },
+    "gui.machine.connecting": {
+      "en": "Starting it on the machine",
+      "zh": "正在机器上启动它"
+    },
+    "gui.machine.connecting_for": {
+      "en": "Starting it on the machine, {s}s so far",
+      "zh": "正在机器上启动它，已等 {s} 秒"
+    },
+    "gui.machine.connecting_hint": {
+      "en": "The node on the machine starts it, then it has to answer one test message: a few seconds to a minute as a rule, ten minutes at most. Cancel asks it to stop, and this form says whether anything was written.",
+      "zh": "机器上的节点先启动它，再等它答一句测试消息：一般几秒到一分钟，最多等 10 分钟。点「取消」会请求停掉这一跑，这里会说有没有写入。"
+    },
+    "gui.machine.cancelling": {
+      "en": "Stopping",
+      "zh": "正在停止"
+    },
+    "gui.machine.connect_cancelled_head": {
+      "en": "Cancelled",
+      "zh": "已取消"
+    },
+    "gui.machine.connect_cancelled": {
+      "en": "Cancelled; nothing was written. It can be connected again.",
+      "zh": "已取消，没有写入。可以再接一次。"
+    },
+    "gui.machine.connect_timeout_head": {
+      "en": "No answer",
+      "zh": "没有等到答复"
+    },
+    "gui.machine.connect_timeout": {
+      "en": "No answer in ten minutes, so the form asked the run to stop. See the Agents page for whether it connected; if not, connect again.",
+      "zh": "等了 10 分钟没有答复，已请求停止。到「智能体」页看它有没有接上；没有的话再接一次。"
+    },
+    "gui.machine.connect_late_for": {
+      "en": "Too late to cancel; waiting for it to finish, {s}s so far",
+      "zh": "已经来不及取消，正在等它收尾，已等 {s} 秒"
+    },
+    "gui.machine.connect_late_hint": {
+      "en": "There was nothing left to stop: it had already answered, or had not started yet, so it may still be written. This form says how it ends.",
+      "zh": "已经没有可停的了：它要么已经答过，要么还没开始，所以仍可能写入。结束后这里会说结果。"
+    },
+    "gui.machine.connect_missed_head": {
+      "en": "Not stopped",
+      "zh": "没能停下"
+    },
+    "gui.machine.connect_missed": {
+      "en": "It was past the point where it could be cancelled, so it may have been written. See the Agents page for whether it connected; if not, connect again.",
+      "zh": "已经过了能取消的时候，可能已经写入。到「智能体」页看它有没有接上；没有的话再接一次。"
+    },
+    "gui.machine.connect_unconfirmed_head": {
+      "en": "Cancel not confirmed",
+      "zh": "取消未确认"
+    },
+    "gui.machine.connect_unconfirmed": {
+      "en": "The stop gave no answer, so it may still be written. See the Agents page for whether it connected; if not, connect again.",
+      "zh": "停止请求没有答复，所以仍可能写入。到「智能体」页看它有没有接上；没有的话再接一次。"
+    },
+    "gui.machine.connected_said": {
+      "en": "{name} is connected; it is on the Agents page.",
+      "zh": "已接入 {name}，到「智能体」页可以看到。"
+    },
+    "gui.machine.connect_bad": {
+      "en": "Not connected",
+      "zh": "没有接入"
+    },
+    "gui.machine.connect_bad_named": {
+      "en": "Not connected: {name}",
+      "zh": "没有接入 {name}"
+    },
+    "gui.machine.connect_do": {
+      "en": "Connect",
+      "zh": "接入"
+    },
+    "gui.machine.presets_none": {
+      "en": "Nothing to connect: every agent that can run on a machine is already connected on this one.",
+      "zh": "没有可接的：能跑在机器上的 Agent 都已经接在这台机器上了。"
+    },
+    "gui.machine.presets_loading": {
+      "en": "Reading the agents",
+      "zh": "正在读取 Agent 列表"
+    },
+    "gui.machine.presets_pending": {
+      "en": "Something is still being connected on this machine; the choices come back when it ends.",
+      "zh": "这台机器上还有接入在进行，结束后再选。"
+    },
+    "gui.machine.keys_found": {
+      "en": "Found on this computer and filled in; pick another or type a path.",
+      "zh": "已填入这台电脑上找到的密钥，也可以换一把或自己填路径。"
+    },
+    "gui.machine.keys_none": {
+      "en": "No ssh key was found on this computer. Type a path, or pick Password: Raven then keeps the password on this computer and logs in with it.",
+      "zh": "这台电脑上没找到 ssh 密钥。可以自己填路径，或改选「密码」：Raven 会把密码保存在本机，每次用它登录。"
+    },
+    "gui.machine.missing_but_machine": {
+      "en": "Not installed on this computer, but it can run on a registered machine where it is installed and signed in.",
+      "zh": "本机没装也可以跑在一台登记机器上，那台机器上要装好并登录它。"
+    },
+    "gui.machine.connect_on": {
+      "en": "Connect on {name}",
+      "zh": "接入到 {name}"
+    },
     "gui.agent.tag_stale": {
       "en": "Moved",
       "zh": "需迁移"
@@ -8235,22 +8601,6 @@
       "en": "Model settings",
       "zh": "模型配置"
     },
-    "gui.settings.nav.skills": {
-      "en": "Skills",
-      "zh": "技能"
-    },
-    "gui.settings.nav.tools": {
-      "en": "Tools",
-      "zh": "工具"
-    },
-    "gui.settings.nav.mcp": {
-      "en": "MCP",
-      "zh": "MCP"
-    },
-    "gui.settings.nav.plugins": {
-      "en": "Plugins",
-      "zh": "插件"
-    },
     "gui.settings.nav.channels": {
       "en": "Channels",
       "zh": "渠道"
@@ -9119,105 +9469,13 @@
       "en": "Above this model's {n}",
       "zh": "超过该模型的 {n}"
     },
-    "gui.settings.skills.search": {
-      "en": "Search skills",
-      "zh": "搜索技能"
-    },
-    "gui.settings.skills.add": {
-      "en": "Add",
-      "zh": "新增"
-    },
-    "gui.settings.skills.add_prompt": {
-      "en": "Help me find a skill on Skill Hub and install it. My requirements are as follows:",
-      "zh": "帮我在 Skill Hub 找一个技能并安装，我的要求如下："
-    },
-    "gui.settings.skills.hub_card": {
-      "en": "Skill Hub",
-      "zh": "Skill Hub"
-    },
-    "gui.settings.skills.hub_title": {
-      "en": "Use 110k+ skills from EverMind Skill Hub",
-      "zh": "使用 EverMind Skill Hub 的 11 万+ 技能"
-    },
-    "gui.settings.skills.hub_sub": {
-      "en": "While on, Raven sends text from your session to the Skill Hub when it looks for a skill.",
-      "zh": "开启时，Raven 查找技能会把会话中的文字发送到 Skill Hub。"
-    },
-    "gui.settings.skills.builtin": {
-      "en": "Built-in",
-      "zh": "内置"
-    },
-    "gui.settings.skills.workspace": {
-      "en": "Workspace",
-      "zh": "工作区"
-    },
-    "gui.settings.skills.on_of": {
-      "en": "{on} of {total} on",
-      "zh": "开 {on} / {total}"
-    },
-    "gui.settings.skills.none": {
-      "en": "No matching skill",
-      "zh": "没有匹配的技能"
-    },
-    "gui.settings.skills.always": {
-      "en": "Injected every turn",
-      "zh": "每轮注入"
-    },
-    "gui.settings.skills.uninstall": {
-      "en": "Uninstall",
-      "zh": "卸载"
-    },
-    "gui.settings.skills.uninstall_title": {
-      "en": "Uninstall {name}?",
-      "zh": "卸载 {name}？"
-    },
-    "gui.settings.skills.uninstall_body": {
-      "en": "Removes the whole directory {path}.",
-      "zh": "会删除 {path} 整个目录。"
-    },
-    "gui.settings.skills.open_file": {
-      "en": "Open {file}",
-      "zh": "打开 {file}"
-    },
     "gui.settings.skills.saved_no_refresh": {
       "en": "Saved, but the skill list could not be refreshed - {detail}",
       "zh": "已保存，但技能列表刷新失败：{detail}"
     },
-    "gui.settings.skills.safety": {
-      "en": "Safety {n}",
-      "zh": "安全分 {n}"
-    },
-    "gui.settings.skills.trig_use": {
-      "en": "Installed in a session",
-      "zh": "会话中安装"
-    },
-    "gui.settings.skills.trig_auto": {
-      "en": "Installed automatically",
-      "zh": "自动安装"
-    },
-    "gui.settings.skills.trig_rpc": {
-      "en": "Installed from a client",
-      "zh": "客户端安装"
-    },
-    "gui.settings.tools.counter": {
-      "en": "On {on} / {total}",
-      "zh": "开 {on} / 共 {total}"
-    },
-    "gui.settings.tools.setup": {
-      "en": "Needs setup",
-      "zh": "待配置"
-    },
     "gui.settings.tools.borrowed_key": {
       "en": "{name} API key is already set.",
       "zh": "{name} API key 已设置。"
-    },
-    "gui.settings.tools.builtin_locked": {
-      "en": "This tool is built in and cannot be switched here.",
-      "zh": "该工具为内置，无法在此手动开关。"
-    },
-    "gui.settings.tools.model": {
-      "en": "Model",
-      "zh": "模型"
     },
     "gui.settings.tools.vendor": {
       "en": "Vendor",
@@ -9226,22 +9484,6 @@
     "gui.settings.tools.search_vendor": {
       "en": "Search service",
       "zh": "搜索服务"
-    },
-    "gui.settings.tools.ppt_image_missing": {
-      "en": "Deck generation cannot use this search API's pictures and no Serper key is configured, so it cannot run.",
-      "zh": "当前搜索 API 的图片结果无法用于 PPT 制作，且未配置 Serper Key，无法启用 PPT 制作引擎。"
-    },
-    "gui.settings.tools.ppt_image_fallback": {
-      "en": "Deck generation cannot use this search API's pictures. It will use {name} instead.",
-      "zh": "当前搜索 API 的图片结果无法用于 PPT 制作，将改用 {name}。"
-    },
-    "gui.settings.tools.ppt_image_no_key": {
-      "en": "Deck generation has no picture search key it can use. Set the {name} key here to enable it.",
-      "zh": "PPT 制作引擎没有可用的搜图 Key，在此设置 {name} Key 即可启用。"
-    },
-    "gui.settings.tools.ppt_image_no_key_or_serper": {
-      "en": "Deck generation has no picture search key it can use. Set the {name} key here, or a Serper key, to enable it.",
-      "zh": "PPT 制作引擎没有可用的搜图 Key，在此设置 {name} Key 或 Serper Key 即可启用。"
     },
     "gui.settings.tools.fetch_vendor": {
       "en": "Fetch service",
@@ -9254,42 +9496,6 @@
     "gui.settings.tools.key_first": {
       "en": "Enter the key first",
       "zh": "先填入 Key"
-    },
-    "gui.settings.tools.grp_file": {
-      "en": "Files",
-      "zh": "文件"
-    },
-    "gui.settings.tools.grp_knowledge": {
-      "en": "Knowledge bases",
-      "zh": "知识库"
-    },
-    "gui.settings.tools.grp_run": {
-      "en": "Execution",
-      "zh": "执行"
-    },
-    "gui.settings.tools.grp_net": {
-      "en": "Web",
-      "zh": "网络"
-    },
-    "gui.settings.tools.grp_generate": {
-      "en": "Generation",
-      "zh": "生成"
-    },
-    "gui.settings.tools.grp_collab": {
-      "en": "Collaboration",
-      "zh": "协作"
-    },
-    "gui.settings.tools.grp_skills": {
-      "en": "Skills and playbooks",
-      "zh": "技能与剧本"
-    },
-    "gui.settings.tools.grp_memory": {
-      "en": "Memory",
-      "zh": "记忆"
-    },
-    "gui.settings.tools.grp_search": {
-      "en": "Meta tools",
-      "zh": "元工具"
     },
     "gui.settings.setup.web_search": {
       "en": "Web search",
@@ -9314,162 +9520,6 @@
     "gui.settings.setup.fetch_keyless_hint": {
       "en": "You can read pages without a key - adding one gets you higher rate limits.",
       "zh": "不填密钥也能抓取网页，填上之后不容易被限流"
-    },
-    "gui.settings.mcp.counter": {
-      "en": "Connected {on} / {total}",
-      "zh": "已连接 {on} / 共 {total}"
-    },
-    "gui.settings.mcp.none": {
-      "en": "No MCP server configured",
-      "zh": "还没有配置 MCP 服务"
-    },
-    "gui.settings.mcp.none_sub": {
-      "en": "An MCP server hands Raven tools and data from outside.",
-      "zh": "MCP 服务能给 Raven 接上外部的工具和数据。"
-    },
-    "gui.settings.mcp.add": {
-      "en": "Add",
-      "zh": "新增"
-    },
-    "gui.settings.mcp.add_prompt": {
-      "en": "Help me connect an MCP server. My requirements are as follows:",
-      "zh": "帮我接入一个 MCP 服务，我的要求如下："
-    },
-    "gui.settings.mcp.add_hint": {
-      "en": "A server the catalogue does not list goes into tools.mcpServers in {path} by hand.",
-      "zh": "目录里没有的服务，要手改配置文件 {path} 的 tools.mcpServers。"
-    },
-    "gui.settings.mcp.connected": {
-      "en": "Connected",
-      "zh": "已连接"
-    },
-    "gui.settings.mcp.connecting": {
-      "en": "Connecting",
-      "zh": "连接中"
-    },
-    "gui.settings.mcp.setup": {
-      "en": "Needs setup",
-      "zh": "待配置"
-    },
-    "gui.settings.mcp.failed": {
-      "en": "Connection failed",
-      "zh": "连接失败"
-    },
-    "gui.settings.mcp.retry": {
-      "en": "Reconnect",
-      "zh": "重新连接"
-    },
-    "gui.settings.mcp.auth_browser": {
-      "en": "Authorize in browser",
-      "zh": "在浏览器中授权"
-    },
-    "gui.settings.mcp.authorized": {
-      "en": "Authorized",
-      "zh": "已授权"
-    },
-    "gui.settings.mcp.reauth": {
-      "en": "Re-authorize",
-      "zh": "重新授权"
-    },
-    "gui.settings.mcp.revoke": {
-      "en": "Revoke",
-      "zh": "撤销"
-    },
-    "gui.settings.mcp.api_key": {
-      "en": "API key",
-      "zh": "API key"
-    },
-    "gui.settings.mcp.key_first": {
-      "en": "Enter the key first",
-      "zh": "先填入 Key"
-    },
-    "gui.settings.mcp.no_credential": {
-      "en": "This server takes no credential",
-      "zh": "这个服务不需要凭据"
-    },
-    "gui.settings.mcp.no_fields": {
-      "en": "The catalogue names no credential field for this server",
-      "zh": "目录里没有登记这个服务要填什么凭据"
-    },
-    "gui.settings.mcp.address": {
-      "en": "Address",
-      "zh": "连接"
-    },
-    "gui.settings.mcp.tools": {
-      "en": "Tools",
-      "zh": "工具"
-    },
-    "gui.settings.mcp.tools_n": {
-      "en": "{n}",
-      "zh": "{n} 个"
-    },
-    "gui.settings.plugins.counter": {
-      "en": "{n} packages",
-      "zh": "共 {n} 个插件包"
-    },
-    "gui.settings.plugins.add_hint": {
-      "en": "Packages are read from agentPlugins.packages in {path}.",
-      "zh": "插件包从配置文件 {path} 的 agentPlugins.packages 读取。"
-    },
-    "gui.settings.plugins.none": {
-      "en": "No Agent Plugin package found",
-      "zh": "还没有 Agent 插件包"
-    },
-    "gui.settings.plugins.none_sub": {
-      "en": "Packages that follow the Agent Plugins format bring skills and MCP servers. List a package's folder in agentPlugins.packages to see it here.",
-      "zh": "这里列出遵循 Agent Plugins 协议的插件包，它们可以带来技能和 MCP 服务。把包所在的目录写进 agentPlugins.packages，就能在这里看到。"
-    },
-    "gui.settings.plugins.problem": {
-      "en": "Has problems",
-      "zh": "有问题"
-    },
-    "gui.settings.plugins.unimported": {
-      "en": "Skills not imported",
-      "zh": "技能未导入"
-    },
-    "gui.settings.plugins.mcp_switch": {
-      "en": "Start its MCP servers",
-      "zh": "启动它的 MCP 服务"
-    },
-    "gui.settings.plugins.mcp_switch_sub": {
-      "en": "Applies after Raven restarts.",
-      "zh": "重启 Raven 后生效。"
-    },
-    "gui.settings.plugins.source": {
-      "en": "Source",
-      "zh": "来源"
-    },
-    "gui.settings.plugins.skills": {
-      "en": "Skills",
-      "zh": "技能"
-    },
-    "gui.settings.plugins.skills_in": {
-      "en": "{n}, imported",
-      "zh": "{n} 个，已导入"
-    },
-    "gui.settings.plugins.skills_out": {
-      "en": "{n}, not imported",
-      "zh": "{n} 个，未导入"
-    },
-    "gui.settings.plugins.server": {
-      "en": "MCP server",
-      "zh": "MCP 服务"
-    },
-    "gui.settings.plugins.server_off": {
-      "en": "not started",
-      "zh": "未启动"
-    },
-    "gui.settings.plugins.server_idle": {
-      "en": "not connected yet",
-      "zh": "尚未连接"
-    },
-    "gui.settings.plugins.import_hint": {
-      "en": "To use its skills, run this on the Raven host:",
-      "zh": "想用它的技能，在 Raven 所在的机器上运行："
-    },
-    "gui.settings.plugins.path_problems": {
-      "en": "Paths that hold no usable package",
-      "zh": "这些路径里没有可用的插件包"
     },
     "gui.model.pick_search": {
       "en": "Search or type a model ID",
@@ -11921,11 +11971,11 @@
     },
     "gui.knowledge.no_embedding": {
       "en": "Store the documents without indexing them yet",
-      "zh": "\u5148\u4fdd\u5b58\u6587\u6863\uff0c\u6682\u4e0d\u5efa\u7acb\u7d22\u5f15"
+      "zh": "先保存文档，暂不建立索引"
     },
     "gui.knowledge.no_embedding_help": {
       "en": "A base with no embedding model reaches no endpoint, so it can be made while one is unreachable. Pick a model later in settings and its documents are indexed then.",
-      "zh": "\u672a\u914d\u7f6e\u5411\u91cf\u6a21\u578b\u7684\u77e5\u8bc6\u5e93\u4e0d\u4f1a\u8bbf\u95ee\u4efb\u4f55\u7aef\u70b9\uff0c\u56e0\u6b64\u5728\u7aef\u70b9\u4e0d\u53ef\u8fbe\u65f6\u4e5f\u80fd\u521b\u5efa\u3002\u7a0d\u540e\u5728\u8bbe\u7f6e\u4e2d\u9009\u62e9\u6a21\u578b\uff0c\u5176\u6587\u6863\u4f1a\u5728\u90a3\u65f6\u5efa\u7acb\u7d22\u5f15\u3002"
+      "zh": "未配置向量模型的知识库不会访问任何端点，因此在端点不可达时也能创建。稍后在设置中选择模型，其文档会在那时建立索引。"
     },
     "gui.knowledge.name": {
       "en": "Name",
@@ -12000,8 +12050,8 @@
       "zh": "还没有文档"
     },
     "gui.knowledge.chunks_n": {
-      "en": "{n} pieces",
-      "zh": "{n} 个分片"
+      "en": "{n} in reading order",
+      "zh": "共 {n} 块，按阅读顺序"
     },
     "gui.knowledge.status_pending": {
       "en": "Queued",
@@ -12086,10 +12136,6 @@
     "gui.knowledge.chunks": {
       "en": "Chunks",
       "zh": "分块"
-    },
-    "gui.knowledge.chunks_n": {
-      "en": "{n} in reading order",
-      "zh": "共 {n} 块，按阅读顺序"
     },
     "gui.knowledge.no_chunks": {
       "en": "Nothing indexed yet",
@@ -12341,7 +12387,7 @@
     },
     "gui.knowledge.skipped_unsupported": {
       "en": "{n} file(s) were left out: this install cannot read them.",
-      "zh": "\u5df2\u8df3\u8fc7 {n} \u4e2a\u6587\u4ef6\uff1a\u5f53\u524d\u5b89\u88c5\u65e0\u6cd5\u8bfb\u53d6\u5b83\u4eec\u3002"
+      "zh": "已跳过 {n} 个文件：当前安装无法读取它们。"
     },
     "gui.knowledge.add_url": {
       "en": "Import from URL",
@@ -13942,6 +13988,550 @@
     "gui.export.stop_report_label": {
       "en": "Discard",
       "zh": "放弃"
+    },
+    "gui.nav.skills_tools": {
+      "en": "Skills & Tools",
+      "zh": "技能与工具"
+    },
+    "gui.page.skills_tools": {
+      "en": "Skills & Tools",
+      "zh": "技能与工具"
+    },
+    "gui.skillsTools.change": {
+      "en": "Change",
+      "zh": "更改"
+    },
+    "gui.skillsTools.clear": {
+      "en": "Clear",
+      "zh": "清除"
+    },
+    "gui.skillsTools.configure": {
+      "en": "Configure",
+      "zh": "配置"
+    },
+    "gui.skillsTools.copied": {
+      "en": "Copied",
+      "zh": "已复制"
+    },
+    "gui.skillsTools.copy_cmd": {
+      "en": "Copy command",
+      "zh": "复制命令"
+    },
+    "gui.skillsTools.details": {
+      "en": "Details",
+      "zh": "详情"
+    },
+    "gui.skillsTools.done": {
+      "en": "Done",
+      "zh": "完成"
+    },
+    "gui.skillsTools.get_key": {
+      "en": "Get API key",
+      "zh": "获取 API key"
+    },
+    "gui.skillsTools.key_ph": {
+      "en": "Paste API key",
+      "zh": "粘贴 API key"
+    },
+    "gui.skillsTools.key_set_ph": {
+      "en": "Saved - paste to replace",
+      "zh": "已保存 - 粘贴新 Key 替换"
+    },
+    "gui.skillsTools.loading": {
+      "en": "Loading...",
+      "zh": "加载中..."
+    },
+    "gui.skillsTools.mcp.add": {
+      "en": "Add MCP server",
+      "zh": "新增 MCP 服务"
+    },
+    "gui.skillsTools.mcp.add_hint": {
+      "en": "A server the catalogue does not list goes into tools.mcpServers in {path} by hand.",
+      "zh": "目录里没有的服务，要手改配置文件 {path} 的 tools.mcpServers。"
+    },
+    "gui.skillsTools.mcp.add_prompt": {
+      "en": "Help me connect an MCP server. My requirements are as follows:",
+      "zh": "帮我接入一个 MCP 服务，我的要求如下："
+    },
+    "gui.skillsTools.mcp.address": {
+      "en": "Address",
+      "zh": "连接"
+    },
+    "gui.skillsTools.mcp.api_key": {
+      "en": "API key",
+      "zh": "API key"
+    },
+    "gui.skillsTools.mcp.auth_browser": {
+      "en": "Authorize in browser",
+      "zh": "在浏览器中授权"
+    },
+    "gui.skillsTools.mcp.authorized": {
+      "en": "Authorized",
+      "zh": "已授权"
+    },
+    "gui.skillsTools.mcp.connected": {
+      "en": "Connected",
+      "zh": "已连接"
+    },
+    "gui.skillsTools.mcp.connecting": {
+      "en": "Connecting",
+      "zh": "连接中"
+    },
+    "gui.skillsTools.mcp.counter": {
+      "en": "Connected {on} / {total}",
+      "zh": "已连接 {on} / 共 {total}"
+    },
+    "gui.skillsTools.mcp.failed": {
+      "en": "Connection failed",
+      "zh": "连接失败"
+    },
+    "gui.skillsTools.mcp.key_first": {
+      "en": "Enter the key first",
+      "zh": "先填入 Key"
+    },
+    "gui.skillsTools.mcp.no_credential": {
+      "en": "This server takes no credential",
+      "zh": "这个服务不需要凭据"
+    },
+    "gui.skillsTools.mcp.no_fields": {
+      "en": "The catalogue names no credential field for this server",
+      "zh": "目录里没有登记这个服务要填什么凭据"
+    },
+    "gui.skillsTools.mcp.none": {
+      "en": "No MCP server configured",
+      "zh": "还没有配置 MCP 服务"
+    },
+    "gui.skillsTools.mcp.none_sub": {
+      "en": "An MCP server hands Raven tools and data from outside.",
+      "zh": "MCP 服务能给 Raven 接上外部的工具和数据。"
+    },
+    "gui.skillsTools.mcp.off": {
+      "en": "Off",
+      "zh": "已关闭"
+    },
+    "gui.skillsTools.mcp.reauth": {
+      "en": "Re-authorize",
+      "zh": "重新授权"
+    },
+    "gui.skillsTools.mcp.retry": {
+      "en": "Reconnect",
+      "zh": "重新连接"
+    },
+    "gui.skillsTools.mcp.revoke": {
+      "en": "Revoke",
+      "zh": "撤销"
+    },
+    "gui.skillsTools.mcp.setup": {
+      "en": "Needs setup",
+      "zh": "待配置"
+    },
+    "gui.skillsTools.mcp.tools": {
+      "en": "Tools",
+      "zh": "工具"
+    },
+    "gui.skillsTools.mcp.tools_n": {
+      "en": "{n} tools",
+      "zh": "{n} 个工具"
+    },
+    "gui.skillsTools.plugins.add_hint": {
+      "en": "Packages are read from agentPlugins.packages in {path}.",
+      "zh": "插件包从配置文件 {path} 的 agentPlugins.packages 读取。"
+    },
+    "gui.skillsTools.plugins.counter": {
+      "en": "{n} packages",
+      "zh": "共 {n} 个插件包"
+    },
+    "gui.skillsTools.plugins.healthy": {
+      "en": "Ready",
+      "zh": "已就绪"
+    },
+    "gui.skillsTools.plugins.import_hint": {
+      "en": "To use its skills, run this on the Raven host:",
+      "zh": "想用它的技能，在 Raven 所在的机器上运行："
+    },
+    "gui.skillsTools.plugins.mcp_switch": {
+      "en": "Start its MCP servers",
+      "zh": "启动它的 MCP 服务"
+    },
+    "gui.skillsTools.plugins.mcp_switch_sub": {
+      "en": "Applies after Raven restarts.",
+      "zh": "重启 Raven 后生效。"
+    },
+    "gui.skillsTools.plugins.none": {
+      "en": "No Agent Plugin package found",
+      "zh": "还没有 Agent 插件包"
+    },
+    "gui.skillsTools.plugins.none_sub": {
+      "en": "Packages that follow the Agent Plugins format bring skills and MCP servers. List a package's folder in agentPlugins.packages to see it here.",
+      "zh": "这里列出遵循 Agent Plugins 协议的插件包，它们可以带来技能和 MCP 服务。把包所在的目录写进 agentPlugins.packages，就能在这里看到。"
+    },
+    "gui.skillsTools.plugins.path_problems": {
+      "en": "Paths that hold no usable package",
+      "zh": "这些路径里没有可用的插件包"
+    },
+    "gui.skillsTools.plugins.problem": {
+      "en": "Has problems",
+      "zh": "有问题"
+    },
+    "gui.skillsTools.plugins.server": {
+      "en": "MCP server",
+      "zh": "MCP 服务"
+    },
+    "gui.skillsTools.plugins.server_idle": {
+      "en": "not connected yet",
+      "zh": "尚未连接"
+    },
+    "gui.skillsTools.plugins.server_off": {
+      "en": "not started",
+      "zh": "未启动"
+    },
+    "gui.skillsTools.plugins.skills": {
+      "en": "Skills",
+      "zh": "技能"
+    },
+    "gui.skillsTools.plugins.skills_in": {
+      "en": "{n}, imported",
+      "zh": "{n} 个，已导入"
+    },
+    "gui.skillsTools.plugins.skills_out": {
+      "en": "{n}, not imported",
+      "zh": "{n} 个，未导入"
+    },
+    "gui.skillsTools.plugins.source": {
+      "en": "Source",
+      "zh": "来源"
+    },
+    "gui.skillsTools.plugins.unimported": {
+      "en": "Skills not imported",
+      "zh": "技能未导入"
+    },
+    "gui.skillsTools.skills.active": {
+      "en": "Active",
+      "zh": "已启用"
+    },
+    "gui.skillsTools.skills.add": {
+      "en": "Add skill",
+      "zh": "新增技能"
+    },
+    "gui.skillsTools.skills.add_prompt": {
+      "en": "Help me find a skill on Skill Hub and install it. My requirements are as follows:",
+      "zh": "帮我在 Skill Hub 找一个技能并安装，我的要求如下："
+    },
+    "gui.skillsTools.skills.always": {
+      "en": "Injected every turn",
+      "zh": "每轮注入"
+    },
+    "gui.skillsTools.skills.builtin": {
+      "en": "Built-in",
+      "zh": "内置"
+    },
+    "gui.skillsTools.skills.disabled": {
+      "en": "Off",
+      "zh": "已关闭"
+    },
+    "gui.skillsTools.skills.filter_all": {
+      "en": "All",
+      "zh": "全部"
+    },
+    "gui.skillsTools.skills.hub_badge": {
+      "en": "110k+ community skills",
+      "zh": "11 万+ 社区技能"
+    },
+    "gui.skillsTools.skills.hub_card": {
+      "en": "Skill Hub",
+      "zh": "Skill Hub"
+    },
+    "gui.skillsTools.skills.hub_sub": {
+      "en": "While on, Raven sends text from your session to the Skill Hub when it looks for a skill.",
+      "zh": "开启时，Raven 查找技能会把会话中的文字发送到 Skill Hub。"
+    },
+    "gui.skillsTools.skills.hub_tag": {
+      "en": "Skill Hub",
+      "zh": "Skill Hub"
+    },
+    "gui.skillsTools.skills.hub_title": {
+      "en": "Use 110k+ skills from EverMind Skill Hub",
+      "zh": "使用 EverMind Skill Hub 的 11 万+ 技能"
+    },
+    "gui.skillsTools.skills.none": {
+      "en": "No matching skill",
+      "zh": "没有匹配的技能"
+    },
+    "gui.skillsTools.skills.on_of": {
+      "en": "{on} of {total} on",
+      "zh": "开 {on} / {total}"
+    },
+    "gui.skillsTools.skills.open_file": {
+      "en": "Open {file}",
+      "zh": "打开 {file}"
+    },
+    "gui.skillsTools.skills.safety": {
+      "en": "Safety {n}",
+      "zh": "安全分 {n}"
+    },
+    "gui.skillsTools.skills.search": {
+      "en": "Search skills",
+      "zh": "搜索技能"
+    },
+    "gui.skillsTools.skills.stat_builtin": {
+      "en": "Built-in",
+      "zh": "内置技能"
+    },
+    "gui.skillsTools.skills.stat_enabled": {
+      "en": "Active",
+      "zh": "已启用"
+    },
+    "gui.skillsTools.skills.stat_workspace": {
+      "en": "Workspace",
+      "zh": "工作区"
+    },
+    "gui.skillsTools.skills.trig_auto": {
+      "en": "Installed automatically",
+      "zh": "自动安装"
+    },
+    "gui.skillsTools.skills.trig_rpc": {
+      "en": "Installed from a client",
+      "zh": "客户端安装"
+    },
+    "gui.skillsTools.skills.trig_use": {
+      "en": "Installed in a session",
+      "zh": "会话中安装"
+    },
+    "gui.skillsTools.skills.uninstall": {
+      "en": "Uninstall",
+      "zh": "卸载"
+    },
+    "gui.skillsTools.skills.uninstall_body": {
+      "en": "Removes the whole directory {path}.",
+      "zh": "会删除 {path} 整个目录。"
+    },
+    "gui.skillsTools.skills.uninstall_title": {
+      "en": "Uninstall {name}?",
+      "zh": "卸载 {name}？"
+    },
+    "gui.skillsTools.skills.workspace": {
+      "en": "Workspace",
+      "zh": "工作区"
+    },
+    "gui.skillsTools.tabs.aria": {
+      "en": "Skills & Tools sections",
+      "zh": "技能与工具分类"
+    },
+    "gui.skillsTools.tabs.attention": {
+      "en": "Needs attention",
+      "zh": "需要处理"
+    },
+    "gui.skillsTools.tabs.mcp": {
+      "en": "MCP",
+      "zh": "MCP"
+    },
+    "gui.skillsTools.tabs.plugins": {
+      "en": "Plugins",
+      "zh": "插件"
+    },
+    "gui.skillsTools.tabs.skills": {
+      "en": "Skills",
+      "zh": "技能"
+    },
+    "gui.skillsTools.tabs.tools": {
+      "en": "Tools",
+      "zh": "工具"
+    },
+    "gui.skillsTools.title": {
+      "en": "Skills & Tools",
+      "zh": "技能与工具"
+    },
+    "gui.skillsTools.tools.borrowed_key": {
+      "en": "{name} API key is already set.",
+      "zh": "{name} API key 已设置。"
+    },
+    "gui.skillsTools.tools.builtin_locked": {
+      "en": "This tool is built in and cannot be switched here.",
+      "zh": "该工具为内置，无法在此手动开关。"
+    },
+    "gui.skillsTools.tools.counter": {
+      "en": "On {on} / {total}",
+      "zh": "开 {on} / 共 {total}"
+    },
+    "gui.skillsTools.tools.featured_sub": {
+      "en": "Click a card to configure API keys, search vendors, or assigned media models.",
+      "zh": "点击卡片配置 API key、搜索服务商或媒体模型。"
+    },
+    "gui.skillsTools.tools.featured_title": {
+      "en": "Configurable tools",
+      "zh": "可配置工具"
+    },
+    "gui.skillsTools.tools.fetch_vendor": {
+      "en": "Fetch service",
+      "zh": "抓取服务"
+    },
+    "gui.skillsTools.tools.filter_all": {
+      "en": "All",
+      "zh": "全部"
+    },
+    "gui.skillsTools.tools.grp_collab": {
+      "en": "Collaboration",
+      "zh": "协作"
+    },
+    "gui.skillsTools.tools.grp_file": {
+      "en": "Files",
+      "zh": "文件"
+    },
+    "gui.skillsTools.tools.grp_generate": {
+      "en": "Generation",
+      "zh": "生成"
+    },
+    "gui.skillsTools.tools.grp_knowledge": {
+      "en": "Knowledge bases",
+      "zh": "知识库"
+    },
+    "gui.skillsTools.tools.grp_memory": {
+      "en": "Memory",
+      "zh": "记忆"
+    },
+    "gui.skillsTools.tools.grp_net": {
+      "en": "Web",
+      "zh": "网络"
+    },
+    "gui.skillsTools.tools.grp_run": {
+      "en": "Execution",
+      "zh": "执行"
+    },
+    "gui.skillsTools.tools.grp_search": {
+      "en": "Meta tools",
+      "zh": "元工具"
+    },
+    "gui.skillsTools.tools.grp_skills": {
+      "en": "Skills and playbooks",
+      "zh": "技能与剧本"
+    },
+    "gui.skillsTools.tools.key_first": {
+      "en": "Enter the key first",
+      "zh": "先填入 Key"
+    },
+    "gui.skillsTools.tools.keyless": {
+      "en": "No API key required",
+      "zh": "无需配置 API key"
+    },
+    "gui.skillsTools.tools.matrix_title": {
+      "en": "All tools",
+      "zh": "全部工具"
+    },
+    "gui.skillsTools.tools.model": {
+      "en": "Model",
+      "zh": "模型"
+    },
+    "gui.skillsTools.tools.needs_key": {
+      "en": "Needs API key",
+      "zh": "需配置 Key"
+    },
+    "gui.skillsTools.tools.needs_model": {
+      "en": "Needs model",
+      "zh": "需配置模型"
+    },
+    "gui.skillsTools.tools.none": {
+      "en": "No matching tool",
+      "zh": "没有匹配的工具"
+    },
+    "gui.skillsTools.tools.off": {
+      "en": "Off",
+      "zh": "已关闭"
+    },
+    "gui.skillsTools.tools.ppt_image_fallback": {
+      "en": "Deck generation cannot use this search API's pictures. It will use {name} instead.",
+      "zh": "当前搜索 API 的图片结果无法用于 PPT 制作，将改用 {name}。"
+    },
+    "gui.skillsTools.tools.ppt_image_missing": {
+      "en": "Deck generation cannot use this search API's pictures and no Serper key is configured, so it cannot run.",
+      "zh": "当前搜索 API 的图片结果无法用于 PPT 制作，且未配置 Serper Key，无法启用 PPT 制作引擎。"
+    },
+    "gui.skillsTools.tools.ppt_image_no_key": {
+      "en": "Deck generation has no picture search key it can use. Set the {name} key here to enable it.",
+      "zh": "PPT 制作引擎没有可用的搜图 Key，在此设置 {name} Key 即可启用。"
+    },
+    "gui.skillsTools.tools.ppt_image_no_key_or_serper": {
+      "en": "Deck generation has no picture search key it can use. Set the {name} key here, or a Serper key, to enable it.",
+      "zh": "PPT 制作引擎没有可用的搜图 Key，在此设置 {name} Key 或 Serper Key 即可启用。"
+    },
+    "gui.skillsTools.tools.ready": {
+      "en": "Ready",
+      "zh": "已就绪"
+    },
+    "gui.skillsTools.tools.role_change": {
+      "en": "Change the {role} model",
+      "zh": "更换{role}模型"
+    },
+    "gui.skillsTools.tools.role_clear": {
+      "en": "Clear the {role} model",
+      "zh": "清除{role}模型"
+    },
+    "gui.skillsTools.tools.role_connect_openrouter": {
+      "en": "Connect OpenRouter",
+      "zh": "连接 OpenRouter"
+    },
+    "gui.skillsTools.tools.role_everos_missing": {
+      "en": "The EverOS memory plugin isn't installed",
+      "zh": "未安装 EverOS 记忆插件"
+    },
+    "gui.skillsTools.tools.role_follows_chat": {
+      "en": "Follows the chat model",
+      "zh": "默认跟随主对话模型"
+    },
+    "gui.skillsTools.tools.role_image": {
+      "en": "Image generation",
+      "zh": "生图"
+    },
+    "gui.skillsTools.tools.role_locked_env": {
+      "en": "Set by exported EVEROS_* variables, which outrank anything saved here",
+      "zh": "由导出的 EVEROS_* 环境变量设定，优先级高于这里保存的任何值"
+    },
+    "gui.skillsTools.tools.role_locked_foreign": {
+      "en": "This EverOS install is yours to manage, so Raven reads its config and does not write it",
+      "zh": "这个 EverOS 由你自己管理，Raven 只读它的配置、不写"
+    },
+    "gui.skillsTools.tools.role_multimodal": {
+      "en": "Multimodal understanding",
+      "zh": "多模态理解"
+    },
+    "gui.skillsTools.tools.role_no_provider": {
+      "en": "Connect a provider first",
+      "zh": "先连接一个供应商"
+    },
+    "gui.skillsTools.tools.role_no_vendor": {
+      "en": "No connected vendor serves this role",
+      "zh": "已连接的供应商里没有支持该角色的模型"
+    },
+    "gui.skillsTools.tools.role_speech": {
+      "en": "Speech",
+      "zh": "语音"
+    },
+    "gui.skillsTools.tools.role_unset": {
+      "en": "Not set",
+      "zh": "未配置"
+    },
+    "gui.skillsTools.tools.role_video": {
+      "en": "Video",
+      "zh": "视频"
+    },
+    "gui.skillsTools.tools.search": {
+      "en": "Search tools",
+      "zh": "搜索工具"
+    },
+    "gui.skillsTools.tools.search_vendor": {
+      "en": "Search service",
+      "zh": "搜索服务"
+    },
+    "gui.skillsTools.tools.vendor": {
+      "en": "Vendor",
+      "zh": "服务"
+    },
+    "gui.skillsTools.tools.vendor_key": {
+      "en": "{name} API key",
+      "zh": "{name} API key"
+    },
+    "gui.skillsTools.update": {
+      "en": "Update",
+      "zh": "更新"
     }
   }
 }

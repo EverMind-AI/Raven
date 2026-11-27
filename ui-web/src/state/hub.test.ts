@@ -13,6 +13,7 @@ beforeEach(() => {
     '<div class="app"></div>' +
     '<section class="page" id="extAgentsPage" data-open="false"><div class="work"></div></section>' +
     '<section class="page" id="connectionsPage" data-open="false"><div class="work"></div></section>' +
+    '<section class="page" id="skillsToolsPage" data-open="false"><div class="work"></div></section>' +
     '<section class="page" id="knowledgePage" data-open="false"><div class="work"></div></section>' +
     '<section class="page" id="tasksBoardPage" data-open="false"><div class="work"></div></section>' +
     '<aside class="detail" id="detail" data-open="false"></aside>'

@@ -48,13 +48,13 @@ describe('settings store', () => {
   })
 
   it('setTab closes every drawer of the section it leaves', () => {
-    store.set({ provider: 'openai', sheet: { slug: 'openai', q: '', state: 'ready', items: [], kind: 'all', picked: [], typed: null }, skill: 's', toolOpen: 'exec', mcpOpen: 'p', err: 'oops' })
-    store.setTab('tools')
+    store.set({ provider: 'openai', sheet: { slug: 'openai', q: '', state: 'ready', items: [], kind: 'all', picked: [], typed: null }, modelsAll: 'openai', err: 'oops' })
+    store.setTab('model')
     const s = store.get()
-    expect(s.tab).toBe('tools')
+    expect(s.tab).toBe('model')
     /* The model picker is no longer one of them: it is the composer's, owned by
        the model store, and it closes on its own when the dialog does. */
-    expect([s.provider, s.sheet, s.skill, s.toolOpen, s.mcpOpen, s.err]).toEqual([null, null, null, null, null, ''])
+    expect([s.provider, s.sheet, s.modelsAll, s.err]).toEqual([null, null, null, ''])
   })
 
   it('both model doors open the providers page, which is where a key and a list are', async () => {
