@@ -134,6 +134,13 @@ def test_the_zh_update_instruction_renders_the_board_and_handles(zh):
     assert text.index("[BEGIN DISPATCHES]") < text.index("定位白屏原因") < text.index("[END DISPATCHES]")
 
 
+def test_the_zh_instruction_describes_the_retrieved_completed_groups(zh):
+    text = build_instruction(Board([], []), [])
+
+    assert "本轮召回中排序最靠前的已完成任务" in text
+    assert "最近更新的至多 5 个已完成任务" in text
+
+
 def test_the_zh_instruction_fences_what_the_reply_asked(zh):
     text = build_instruction(Board([], []), [], asked=["用哪种修法？"])
 

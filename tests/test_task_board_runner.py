@@ -486,8 +486,9 @@ def test_the_retrieved_completed_groups_are_expanded_in_retrieval_order():
         assert f"(created {_iso(BASE + i * 1000)}, updated {_iso(BASE + (100 - i * 10) * 1000)})" in record
         assert f"g_{i}: Matter {i}" not in record
     assert record.index("- g_3 [completed]") < record.index("- g_1 [completed]")
-    assert record.index("- g_1 [completed]") < record.index("Completed:")
-    assert "g_2: Matter 2" in record and "g_4: Matter 4" in record
+    assert record.index("- g_1 [completed]") < record.index("- g_2 [completed]")
+    assert "g_2: Matter 2" not in record and "g_4: Matter 4" not in record
+    assert "g_6: Matter 6" in record
 
 
 def test_an_unknown_or_open_id_is_not_expanded():
@@ -579,6 +580,74 @@ def test_every_retrieved_completed_group_leaves_no_compressed_line():
         assert "Completed:" not in record
 
 
+def test_the_recalled_and_the_five_most_recent_completed_groups_are_a_union():
+    groups = [
+        TaskGroup(
+            f"g_{i}",
+            f"Matter {i}",
+            f"Summary {i}",
+            "completed",
+            BASE + i * 1000,
+            BASE + i * 1000,
+            [ProgressStep(f"s{i}", "T0", None, f"Step {i}", "detail", [])],
+        )
+        for i in range(1, 8)
+    ]
+
+    record = _record_of(build_instruction(Board(groups, []), [], completed_ids=["g_1", "g_2"]))
+
+    for i in range(1, 8):
+        assert f"- g_{i} [completed] Matter {i} -- Summary {i}" in record
+    assert record.index("- g_1 [completed]") < record.index("- g_2 [completed]")
+    assert record.index("- g_2 [completed]") < record.index("- g_7 [completed]")
+    assert "Completed:" not in record
+
+
+def test_a_recalled_group_also_among_the_recent_five_is_shown_once():
+    groups = [
+        TaskGroup(
+            f"g_{i}",
+            f"Matter {i}",
+            f"Summary {i}",
+            "completed",
+            BASE + i * 1000,
+            BASE + i * 1000,
+            [ProgressStep(f"s{i}", "T0", None, f"Step {i}", "detail", [])],
+        )
+        for i in range(1, 8)
+    ]
+
+    record = _record_of(build_instruction(Board(groups, []), [], completed_ids=["g_5", "g_6"]))
+
+    assert record.count("[completed]") == 5
+    for i in (3, 4, 5, 6, 7):
+        assert record.count(f"- g_{i} [completed]") == 1
+    assert record.index("- g_5 [completed]") < record.index("- g_6 [completed]")
+    assert "g_1: Matter 1" in record and "g_2: Matter 2" in record
+
+
+@pytest.mark.parametrize("count", [4, 5])
+def test_five_or_fewer_completed_groups_leave_no_compressed_line(count):
+    groups = [
+        TaskGroup(
+            f"g_{i}",
+            f"Matter {i}",
+            f"Summary {i}",
+            "completed",
+            BASE + i * 1000,
+            BASE + i * 1000,
+            [ProgressStep(f"s{i}", "T0", None, f"Step {i}", "detail", [])],
+        )
+        for i in range(1, count + 1)
+    ]
+
+    record = _record_of(build_instruction(Board(groups, []), [], completed_ids=["g_2"]))
+
+    for i in range(1, count + 1):
+        assert f"- g_{i} [completed] Matter {i}" in record
+    assert "Completed:" not in record
+
+
 def test_the_instruction_carries_the_current_time_when_given():
     text = build_instruction(Board([], []), [], now="2026-11-20T13:10:00Z")
 
@@ -592,7 +661,8 @@ def test_the_instruction_omits_the_current_time_when_not_given():
 def test_the_instruction_describes_the_retrieved_completed_groups():
     text = build_instruction(Board([], []), [])
 
-    assert "completed groups most related to this turn" in text
+    assert "the completed groups the recall ranked highest for this turn" in text
+    assert "up to five most recently updated completed groups" in text
 
 
 async def test_the_summary_is_used_as_the_recall_query(tmp_path):
