@@ -880,6 +880,8 @@ def _module_body(path: Path) -> str:
 TWIN_LEADS_ADDED: frozenset[str] = frozenset(
     {"_TRACKING_KEYS", "_is_tracking", "_drop_tracking"}  # click-tracking parameters dropped before matching
     | {"ResearchTrail.refused"}  # pages the site refused, counted apart
+    | {"_one_per_page"}  # a page cited in two spellings named once in the warnings
+    | {"_other_revision", "ResearchTrail.cited_other_revision"}  # a bare arXiv cite whose other revision was read
 )
 #: Definitions in both whose bodies the twin changed.
 TWIN_LEADS_CHANGED: frozenset[str] = frozenset(
@@ -1196,6 +1198,35 @@ def test_the_paper_fold_stops_at_the_identifier():
     t = build_trail(ledger, "as https://arxiv.org/pdf/2401.99999 reports, it holds")
 
     assert t.cited_never_surfaced == ["https://arxiv.org/pdf/2401.99999"]
+
+
+def test_one_page_cited_in_two_spellings_is_one_citation():
+    page = "https://listed.example/blog/terminal-bench-hardens"
+    ledger = [*LEDGER, {"op": "search", "query": "tb", "urls": [page]}]
+    t = build_trail(ledger, f"see https://a.example/one, {page} and {page}/ again")
+
+    # Counted as written (``urls_cited``), named once.
+    assert len(t.cited_not_opened) == 2 and t.counters()["urls_cited"] == 3
+    assert (
+        f"1 of 3 link(s) cited above were returned by a search but never opened, so nothing here rests on reading them: {page}\n"
+        in t.render()
+    )
+
+
+def test_a_bare_arxiv_cite_whose_pinned_revision_was_read_is_named_as_such():
+    """Still not opened - the bare address serves the latest revision - so no counter
+    moves; but it is not a link that appears nowhere, and the line says what happened."""
+    ledger = [*LEDGER, {"op": "fetch", "url": "https://arxiv.org/html/2609.13443v1", "chars": 41002, "ok": True}]
+    t = build_trail(ledger, "see https://a.example/one and https://arxiv.org/abs/2609.13443 for it")
+
+    assert t.cited_not_opened == t.cited_never_surfaced == ["https://arxiv.org/abs/2609.13443"]
+    assert t.counters()["citation_grounding_rate"] == 0.5
+    text = t.render()
+    assert "appear nowhere" not in text and "returned by a search" not in text
+    assert (
+        "1 of 2 link(s) cited above point at another revision of an arXiv paper than the one opened, "
+        "so the version cited was not read: https://arxiv.org/abs/2609.13443 (opened arxiv.org/abs/2609.13443v1)"
+    ) in text
 
 
 def test_an_arxiv_form_folds_before_the_never_surfaced_check_too():

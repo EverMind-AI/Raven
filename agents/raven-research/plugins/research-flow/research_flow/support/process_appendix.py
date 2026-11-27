@@ -330,6 +330,31 @@ def _norm(url: str) -> str:
 _ARXIV_REVISION_SUFFIX_RE = re.compile(r"^v\d+$")
 
 
+def _other_revision(cited: str, opened: set[str]) -> str | None:
+    """The opened revision of the arXiv paper ``cited`` names, when it is not the one cited."""
+    host, _, path = _norm(cited).partition("/")
+    paper = _ARXIV_PAPER_RE.match(path) if host == "arxiv.org" else None
+    if paper is None:
+        return None
+    for form in sorted(opened):
+        o_host, _, o_path = form.partition("/")
+        other = _ARXIV_PAPER_RE.match(o_path) if o_host == "arxiv.org" else None
+        if other is not None and other.group("id") == paper.group("id") and form != _norm(cited):
+            return "arxiv.org/" + o_path
+    return None
+
+
+def _one_per_page(urls: list[str]) -> list[str]:
+    """``urls`` with a second spelling of a page already listed left out."""
+    seen: set[str] = set()
+    out = []
+    for u in urls:
+        if _norm(u) not in seen:
+            seen.add(_norm(u))
+            out.append(u)
+    return out
+
+
 def _arxiv_revision_of(cited: str, opened: str) -> bool:
     """Whether ``opened`` is ``cited`` plus nothing but an arXiv version suffix.
 
@@ -438,6 +463,13 @@ class ResearchTrail:
     ``citation_grounding_rate`` is computed from it and has readings on disk.
     Splitting the number would have moved a published metric while its name
     stayed put - this repo's most repeated failure."""
+    cited_other_revision: dict[str, str] = field(default_factory=dict)
+    """Cited arXiv addresses not opened, mapped to the other revision of the paper that was.
+
+    Not opened all the same - a bare address serves the latest revision, and the
+    ledger holds the address a fetch asked for, not the revision it got (see the
+    version note above ``_fold_path``) - so the counters do not move. Only the words
+    do: such a link is neither unseen nor merely listed, and is named as what it is."""
     span_seconds: float | None = None
     """Wall-clock from the turn's first ledger row to its last, or ``None`` for one row.
 
@@ -695,12 +727,24 @@ class ResearchTrail:
             # one, because the two causes need different things from the reader -
             # a listed-but-unopened link is a link they can still go read, an
             # unseen one is a citation with nothing behind it.
-            listed = [u for u in self.cited_not_opened if u not in set(self.cited_never_surfaced)]
-            if self.cited_never_surfaced:
+            # A page cited in two spellings (a trailing slash) is named once here; the
+            # counters keep counting what the answer wrote (``urls_cited``).
+            other = self.cited_other_revision
+            unseen = _one_per_page([u for u in self.cited_never_surfaced if u not in other])
+            listed = _one_per_page(
+                [u for u in self.cited_not_opened if u not in set(self.cited_never_surfaced) and u not in other]
+            )
+            if other:
                 lines.append(
-                    f"> ⚠️ {len(self.cited_never_surfaced)} of {len(self.cited)} link(s) cited "
+                    f"> ⚠️ {len(other)} of {len(self.cited)} link(s) cited above point at another "
+                    "revision of an arXiv paper than the one opened, so the version cited was not "
+                    "read: " + ", ".join(f"{u} (opened {read})" for u, read in list(other.items())[:5])
+                )
+            if unseen:
+                lines.append(
+                    f"> ⚠️ {len(unseen)} of {len(self.cited)} link(s) cited "
                     "above appear nowhere in this run - no search returned them and no page "
-                    "was opened at them: " + ", ".join(self.cited_never_surfaced[:5])
+                    "was opened at them: " + ", ".join(unseen[:5])
                 )
             if listed:
                 lines.append(
@@ -920,6 +964,9 @@ def build_trail(
     # called fabricated -- the heavier accusation -- for a defect the opened
     # check forgives.
     t.cited_never_surfaced = [u for u in t.cited_not_opened if _match_form(u, surfaced) is None]
+    t.cited_other_revision = {
+        u: read for u in t.cited_not_opened if (read := _other_revision(u, norm_opened | norm_earlier))
+    }
     # ★ 20260901 (Framework). Disclosure pass, deliberately last and deliberately
     # read-only with respect to everything above: ``cited``, ``cited_not_opened``,
     # ``cited_never_surfaced`` and the rate derived from them are already final at
