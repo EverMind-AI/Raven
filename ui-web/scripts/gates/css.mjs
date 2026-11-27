@@ -46,7 +46,13 @@ export function decls(selector, source = css) {
   const out = new Map()
   for (const decl of body.split(';')) {
     const at = decl.indexOf(':')
-    if (at > 0) out.set(decl.slice(0, at).trim(), decl.slice(at + 1).trim())
+    if (at > 0) {
+      const name = decl.slice(0, at).trim()
+      /* A repeated property takes the position of its last declaration, so
+         iterating the map is iterating the source order that paints. */
+      out.delete(name)
+      out.set(name, decl.slice(at + 1).trim())
+    }
   }
   return out
 }

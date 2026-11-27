@@ -50,6 +50,7 @@ const resolved = (value, vars) =>
   value === undefined
     ? undefined
     : value
+        .replace(/\s*!\s*important\s*$/i, '')
         .replace(/var\(\s*(--[\w-]+)\s*(?:,\s*([^)]*))?\)/g, (whole, name, fallback) =>
           vars.has(name) ? vars.get(name) : fallback !== undefined ? fallback.trim() : whole,
         )
@@ -113,13 +114,28 @@ const horizontalSides = (declarations, property, vars = customProps(declarations
 
 const horizontalInsets = (declarations, vars) => horizontalSides(declarations, 'padding', vars)
 
-/* A length's magnitude, ignoring the sign: the list's negative margin and its
-   positive padding are the same gutter. A calc() that negates a length reads as
-   that length. */
-const magnitude = (value) => {
+/* A value as CSS compares it: the priority flag is not part of the value, and a
+   bare 0 is the same length as 0px. */
+const normalize = (value) => {
+  if (value === undefined) return undefined
+  const stripped = value.replace(/\s*!\s*important\s*$/i, '').trim()
+  return stripped === '0' ? '0px' : stripped
+}
+
+/* A length's value with its sign kept, and a calc() that negates a length read
+   as that length negated. The list's margin has to be the gutter negated, so a
+   margin that lost its minus must not compare equal. */
+const signedValue = (value) => {
   if (value === undefined) return undefined
   const negated = value.match(/^calc\(\s*-1\s*\*\s*(.+?)\s*\)$/)
-  return negated ? negated[1].trim() : value.startsWith('-') ? value.slice(1) : value
+  if (!negated) return normalize(value)
+  const inner = normalize(negated[1].trim())
+  return inner.startsWith('-') ? inner.slice(1) : `-${inner}`
+}
+
+const negatedLength = (value) => {
+  if (value === '0' || value === '0px') return '0px'
+  return value.startsWith('-') ? value.slice(1) : `-${value}`
 }
 
 /* The list's negative margin: it pulls the rows' content edges back out by the
@@ -127,9 +143,10 @@ const magnitude = (value) => {
    negated. Nothing else in the gate reads it. */
 const gutterProblems = (list) => {
   const vars = customProps(list)
-  const gutter = vars.get('--two-pane-gutter')
+  const gutter = normalize(vars.get('--two-pane-gutter'))
   if (gutter === undefined) return ['the list declares no --two-pane-gutter']
 
+  const required = negatedLength(gutter)
   const problems = []
   const margins = horizontalSides(list, 'margin', vars)
   for (const [side, value] of [['left', margins.left], ['right', margins.right]]) {
@@ -141,7 +158,7 @@ const gutterProblems = (list) => {
       problems.push(`the list's ${side} margin does not resolve: ${value}`)
       continue
     }
-    if (magnitude(value) !== gutter) {
+    if (signedValue(value) !== required) {
       problems.push(`the list's ${side} margin is ${value}, the gutter is ${gutter}`)
     }
   }
@@ -163,12 +180,13 @@ const edgeProblems = (list, card) => {
   if (left === undefined || right === undefined) return ['the list declares no horizontal padding']
 
   const problems = []
-  for (const [side, expected] of [['left', left], ['right', right]]) {
+  for (const [side, rawExpected] of [['left', left], ['right', right]]) {
+    const expected = normalize(rawExpected)
     if (expected.includes('var(')) {
       problems.push(`the list's ${side} does not resolve: ${expected}`)
       continue
     }
-    const actual = resolved(card?.get(side), cardVars)
+    const actual = normalize(resolved(card?.get(side), cardVars))
     if (actual === undefined) problems.push(`the card declares no ${side} offset`)
     else if (actual.includes('var(')) problems.push(`the card's ${side} does not resolve: ${actual}`)
     else if (actual !== expected) problems.push(`the card's ${side} is ${actual}, the list's is ${expected}`)
@@ -259,5 +277,24 @@ describe('reading the list padding', () => {
     const list = new Map([['padding', '0 6px 2px']])
     const card = new Map([['left', '5px'], ['right', '5px']])
     expect(edgeProblems(list, card).join('; ')).toContain("card's left is 5px")
+  })
+
+  it('keeps a repeated property at the position of its last declaration', () => {
+    const source = '.probe { padding-left: 7px; padding: 0 5px 2px; padding-left: 9px; }'
+    expect(horizontalInsets(decls('.probe', source))).toEqual({ left: '9px', right: '5px' })
+  })
+
+  it('requires the margin to be the gutter negated', () => {
+    const list = (margin) => new Map([['--two-pane-gutter', '5px'], ['margin', margin]])
+    expect(gutterProblems(list('0 calc(-1 * var(--two-pane-gutter))'))).toEqual([])
+    expect(gutterProblems(list('0 -5px'))).toEqual([])
+    expect(gutterProblems(list('0 5px')).join('; ')).toContain('the gutter is 5px')
+  })
+
+  it('treats a bare 0 as 0px and ignores the priority flag', () => {
+    expect(edgeProblems(new Map([['padding', '0 0px']]), new Map([['left', '0'], ['right', '0px']]))).toEqual([])
+    const flagged = new Map([['padding', '0 5px 2px !important']])
+    expect(horizontalInsets(flagged)).toEqual({ left: '5px', right: '5px' })
+    expect(edgeProblems(flagged, new Map([['left', '5px !important'], ['right', '5px']]))).toEqual([])
   })
 })
