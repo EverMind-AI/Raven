@@ -14,6 +14,7 @@ an error string while the launch reports success.
 from __future__ import annotations
 
 import json
+import os
 import socket
 import sys
 from pathlib import Path
@@ -461,6 +462,58 @@ def test_a_digest_provider_without_a_key_falls_back_to_the_agents(tmp_path):
     slice_ = {"enabled": True, "digest": {"provider": "deepseek", "model": "deepseek/x"}, **_NO_LLM_GATES}
     ctx = _ctx(tmp_path, slice_, provider=agent)
     assert _shared_for(ctx).digest_provider() == (agent, None)
+
+
+def test_a_digest_provider_that_falls_back_runs_the_agents_model(tmp_path):
+    """Without its key the digest runs on the agent's provider, and so on the agent's
+    model: neither the configured digest model nor a mode's is one that endpoint serves."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from research_flow.flow import SessionGear
+    from research_flow.plugin import _shared_for
+
+    agent_calls: list[str | None] = []
+
+    class _Agent:
+        async def chat_with_retry(self, **kwargs):
+            agent_calls.append(kwargs.get("model"))
+            return SimpleNamespace(content="from the agent")
+
+    slice_ = {
+        "enabled": True,
+        "digest": {"enabled": True, "provider": "deepseek", "model": "deepseek/x", "verbatimHeadChars": 0},
+        **_NO_LLM_GATES,
+    }
+    ctx = _ctx(tmp_path, slice_, provider=_Agent())
+    tool = make_web_fetch(ctx)
+    page = "x" * (tool.digest_threshold_chars + 1)
+
+    async def run():
+        set_current_session("s-plain")
+        first = (await tool._try_digest(page, "the founding date", "https://a.example/one"))[0]
+        set_current_session("s-deep")
+        _shared_for(ctx).session_gear["s-deep"] = SessionGear(digest_model="deep/strong", digest_verbatim_head_chars=0)
+        second = (await tool._try_digest(page, "the founding date", "https://a.example/two"))[0]
+        return first, second
+
+    assert asyncio.run(run()) == ("from the agent", "from the agent")
+    assert agent_calls == [None, None]
+
+
+def test_the_digest_provider_leaves_the_agents_environment_alone(tmp_path, monkeypatch):
+    """The digest's key travels on its own calls; exported, a gateway key would
+    overwrite the agent's in the process and reach every child it starts."""
+    from research_flow.plugin import _shared_for
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "the-agents-key")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    for vendor, model in (("openrouter", "openai/gpt-x"), ("deepseek", "deepseek/deepseek-chat")):
+        slice_ = {"enabled": True, "digest": {"provider": vendor, "model": model, "apiKey": "dk"}, **_NO_LLM_GATES}
+        own, _ = _shared_for(_ctx(tmp_path / vendor, slice_, provider=object())).digest_provider()
+        assert own is not None
+    assert os.environ["OPENROUTER_API_KEY"] == "the-agents-key"
+    assert "DEEPSEEK_API_KEY" not in os.environ
 
 
 def test_the_digest_provider_is_built_once_for_the_fetch_tool_and_the_hook(tmp_path, monkeypatch):

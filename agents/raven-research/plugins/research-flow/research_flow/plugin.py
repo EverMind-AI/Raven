@@ -176,6 +176,8 @@ class _Shared:
             api_base=digest.api_base,
             default_model=digest.model,
             provider_name=digest.provider,
+            # A second provider in the agent's process: exporting its key would overwrite the agent's own.
+            export_env=False,
             **no_thinking,
         )
         return own, digest.model
@@ -282,6 +284,9 @@ class _Shared:
             kwargs: dict[str, Any] = {"max_chars": cfg.fetch_max_chars}
             if cfg.digest.enabled:
                 provider, own_model = self.digest_provider()
+                # A digest.provider that fell back runs the agent's model: no configured
+                # digest model is one the agent's endpoint serves.
+                fell_back = bool(cfg.digest.provider) and own_model is None
                 if provider is None:
                     logger.warning(
                         "research-flow: digest is enabled but no provider was lent to the "
@@ -299,13 +304,16 @@ class _Shared:
                     def digest_knobs() -> tuple[str | None, int]:
                         slot = gear.get(current_session())
                         if slot is not None:
-                            return own_model or slot.digest_model, slot.digest_verbatim_head_chars
-                        return own_model or cfg.digest.model, cfg.digest.verbatim_head_chars
+                            return pinned(slot.digest_model), slot.digest_verbatim_head_chars
+                        return pinned(cfg.digest.model), cfg.digest.verbatim_head_chars
+
+                    def pinned(model: str | None) -> str | None:
+                        return own_model if own_model or fell_back else model
 
                     kwargs.update(
                         digest_fn=_make_digest_fn(
                             provider,
-                            own_model or cfg.digest.model,
+                            pinned(cfg.digest.model),
                             verbatim_head_chars=cfg.digest.verbatim_head_chars,
                             resolve=digest_knobs,
                         ),
