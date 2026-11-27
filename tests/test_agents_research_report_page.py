@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import pathlib
 import re
 import sys
@@ -94,6 +95,53 @@ def test_a_report_without_a_title_leads_with_its_answer():
 
 def test_the_title_of_the_report_file_is_used_when_the_reply_has_none():
     assert "<h1>Kept from the file</h1>" in render_page(_REPORT, title="Kept from the file")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name == "nt", reason="creating a symlink needs a privilege on Windows")
+async def test_a_link_beside_the_report_is_never_written_through(tmp_path):
+    """A dangling link reads as absent to ``exists()``, and the write would follow it out."""
+    outside = tmp_path / "outside" / "page.html"
+    outside.parent.mkdir()
+    work = tmp_path / "work"
+    work.mkdir()
+    report = work / "vite.md"
+    report.write_text(_REPORT, encoding="utf-8")
+    (work / "vite.html").symlink_to(outside)
+    writer = ReportPage(_cfg().report_page)
+    with workdir.bind(work):
+        path, record = await writer.write(_REPORT, beside=str(report), day="2026-11-19")
+    assert not outside.exists()
+    assert path is not None and pathlib.Path(path).parent == work and pathlib.Path(path).name != "vite.html"
+    assert (work / "vite.html").is_symlink() and record["written"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name == "nt", reason="creating a symlink needs a privilege on Windows")
+async def test_a_page_whose_own_name_is_a_link_is_not_written(tmp_path, monkeypatch):
+    outside = tmp_path / "outside.html"
+    writer = ReportPage(_cfg().report_page)
+    monkeypatch.setattr(ReportPage, "_target", lambda self, *a: pathlib.PurePath(tmp_path / "page.html"))
+    (tmp_path / "page.html").symlink_to(outside)
+    with workdir.bind(tmp_path):
+        path, record = await writer.write(_REPORT, day="2026-11-19")
+    assert path is None and record == {"written": False, "reason": "target_is_link"} and not outside.exists()
+
+
+@pytest.mark.asyncio
+async def test_the_turns_own_twin_is_known_by_any_spelling_of_it(tmp_path):
+    """On NTFS or default APFS ``report.html`` and ``Report.html`` are one file; a hard
+    link stands in for that here, a second name for the same file."""
+    report = tmp_path / "Report.md"
+    report.write_text(_REPORT, encoding="utf-8")
+    drafted = tmp_path / "report.html"
+    drafted.write_text("<p>the turn's own draft</p>", encoding="utf-8")
+    os.link(drafted, tmp_path / "Report.html")
+    writer = ReportPage(_cfg().report_page)
+    with workdir.bind(tmp_path):
+        path, record = await writer.write(_REPORT, beside=str(report), own=[str(drafted)], day="2026-11-19")
+    assert path == str(tmp_path / "Report.html") and record["replaced_own_draft"] is True
+    assert sorted(p.name for p in tmp_path.glob("*.html")) == ["Report.html", "report.html"]
 
 
 @pytest.mark.asyncio

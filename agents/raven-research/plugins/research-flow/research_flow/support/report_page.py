@@ -46,6 +46,7 @@ written is recorded, not turned into a failed turn.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from collections.abc import Iterable, Sequence
 from datetime import date
@@ -89,6 +90,20 @@ _LINE_LEAD = "Report page (HTML file for the reader): "
 # The success line of ``WriteFileTool.execute`` for a file written whole (raven/agent/tools/filesystem.py).
 _WROTE_PAGE_RE = re.compile(r"Successfully wrote \d+ bytes to (?P<path>.+?\.html?)", re.I)
 _SPACE_RE = re.compile(r"\s+")
+
+
+def _among(path: PurePath, own: Sequence[str]) -> bool:
+    """Whether ``path`` is one of ``own``: by its spelling, or as the same file on disk,
+    which a case-insensitive file system (NTFS, default APFS) reaches by more than one."""
+    if str(path) in own:
+        return True
+    for other in own:
+        try:
+            if os.path.samefile(path, other):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def page_line(path: str, replaces: str | None = None) -> str:
@@ -204,16 +219,19 @@ class ReportPage:
         """Whether the markdown report file a page was written from is removed."""
         return self._cfg.remove_markdown
 
-    def _target(self, report: str, beside: str | None, own: Iterable[str]) -> PurePath | None:
+    def _target(self, report: str, beside: str | None, own: Sequence[str]) -> PurePath | None:
         """The path the page is written to, or None when there is nowhere to write it."""
         if beside:
             sibling = PurePath(beside).with_suffix(".html")
             # A file that is there but cannot be read (binary, another encoding) is not
             # the page's to write over: only an absent file, a page this module wrote,
-            # or an HTML twin the turn wrote itself is.
+            # or an HTML twin the turn wrote itself is. A link is none of them, even a
+            # dangling one: the write would land wherever it points.
+            if Path(sibling).is_symlink():
+                return sibling.with_name(_named(report))
             exists = Path(sibling).exists()
             held = read_text(str(sibling)) if exists else None
-            if not exists or (held is not None and GENERATOR in held) or str(sibling) in set(own):
+            if not exists or (held is not None and GENERATOR in held) or _among(sibling, own):
                 return sibling
             return sibling.with_name(_named(report))
         bound = workdir.current()
@@ -237,10 +255,13 @@ class ReportPage:
         task: the page's title when neither the reply nor the file has one. The path is None when no page was written, and the
         record says why.
         """
+        own = tuple(own)
         try:
             target = self._target(report, beside, own)
             if target is None:
                 return None, {"written": False, "reason": "no_working_directory"}
+            if Path(target).is_symlink():
+                return None, {"written": False, "reason": "target_is_link"}
             record: dict[str, Any] = {"path": str(target)}
             held = (read_text(beside) or "").strip() if beside else ""
             if held:
@@ -251,7 +272,7 @@ class ReportPage:
                 record.update(counts)
                 # The reply stands in for a report file: like one, it leaves out the line that names it.
                 report, _ = file_text(report, str(target))
-            if str(target) in set(own):
+            if _among(target, own):
                 record["replaced_own_draft"] = True
             highlights = Highlights()
             if self._cfg.highlights and self._provider is not None:
