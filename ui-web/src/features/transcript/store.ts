@@ -2188,13 +2188,23 @@ export function brandOf(name: string): AgentBrand | null {
   return (brands && brands.get(name)) || null
 }
 
+/* The mark each named agent wears, from the roster rows that say which package
+   is behind the name. `own` is the server's semantic answer and the only flag a
+   shipped product registered as a plain config row carries; the provenance
+   flags stay for a server that predates it. */
+export function brandsFrom(
+  rows: ReadonlyArray<{ name: string; preset?: string; builtin?: boolean; vendored?: boolean; own?: boolean }>,
+): Map<string, AgentBrand> {
+  return new Map(rows.map((r) => [r.name, { preset: r.preset ?? null, own: !!(r.own || r.builtin || r.vendored) }]))
+}
+
 function askBrands(): void {
   const roster = sources.subagents?.roster
   if (!roster) return
   brandsAsked = true
   roster()
     .then((rows: SubagentRow[]) => {
-      brands = new Map(rows.map((r) => [r.name, { preset: r.preset ?? null, own: !!(r.builtin || r.vendored) }]))
+      brands = brandsFrom(rows)
       brandsV += 1
       brandListeners.forEach((fn) => fn())
     })

@@ -117,3 +117,21 @@ describe('a node a replan carried on', () => {
   })
 })
 })
+
+/* Which mark a delivered result sends back. The roster may spell one of
+   raven's own three ways, and `own` is the one the server computes: a shipped
+   product registered as a plain config row carries neither provenance flag. */
+describe('brandsFrom', () => {
+  it('counts own as well as the provenance flags', () => {
+    const brands = store.brandsFrom([
+      { name: 'Raven-Code', own: true },
+      { name: 'Raven-Research', vendored: true },
+      { name: 'raven', builtin: true },
+      { name: 'Codex', preset: 'codex' },
+    ])
+    expect(brands.get('Raven-Code')).toEqual({ preset: null, own: true })
+    expect(brands.get('Raven-Research')).toEqual({ preset: null, own: true })
+    expect(brands.get('raven')).toEqual({ preset: null, own: true })
+    expect(brands.get('Codex')).toEqual({ preset: 'codex', own: false })
+  })
+})

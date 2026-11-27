@@ -101,9 +101,9 @@ describe('an agent row s brand mark', () => {
   })
 
   /* Raven's own agents, which reach here with no preset because there is no
-     third-party package behind them to name. The flag is the server's
-     `builtin || vendored`, so this is the same kind of claim a preset is and
-     not a test on the row's name. */
+     third-party package behind them to name. The flag is the server's ownness
+     answer (`own`, or one of the provenance flags it predates), so this is the
+     same kind of claim a preset is and not a test on the row's name. */
   describe('raven s own', () => {
     it('draws the project s own mark off the flag, with no preset in hand', () => {
       expect(agentMarkPath(undefined, true)).toBe('assets/agents/raven.svg')
@@ -177,13 +177,17 @@ describe('an agent row s brand mark', () => {
       expect(agentMarkPath('claude_code', true, 'Raven-Code')).toBe('assets/agents/raven-code.svg')
     })
 
-    /* Both flags, spelled once here so four call sites cannot drift: a reading
-       that covers only `builtin` leaves every Discovered agent wearing the
-       generic glyph. */
-    it('counts both flags the server sets, and nothing else', () => {
+    /* Every flag the server sets for one of raven's own, spelled once here so
+       four call sites cannot drift: a reading that covers only `builtin` leaves
+       every Discovered agent on the generic glyph, and one that misses `own`
+       leaves the products registered as plain config rows there too. `own` is
+       the semantic answer on its own -- the shipped installer writes a product
+       as a config row, so neither provenance flag is set. */
+    it('counts every flag the server sets, and nothing else', () => {
+      expect(isOwnAgent({ own: true })).toBe(true)
       expect(isOwnAgent({ builtin: true })).toBe(true)
       expect(isOwnAgent({ vendored: true })).toBe(true)
-      expect(isOwnAgent({ builtin: false, vendored: false })).toBe(false)
+      expect(isOwnAgent({ own: false, builtin: false, vendored: false })).toBe(false)
       expect(isOwnAgent({})).toBe(false)
       expect(isOwnAgent(undefined)).toBe(false)
       expect(isOwnAgent(null)).toBe(false)
