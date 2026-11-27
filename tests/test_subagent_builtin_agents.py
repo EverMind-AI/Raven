@@ -350,6 +350,53 @@ class TestAnAcpRowCanReplaceTheSeed:
 
         assert argv[argv.index("--as-subagent") + 1] == GENERIC_AGENT
 
+    def test_a_remote_row_keeps_the_launcher_its_machine_must_run(self, monkeypatch) -> None:
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/local/raven acp")
+        row = ThirdPartyAcpSubagentConfig.model_validate(
+            {
+                "name": GENERIC_AGENT,
+                "kind": "acp",
+                "machine": "box1",
+                "command": "/opt/remote-raven/bin/raven acp --config /remote/config.json",
+            }
+        )
+
+        merged = merge_builtin_seeds([row])
+
+        assert merged[0].machine == "box1"
+        assert commands.command_argv(merged[0].command) == [
+            "/opt/remote-raven/bin/raven",
+            "acp",
+            "--config",
+            "/remote/config.json",
+        ]
+
+    def test_a_remote_row_without_a_command_gets_no_path_from_this_host(self, monkeypatch) -> None:
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        warnings: list[str] = []
+        monkeypatch.setattr(
+            builtin_agents,
+            "host_raven_acp_command",
+            lambda: pytest.fail("a remote row must not use this host's launcher"),
+        )
+        monkeypatch.setattr(
+            builtin_agents.logger,
+            "warning",
+            lambda message, *args: warnings.append(message.format(*args)),
+        )
+        row = ThirdPartyAcpSubagentConfig.model_validate(
+            {"name": GENERIC_AGENT, "kind": "acp", "machine": "box1", "command": ""}
+        )
+
+        merged = merge_builtin_seeds([row])
+
+        assert merged[0].machine == "box1"
+        assert merged[0].command == ""
+        assert any("machine" in warning and "command" in warning for warning in warnings)
+
     def test_the_legacy_spelling_resolves_onto_the_capitalised_row(self, monkeypatch) -> None:
         monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
 
