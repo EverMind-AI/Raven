@@ -60,6 +60,24 @@ describe('skillsTools store', () => {
     expect(store.get().tab).toBe('mcp')
   })
 
+  it('leaves the page standing when the config has not moved', async () => {
+    const first = snap()
+    setSources({ skillsTools: sourceOf({ load: async () => first }) })
+    await store.refresh()
+    const epoch0 = store.get().epoch
+
+    /* The same config read again: the page does not remount, because a
+       remount would drop what the reader had typed into a field. */
+    await store.refresh()
+    expect(store.get().epoch).toBe(epoch0)
+
+    const next: SettingsSnapshot = snap({ model: 'claude-sonnet-4-5' })
+    setSources({ skillsTools: sourceOf({ load: async () => next }) })
+    await store.refresh()
+    expect(store.get().epoch).toBe(epoch0 + 1)
+    expect(store.get().snap.model).toBe('claude-sonnet-4-5')
+  })
+
   it('coalesces refreshSoon bursts only while the Skills & Tools page is open', async () => {
     vi.useFakeTimers()
     document.body.innerHTML = PAGE_SHELL
