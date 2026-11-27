@@ -237,6 +237,10 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
     selection.setSelectionBgColor(ui.theme.color.selectionBg)
   }, [selection, ui.theme.color.selectionBg])
 
+  useEffect(() => {
+    selection.setSelectionFgColor(ui.theme.color.selectionFg)
+  }, [selection, ui.theme.color.selectionFg])
+
   const clearSelection = useCallback(() => {
     selection.clearSelection()
     getInputSelection()?.collapseToEnd()

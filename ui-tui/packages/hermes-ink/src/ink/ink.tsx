@@ -1674,6 +1674,33 @@ export default class Ink {
   }
 
   /**
+   * Set the selection highlight foreground color. Replaces the fg of every
+   * selected cell, so the highlight stays readable whatever color the
+   * selected text was. Accepts the same color formats as Text
+   * foregroundColor; an empty or invalid color → the cell keeps its own
+   * foreground (what the higher color tiers do).
+   */
+  setSelectionFgColor(color: string): void {
+    // Wrap a NUL marker, then split on it to extract the open/close SGR.
+    // colorize returns the input unchanged if the color string is bad —
+    // no NUL-split then, so fall through to null (keep the cell's fg).
+    const wrapped = colorize('\0', color, 'foreground')
+    const nul = wrapped.indexOf('\0')
+
+    if (nul <= 0 || nul === wrapped.length - 1) {
+      this.stylePool.setSelectionFg(null)
+
+      return
+    }
+
+    this.stylePool.setSelectionFg({
+      type: 'ansi',
+      code: wrapped.slice(0, nul),
+      endCode: wrapped.slice(nul + 1) // always \x1b[39m for fg
+    })
+  }
+
+  /**
    * Capture text from rows about to scroll out of the viewport during
    * drag-to-scroll. Must be called BEFORE the ScrollBox scrolls so the
    * screen buffer still holds the outgoing content. Accumulated into

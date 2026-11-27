@@ -303,8 +303,9 @@ export class StylePool {
   }
 
   /**
-   * Selection overlay: REPLACE the cell's background with a solid color
-   * while preserving its foreground (color, bold, italic, dim, underline).
+   * Selection overlay: REPLACE the cell's background with a solid color.
+   * The foreground (color, bold, italic, dim, underline) is preserved by
+   * default, but is replaced too when a selection foreground is set.
    * Matches native terminal selection — a dedicated bg color, not SGR-7
    * inverse. Inverse swaps fg/bg per-cell, which fragments visually over
    * syntax-highlighted text (every fg color becomes a different bg stripe).
@@ -327,6 +328,22 @@ export class StylePool {
     this.selectionBgCode = bg
     this.selectionBgCache.clear()
   }
+  /**
+   * Optional foreground the selection paints over the cell's own one.
+   * Set when a palette needs the highlight to stay readable whatever the
+   * selected text was (the 16-color tier, where a muted foreground would
+   * otherwise sink into the highlight); null → the cell keeps its own
+   * foreground, which is what the higher tiers do.
+   */
+  private selectionFgCode: AnsiCode | null = null
+  setSelectionFg(fg: AnsiCode | null): void {
+    if (this.selectionFgCode?.code === fg?.code) {
+      return
+    }
+
+    this.selectionFgCode = fg
+    this.selectionBgCache.clear()
+  }
   withSelectionBg(baseId: number): number {
     const bg = this.selectionBgCode
 
@@ -337,9 +354,22 @@ export class StylePool {
     let id = this.selectionBgCache.get(baseId)
 
     if (id === undefined) {
-      // Keep everything except bg (49m) and inverse (27m). Fg, bold, dim,
-      // italic, underline, strikethrough all preserved.
+      // Keep everything except bg (49m) and inverse (27m). Bold, dim, italic,
+      // underline and strikethrough are preserved; the fg is preserved too
+      // unless a selection foreground replaces it below.
       const kept = this.get(baseId).filter(c => c.endCode !== '\x1b[49m' && c.endCode !== '\x1b[27m')
+
+      if (this.selectionFgCode) {
+        // Drop the cell's own fg (39m) so the selection fg replaces it
+        // instead of stacking on top of it.
+        for (let i = kept.length - 1; i >= 0; i--) {
+          if (kept[i]!.endCode === '\x1b[39m') {
+            kept.splice(i, 1)
+          }
+        }
+
+        kept.push(this.selectionFgCode)
+      }
 
       kept.push(bg)
       id = this.intern(kept)

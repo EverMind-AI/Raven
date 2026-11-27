@@ -25,6 +25,45 @@ const screenWithText = () => {
   return { screen, styles }
 }
 
+describe('selection foreground', () => {
+  const white = { type: 'ansi' as const, code: '\x1b[37m', endCode: '\x1b[39m' }
+  const cyanBg = { type: 'ansi' as const, code: '\x1b[46m', endCode: '\x1b[49m' }
+  const blackFg = { type: 'ansi' as const, code: '\x1b[30m', endCode: '\x1b[39m' }
+
+  it('paints the selection foreground over the cell it covers', () => {
+    const styles = new StylePool()
+
+    styles.setSelectionBg(cyanBg)
+    styles.setSelectionFg(blackFg)
+
+    const overlaid = styles.withSelectionBg(styles.intern([white]))
+
+    expect(styles.get(overlaid).map(c => c.code)).toEqual(['\x1b[30m', '\x1b[46m'])
+  })
+
+  it('keeps the cell foreground when the theme sets no selection foreground', () => {
+    const styles = new StylePool()
+
+    styles.setSelectionBg(cyanBg)
+
+    const overlaid = styles.withSelectionBg(styles.intern([white]))
+
+    expect(styles.get(overlaid).map(c => c.code)).toEqual(['\x1b[37m', '\x1b[46m'])
+  })
+
+  it('drops the cell foreground but keeps its weight', () => {
+    const styles = new StylePool()
+
+    styles.setSelectionBg(cyanBg)
+    styles.setSelectionFg(blackFg)
+
+    const bold = { type: 'ansi' as const, code: '\x1b[1m', endCode: '\x1b[22m' }
+    const overlaid = styles.withSelectionBg(styles.intern([white, bold]))
+
+    expect(styles.get(overlaid).map(c => c.code)).toEqual(['\x1b[1m', '\x1b[30m', '\x1b[46m'])
+  })
+})
+
 describe('selection whitespace handling', () => {
   it('does not copy whitespace-only selections', () => {
     const { screen } = screenWithText()

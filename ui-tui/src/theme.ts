@@ -34,6 +34,10 @@ export interface ThemeColors {
   statusBad: string
   statusCritical: string
   selectionBg: string
+  // The foreground a selected cell is drawn with. Empty = the cell keeps
+  // the foreground it already had (the default); set = the selection
+  // replaces it, so the highlight contrasts whatever the text was.
+  selectionFg: string
 
   diffAdded: string
   diffRemoved: string
@@ -239,6 +243,7 @@ export const DARK_THEME: Theme = {
     statusBad: '#ec6a5e',
     statusCritical: '#ec6a5e',
     selectionBg: '#8a6d00',
+    selectionFg: '',
 
     diffAdded: '#13260f',
     diffRemoved: '#2a1416',
@@ -288,6 +293,7 @@ export const LIGHT_THEME: Theme = {
     statusBad: '#cf222e',
     statusCritical: '#cf222e',
     selectionBg: '#ffdf85',
+    selectionFg: '',
 
     diffAdded: '#e6f7dd',
     diffRemoved: '#ffe3e0',
@@ -331,6 +337,7 @@ const DARK_256_COLORS: ThemeColors = {
   statusBad: 'ansi256(203)',
   statusCritical: 'ansi256(203)',
   selectionBg: 'ansi256(58)',
+  selectionFg: '',
   diffAdded: 'ansi256(234)',
   diffRemoved: 'ansi256(234)',
   diffAddedWord: 'ansi256(107)',
@@ -364,6 +371,7 @@ const LIGHT_256_COLORS: ThemeColors = {
   statusBad: 'ansi256(160)',
   statusCritical: 'ansi256(160)',
   selectionBg: 'ansi256(222)',
+  selectionFg: '',
   diffAdded: 'ansi256(194)',
   diffRemoved: 'ansi256(224)',
   diffAddedWord: 'ansi256(64)',
@@ -373,11 +381,22 @@ const LIGHT_256_COLORS: ThemeColors = {
 
 // ── Tier 1: 16-color (per design tokens, docs/tui-color-problem/tokens.md) ──
 //
-// Two caveats vs the token spec, which a single color string can't encode:
-//   - `reverse` highlights (completionCurrentBg/completionMetaCurrentBg/
-//     selectionBg) fall back to brightBlack — the spec's stated alternative.
+// Three caveats vs the token spec, which a single color string can't encode:
+//   - `reverse` highlights (completionCurrentBg/completionMetaCurrentBg)
+//     fall back to brightBlack — the spec's stated alternative.
+//   - the selection is a saturated background plus a selectionFg drawn on
+//     top of it, instead of a background that merely differs from the text
+//     color. The tier has no shade between the ground and brightBlack, so a
+//     muted (brightBlack) foreground would vanish into a brightBlack
+//     highlight; replacing the foreground keeps the highlight readable
+//     whatever role the selected text had.
 //   - statusCritical's `+ bold` is dropped (bold is a text style, not a
 //     color), leaving it `red` like the spec's base.
+//
+// The 16-color selection pair measures 10.6:1 (dark) and 6.7:1 (light)
+// against the xterm default palette, and black on any standard cyan
+// (#008080 and brighter) stays at 4.4:1 or better; the numbers are checked
+// by the contrast table in src/__tests__/theme.test.ts.
 
 const DARK_16_COLORS: ThemeColors = {
   detailBg: 'ansi:black',
@@ -404,7 +423,8 @@ const DARK_16_COLORS: ThemeColors = {
   statusWarn: 'ansi:yellow',
   statusBad: 'ansi:redBright',
   statusCritical: 'ansi:red',
-  selectionBg: 'ansi:yellow',
+  selectionBg: 'ansi:cyan',
+  selectionFg: 'ansi:black',
   diffAdded: 'ansi:blackBright',
   diffRemoved: 'ansi:blackBright',
   diffAddedWord: 'ansi:green',
@@ -438,6 +458,7 @@ const LIGHT_16_COLORS: ThemeColors = {
   statusBad: 'ansi:red',
   statusCritical: 'ansi:red',
   selectionBg: 'ansi:magentaBright',
+  selectionFg: 'ansi:black',
   diffAdded: 'ansi:blackBright',
   diffRemoved: 'ansi:blackBright',
   diffAddedWord: 'ansi:green',
@@ -860,6 +881,7 @@ function skinColors(colors: Record<string, string>): ThemeColors {
     statusCritical: base.statusCritical,
     selectionBg:
       c('selection_bg') ?? c('completion_menu_current_bg') ?? (hasSkinColors ? completionCurrentBg : base.selectionBg),
+    selectionFg: base.selectionFg,
 
     diffAdded: base.diffAdded,
     diffRemoved: base.diffRemoved,

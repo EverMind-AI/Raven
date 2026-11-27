@@ -168,6 +168,7 @@ declare module '@hermes/ink' {
     readonly moveFocus: (move: unknown) => void
     readonly captureScrolledRows: (firstRow: number, lastRow: number, side: 'above' | 'below') => void
     readonly setSelectionBgColor: (color: string) => void
+    readonly setSelectionFgColor: (color: string) => void
   }
   export type ClipboardPath = 'native' | 'osc52' | 'tmux-buffer'
   export type SelectionCopy = {
