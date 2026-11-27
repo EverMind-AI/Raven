@@ -534,3 +534,23 @@ def test_read_text_with_retry_keeps_a_missing_file_an_answer(tmp_path: Path, mon
     with pytest.raises(FileNotFoundError):
         atomic_io.read_text_with_retry(tmp_path / "absent.json")
     assert calls["n"] == 1
+
+
+def test_read_text_with_retry_gives_up_after_the_bound(tmp_path: Path, monkeypatch):
+    """The retry is bounded: once the attempts are spent, the reader's
+    PermissionError is raised as itself instead of retried forever, so a
+    genuinely wedged file cannot turn a poll into a hang."""
+    from raven.utils import atomic_io
+
+    calls = {"n": 0}
+
+    def always_denied(self, *args, **kwargs):
+        calls["n"] += 1
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "read_text", always_denied)
+    monkeypatch.setattr(atomic_io, "_REPLACE_BACKOFF", 0.001)
+
+    with pytest.raises(PermissionError):
+        atomic_io.read_text_with_retry(tmp_path / "state.json")
+    assert calls["n"] == atomic_io._REPLACE_ATTEMPTS
