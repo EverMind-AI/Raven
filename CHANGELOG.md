@@ -9,7 +9,7 @@ All notable changes to Raven are documented here.
 - Raven-Research has an outline style for its report, set with
   `finalShape.reportStyle: "outline"` (the class default stays `"prose"`). The report
   then opens with a `#` title above the answer, numbers its sections and the
-  subsections inside them, opens each section with its conclusion after a bold label,
+  subsections inside them, opens each section with its conclusion in one sentence,
   writes three or more parallel items as a list, each item opening with its name
   in bold, and bolds the one or two facts a paragraph rests on (a number, a date,
   a model, a person, an organization or a place). Its paragraphs and tables follow the same rules as the prose style,
@@ -44,9 +44,8 @@ All notable changes to Raven are documented here.
   required shape instead of the old answer-first short form, and a reviewer's
   rejection says the draft is the reply, not a file. An interrupted turn's
   rewrite keeps the title and the list of sources, and its fallback reply
-  takes the headings of the task's language. The outline style opens each section with
-  its conclusion after a bold label (`**Conclusion**:` or its Chinese twin)
-  and bolds the phrase that carries the verdict, never a whole sentence. A task's length now leaves out a
+  takes the headings of the task's language. The outline style never bolds a
+  whole sentence. A task's length now leaves out a
   link-check section, as the clause already said, its heading read whole
   and in either word order ("链接核验", "核验链接"). A list of sources that
   mixes addresses and local file paths under its fixed heading is now read
@@ -87,7 +86,9 @@ All notable changes to Raven are documented here.
   apology (`wrapUpSalvage`). The outline style now states principles only: a
   title, numbered sections each opening with its conclusion in one sentence, a
   first section that compares the methods, paradigms, products or works side by
-  side in one table when the question surveys several, a table, list or prose
+  side in one table when the question surveys several, or that gives the dated
+  chronology, one event to an item and oldest first, when the question asks how
+  an event came about or unfolded (label `...-close-skim-chrono`), a table, list or prose
   as the content has that form, and bold chosen by what a paragraph holds - the
   names a reader scans for, the deciding figures, at most one short verdict -
   never a whole sentence, in place of its paragraph-level rules and template; its
@@ -118,6 +119,12 @@ All notable changes to Raven are documented here.
   review, reading the draft phrases only. The process appendix names a cited
   arXiv address whose paper was opened at another revision as that, rather
   than as a link nothing opened, and names a page cited in two spellings once.
+- Raven-Research can run its fetch digest on a provider of its own
+  (`digest.provider`, `digest.model`): the launcher fills `digest.apiKey` from
+  `RESEARCH_DIGEST_API_KEY`, or from the provider of that name in the product or
+  host config, and writes it into the rendered slice only. With no key the
+  digest stays on the agent's provider. A served reasoning model took 70 s over
+  a page a small model digested in 9 s, and every `web_fetch` waits on it.
 - Raven-Research can keep room for its report on a long context and run its
   side calls on a served thinking model; every knob here is off by default.
   `budgetNote.reserveTokens` withdraws the web tools at once when the context
@@ -465,7 +472,10 @@ All notable changes to Raven are documented here.
   JSON object as its arguments. Any other reply is left as it came. Blocks
   are read only outside the model's thinking (a `<think>` block, or the text
   before an orphan closing tag), so a thought that names the form calls
-  nothing and does not hide the real call after it. Where the loop holds a
+  nothing and does not hide the real call after it. A block whose
+  `</use_mcp_tool>` never comes ends where a `<toolbox>` wrapper closes, where
+  the next block opens, or at the end of the reply; its `<arguments>` must
+  still be closed, so a reply cut off inside them stays text. Where the loop holds a
   draft (a hook may send it back), the reader gets the words around the
   blocks, not the blocks, once, and without the thinking, on an unstreamed
   resend too; otherwise words of the block that already streamed stay shown.
