@@ -144,11 +144,13 @@ const GROUP_MARK: { file: string } = { file: 'mirasim' }
 export const MIRASIM_GROUP = 'mirasim'
 
 /* Spelled once, because four call sites read it off three different row types
-   and a fifth that forgets `vendored` loses the mark on every Discovered agent
-   while `builtin` keeps working -- a difference nobody reviewing one line would
-   see. */
-export const isOwnAgent = (row?: { builtin?: boolean; vendored?: boolean } | null): boolean =>
-  !!(row?.builtin || row?.vendored)
+   and a fifth that forgets a flag loses the mark on a whole class of rows while
+   the others keep working -- a difference nobody reviewing one line would see.
+   `own` is the server's semantic answer, and the only flag set on a shipped
+   product its installer registered as a plain config row; the provenance flags
+   stay for a server that predates it. */
+export const isOwnAgent = (row?: { own?: boolean; builtin?: boolean; vendored?: boolean } | null): boolean =>
+  !!(row?.own || row?.builtin || row?.vendored)
 
 /* `hasOwn`, not a bare index: a preset reaches this from config, and every
    object literal answers `constructor`, `toString` and `__proto__` from its
@@ -188,8 +190,8 @@ function BotIcon(): JSX.Element {
    hand-written rows starting its names at one x. The size lives on the slot,
    not on what fills it.
 
-   `own` is the row's `builtin || vendored`, not a name test: it is resolved by
-   the caller because the two flags live on the row and their spelling is the
+   `own` is the row's ownness flags, not a name test: it is resolved by the
+   caller because those flags live on the row and their spelling is the
    server's, not this module's. */
 export function AgentMark({
   preset, own, agent, badge,

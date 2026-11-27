@@ -2403,6 +2403,7 @@ describe('the compact roster', () => {
           roster: [
             { name: 'raven', builtin: true },
             { name: 'Raven-Code', vendored: true },
+            { name: 'Raven-Design', configured: true, own: true },
           ] as SubagentRow[],
           instances: [],
         }}
@@ -2411,7 +2412,11 @@ describe('the compact roster', () => {
       { container: document.getElementById('wsBody')! },
     )
     const marks = heads().map((head) => head?.querySelector('.agent-mark img')?.getAttribute('src'))
-    expect(marks).toEqual(['assets/agents/raven.svg', 'assets/agents/raven-code.svg'])
+    expect(marks).toEqual([
+      'assets/agents/raven.svg',
+      'assets/agents/raven-code.svg',
+      'assets/agents/raven-design.svg',
+    ])
   })
 })
 
