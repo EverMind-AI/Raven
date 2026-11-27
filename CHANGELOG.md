@@ -118,6 +118,24 @@ All notable changes to Raven are documented here.
   review, reading the draft phrases only. The process appendix names a cited
   arXiv address whose paper was opened at another revision as that, rather
   than as a link nothing opened, and names a page cited in two spellings once.
+- Raven-Research can keep room for its report on a long context and run its
+  side calls on a served thinking model; every knob here is off by default.
+  `budgetNote.reserveTokens` withdraws the web tools at once when the context
+  leaves less than that for the report and a revision, and no evidence round
+  reopens them; `verify.minRevisionRoomTokens` ships a rejected draft rather
+  than send it back into a context that cannot hold the revision; and
+  `finalShape.cutRewrites` asks again, shorter and with the tools withdrawn,
+  for a reply cut off at the output limit, which before shipped cut. With
+  `independentViews`, a question on whether something is good, which option
+  to choose or how it is received is researched beyond its makers' own pages,
+  and the reviewer fails a verdict on it that cites the makers alone.
+  `digest.thinking: false` asks the digest's own provider to answer without
+  thinking, through the chat template's `enable_thinking` flag, which covers
+  the bold pass placed there too; `verify.temperature` sets the reviewer's
+  sampling, greedy before. A served thinking model took 117 s and its 16k
+  tokens to give no bold pick and 4 s without thinking, and finished a review
+  in 66 s at its own temperature of 1.0 that it thought past 16k tokens on
+  greedily.
 - Raven-Research can run its draft review (`verify.onDigestProvider`) and its
   page highlights (`reportPage.highlightsOnDigestProvider`) on the fetch digest's
   own provider and model instead of the agent's, so a reasoning agent model no

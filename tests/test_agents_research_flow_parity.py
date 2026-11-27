@@ -330,6 +330,37 @@ PRODUCT_ONLY_FIELDS: dict[str, str] = {
         "and web_fetch are withheld for the rest of the turn (gates/budget_note.py). Off as "
         "a class default; the product's high overlay sets it"
     ),
+    "budget_note.reserve_tokens": (
+        "research closed at once, evidence rounds included, when the context leaves less than "
+        "this for the report and a revision (gates/budget_note.py). Off as a class default and "
+        "in the product; an experiment sets it beside its window"
+    ),
+    "digest.thinking": (
+        "the digest's own provider asked to answer without thinking through the chat "
+        "template's enable_thinking flag (plugin.py). On as a class default and in the "
+        "product; an arm serving a thinking model for the side calls turns it off"
+    ),
+    "verify.temperature": (
+        "the reviewer's sampling temperature, greedy before it existed (gates/verify.py). "
+        "0.0 as a class default and in the product; an arm reviewing on a thinking model "
+        "sets that model's own default"
+    ),
+    "verify.min_revision_room_tokens": (
+        "a rejection sent back only when the context leaves this much for the revision, else "
+        "the draft ships as it does once revisions are spent (gates/verify.py). Off as a class "
+        "default and in the product; an experiment sets it"
+    ),
+    "independent_views": (
+        "a contract rule asking a question on whether something is good to be researched "
+        "beyond its makers' pages, and a reviewer rubric failing a verdict that cites them "
+        "alone (prompts.py, gates/verify.py). Off as a class default and in the product; an "
+        "experiment turns it on"
+    ),
+    "final_shape.cut_rewrites": (
+        "a reply cut at the output limit asked for again, shorter and without tools, before "
+        "review (gates/cut_report.py). Off as a class default and in the product; an "
+        "experiment turns it on"
+    ),
     "force_finalize.wrap_up_reasoning_effort": (
         "the effort of the loop's wrap-up for a turn cut off by a budget, handed to the "
         "loop on the turn's synthesis policy. Unset keeps the turn's own effort, as the fork has it"

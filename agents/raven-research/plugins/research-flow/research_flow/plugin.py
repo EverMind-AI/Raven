@@ -164,11 +164,19 @@ class _Shared:
             return None, None
         from raven.providers.litellm_provider import LiteLLMProvider
 
+        no_thinking = (
+            {}
+            if digest.thinking
+            else {
+                "model_overrides": {digest.model: {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}}
+            }
+        )
         own = LiteLLMProvider(
             api_key=digest.api_key,
             api_base=digest.api_base,
             default_model=digest.model,
             provider_name=digest.provider,
+            **no_thinking,
         )
         return own, digest.model
 

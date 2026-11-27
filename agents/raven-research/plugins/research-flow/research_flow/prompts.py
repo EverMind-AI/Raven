@@ -94,6 +94,14 @@ _DR_PROMPT_SECTION = """# Deep Research Mode - Contract
    are seeing the cached answer. Asking it again cannot change anything -
    either open one of the links, or ask a materially different question."""
 
+_DR_INDEPENDENT_VIEWS_CLAUSE = """{n}. When the question asks whether something is good, which option to choose, or
+   how it is received, the makers' own pages are one side of the answer. Also look
+   for views independent of them - third-party tests and comparisons, the project's
+   issue tracker, users' reports in forums and communities - and open the ones you
+   rely on, as rule 1 asks. In the reply, say which views are the makers' and which
+   are independent; if you found no independent view, say so in one sentence rather
+   than filling the gap from search listings."""
+
 # Numbered rules in the contract above. The optional clauses continue from here,
 # so a rule added to the contract must bump this or the list repeats a number.
 _DR_CONTRACT_RULES = 5
@@ -775,6 +783,7 @@ def render_parts(
     ask_user_outline: bool = True,
     ask_user_mode: str = "first_turn",
     ask_user_delivery: str = "handoff",
+    independent_views: bool = False,
 ) -> tuple[str, str]:
     """The identity and contract texts, exactly as the fork's segment builder made them.
 
@@ -822,6 +831,7 @@ def render_parts(
                 (_DR_ANSWER_MARKER_CLAUSE, require_answer_marker),
                 (report_clause, report_structure),
                 (ask_user_clause, ask_user),
+                (_DR_INDEPENDENT_VIEWS_CLAUSE, independent_views),
             )
             if on
         ]
@@ -874,6 +884,7 @@ def render_identity_and_contract(cfg: "FlowConfig") -> tuple[str, str]:
         ask_user_outline=cfg.ask_user.outline,
         ask_user_mode=cfg.ask_user.mode,
         ask_user_delivery=cfg.ask_user.delivery,
+        independent_views=cfg.independent_views,
     )
 
 

@@ -147,3 +147,45 @@ def test_a_reviewers_evidence_round_reopens_closed_research_while_it_lasts():
     assert _offered(obs, metadata) == ["web_search", "web_fetch", "write_file"]
     rounds.consume()
     assert _offered(obs, metadata) == ["write_file"]
+
+
+def _held(obs: BudgetNoteObserver, prompt_tokens: int, results: list[str], metadata: dict) -> str:
+    messages = [{"role": "assistant", "content": "", "tool_calls": []}]
+    messages += [{"role": "tool", "name": "web_fetch", "content": body} for body in results]
+    ctx = AgentHookContext(
+        session_key="t", iteration=10, messages=messages, response=_Response(prompt_tokens), metadata=metadata
+    )
+    return asyncio.run(obs.after_iteration(ctx)).append_note or ""
+
+
+def test_research_closes_at_once_when_the_context_leaves_less_than_the_reserve():
+    """One run warned at 80% of its window, fetched for six more iterations, and wrote into 11.9k tokens."""
+    obs = BudgetNoteObserver(max_iterations=60, context_window_tokens=100_000, close_after=6, reserve_tokens=30_000)
+    metadata: dict = {}
+    assert "nearly full" not in _held(obs, 60_000, ["short page"], metadata)
+    assert _offered(obs, metadata) == ["web_search", "web_fetch", "write_file"]
+    # The call read 60k; the pages this round fetched are what the next call reads on top.
+    assert "nearly full" in _held(obs, 60_000, ["page text " * 8_000], metadata)
+    assert _offered(obs, metadata) == ["write_file"]
+    assert metadata["budget_note"]["full"] is True and metadata["budget_note"]["held_tokens"] > 70_000
+    assert "nearly full" not in _held(obs, 80_000, ["page"], metadata), "said once"
+
+
+def test_a_full_context_stays_closed_through_an_evidence_round():
+    from research_flow.support.evidence_round import EvidenceRound
+
+    rounds = EvidenceRound(searches=2)
+    obs = BudgetNoteObserver(
+        max_iterations=60, context_window_tokens=100_000, reserve_tokens=30_000, evidence_round=rounds
+    )
+    metadata: dict = {}
+    _held(obs, 75_000, ["page"], metadata)
+    rounds.open()
+    assert _offered(obs, metadata) == ["write_file"]
+
+
+def test_without_a_reserve_a_full_context_only_warns():
+    obs = BudgetNoteObserver(max_iterations=60, context_window_tokens=100_000)
+    metadata: dict = {}
+    assert "budget warning" in _held(obs, 95_000, ["page"], metadata)
+    assert _offered(obs, metadata) == ["web_search", "web_fetch", "write_file"]

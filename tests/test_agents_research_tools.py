@@ -485,6 +485,34 @@ def test_the_digest_provider_is_built_once_for_the_fetch_tool_and_the_hook(tmp_p
     assert len(built) == 1
 
 
+def test_the_digest_provider_answers_without_thinking_only_when_asked(tmp_path, monkeypatch):
+    """``digest.thinking: false`` reaches the served model as the chat template's
+    ``enable_thinking`` flag, on the digest's own provider only; left on, the
+    provider is built exactly as before, with no override at all."""
+    from research_flow.plugin import _shared_for
+
+    built = []
+
+    class _Own:
+        def __init__(self, **kwargs):
+            built.append(kwargs)
+
+    monkeypatch.setattr("raven.providers.litellm_provider.LiteLLMProvider", _Own)
+    digest = {"provider": "custom", "model": "MiroThinker-2.0", "apiKey": "k"}
+    _shared_for(
+        _ctx(tmp_path / "on", {"enabled": True, "digest": digest, **_NO_LLM_GATES}, provider=object())
+    ).digest_provider()
+    off = {**digest, "thinking": False}
+    _shared_for(
+        _ctx(tmp_path / "off", {"enabled": True, "digest": off, **_NO_LLM_GATES}, provider=object())
+    ).digest_provider()
+
+    assert "model_overrides" not in built[0]
+    assert built[1]["model_overrides"] == {
+        "MiroThinker-2.0": {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
+    }
+
+
 def test_a_keyless_search_tool_is_not_contributed(tmp_path, monkeypatch):
     """The fork refused to register it rather than advertise a tool whose every
     call is an error string; the contract this flow renders names the model's

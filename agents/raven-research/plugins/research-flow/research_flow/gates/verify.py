@@ -26,9 +26,11 @@ from pathlib import Path
 from raven.contracts.loop_hooks import HookDecision
 from raven.i18n import zh_lexicon
 from raven.security.trust import wrap_untrusted
+from raven.utils.tokens import estimate_message_tokens
 from research_flow.gates.base import Gate, GateCtx
 from research_flow.support._verdict import coerce_bool, parse_bool_verdict
 from research_flow.support.answer_text import closing_tag_bar, visible_answer
+from research_flow.support.budget import usage_tokens
 from research_flow.support.evidence_round import EvidenceRound
 from research_flow.support.harness_text import REVIEW_TALK_PREFIX, harness_body_kind, is_elided_tool_output
 from research_flow.support.ledger import ledger_append
@@ -136,6 +138,15 @@ _NUMERIC_RUBRIC = (
     "still in view, because it is a fact about the draft. A quantity the draft computes "
     "from numbers it did read, marked as derived and shown with its arithmetic, is a "
     "measurement and not an estimate."
+)
+
+_INDEPENDENT_VIEWS_RUBRIC = (
+    " Where the task asks whether something is good, which option to choose, or how it "
+    "is received, a verdict on that - mature, reliable, well regarded, recommended, "
+    "widely used - that the draft rests only on pages by the thing's own makers (its "
+    "site, docs, repository, blog or announcements) is a decisive claim absent from the "
+    "evidence: name it in unsupported_claims. A draft that says plainly it found no "
+    "independent view is not failed for that."
 )
 
 _STRICT_REJECT_ONLY = (
@@ -281,14 +292,20 @@ class DraftReviewerGate(Gate):
         evidence_item_chars: int = 2000,
         max_tokens: int = 8192,
         reasoning_effort: str | None = None,
+        temperature: float = 0.0,
         constraint_rubric: bool = False,
         strict_reject_only: bool = False,
         fail_open_on_elided_evidence: bool = True,
         evidence_round: "EvidenceRound | None" = None,
         closing_tag_required: bool = False,
         capture_requests: bool = False,
+        independent_views: bool = False,
+        context_window_tokens: int = 0,
+        min_revision_room_tokens: int = 0,
     ) -> None:
         self._provider = provider
+        self._context_window_tokens = context_window_tokens
+        self._min_revision_room_tokens = min_revision_room_tokens
         self._model = model
         self._capture_requests = capture_requests
         self._timeout_seconds = timeout_seconds
@@ -309,6 +326,7 @@ class DraftReviewerGate(Gate):
         self._evidence_item_chars = evidence_item_chars
         self._max_tokens = max_tokens
         self._reasoning_effort = reasoning_effort
+        self._temperature = temperature
         self._verdict_tool_choice: dict | str = _VERDICT_TOOL_CHOICE
         self._strict_reject_only = strict_reject_only
         self._fail_open_on_elided_evidence = fail_open_on_elided_evidence
@@ -340,6 +358,8 @@ class DraftReviewerGate(Gate):
         # After the reject-only carve-out it narrows, and before the elision one so
         # that stays the last word. Its own text says the carve-out cannot reach it.
         self._reviewer_system += _NUMERIC_RUBRIC
+        if independent_views:
+            self._reviewer_system += _INDEPENDENT_VIEWS_RUBRIC
         self._reviewer_system += _ELISION_RUBRIC
 
     @property
@@ -537,14 +557,27 @@ class DraftReviewerGate(Gate):
             self._record(state, "degraded_no_claim", verdict=verdict, draft=draft)
             return HookDecision(notes=["verify_gate: reject degraded to pass (no named claim)"])
 
+        feedback = self._format_feedback(verdict)
+        # The context held is the draft's call plus the bounce that would follow it.
+        room = self._room_after(ctx, _EVIDENCE_ROUND_PROMPT.format(feedback=feedback))
+        if room is not None and room < self._min_revision_room_tokens:
+            state["rejected_no_room"] = state.get("rejected_no_room", 0) + 1
+            self._record(state, "reject_no_room", verdict=verdict, draft=draft)
+            logger.warning(
+                "verify-gate: draft rejected, but ~%d context tokens are left for a revision (< %d); shipping it",
+                room,
+                self._min_revision_room_tokens,
+            )
+            return HookDecision(notes=["verify_gate: rejected, no room left for a revision; accepting"])
         state["rejects"] += 1
         state["revisions"] += 1
         self._record(state, "reject", verdict=verdict, draft=draft)
-        feedback = self._format_feedback(verdict)
         # The round is opened before the bounce, not after the model asks for it:
         # the tool has to be deep by the time the re-sample issues its first search,
-        # and there is no seam between the re-sample and that call.
-        evidence_round = self._evidence_round is not None
+        # and there is no seam between the re-sample and that call. Research the budget
+        # note closed on a full context stays closed, so no round is offered.
+        full = bool((ctx.metadata.get("budget_note") or {}).get("full"))
+        evidence_round = self._evidence_round is not None and not full
         if evidence_round:
             self._evidence_round.open()
             state["evidence_rounds"] = self._evidence_round.opened
@@ -565,6 +598,13 @@ class DraftReviewerGate(Gate):
             ],
             notes=[f"verify_gate: rejected, revision {state['revisions']}/{self._max_revisions}"],
         )
+
+    def _room_after(self, ctx: GateCtx, prompt: str) -> int | None:
+        """Context tokens a revision would be left, or None when unmeasured or not asked."""
+        used = usage_tokens(ctx.response)
+        if not (self._min_revision_room_tokens and self._context_window_tokens and used):
+            return None
+        return self._context_window_tokens - used - estimate_message_tokens({"role": "user", "content": prompt})
 
     async def _review(self, ctx: GateCtx, draft: str) -> dict | None:
         task = task_for(ctx)
@@ -632,7 +672,7 @@ class DraftReviewerGate(Gate):
                         tools=[_VERDICT_TOOL],
                         tool_choice=self._verdict_tool_choice,
                         max_tokens=self._max_tokens,
-                        temperature=0.0,
+                        temperature=self._temperature,
                         **effort_kwargs,
                     ),
                     timeout=min(self._attempt_timeout_seconds, remaining),

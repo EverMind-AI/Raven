@@ -72,6 +72,16 @@ def test_a_configured_effort_reaches_the_reviewer_call():
     assert reviewer.calls[0]["reasoning_effort"] == "low"
 
 
+def test_the_reviewer_samples_greedily_unless_a_temperature_is_set():
+    reviewer = _Reviewer()
+    _review(DraftReviewerGate(reviewer))
+    assert reviewer.calls[0]["temperature"] == 0.0
+
+    reviewer = _Reviewer()
+    _review(DraftReviewerGate(reviewer, temperature=1.0))
+    assert reviewer.calls[0]["temperature"] == 1.0
+
+
 def test_the_transport_deadline_knob_is_kept_but_never_sent():
     """``attemptHttpTimeoutSeconds`` stays on the model for twin parity and reaches the
     gate, but the call never carries ``timeout``: the trunk provider protocol has no
@@ -110,9 +120,11 @@ def test_the_knob_travels_from_config_to_the_gate(tmp_path):
     config = FlowConfig(enabled=True)
     config.verify.reasoning_effort = "low"
     config.verify.attempt_http_timeout_seconds = 35.0
+    config.verify.temperature = 1.0
     chain = _build(config)
     gate = next(o for o in chain if isinstance(o, DraftReviewerGate))
     assert gate._reasoning_effort == "low"
+    assert gate._temperature == 1.0
     assert gate._attempt_http_timeout_seconds == 35.0
 
     chain = _build(FlowConfig(enabled=True))

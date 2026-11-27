@@ -91,6 +91,12 @@ class DigestConfig(_Base):
     provider: str | None = None
     api_base: str | None = None
     api_key: str | None = Field(default=None, repr=False)
+    # False asks the digest's own provider to answer without thinking, through the
+    # chat template's ``enable_thinking`` flag; a served model whose template has no
+    # such flag ignores it. It covers every call on that provider: the digest, and the
+    # review and the bold pass when they are placed on it. A served thinking model took
+    # 117 s and 16k tokens of thought to give no bold pick, and 4 s without thinking.
+    thinking: bool = True
 
 
 class VerifyConfig(_Base):
@@ -111,6 +117,9 @@ class VerifyConfig(_Base):
     attempt_timeout_seconds: float = 120.0
     attempt_http_timeout_seconds: float | None = None
     reasoning_effort: str | None = None
+    # The reviewer's sampling temperature. A thinking model decoding greedily thought
+    # past 16k tokens on a review it finished in 66 s at its own default of 1.0.
+    temperature: float = 0.0
     max_revisions: int = 1
     review_final_draft: bool = False
     max_tokens: int = 8192
@@ -120,6 +129,10 @@ class VerifyConfig(_Base):
     evidence_round: bool = False
     evidence_round_searches: int = 6
     evidence_round_depth: int = 50
+    # A rejection is sent back only when the context leaves at least this many tokens
+    # for the revision; with less, the draft ships as it is, the way it does once the
+    # revisions are spent. 0 sends it back whatever is left.
+    min_revision_room_tokens: int = 0
 
 
 class BudgetNoteConfig(_Base):
@@ -130,6 +143,10 @@ class BudgetNoteConfig(_Base):
     # Iterations after the warning before web_search and web_fetch are withdrawn for
     # the rest of the turn; None keeps the warning advisory.
     close_after: int | None = None
+    # Context tokens kept for the report and one revision: once the context leaves
+    # less, the web tools are withdrawn at once and no evidence round reopens them.
+    # None never closes on context. An absolute count, so it is set beside the window.
+    reserve_tokens: int | None = None
 
 
 class ForceFinalizeConfig(_Base):
@@ -288,6 +305,9 @@ class FinalShapeConfig(_Base):
     # aside, and the model writes the report again with the tools withdrawn and the
     # report rule repeated after the research (``WritePhaseGate``).
     write_phase: bool = False
+    # How often a turn asks again, shorter and without tools, for a reply cut off at the
+    # output limit (``CutReportGate``); past that, the cut reply ships. 0 never asks.
+    cut_rewrites: int = 0
     # The bold pass, last in the chain (``BoldPassGate``): when fewer than this share of a
     # researched report body's paragraphs bold a name, a figure or a few words, or one
     # bolds past the cap, or a bold is a clause, a side call chooses the bold anew and
@@ -695,6 +715,11 @@ class FlowConfig(_Base):
     prompt_section_override: str | None = None
     identity_override: str | None = None
     measured_guidance: bool = True
+    # A question on whether something is good, which to choose or how it is received is
+    # researched beyond its makers' own pages: a contract rule asks for independent views,
+    # opened and kept apart in the report, and the reviewer fails a verdict on it that
+    # cites the makers alone. Off: neither is said.
+    independent_views: bool = False
     fetch_max_chars: int = 14_000
     search: SearchConfig = Field(default_factory=SearchConfig)
     digest: DigestConfig = Field(default_factory=DigestConfig)

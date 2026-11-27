@@ -63,6 +63,7 @@ from research_flow.gates.conversation import (
     set_prior_sources,
     set_research_turn,
 )
+from research_flow.gates.cut_report import CutReportGate
 from research_flow.gates.evidence_floor import EvidenceFloorGate
 from research_flow.gates.fetch_floor import FetchFloorObserver
 from research_flow.gates.fetch_gate import FetchGateObserver
@@ -761,6 +762,7 @@ def build_chain(
                 warn_ratio=cfg.budget_note.warn_ratio,
                 close_after=cfg.budget_note.close_after,
                 evidence_round=evidence_round,
+                reserve_tokens=cfg.budget_note.reserve_tokens,
             )
         )
     if cfg.final_shape.report_structure and layout == READER_LAYOUT:
@@ -863,6 +865,13 @@ def build_chain(
         if ask_user_on:
             writer = ClarifyExemptHook(writer, layout)
         observers.append(writer)
+    if cfg.final_shape.cut_rewrites > 0:
+        # After the write step, which sets its draft aside cut or not; before the reviewer,
+        # which should not review a reply that stops mid-way.
+        rewriter: Gate = CutReportGate(cfg.final_shape.cut_rewrites, cfg.think_closing_tag_required)
+        if ask_user_on:
+            rewriter = ClarifyExemptHook(rewriter, layout)
+        observers.append(rewriter)
     if cfg.verify.enabled:
         review_on, review_model = _on_side(provider, cfg.verify.model, cfg.verify.on_digest_provider, side)
         if review_on is None:
@@ -878,12 +887,16 @@ def build_chain(
                 review_final_draft=cfg.verify.review_final_draft,
                 max_tokens=cfg.verify.max_tokens,
                 reasoning_effort=cfg.verify.reasoning_effort,
+                temperature=cfg.verify.temperature,
                 constraint_rubric=cfg.verify.constraint_rubric,
                 strict_reject_only=cfg.verify.strict_reject_only,
                 fail_open_on_elided_evidence=cfg.verify.fail_open_on_elided_evidence,
                 evidence_round=evidence_round,
                 closing_tag_required=cfg.think_closing_tag_required,
                 capture_requests=cfg.verify.capture_requests,
+                independent_views=cfg.independent_views,
+                context_window_tokens=effective_window,
+                min_revision_room_tokens=cfg.verify.min_revision_room_tokens,
             )
             # An accepted plain answer carries no evidence for this reviewer to
             # check and the judge has already read it; the scoped wrapper ships it

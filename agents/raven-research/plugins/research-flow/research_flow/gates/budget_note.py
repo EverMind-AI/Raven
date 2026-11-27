@@ -5,7 +5,11 @@ plus a one-shot converge warning past ``warn_ratio``. With ``close_after`` set,
 the warning is also a deadline: that many iterations after it, ``web_search`` and
 ``web_fetch`` are withdrawn for the rest of the turn, so the turn has to write.
 A warning alone was read and ignored: one product run said "two more searches"
-from the warning at iteration 48 to the iteration cap at 60. Persisted history
+from the warning at iteration 48 to the iteration cap at 60. With ``reserve_tokens``
+set, research also closes at once when the context leaves less than that for the
+report and its revision, and a reviewer's evidence round does not reopen it: one run
+warned at 80% of a 262k window, fetched for six more iterations, and wrote its report
+into 11.9k tokens of room and every revision into 4k, each cut at the limit. Persisted history
 is the only train-serve-safe channel for this: the runtime-context block
 is stripped on persist and TokenWise rewrites are wire-only, so anything
 injected there would be invisible to training. The note is part of the
@@ -18,6 +22,7 @@ from __future__ import annotations
 import logging
 
 from raven.contracts.loop_hooks import HookDecision
+from raven.utils.tokens import estimate_message_tokens
 from research_flow.gates.base import Gate, GateCtx
 from research_flow.support.budget import usage_tokens
 from research_flow.support.evidence_round import EvidenceRound
@@ -38,6 +43,11 @@ _CLOSED_NOTE = (
     "[budget: research is closed - web_search and web_fetch are withdrawn for the "
     "rest of this turn. Write the final answer now from what you have gathered.]"
 )
+_FULL_NOTE = (
+    "[budget: the context is nearly full - web_search and web_fetch are withdrawn for "
+    "the rest of this turn, and the room left is for the answer. Write the final answer "
+    "now from what you have gathered.]"
+)
 
 
 class BudgetNoteObserver(Gate):
@@ -50,12 +60,14 @@ class BudgetNoteObserver(Gate):
         warn_ratio: float = 0.8,
         close_after: int | None = None,
         evidence_round: EvidenceRound | None = None,
+        reserve_tokens: int | None = None,
     ) -> None:
         self._max_iterations = max_iterations
         self._context_window_tokens = context_window_tokens
         self._warn_ratio = warn_ratio
         self._close_after = close_after
         self._evidence_round = evidence_round
+        self._reserve_tokens = reserve_tokens
 
     @property
     def name(self) -> str:
@@ -63,7 +75,9 @@ class BudgetNoteObserver(Gate):
 
     def _closed(self, state: dict) -> bool:
         # A reviewer's evidence round is a sanctioned search after a rejection, so it
-        # reopens research for as long as it lasts.
+        # reopens research for as long as it lasts - unless the context is full.
+        if state.get("full"):
+            return True
         return bool(state.get("closed")) and not (self._evidence_round is not None and self._evidence_round.active)
 
     async def before_iteration(self, ctx: GateCtx) -> HookDecision:
@@ -121,6 +135,20 @@ class BudgetNoteObserver(Gate):
 
         note = f"[budget: {' | '.join(parts)}]"
         state = ctx.metadata.setdefault("budget_note", {})
+        if self._reserve_tokens and used and self._context_window_tokens and not state.get("full"):
+            # ``used`` is the call before this round's results; they are in the next one.
+            held = used + sum(estimate_message_tokens(m) for m in _this_rounds_results(messages))
+            if self._context_window_tokens - held < self._reserve_tokens:
+                state.update(full=True, closed=True, full_at=ctx.iteration or 0, held_tokens=held)
+                state.setdefault("closed_at", ctx.iteration or 0)
+                logger.warning(
+                    "budget-note: ~%d of %d context tokens held, under %d left; research tools withdrawn at iteration %s",
+                    held,
+                    self._context_window_tokens,
+                    self._reserve_tokens,
+                    ctx.iteration,
+                )
+                return HookDecision(append_note=f"{note}\n{_FULL_NOTE}")
         crossed_iter = bool(
             self._max_iterations and ctx.iteration and ctx.iteration / self._max_iterations >= self._warn_ratio
         )
@@ -146,6 +174,16 @@ class BudgetNoteObserver(Gate):
         # The note travels as ``append_note``: the loop lands it on the newest
         # tool result, a blank line between.
         return HookDecision(append_note=note)
+
+
+def _this_rounds_results(messages: list[dict]) -> list[dict]:
+    """The tool results after the last assistant message."""
+    tail: list[dict] = []
+    for message in reversed(messages):
+        if message.get("role") != "tool":
+            break
+        tail.append(message)
+    return tail
 
 
 __all__ = ["BudgetNoteObserver"]
