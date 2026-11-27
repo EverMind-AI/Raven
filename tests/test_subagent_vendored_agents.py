@@ -499,6 +499,7 @@ class TestOnTheTable:
         script; the real one answers "" from a source tree that installed none.
         """
         from raven.config.schema import ThirdPartyAcpSubagentConfig
+        from raven.utils.commands import command_argv
 
         monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/stub/raven acp")
         redeclared = ThirdPartyAcpSubagentConfig.model_validate({"name": GENERIC_AGENT, "kind": "acp", "command": ""})
@@ -509,7 +510,7 @@ class TestOnTheTable:
         assert GENERIC_AGENT in registry.names()
         row = registry.get(GENERIC_AGENT)
         assert row.kind == "acp"
-        assert row.config.command == "/stub/raven acp"
+        assert command_argv(row.config.command) == ["/stub/raven", "acp", "--as-subagent", GENERIC_AGENT]
 
     def test_an_acp_row_the_operator_switched_off_stays_off(self, tree: Path) -> None:
         """The other direction: this merge leaves the flag alone rather than

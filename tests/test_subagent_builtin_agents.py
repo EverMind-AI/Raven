@@ -32,6 +32,9 @@ from raven.utils import commands
 
 OWNS = "owns decks. Do not build the deck yourself."
 
+#: The command an acp redeclaration of the generic row is given when it names none.
+GENERATED_ARGV = ["/usr/bin/raven", "acp", "--as-subagent", GENERIC_AGENT]
+
 
 def _row(**fields: Any) -> BuiltinAgentConfig:
     """A row as the write path leaves it: validated, then dumped and reloaded."""
@@ -252,7 +255,7 @@ class TestTheLegacyNamesStillNameTheSeed:
         assert row is not None
         assert row.kind == ("acp" if winner_kind == "acp" else "builtin")
         if winner_kind == "acp":
-            assert row.config.command == "/usr/bin/raven acp"
+            assert commands.command_argv(row.config.command) == GENERATED_ARGV
         elif winner_kind == "builtin":
             assert row.config.skills == ["new"]
 
@@ -336,7 +339,63 @@ class TestAnAcpRowCanReplaceTheSeed:
         merged = merge_builtin_seeds([self._acp()])
 
         assert [(row.name, row.kind) for row in merged] == [(GENERIC_AGENT, "acp")]
-        assert merged[0].command == "/usr/bin/raven acp"
+        assert commands.command_argv(merged[0].command) == GENERATED_ARGV
+
+    def test_the_generated_command_serves_the_row_under_its_own_name(self, monkeypatch) -> None:
+        """A bare ``raven acp`` is Raven itself: its prompt says so. The row is
+        the generic sub-agent, so the command it is given says which one."""
+        monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
+
+        argv = commands.command_argv(merge_builtin_seeds([self._acp()])[0].command)
+
+        assert argv[argv.index("--as-subagent") + 1] == GENERIC_AGENT
+
+    def test_a_remote_row_keeps_the_launcher_its_machine_must_run(self, monkeypatch) -> None:
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/local/raven acp")
+        row = ThirdPartyAcpSubagentConfig.model_validate(
+            {
+                "name": GENERIC_AGENT,
+                "kind": "acp",
+                "machine": "box1",
+                "command": "/opt/remote-raven/bin/raven acp --config /remote/config.json",
+            }
+        )
+
+        merged = merge_builtin_seeds([row])
+
+        assert merged[0].machine == "box1"
+        assert commands.command_argv(merged[0].command) == [
+            "/opt/remote-raven/bin/raven",
+            "acp",
+            "--config",
+            "/remote/config.json",
+        ]
+
+    def test_a_remote_row_without_a_command_gets_no_path_from_this_host(self, monkeypatch) -> None:
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        warnings: list[str] = []
+        monkeypatch.setattr(
+            builtin_agents,
+            "host_raven_acp_command",
+            lambda: pytest.fail("a remote row must not use this host's launcher"),
+        )
+        monkeypatch.setattr(
+            builtin_agents.logger,
+            "warning",
+            lambda message, *args: warnings.append(message.format(*args)),
+        )
+        row = ThirdPartyAcpSubagentConfig.model_validate(
+            {"name": GENERIC_AGENT, "kind": "acp", "machine": "box1", "command": ""}
+        )
+
+        merged = merge_builtin_seeds([row])
+
+        assert merged[0].machine == "box1"
+        assert merged[0].command == ""
+        assert any("machine" in warning and "command" in warning for warning in warnings)
 
     def test_the_legacy_spelling_resolves_onto_the_capitalised_row(self, monkeypatch) -> None:
         monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
@@ -344,12 +403,15 @@ class TestAnAcpRowCanReplaceTheSeed:
         merged = merge_builtin_seeds([self._acp("raven")])
 
         assert [(row.name, row.kind) for row in merged] == [(GENERIC_AGENT, "acp")]
+        assert commands.command_argv(merged[0].command) == GENERATED_ARGV
 
-    def test_the_host_roster_line_spells_it_subagent(self, monkeypatch) -> None:
+    def test_the_host_roster_line_says_what_the_child_cannot_do(self, monkeypatch) -> None:
         """The description is what ``roster_text`` renders into both tools.
 
-        An acp redeclaration therefore puts this line in front of the model, and
-        a hyphen here would sit in the same roster as the seed row's "subagent".
+        The child is launched with the sub-agent role, which withholds every
+        dispatch tool, so a line promising delegation sends it steps it can
+        neither do nor hand on. And a hyphen here would sit in the same roster
+        as the seed row's "subagent".
         """
         from raven.config.schema import ThirdPartyAcpSubagentConfig
 
@@ -362,7 +424,8 @@ class TestAnAcpRowCanReplaceTheSeed:
 
         roster = registry.roster_text()
 
-        assert "own subagent delegation" in roster
+        assert "cannot call subagents" in roster
+        assert "own subagent delegation" not in roster
         assert "sub-agent" not in roster
 
     def test_env_carries_the_host_raven_home(self, monkeypatch, tmp_path) -> None:
@@ -373,9 +436,10 @@ class TestAnAcpRowCanReplaceTheSeed:
 
         assert merged[0].env["RAVEN_HOME"] == str(home)
 
-    def test_a_declared_command_description_and_env_are_kept(self) -> None:
+    def test_the_command_is_fixed_while_description_and_env_stay_configurable(self, monkeypatch) -> None:
         from raven.config.schema import ThirdPartyAcpSubagentConfig
 
+        monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
         row = ThirdPartyAcpSubagentConfig.model_validate(
             {
                 "name": GENERIC_AGENT,
@@ -388,7 +452,7 @@ class TestAnAcpRowCanReplaceTheSeed:
 
         merged = merge_builtin_seeds([row])
 
-        assert merged[0].command == "custom acp"
+        assert commands.command_argv(merged[0].command) == GENERATED_ARGV
         assert merged[0].description == "mine"
         assert merged[0].env == {"RAVEN_HOME": "/elsewhere"}
 
@@ -407,7 +471,7 @@ class TestAnAcpRowCanReplaceTheSeed:
 
         merged = merge_builtin_seeds([self._acp()])
 
-        assert commands.command_argv(merged[0].command) == ["/usr/bin/raven", "acp", "--config", str(cfg)]
+        assert commands.command_argv(merged[0].command) == [*GENERATED_ARGV, "--config", str(cfg)]
         assert merged[0].env["RAVEN_HOME"] == str(home)
 
     def test_a_host_reading_its_own_homes_config_adds_no_flag(self, monkeypatch) -> None:
@@ -417,22 +481,27 @@ class TestAnAcpRowCanReplaceTheSeed:
 
         merged = merge_builtin_seeds([self._acp()])
 
-        assert merged[0].command == "/usr/bin/raven acp"
+        assert commands.command_argv(merged[0].command) == GENERATED_ARGV
 
-    def test_a_declared_command_is_never_given_arguments(self, monkeypatch, tmp_path) -> None:
-        """A row that brought its own command line chose it. Injecting the host's
-        config path into someone else's argv is not this function's business."""
+    def test_a_declared_command_cannot_replace_the_generated_launcher(self, monkeypatch) -> None:
+        """Raven-General over acp is this raven, not an arbitrary ACP server.
+
+        Letting a row choose the command would let it occupy the mandatory seed
+        slot with another process, so the transport is selectable and the
+        launcher is not.
+        """
         from raven.config.schema import ThirdPartyAcpSubagentConfig
 
         monkeypatch.setenv("RAVEN_HOME", "/srv/raven")
-        monkeypatch.setattr("raven.home._current_config_path", tmp_path / "config.json")
+        monkeypatch.setattr("raven.home._current_config_path", None)
+        monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
         row = ThirdPartyAcpSubagentConfig.model_validate(
             {"name": GENERIC_AGENT, "kind": "acp", "command": "custom acp"}
         )
 
         merged = merge_builtin_seeds([row])
 
-        assert merged[0].command == "custom acp"
+        assert commands.command_argv(merged[0].command) == GENERATED_ARGV
 
     def test_a_row_that_named_its_own_home_is_left_alone(self, monkeypatch, tmp_path) -> None:
         """An explicit ``env.RAVEN_HOME`` is the row asking for a different
@@ -451,7 +520,7 @@ class TestAnAcpRowCanReplaceTheSeed:
 
         merged = merge_builtin_seeds([row])
 
-        assert merged[0].command == "/usr/bin/raven acp"
+        assert commands.command_argv(merged[0].command) == GENERATED_ARGV
         assert merged[0].env["RAVEN_HOME"] == "/child-home"
 
     def test_a_row_that_named_its_own_home_is_left_alone_on_a_default_host(self, monkeypatch) -> None:
@@ -471,7 +540,7 @@ class TestAnAcpRowCanReplaceTheSeed:
 
         merged = merge_builtin_seeds([row])
 
-        assert merged[0].command == "/usr/bin/raven acp"
+        assert commands.command_argv(merged[0].command) == GENERATED_ARGV
 
     def test_a_config_path_with_a_space_stays_one_argv_token(self, monkeypatch, command_platform) -> None:
         root = PureWindowsPath("C:/Users/me") if command_platform == "nt" else PurePosixPath("/srv")
@@ -482,4 +551,4 @@ class TestAnAcpRowCanReplaceTheSeed:
 
         merged = merge_builtin_seeds([self._acp()])
 
-        assert commands.command_argv(merged[0].command) == ["/usr/bin/raven", "acp", "--config", str(cfg)]
+        assert commands.command_argv(merged[0].command) == [*GENERATED_ARGV, "--config", str(cfg)]

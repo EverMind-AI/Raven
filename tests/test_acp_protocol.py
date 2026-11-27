@@ -109,6 +109,31 @@ class TestDeclaredCapabilities:
     def test_no_authentication_is_declared_as_a_fact_not_an_omission(self):
         assert initialize_result({})["authMethods"] == []
 
+    def test_a_named_sub_agent_says_its_name_in_the_title(self, monkeypatch):
+        """``name`` stays ``raven``: raven's own client reads it as the family
+        marker that decides model push, usage booking and the own/third-party
+        split. ``title`` is the spec's display name and carries the roster row."""
+        monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+        monkeypatch.setenv("RAVEN_SUBAGENT_NAME", "Raven-General")
+
+        result = initialize_result({"protocolVersion": 1})
+
+        validate_def("InitializeResponse", result)
+        assert result["agentInfo"]["name"] == "raven"
+        assert result["agentInfo"]["title"] == "Raven-General"
+
+    def test_an_unnamed_process_declares_no_title(self, monkeypatch):
+        monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+        monkeypatch.delenv("RAVEN_SUBAGENT_NAME", raising=False)
+
+        assert set(initialize_result({})["agentInfo"]) == {"name", "version"}
+
+    def test_a_name_without_the_role_declares_nothing(self, monkeypatch):
+        monkeypatch.delenv("RAVEN_SUBAGENT", raising=False)
+        monkeypatch.setenv("RAVEN_SUBAGENT_NAME", "Raven-General")
+
+        assert "title" not in initialize_result({})["agentInfo"]
+
     def test_nothing_unbuilt_is_declared(self):
         """The worst failure shape in the protocol is a declared capability with
         nothing behind it: the client routes work to a method that errors, and

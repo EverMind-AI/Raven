@@ -357,7 +357,7 @@ class TestCallback:
 
         monkeypatch.setattr(acp_commands, "_serve", _fake_serve)
 
-        acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=None, verbose=False)
+        acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=None, verbose=False, as_subagent=None)
 
         assert served == [False]
 
@@ -373,7 +373,7 @@ class TestCallback:
         monkeypatch.setattr(acp_commands, "_serve", _explode)
 
         with pytest.raises(typer.Exit) as caught:
-            acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=None, verbose=False)
+            acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=None, verbose=False, as_subagent=None)
 
         assert caught.value.exit_code == 1
 
@@ -387,7 +387,9 @@ class TestCallback:
         monkeypatch.setattr(acp_commands, "_serve", _must_not_run)
 
         with contextlib.suppress(RuntimeWarning):
-            acp_commands.acp(SimpleNamespace(invoked_subcommand="future-subcommand"), config=None, verbose=False)
+            acp_commands.acp(
+                SimpleNamespace(invoked_subcommand="future-subcommand"), config=None, verbose=False, as_subagent=None
+            )
 
 
 class TestConfigOption:
@@ -413,7 +415,7 @@ class TestConfigOption:
         monkeypatch.setattr(acp_commands, "set_config_path", seen.append)
         self._dont_serve(monkeypatch)
 
-        acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=str(cfg), verbose=False)
+        acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=str(cfg), verbose=False, as_subagent=None)
 
         assert seen == [cfg.resolve()]
 
@@ -422,7 +424,7 @@ class TestConfigOption:
         monkeypatch.setattr(acp_commands, "set_config_path", seen.append)
         self._dont_serve(monkeypatch)
 
-        acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=None, verbose=False)
+        acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=None, verbose=False, as_subagent=None)
 
         assert seen == []
 
@@ -440,7 +442,7 @@ class TestConfigOption:
 
         monkeypatch.setattr(acp_commands, "_serve", _fake_serve)
 
-        acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=str(cfg), verbose=False)
+        acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=str(cfg), verbose=False, as_subagent=None)
 
         assert order == ["config", "serve"]
 
@@ -459,6 +461,7 @@ class TestConfigOption:
                 SimpleNamespace(invoked_subcommand=None),
                 config=str(tmp_path / "absent.json"),
                 verbose=False,
+                as_subagent=None,
             )
 
         assert caught.value.exit_code == 2
@@ -479,7 +482,7 @@ class TestConfigOption:
         monkeypatch.setattr("raven.home._current_config_path", None)
         self._dont_serve(monkeypatch)
 
-        acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=str(cfg), verbose=False)
+        acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=str(cfg), verbose=False, as_subagent=None)
 
         assert loader.get_config_path() == cfg
         assert get_logs_dir() == cfg.parent / "logs"
@@ -491,9 +494,111 @@ class TestConfigOption:
         monkeypatch.setattr(acp_commands, "_serve", _must_not_run)
 
         with pytest.raises(typer.Exit) as caught:
-            acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=str(tmp_path), verbose=False)
+            acp_commands.acp(
+                SimpleNamespace(invoked_subcommand=None), config=str(tmp_path), verbose=False, as_subagent=None
+            )
 
         assert caught.value.exit_code == 2
+
+
+class TestAsSubagentOption:
+    """``--as-subagent`` names the roster row a bare ``raven acp`` serves as.
+
+    Without it the process is Raven itself, which is what an acp redeclaration of
+    the generic row used to launch: a child that introduced itself as the host.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolated_role(self, monkeypatch):
+        # Set before deleting, so teardown restores the original state even
+        # though the option writes these straight into ``os.environ``.
+        for name in ("RAVEN_SUBAGENT", "RAVEN_SUBAGENT_NAME"):
+            monkeypatch.setenv(name, "")
+            monkeypatch.delenv(name)
+
+    @staticmethod
+    def _run(monkeypatch, name: str | None) -> dict[str, str | None]:
+        seen: dict[str, str | None] = {}
+
+        async def _fake_serve(*, verbose: bool = False) -> None:
+            seen["role"] = os.environ.get("RAVEN_SUBAGENT")
+            seen["name"] = os.environ.get("RAVEN_SUBAGENT_NAME")
+
+        monkeypatch.setattr(acp_commands, "_serve", _fake_serve)
+        acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=None, verbose=False, as_subagent=name)
+        return seen
+
+    @staticmethod
+    def _refused(monkeypatch, name: str | None) -> int:
+        async def _must_not_run(*, verbose: bool = False) -> None:
+            raise AssertionError("served under a name it cannot carry")
+
+        monkeypatch.setattr(acp_commands, "_serve", _must_not_run)
+        with pytest.raises(typer.Exit) as caught:
+            acp_commands.acp(SimpleNamespace(invoked_subcommand=None), config=None, verbose=False, as_subagent=name)
+        return caught.value.exit_code
+
+    def test_it_takes_the_role_and_the_name_before_serving(self, monkeypatch):
+        assert self._run(monkeypatch, "Raven-General") == {"role": "1", "name": "Raven-General"}
+
+    def test_the_typer_command_carries_the_flag_to_the_callback(self, monkeypatch):
+        from typer.testing import CliRunner
+
+        from raven.cli.commands import app
+
+        seen = {}
+
+        async def _fake_serve(*, verbose: bool = False) -> None:
+            seen["role"] = os.environ.get("RAVEN_SUBAGENT")
+            seen["name"] = os.environ.get("RAVEN_SUBAGENT_NAME")
+
+        monkeypatch.setattr(acp_commands, "_serve", _fake_serve)
+
+        result = CliRunner().invoke(app, ["acp", "--as-subagent", "Raven-General"])
+
+        assert result.exit_code == 0, result.output
+        assert seen == {"role": "1", "name": "Raven-General"}
+
+    @pytest.mark.parametrize("former", ["raven", "Raven"])
+    def test_a_former_spelling_is_served_under_the_current_name(self, monkeypatch, former):
+        assert self._run(monkeypatch, former)["name"] == "Raven-General"
+
+    def test_the_role_cannot_be_switched_off_beside_it(self, monkeypatch):
+        """A config ``env`` of ``RAVEN_SUBAGENT=0`` hands an ordinary child its
+        full registry. On a named child that registry would hold ``spawn``, and an
+        unnamed spawn lands back on this very row."""
+        monkeypatch.setenv("RAVEN_SUBAGENT", "0")
+
+        assert self._run(monkeypatch, "Raven-General")["role"] == "1"
+
+    def test_without_it_the_environment_is_left_alone(self, monkeypatch):
+        assert self._run(monkeypatch, None) == {"role": None, "name": None}
+
+    @pytest.mark.parametrize("name", ["Raven-Code", "Nobody", "", "  "])
+    def test_a_name_that_is_not_a_package_seed_exits_2(self, monkeypatch, name):
+        """A product row carries its identity in its own launcher, config and
+        ``soul.md``. A bare ``raven acp`` under its name would answer with the
+        right name and none of its abilities."""
+        assert self._refused(monkeypatch, name) == 2
+        assert "RAVEN_SUBAGENT_NAME" not in os.environ
+
+    def test_a_name_from_the_environment_is_held_to_the_same_rule(self, monkeypatch):
+        monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+        monkeypatch.setenv("RAVEN_SUBAGENT_NAME", "Raven-Code")
+
+        assert self._refused(monkeypatch, None) == 2
+
+    def test_a_name_from_the_environment_is_canonicalized(self, monkeypatch):
+        monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+        monkeypatch.setenv("RAVEN_SUBAGENT_NAME", "raven")
+
+        assert self._run(monkeypatch, None) == {"role": "1", "name": "Raven-General"}
+
+    def test_a_name_the_role_leaves_inert_is_not_checked(self, monkeypatch):
+        """Without the role the name says nothing, so it cannot stop a launch."""
+        monkeypatch.setenv("RAVEN_SUBAGENT_NAME", "Raven-Code")
+
+        assert self._run(monkeypatch, None) == {"role": None, "name": "Raven-Code"}
 
 
 class TestFileLogLevel:
@@ -561,7 +666,7 @@ class TestHelp:
     def test_it_names_every_variable_that_changes_its_behaviour(self):
         out = self._rendered()
 
-        for name in ("RAVEN_ACP_LOG_LEVEL", "RAVEN_CLI_DEBUG", "RAVEN_HOME"):
+        for name in ("RAVEN_ACP_LOG_LEVEL", "RAVEN_CLI_DEBUG", "RAVEN_HOME", "RAVEN_SUBAGENT", "RAVEN_SUBAGENT_NAME"):
             assert name in out, f"{name} changes how this command behaves and is not in its help"
 
     def test_it_names_every_method_that_requires_a_cwd(self):
@@ -578,3 +683,4 @@ class TestHelp:
 
         assert "--config" in out
         assert "--verbose" in out
+        assert "--as-subagent" in out

@@ -32,7 +32,13 @@ from __future__ import annotations
 # every shelf may import: ``raven.ops`` reads the role to pick whose machine list
 # is authoritative, and ops importing raven.agent would tie the two packages into
 # a cycle. Re-exported here so the sub-agent code keeps its own address for them.
-from raven.home import SUBAGENT_ENV_VAR, is_subagent_process, subagent_role_env
+from raven.home import (
+    SUBAGENT_ENV_VAR,
+    SUBAGENT_NAME_ENV_VAR,
+    is_subagent_process,
+    subagent_name,
+    subagent_role_env,
+)
 
 #: Every tool that dispatches work to another agent, or steers a dispatch already
 #: running. Withheld from a sub-agent because a node's whole point is that *this*
@@ -77,4 +83,11 @@ WITHHELD_FROM_SUBAGENT = frozenset(
 )
 
 
-__all__ = ["SUBAGENT_ENV_VAR", "WITHHELD_FROM_SUBAGENT", "is_subagent_process", "subagent_role_env"]
+__all__ = [
+    "SUBAGENT_ENV_VAR",
+    "SUBAGENT_NAME_ENV_VAR",
+    "WITHHELD_FROM_SUBAGENT",
+    "is_subagent_process",
+    "subagent_name",
+    "subagent_role_env",
+]

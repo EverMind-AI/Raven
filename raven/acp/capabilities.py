@@ -29,15 +29,25 @@ _MISSING = object()
 
 
 def _agent_info() -> dict[str, str]:
-    """Name and version, read from the installed distribution.
+    """Name and version, read from the installed distribution, and the roster title.
 
     Read rather than hardcoded so it cannot claim a version this build is not.
     A source checkout with no distribution metadata reports ``0.0.0`` instead of
     failing the handshake over a cosmetic field.
+
+    ``name`` stays ``raven`` for a process serving as a named sub-agent: raven's
+    own client reads it as the family marker that decides model push, usage
+    booking and the own/third-party split, and every product under ``agents/``
+    already answers with it. The roster row goes in ``title``, the spec's
+    display name.
     """
     from raven import __version__
+    from raven.home import subagent_name
 
-    return {"name": "raven", "version": str(__version__ or "0.0.0")}
+    info = {"name": "raven", "version": str(__version__ or "0.0.0")}
+    if title := subagent_name():
+        info["title"] = title
+    return info
 
 
 def agent_capabilities() -> dict[str, Any]:

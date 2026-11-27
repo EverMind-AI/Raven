@@ -27,11 +27,13 @@ from raven.contracts.path_policy import CONFIG_FILENAME, DEFAULT_HOME_DIRNAME, H
 
 __all__ = [
     "SUBAGENT_ENV_VAR",
+    "SUBAGENT_NAME_ENV_VAR",
     "get_config_path",
     "is_subagent_process",
     "oauth_home",
     "raven_home",
     "set_config_path",
+    "subagent_name",
     "subagent_role_env",
 ]
 
@@ -96,3 +98,21 @@ def subagent_role_env() -> dict[str, str]:
     registry -- the failure this exists to close, and one no error reports.
     """
     return {SUBAGENT_ENV_VAR: "1"}
+
+
+#: The roster row a sub-agent process serves as. Written by ``raven acp
+#: --as-subagent``, never by ``subagent_role_env``: the products under
+#: ``agents/`` run with the role and no name, and their prompt face is pinned.
+SUBAGENT_NAME_ENV_VAR = "RAVEN_SUBAGENT_NAME"
+
+
+def subagent_name() -> str:
+    """The roster name this process serves under, or "" when it serves under none.
+
+    Read only while the role is on. The name says which sub-agent this is, so a
+    process handed back its full registry (the role switched off) is not a
+    sub-agent and must not introduce itself as one.
+    """
+    if not is_subagent_process():
+        return ""
+    return os.environ.get(SUBAGENT_NAME_ENV_VAR, "").strip()

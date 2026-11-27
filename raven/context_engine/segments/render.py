@@ -661,9 +661,14 @@ def _host_role(dispatch: Sequence[str], worker_table: bool = False, board_shown:
     identity is a stable segment, so its text moves only where a turn binds or
     drops a table -- where the dispatch tools' own schemas move as well.
     """
-    from raven.agent.subagent.role import is_subagent_process
+    from raven.agent.subagent.role import is_subagent_process, subagent_name
 
     if not dispatch or is_subagent_process():
+        # A named child is a roster row, not the host: reading "You are Raven" it
+        # answered as the agent that had dispatched it. Unnamed children keep the
+        # line, since the products' prompt faces are pinned to it.
+        if name := subagent_name():
+            return f"You are {name}, a sub-agent working for Raven.", ""
         return "You are Raven, a helpful AI assistant.", ""
     if "spawn" in dispatch and "run_subagent_dag" in dispatch:
         route = "with `spawn`, or `run_subagent_dag` when tasks depend on each other or can run side by side"
