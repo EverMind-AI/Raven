@@ -47,7 +47,10 @@
           "warnRatio": 0.3
         },
         "forceFinalize": {
-          "enabled": true
+          "enabled": true,
+          "wrapUpReasoningEffort": "low",
+          "wrapUpMaxTokens": 16384,
+          "wrapUpSalvage": true
         },
         "spinBreaker": {
           "enabled": true
@@ -95,9 +98,20 @@
           "reportFormatOverride": true,
           "reportDepth": true,
           "reportLayout": "reader",
+          "reportStyle": "outline",
+          "limits": false,
           "reportReminder": true,
           "reportBounce": true,
           "processAppendix": true
+        },
+        "reportPage": {
+          "enabled": true,
+          "highlights": false,
+          "removeMarkdown": true,
+          "showLimits": false
+        },
+        "draftRevisions": {
+          "enabled": true
         },
         "askUser": {
           "enabled": true,
@@ -116,7 +130,7 @@
           "enabled": true,
           "judge": true
         },
-        "version": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader"
+        "version": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window-close-skim-chrono"
       }
     }
   },

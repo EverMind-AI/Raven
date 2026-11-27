@@ -360,8 +360,9 @@ def test_every_modes_worst_case_rollbacks_fit_the_loops_cap(flows):
     """Each gate that can bounce a draft is bounded on its own; the loop caps their sum
     per turn and refuses the next rollback past it, which would leave a gate's promise
     unkept with no record of why. max sits exactly on the cap by design: one spin
-    break, one salvage nudge, one report-shape bounce, three revisions and two floor
-    bounces. A new bouncing gate, or a wider knob, has to take room from another.
+    break, one salvage nudge, one report-shape bounce, three revisions, the one bounce
+    of a revision that talks about the review, and two floor bounces. A new bouncing
+    gate, or a wider knob, has to take room from another.
     """
     from raven.agent.loop.main import AgentLoop
 
@@ -372,6 +373,7 @@ def test_every_modes_worst_case_rollbacks_fit_the_loops_cap(flows):
             + (flow.force_finalize.max_nudges if flow.force_finalize.enabled else 0)
             + (1 if flow.final_shape.report_bounce else 0)
             + (flow.verify.max_revisions if flow.verify.enabled else 0)
+            + (1 if flow.verify.enabled and flow.verify.max_revisions > 0 else 0)
             + (flow.evidence_floor.max_rollbacks if flow.evidence_floor.enabled else 0)
             + (1 if flow.plain_first.enabled else 0)
         )

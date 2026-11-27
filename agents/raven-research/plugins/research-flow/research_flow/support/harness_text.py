@@ -127,8 +127,8 @@ def sufficiency_notice() -> str:
     return (
         f"{SUFFICIENCY_PREFIX} an independent review of the pages you have opened "
         "finds they already decide the answer. Do not open new leads. Write the "
-        "final answer now from the evidence above: the answer itself first, then "
-        "the evidence that decides it with source URLs."
+        "final answer now from the evidence above, in the shape the reply is required to take, "
+        "with the source URLs that decide it."
     )
 
 
@@ -146,7 +146,7 @@ def sufficiency_listing_notice() -> str:
         f"{SUFFICIENCY_PREFIX} an independent review of the search results finds the "
         "snippets already state the answer and agree with each other. For this task you "
         "may answer from the listing without opening a page: write the final answer now, "
-        "the answer itself first, then the snippets that decide it with their result URLs."
+        "in the shape the reply is required to take, citing the snippets that decide it by their result URLs."
     )
 
 
@@ -228,10 +228,14 @@ CHECKPOINT_ASK_PREFIX = "[research checkpoint]"
 VERIFY_REJECT_PREFIX = "A reviewer rejected the draft above."
 """Opening of both verify-gate rejections (``gates/verify.py``)."""
 
+REVIEW_TALK_PREFIX = "[reader-facing]"
+"""Opening of the verify gate's ask to drop talk about the review from a revision."""
+
 _HARNESS_ASKS = (
     ("finalize", FINALIZE_ASK_PREFIX),
     ("checkpoint", CHECKPOINT_ASK_PREFIX),
     ("verify_reject", VERIFY_REJECT_PREFIX),
+    ("review_talk", REVIEW_TALK_PREFIX),
 )
 
 
@@ -325,6 +329,7 @@ __all__ = [
     "FINALIZE_ASK_PREFIX",
     "ORPHAN_ENTITIES_HEADER",
     "PLAIN_FIRST_PREFIX",
+    "REVIEW_TALK_PREFIX",
     "SUFFICIENCY_PREFIX",
     "SEARCH_CLOSED_PREFIX",
     "TOOL_OUTPUT_ELIDED",

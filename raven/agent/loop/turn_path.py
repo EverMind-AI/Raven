@@ -97,7 +97,9 @@ from raven.agent.loop.recovery import (
     CONTEXT_WINDOW_CONTINUATION,
     CONTEXT_WINDOW_FAILURE,
     EMPTY_REPLY_FAILURE,
+    LOOP_REDIRECT_NOTE,
     MAX_CONTINUATIONS,
+    MAX_LOOP_REDIRECTS,
     NETWORK_CUT_CONTINUATION,
     OUTPUT_LIMIT_CONTINUATION,
     PARTIAL_STREAM_NOTE,
@@ -119,6 +121,7 @@ from raven.agent.loop.recovery import (
     empty_retry_delay,
     has_thinking_to_refeed,
     leaves_think_block_open,
+    looped,
     next_step_down,
     reasoning_excerpt,
     reply_kind,
@@ -146,6 +149,7 @@ from raven.permissions.turn import set_current_tool_call_id
 from raven.providers import usage_record
 from raven.providers.base import bound_llm_detail, canonical_llm_error, llm_error_summary, parse_llm_error
 from raven.providers.first_byte import first_byte_budget
+from raven.providers.text_tool_calls import recover_text_tool_calls
 from raven.providers.tool_calls import openai_tool_call
 from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT, SessionWriterConflictError
 from raven.session.refs import cap_tool_result, tool_result_view
@@ -513,6 +517,7 @@ _GIVEN_UP_ONCE_ANSWERED = frozenset(
 # The moves that ask the model again about the reply in hand, counted per step and kind for the failure texts.
 _ASKS_AGAIN = frozenset(
     {
+        RecoveryAction.REDIRECT,
         RecoveryAction.PREFILL,
         RecoveryAction.NUDGE,
         RecoveryAction.RETRY,
@@ -957,6 +962,12 @@ class TurnPathMixin:
         if reply_room := self._reply_room(synth_messages, None, model):
             effort_kwargs["max_tokens"] = reply_room
         if synthesis_policy is not None:
+            if synthesis_policy.reasoning_effort is not None:
+                effort_kwargs["reasoning_effort"] = synthesis_policy.reasoning_effort
+            if synthesis_policy.max_tokens:
+                effort_kwargs["max_tokens"] = min(
+                    reply_room or synthesis_policy.max_tokens, synthesis_policy.max_tokens
+                )
 
             async def _call(rows: list[dict]) -> str:
                 with _llm_purpose("main"):
@@ -986,6 +997,11 @@ class TurnPathMixin:
                             text = revised
                     except Exception as exc:
                         logger.warning("Early-exit synthesis repair failed: {}", exc)
+            if not text and synthesis_policy.salvage is not None:
+                try:
+                    text = await synthesis_policy.salvage(messages) or ""
+                except Exception as exc:
+                    logger.warning("Early-exit synthesis salvage failed: {}", exc)
             if not text:
                 text = fallback or _MAX_ITER_STATIC_FALLBACK.format(n=cap or "unbounded")
                 if synthesis_policy.format_fallback is not None:
@@ -1942,14 +1958,27 @@ class TurnPathMixin:
                     break
                 # Read inside the bind: the count belongs to it and ends with it.
                 recorded_at_seam = usage_record.recorded_inbound()
+            shown = response.content
+            if (recovered := recover_text_tool_calls(response, call_tools)) is not None:
+                logger.warning(
+                    "text-tool-calls: read {} <use_mcp_tool> block(s) in the reply as calls to {}",
+                    len(recovered.tool_calls),
+                    ", ".join(call.name for call in recovered.tool_calls),
+                )
+                response = recovered
+                shown = self._strip_think(response.content)
+                # A streamed reply already sits in the draft with its blocks; an unstreamed one
+                # reaches the draft only below, so restating it too would show it twice.
+                if draft is not None and not unstreamed:
+                    draft.restate(shown)
             if unstreamed and response.finish_reason != "error":
                 # What the stream would have shown, shown once the whole reply is in and through the
                 # same sinks: the thought first, then the words, which pass the gates a streamed
                 # delta passes, so a marker is still held and a reply still reaches the reader once.
                 if on_reasoning_delta is not None and response.reasoning_content:
                     await on_reasoning_delta(response.reasoning_content)
-                if (sink := draft or gate or downstream) is not None and response.content:
-                    await sink(response.content)
+                if (sink := draft or gate or downstream) is not None and shown:
+                    await sink(shown)
             if response.finish_reason != "error" and (note := getattr(self.context_engine, "note_request", None)):
                 # What went out and was answered, for a history strategy that
                 # summarises by replaying it (its prefix is what is cached).
@@ -2739,6 +2768,7 @@ class TurnPathMixin:
                     next_rung=next_rung,
                     fallback_left=bool(fallbacks_left),
                     resend_budget=resends_allowed,
+                    looping=looped(response),
                 )
                 answered_by_tool = False
                 if action in _GIVEN_UP_ONCE_ANSWERED:
@@ -2759,6 +2789,23 @@ class TurnPathMixin:
                     action = RecoveryAction.COMPLETE
                 if action in _ASKS_AGAIN:
                     recovery.step_asks[kind] += 1
+                if action is RecoveryAction.REDIRECT:
+                    recovery.redirects += 1
+                    logger.warning(
+                        "empty-recovery: reasoning went in circles; dropping it and asking for the next step {}/{}",
+                        recovery.redirects,
+                        MAX_LOOP_REDIRECTS,
+                    )
+                    # The looping thought is not carried: re-fed, it is continued. The
+                    # (empty) assistant keeps the note from following a tool result.
+                    _drop_trailing_prefills(messages)
+                    messages = self.context.add_assistant_message(messages, "(empty)")
+                    messages[-1]["_recovery_synthetic"] = True
+                    messages.append({"role": "user", "content": LOOP_REDIRECT_NOTE, "_recovery_synthetic": True})
+                    prev_had_tool_calls = False
+                    await _announce_wait("thinking_only")
+                    iteration -= 1
+                    continue
                 if action is RecoveryAction.PREFILL:
                     recovery.prefills += 1
                     logger.warning(
@@ -3014,6 +3061,10 @@ class TurnPathMixin:
                             draft.discard()
                         continue
                     if draft is not None:
+                        # A reply a hook replaced reaches the reader as replaced: a streamed
+                        # turn sends no closing text, so what is held is all the reader gets.
+                        if isinstance(decision.short_circuit_result, str):
+                            draft.restate(decision.short_circuit_result)
                         await draft.release()
                     await _settle_silence(silence_gate, silent=ends_silent, dropped_marker=dropped_marker)
                     _land_hook_note(decision)

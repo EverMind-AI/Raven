@@ -25,7 +25,11 @@ _DIGEST_SYSTEM = (
     "You extract exactly the requested information from a web page. Return "
     "the relevant facts, quotes and figures verbatim where possible, with "
     "enough surrounding context to be verifiable, and note where on the page "
-    "they appear. If the page does not contain the requested information, "
+    "they appear. A page's header time - a reader's 'Published Time' or "
+    "'Page timestamp', a crawl or render date - is not the date of the work: "
+    "when a date matters, give the work's own date (its submission history, "
+    "the first-version month an arXiv ID carries, its venue's date) and say "
+    "which date you quote. If the page does not contain the requested information, "
     "say so explicitly and list the closest related information it does "
     "contain. Be concise; no preamble."
 )
@@ -90,6 +94,14 @@ _DR_PROMPT_SECTION = """# Deep Research Mode - Contract
    are seeing the cached answer. Asking it again cannot change anything -
    either open one of the links, or ask a materially different question."""
 
+_DR_INDEPENDENT_VIEWS_CLAUSE = """{n}. When the question asks whether something is good, which option to choose, or
+   how it is received, the makers' own pages are one side of the answer. Also look
+   for views independent of them - third-party tests and comparisons, the project's
+   issue tracker, users' reports in forums and communities - and open the ones you
+   rely on, as rule 1 asks. In the reply, say which views are the makers' and which
+   are independent; if you found no independent view, say so in one sentence rather
+   than filling the gap from search listings."""
+
 # Numbered rules in the contract above. The optional clauses continue from here,
 # so a rule added to the contract must bump this or the list repeats a number.
 _DR_CONTRACT_RULES = 5
@@ -139,8 +151,9 @@ _DR_REPORT_STRUCTURE_CLAUSE_DEEP = """{n}. Write the reply as a research report 
    statement carries the URL of the page you fetched it from - written out in
    full and starting with `https://` - and its as-of or publication date when
    the data is time-sensitive; the `web_fetch #...` tag that wraps a tool
-   result is a data fence, not a citation, and never appears in the reply. In
-   prose, put the URL in a markdown link on the words it supports -
+   result is a data fence, not a citation, and never appears in the reply. A
+   fact read from a file on this host cites the file's absolute path instead.
+   In prose, put the URL in a markdown link on the words it supports -
    `[publisher or page title](https://...)` - so the sentence still reads as a
    sentence; a source column in a table may hold the bare URL. A
    finding no fetched page supports is named as unverified, never given an
@@ -186,7 +199,10 @@ _DR_REPORT_STRUCTURE_CLAUSE_DEEP = """{n}. Write the reply as a research report 
    works with it, and anchor an abstract point in one concrete case from your
    sources. Cut sentences that carry no information - restating the
    question, announcing what comes next, "it is worth noting", a closing recap
-   of what was just said."""
+   of what was just said.
+   This rule sets the shape of the reply, over the short form the identity
+   above describes: the reply is this report, in markdown, and its limits are
+   present every time."""
 
 
 def _derive(base: str, edits: tuple[tuple[str, str], ...]) -> str:
@@ -219,10 +235,12 @@ _DR_REPORT_STRUCTURE_CLAUSE_READER = _derive(
    one present every time, all in the language of the question:
    The answer, as the opening blockquote - every line of it starts with `> `,
    and no label comes before the answer itself - not a word or phrase and a
-   colon, in any language, and no bold lead-in. State the direct answer first
+   colon, in any language, and no bold label. State the direct answer first
    and in plain words, then two to four sentences on why it holds and what it
    means for the reader; if the question was ambiguous, one more line on how you
-   read it. Anything the task asks the report to open with - a retrieval
+   read it. When the answer rests on numbers, the blockquote gives the
+   deciding ones - a price, a share, a count, a date - rather than leaving
+   them to the body. Anything the task asks the report to open with - a retrieval
    date, the kinds of sources used - goes in the blockquote after the answer.
    What the task asks you to report back about the delivery itself - a file
    path, counts, link-check totals - is the blockquote's last line, naming
@@ -233,8 +251,33 @@ _DR_REPORT_STRUCTURE_CLAUSE_READER = _derive(
    whole. When the task names the report's sections, those names are the
    headings, word for word with their numbering, in every draft you write
    and in this reply, the link-check table's and the limits' included.
-   Organize it as an argument, not a list of signals: why something
-   happened, what it leads to, and what would break that reading. `###`
+   Cover the whole subject the question names. Before the first search, list
+   the parts it divides into - a product or a market by the buyers who pay
+   for it and the channels they buy through, a policy by the parties it
+   binds - and research each part the answer depends on. A part that moves
+   the other way, or that only another kind of source reports, belongs in
+   the answer, not in an aside; when the report leaves a part out, the
+   blockquote names it and says why.
+   When the question pins a time span - two dates, named months, "the last
+   half year" - the report is about work that first appeared inside it. Put
+   the span in the queries, not a bare year: `after:YYYY-MM-DD
+   before:YYYY-MM-DD` at the end of the query, or the months by name. Date
+   each source by when the work first appeared: an arXiv paper by the month
+   its ID carries (2605 is May 2026); a journal or conference paper by its
+   first public version, often a preprint months or a year before the venue,
+   and when the venue's date is all you found, say so; never by a page's
+   crawl or render timestamp or the year a search listing shows. Work from
+   before the span is a baseline: a clause of comparison, never what a
+   section about the span is built on. For a question about recent progress,
+   survey before you dig:
+   a few broad searches across the span - new methods, benchmarks and
+   leaderboards, systems and tools, industry releases - to learn the names
+   that appeared in it, one or two of them in the question's own language,
+   then open the work behind those names.
+   Organize it as an argument, not a list of signals: what is the case now,
+   with the figures that show it; why it is so; what it leads to; and what
+   would break that reading. The blockquote already gives the answer, so no
+   section restates it: the body starts at the argument's first step. `###`
    subheadings are allowed inside a part when it needs them. Every specific
    number, date or quoted statement carries the URL of the page you fetched it
    from - written out in""",
@@ -271,9 +314,19 @@ _DR_REPORT_STRUCTURE_CLAUSE_READER = _derive(
             """   identifier may appear only in the sentence that already says so. When the
    task sets a length, keep the body inside it: make room by cutting
    repetition, background and secondary detail, never evidence, sources or
-   caveats. Without one, let the report run as long as the evidence needs.
+   caveats. A count within a twentieth of the bound meets it, and a body that
+   meets it is done as far as length goes: do not lengthen it for depth or
+   trim it for the count. State the report's own length or its number of
+   sources only when the task asks for them, since a stated count has to be
+   kept true through every later edit. Trim in one or two passes, a paragraph
+   or a sentence at a time, and stop once the count meets the bound: a file
+   edited over and over for a few characters costs the turn more than the
+   overrun. An edit keeps every heading its old text
+   holds. Without one, let the report run as long as the evidence needs.
    After you write or edit a markdown file, its tool result ends with a
-   `[report length: ...]` line measured from that file. Unless the task says
+   `[report length: ...]` line measured from that file; when the task's
+   length is one the flow can read, the line also says whether the body
+   meets it, and that verdict stands. Unless the task says
    what its length covers, it covers prose and tables alike and leaves out
    only a link-check table: check the total less that table's section
    against it, and take any count you state from it, the number of sources
@@ -283,7 +336,246 @@ _DR_REPORT_STRUCTURE_CLAUSE_READER = _derive(
             """   Add no other `##` headings, and do not close with a list of sources: every""",
             """   Do not close with a list of sources: every""",
         ),
+        (
+            """   question, announcing what comes next, "it is worth noting", a closing recap
+   of what was just said.""",
+            """   question, announcing what comes next, "it is worth noting", a closing recap
+   of what was just said. Write in the plain, standard register of the
+   question's language, as its native editor would: every sentence parses -
+   reread each one before you send it and rewrite any that does not. In a
+   report not in English, keep an English word only for a proper name - a
+   method, model, product, organization, benchmark or dataset - a model
+   number, a unit, or a technical term the field writes in English and the
+   language has no settled word for. Translate every other word - "blended
+   ASP" is an average selling price, "over MSRP" a figure above the list
+   price - and let no English verb, adjective or common noun stand in a
+   sentence of another language: "consolidate around", "reading", "robust"
+   are words to translate, not terms; in Chinese, use the mainland terms, never a Taiwan
+   or Hong Kong variant. When two figures for one quantity differ - new
+   against used, list against street, two dates - say in the same sentence
+   what each one measures, so they do not read as a contradiction.""",
+        ),
     ),
+)
+
+# The reader clause when the flow also writes the report's reading page. Without it a
+# task that asks for "the report as HTML" gets a page the model writes by hand, which
+# the flow's page then replaces: the turns that wrote it are spent for nothing. The
+# page is promised only for a reply that is the report, because no other reply gets one.
+# The clause also closes the link-check rule: a model given only "when the task asks"
+# wrote the table unasked, and on the page it is a second list of the same sources.
+# The report then closes with its list of sources, after the limits: the page's source
+# list is that list, and the file and the page end the same way on every report. Under
+# "the limits are the last section" a model that listed its sources put them before the
+# limits. The two headings are fixed in English and Chinese, the languages the product
+# is read in, so a reader finds the same two sections at the end of every report.
+# The paragraph rule is here because the page shows the fault: under "let prose carry
+# the argument" alone a report held paragraphs of 900 Chinese characters. The clause
+# does not name the forms the page sets as blocks of their own: with them named, two
+# real reports used none that they did not use before.
+_DR_REPORT_STRUCTURE_CLAUSE_READER_PAGE = _derive(
+    _DR_REPORT_STRUCTURE_CLAUSE_READER,
+    (
+        (
+            """   The limits, as the last `##` section - `## Limitations` in English; in any
+   other language, that language's words for what could not be verified, with
+   no English word in the heading, alone or beside them - whatever you could
+   not establish, named plainly, plus the few concrete signals that would
+   confirm or overturn this report later; when nothing material is missing,
+   say so in one line.""",
+            """   The limits, as the `##` section that closes the body - `## Limitations` in
+   English, `## \u672a\u6838\u9a8c\u9879` in Chinese; in any other language, that language's words
+   for what could not be verified, with no English word in the heading,
+   alone or beside them - whatever you could not establish, named plainly,
+   plus the few concrete signals that would confirm or overturn this report
+   later; when nothing material is missing, say so in one line.
+   After the limits, the list of sources closes the report, under the last
+   `##` heading - `## Sources` in English, `## \u6765\u6e90` in Chinese; in any other
+   language, that language's word for it. It is one list of the pages the
+   report cites, each page once: its title or publisher, then its URL
+   written out, or the absolute path of a local file it cites. A task that
+   names the report's sections and names neither of these two still gets
+   both, after its own sections.""",
+        ),
+        (
+            """   Do not close with a list of sources: every""",
+            """   Write no other list of sources, and nothing after that one. It adds no
+   page the report does not cite and replaces no link in the text: every""",
+        ),
+        (
+            """   the site blocked it. A
+   finding no fetched page supports""",
+            """   the site blocked it. When the task does not ask for that, write no
+   link-check table and no section about link checks: the record that
+   follows the reply already holds every fetch. A
+   finding no fetched page supports""",
+        ),
+        (
+            """   included. A link-check table has one row for each URL that line counts.""",
+            """   included. A link-check table has one row for each URL that line counts.
+   When this reply is the report in the three parts above, the flow itself
+   writes it as an HTML page for the reader after the reply, and names that
+   file to whoever reads the reply. Do not write an HTML file of the report
+   yourself, also when the task asks for the report as HTML or as a page:
+   the flow's page is that file.""",
+        ),
+        (
+            """   what its length covers, it covers prose and tables alike and leaves out
+   only a link-check table: check the total less that table's section
+   against it, and take any count you state from it, the number of sources
+   included. A link-check table has one row for each URL that line counts.""",
+            """   what its length covers, it covers prose and tables alike and leaves out
+   only a link-check table and the list of sources: check the total less
+   those sections against it, and take any count you state from it, the
+   number of sources included. A link-check table has one row for each URL
+   that line counts.""",
+        ),
+        (
+            """   lists and tables for items the reader compares side by side. Define a term""",
+            """   lists and tables for items the reader compares side by side. Keep each
+   paragraph to one point and to three to five sentences - about 150 to 300
+   characters in Chinese, 60 to 120 words in English - and never past 500
+   characters or 200 words: start a new paragraph where the point changes,
+   because on the page a long paragraph is a block the reader skips. Define a term""",
+        ),
+    ),
+)
+
+# The outline style of the reader layout (``finalShape.reportStyle``): a title, numbered
+# sections and subsections, and a labelled conclusion opening each section; the form of
+# each part - table, list or prose - follows its content. Only principles here: on
+# 2026-11-26 a 600-word set of rules and a template, held in the system prompt through a
+# long research turn, gave a report with no table, no list and two of five sections
+# labelled, while the same model under a short write-up brief wrote tables and lists of
+# its own. The fixed limits and sources headings stay unnumbered: the page and the shape
+# bar find them by name.
+_OUTLINE_STYLE_EDITS = (
+    (
+        """   with the figures that show it; why it is so; what it leads to; and what
+   would break that reading. The blockquote already gives the answer, so no""",
+        """   with the figures that show it; why it is so; what it leads to; and what is
+   still open - the questions the evidence leaves unsettled, the signals that
+   would change this reading, the work worth following next - under a heading
+   such as `Open questions and next steps`
+   (`\u5f00\u653e\u95ee\u9898\u4e0e\u540e\u7eed\u65b9\u5411` in Chinese), numbered like the rest; no
+   heading names "the reading" or what would break it. The blockquote already
+   gives the answer, so no""",
+    ),
+    (
+        """   and is left out of the saved file. Nothing comes before the blockquote.""",
+        """   and is left out of the saved file. Nothing comes before the blockquote
+   but the report's title: one `#` line that names the topic and its scope,
+   in the language of the question.""",
+    ),
+    (
+        """   each name what their part shows; no heading stands above the body as a
+   whole.""",
+        """   each name what their part shows; no heading but the title stands above
+   the body as a whole.""",
+    ),
+    (
+        """   section restates it: the body starts at the argument's first step. `###`
+   subheadings are allowed inside a part when it needs them.""",
+        """   section restates it: the body starts at the argument's first step. Number
+   the body's `##` headings in order - `## \u4e00\u3001...` in Chinese, `## 1. ...` in
+   other languages - unless the task names the sections, and give a section
+   that covers several aspects a numbered `###` subheading for each -
+   `### \uff08\u4e00\uff09...` in Chinese, `### 1.1 ...` in other languages.
+   The limits keep their heading unnumbered.""",
+    ),
+    (
+        """   once, top to bottom. Let prose carry the argument: open each part with the
+   claim it makes, then give the evidence and the mechanism behind it, and keep
+   lists and tables for items the reader compares side by side.""",
+        """   once, top to bottom. Open each numbered `##` section with its conclusion in
+   one sentence, with no label before it. When the question surveys several
+   methods, paradigms, products or works, the first numbered section sets
+   them side by side in one table before any is taken up - a row for each,
+   its columns what the reader compares them by: what it is, its
+   representative work, its key result, where it fits. When the question
+   asks how an event came about or how it has unfolded, the first numbered
+   section gives its chronology before any part is analyzed - a dated list,
+   one event to an item, oldest first, each dated as its source dates it and
+   citing that source. Give the content the
+   form it has: a table where the reader compares items across the same
+   measures, a list where a section names parallel items, prose for why
+   something holds and what it leads to. Bold for a reader who skims, by
+   what a paragraph holds, not by where it stands: the names the reader
+   scans for - each method, model, work, product, benchmark or organization
+   the text is about, where it first appears in that paragraph - its
+   deciding figures - a score, a gain, a cost, a count, a date - and at most
+   one verdict of a few words. Bold the name, the figure or the few words
+   alone - `**DARE**`, not the clause that explains it - and never a whole
+   sentence, the opening one included. A paragraph with nothing a reader
+   scans for stays plain, and none carries more than four or five, so that
+   the bold alone gives the report's findings.""",
+    ),
+)
+# What the outline style adds where the flow also writes the page: the list of sources
+# the page clause closes the report with keeps its fixed heading too.
+_OUTLINE_PAGE_EDITS = (
+    (
+        """   The limits keep their heading unnumbered.""",
+        """   The limits and the list of sources keep their fixed headings, unnumbered.""",
+    ),
+)
+_DR_REPORT_STRUCTURE_CLAUSE_READER_OUTLINE = _derive(_DR_REPORT_STRUCTURE_CLAUSE_READER, _OUTLINE_STYLE_EDITS)
+_DR_REPORT_STRUCTURE_CLAUSE_READER_PAGE_OUTLINE = _derive(
+    _derive(_DR_REPORT_STRUCTURE_CLAUSE_READER_PAGE, _OUTLINE_STYLE_EDITS), _OUTLINE_PAGE_EDITS
+)
+
+# The page's report without its limits (``finalShape.limits`` off): the answer and the
+# body, the list of sources closing it. What could not be established is said where it
+# bears, beside the claim, not gathered into a closing section; the page left that
+# section off already, and a reader of the file met it as a repeat of the caveats above.
+_NO_LIMITS_EDITS = (
+    (
+        """{n}. Write the reply as a research report in three parts, in this order, each""",
+        """{n}. Write the reply as a research report in two parts, in this order, each""",
+    ),
+    (
+        """   and in this reply, the link-check table's and the limits' included.""",
+        """   and in this reply, the link-check table's included.""",
+    ),
+    (
+        """   were checked, do it once, in one table under its own `##` heading before
+   the limits, listing every URL the report cites, none left out, each""",
+        """   were checked, do it once, in one table under its own `##` heading before
+   the list of sources, listing every URL the report cites, none left out, each""",
+    ),
+    (
+        """   The limits, as the `##` section that closes the body - `## Limitations` in
+   English, `## \u672a\u6838\u9a8c\u9879` in Chinese; in any other language, that language's words
+   for what could not be verified, with no English word in the heading,
+   alone or beside them - whatever you could not establish, named plainly,
+   plus the few concrete signals that would confirm or overturn this report
+   later; when nothing material is missing, say so in one line.
+   After the limits, the list of sources closes the report, under the last""",
+        """   Write no section on what could not be verified: say it in the sentence it
+   bears on. The list of sources closes the report, under the last""",
+    ),
+    (
+        """   written out, or the absolute path of a local file it cites. A task that
+   names the report's sections and names neither of these two still gets
+   both, after its own sections.""",
+        """   written out, or the absolute path of a local file it cites. A task that
+   names the report's sections and names no list of sources still gets one,
+   after its own sections.""",
+    ),
+    (
+        """   When this reply is the report in the three parts above, the flow itself""",
+        """   When this reply is the report in the two parts above, the flow itself""",
+    ),
+    (
+        """   above describes: the reply is this report, in markdown, and its limits are
+   present every time.""",
+        """   above describes: the reply is this report, in markdown.""",
+    ),
+)
+_DR_REPORT_STRUCTURE_CLAUSE_READER_PAGE_NO_LIMITS = _derive(_DR_REPORT_STRUCTURE_CLAUSE_READER_PAGE, _NO_LIMITS_EDITS)
+_DR_REPORT_STRUCTURE_CLAUSE_READER_PAGE_OUTLINE_NO_LIMITS = _derive(
+    _derive(_derive(_DR_REPORT_STRUCTURE_CLAUSE_READER_PAGE, _NO_LIMITS_EDITS), _OUTLINE_STYLE_EDITS),
+    ((_OUTLINE_PAGE_EDITS[0][0], """   The list of sources keeps its fixed heading, unnumbered."""),),
 )
 
 _DR_REPORT_FORMAT_OVERRIDE_PASSAGE_READER = _derive(
@@ -442,6 +734,42 @@ def _apply_ask_user_identity(identity: str, *, delivery: str = "handoff") -> str
     return identity
 
 
+def _report_clause(
+    *,
+    report_format_override: bool,
+    report_depth: bool,
+    report_layout: str,
+    report_page: bool,
+    report_style: str,
+    report_limits: bool = True,
+) -> str:
+    """The report rule for these switches, its ``{n}`` still open."""
+    # The reader layout is a form of the deep clause; the short clause has none.
+    if report_depth and report_layout == "reader":
+        # The page is a form of the reader layout's report, so only that clause speaks of it.
+        # Only the page's report can close without its limits: the page shows that report.
+        if report_page and not report_limits:
+            clause = (
+                _DR_REPORT_STRUCTURE_CLAUSE_READER_PAGE_OUTLINE_NO_LIMITS
+                if report_style == "outline"
+                else _DR_REPORT_STRUCTURE_CLAUSE_READER_PAGE_NO_LIMITS
+            )
+        elif report_style == "outline":
+            clause = (
+                _DR_REPORT_STRUCTURE_CLAUSE_READER_PAGE_OUTLINE
+                if report_page
+                else _DR_REPORT_STRUCTURE_CLAUSE_READER_OUTLINE
+            )
+        else:
+            clause = _DR_REPORT_STRUCTURE_CLAUSE_READER_PAGE if report_page else _DR_REPORT_STRUCTURE_CLAUSE_READER
+        override = _DR_REPORT_FORMAT_OVERRIDE_PASSAGE_READER
+    elif report_depth:
+        clause, override = _DR_REPORT_STRUCTURE_CLAUSE_DEEP, _DR_REPORT_FORMAT_OVERRIDE_PASSAGE
+    else:
+        clause, override = _DR_REPORT_STRUCTURE_CLAUSE, _DR_REPORT_FORMAT_OVERRIDE_PASSAGE
+    return clause.replace("{format_override}", override if report_format_override else "")
+
+
 def render_parts(
     text: str | None = None,
     *,
@@ -452,10 +780,14 @@ def render_parts(
     report_format_override: bool = True,
     report_depth: bool = False,
     report_layout: str = "sections",
+    report_page: bool = False,
+    report_style: str = "prose",
+    report_limits: bool = True,
     ask_user: bool = False,
     ask_user_outline: bool = True,
     ask_user_mode: str = "first_turn",
     ask_user_delivery: str = "handoff",
+    independent_views: bool = False,
 ) -> tuple[str, str]:
     """The identity and contract texts, exactly as the fork's segment builder made them.
 
@@ -472,15 +804,14 @@ def render_parts(
     """
     contract = text or _DR_PROMPT_SECTION
     if text is None:
-        # The reader layout is a form of the deep clause; the short clause has none.
-        reader = report_depth and report_layout == "reader"
-        if reader:
-            report_clause, override = _DR_REPORT_STRUCTURE_CLAUSE_READER, _DR_REPORT_FORMAT_OVERRIDE_PASSAGE_READER
-        elif report_depth:
-            report_clause, override = _DR_REPORT_STRUCTURE_CLAUSE_DEEP, _DR_REPORT_FORMAT_OVERRIDE_PASSAGE
-        else:
-            report_clause, override = _DR_REPORT_STRUCTURE_CLAUSE, _DR_REPORT_FORMAT_OVERRIDE_PASSAGE
-        report_clause = report_clause.replace("{format_override}", override if report_format_override else "")
+        report_clause = _report_clause(
+            report_format_override=report_format_override,
+            report_depth=report_depth,
+            report_layout=report_layout,
+            report_page=report_page,
+            report_style=report_style,
+            report_limits=report_limits,
+        )
         if ask_user_mode == "first_turn":
             ask_user_clause = (
                 _DR_ASK_USER_CLAUSE_FIRST_TURN_TOOL if ask_user_delivery == "tool" else _DR_ASK_USER_CLAUSE_FIRST_TURN
@@ -504,6 +835,7 @@ def render_parts(
                 (_DR_ANSWER_MARKER_CLAUSE, require_answer_marker),
                 (report_clause, report_structure),
                 (ask_user_clause, ask_user),
+                (_DR_INDEPENDENT_VIEWS_CLAUSE, independent_views),
             )
             if on
         ]
@@ -549,8 +881,41 @@ def render_identity_and_contract(cfg: "FlowConfig") -> tuple[str, str]:
         report_format_override=cfg.final_shape.report_format_override,
         report_depth=cfg.final_shape.report_depth,
         report_layout=cfg.final_shape.report_layout,
+        report_page=cfg.report_page.enabled,
+        report_style=cfg.final_shape.report_style,
+        report_limits=cfg.final_shape.limits,
         ask_user=ask_user_on and cfg.ask_user.prompt_clause,
         ask_user_outline=cfg.ask_user.outline,
         ask_user_mode=cfg.ask_user.mode,
         ask_user_delivery=cfg.ask_user.delivery,
+        independent_views=cfg.independent_views,
     )
+
+
+# The write step's brief (``finalShape.writePhase``): the report rule, repeated after the
+# research it is written from. Under the rule in the system prompt alone, held through a
+# research turn of 100k+ tokens, the model kept the rules it was told once in a fixed
+# form and dropped those that ask it to judge the content's form - tables, which names
+# to bold, subsections.
+_WRITE_BRIEF_HEAD = """[Research is closed: the tools are withdrawn for this reply.] Write the final
+reply now, from the evidence gathered above, as one complete report. Rule {n} of
+your instructions sets its shape in full; it is repeated here so that you write
+to it. The reader sees the report and never this request: do not mention it.
+Nor has the reader seen an earlier draft or your notes: where the research showed
+a fact you held to be wrong, state the right one plainly, never that it was corrected.
+
+"""
+
+
+def write_brief(cfg: "FlowConfig") -> str:
+    """The message the write step appends after the research: the report rule ``cfg`` renders, numbered as there."""
+    number = _DR_CONTRACT_RULES + 1 + (1 if cfg.final_shape.require_marker else 0)
+    clause = _report_clause(
+        report_format_override=cfg.final_shape.report_format_override,
+        report_depth=cfg.final_shape.report_depth,
+        report_layout=cfg.final_shape.report_layout,
+        report_page=cfg.report_page.enabled,
+        report_style=cfg.final_shape.report_style,
+        report_limits=cfg.final_shape.limits,
+    )
+    return _WRITE_BRIEF_HEAD.replace("{n}", str(number)) + clause.replace("{n}", str(number)).strip("\n")

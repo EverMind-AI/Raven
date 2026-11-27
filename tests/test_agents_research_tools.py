@@ -14,6 +14,7 @@ an error string while the launch reports success.
 from __future__ import annotations
 
 import json
+import os
 import socket
 import sys
 from pathlib import Path
@@ -391,6 +392,178 @@ def test_the_digest_follows_the_sessions_mode_not_the_base_config(tmp_path):
     deep, base = asyncio.run(run())
     assert deep == "the extracted facts" and base == "the extracted facts"
     assert seen == ["deep/strong", "base/cheap"]
+
+
+def test_a_digest_provider_of_its_own_serves_the_digest_with_its_model(tmp_path, monkeypatch):
+    """digest.provider moves the digest off the agent's provider: the agent's is not
+    called, and the configured model is pinned even on a session whose mode names
+    another, because that model is one only the digest's own provider serves."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from research_flow.flow import SessionGear
+    from research_flow.plugin import _shared_for
+
+    agent_calls: list[str | None] = []
+    own_calls: list[dict] = []
+
+    class _Agent:
+        async def chat_with_retry(self, **kwargs):
+            agent_calls.append(kwargs.get("model"))
+            return SimpleNamespace(content="from the agent")
+
+    class _Own:
+        def __init__(self, **kwargs):
+            own_calls.append({"built": kwargs})
+
+        async def chat_with_retry(self, **kwargs):
+            own_calls.append({"model": kwargs.get("model")})
+            return SimpleNamespace(content="from the digest provider")
+
+    monkeypatch.setattr("raven.providers.litellm_provider.LiteLLMProvider", _Own)
+    slice_ = {
+        "enabled": True,
+        "digest": {
+            "enabled": True,
+            "provider": "deepseek",
+            "model": "deepseek/deepseek-v4-flash",
+            "apiKey": "dk",
+            "verbatimHeadChars": 0,
+        },
+        **_NO_LLM_GATES,
+    }
+    ctx = _ctx(tmp_path, slice_, provider=_Agent())
+    tool = make_web_fetch(ctx)
+    page = "x" * (tool.digest_threshold_chars + 1)
+
+    async def run():
+        set_current_session("s-deep")
+        _shared_for(ctx).session_gear["s-deep"] = SessionGear(digest_model="deep/strong", digest_verbatim_head_chars=0)
+        return (await tool._try_digest(page, "the founding date", "https://a.example/one"))[0]
+
+    assert asyncio.run(run()) == "from the digest provider"
+    assert agent_calls == []
+    built = own_calls[0]["built"]
+    assert (built["provider_name"], built["api_key"], built["default_model"]) == (
+        "deepseek",
+        "dk",
+        "deepseek/deepseek-v4-flash",
+    )
+    assert own_calls[1] == {"model": "deepseek/deepseek-v4-flash"}
+
+
+def test_a_digest_provider_without_a_key_falls_back_to_the_agents(tmp_path):
+    from research_flow.plugin import _shared_for
+
+    class _Agent:
+        pass
+
+    agent = _Agent()
+    slice_ = {"enabled": True, "digest": {"provider": "deepseek", "model": "deepseek/x"}, **_NO_LLM_GATES}
+    ctx = _ctx(tmp_path, slice_, provider=agent)
+    assert _shared_for(ctx).digest_provider() == (agent, None)
+
+
+def test_a_digest_provider_that_falls_back_runs_the_agents_model(tmp_path):
+    """Without its key the digest runs on the agent's provider, and so on the agent's
+    model: neither the configured digest model nor a mode's is one that endpoint serves."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from research_flow.flow import SessionGear
+    from research_flow.plugin import _shared_for
+
+    agent_calls: list[str | None] = []
+
+    class _Agent:
+        async def chat_with_retry(self, **kwargs):
+            agent_calls.append(kwargs.get("model"))
+            return SimpleNamespace(content="from the agent")
+
+    slice_ = {
+        "enabled": True,
+        "digest": {"enabled": True, "provider": "deepseek", "model": "deepseek/x", "verbatimHeadChars": 0},
+        **_NO_LLM_GATES,
+    }
+    ctx = _ctx(tmp_path, slice_, provider=_Agent())
+    tool = make_web_fetch(ctx)
+    page = "x" * (tool.digest_threshold_chars + 1)
+
+    async def run():
+        set_current_session("s-plain")
+        first = (await tool._try_digest(page, "the founding date", "https://a.example/one"))[0]
+        set_current_session("s-deep")
+        _shared_for(ctx).session_gear["s-deep"] = SessionGear(digest_model="deep/strong", digest_verbatim_head_chars=0)
+        second = (await tool._try_digest(page, "the founding date", "https://a.example/two"))[0]
+        return first, second
+
+    assert asyncio.run(run()) == ("from the agent", "from the agent")
+    assert agent_calls == [None, None]
+
+
+def test_the_digest_provider_leaves_the_agents_environment_alone(tmp_path, monkeypatch):
+    """The digest's key travels on its own calls; exported, a gateway key would
+    overwrite the agent's in the process and reach every child it starts."""
+    from research_flow.plugin import _shared_for
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "the-agents-key")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    for vendor, model in (("openrouter", "openai/gpt-x"), ("deepseek", "deepseek/deepseek-chat")):
+        slice_ = {"enabled": True, "digest": {"provider": vendor, "model": model, "apiKey": "dk"}, **_NO_LLM_GATES}
+        own, _ = _shared_for(_ctx(tmp_path / vendor, slice_, provider=object())).digest_provider()
+        assert own is not None
+    assert os.environ["OPENROUTER_API_KEY"] == "the-agents-key"
+    assert "DEEPSEEK_API_KEY" not in os.environ
+
+
+def test_the_digest_provider_is_built_once_for_the_fetch_tool_and_the_hook(tmp_path, monkeypatch):
+    from research_flow.plugin import _shared_for
+
+    built = []
+
+    class _Own:
+        def __init__(self, **kwargs):
+            built.append(kwargs)
+
+    monkeypatch.setattr("raven.providers.litellm_provider.LiteLLMProvider", _Own)
+    slice_ = {
+        "enabled": True,
+        "digest": {"provider": "deepseek", "model": "deepseek/x", "apiKey": "dk"},
+        **_NO_LLM_GATES,
+    }
+    shared = _shared_for(_ctx(tmp_path, slice_, provider=object()))
+
+    first, second = shared.digest_provider(), shared.digest_provider()
+    assert first[0] is second[0] and first[1] == "deepseek/x"
+    assert len(built) == 1
+
+
+def test_the_digest_provider_answers_without_thinking_only_when_asked(tmp_path, monkeypatch):
+    """``digest.thinking: false`` reaches the served model as the chat template's
+    ``enable_thinking`` flag, on the digest's own provider only; left on, the
+    provider is built exactly as before, with no override at all."""
+    from research_flow.plugin import _shared_for
+
+    built = []
+
+    class _Own:
+        def __init__(self, **kwargs):
+            built.append(kwargs)
+
+    monkeypatch.setattr("raven.providers.litellm_provider.LiteLLMProvider", _Own)
+    digest = {"provider": "custom", "model": "MiroThinker-2.0", "apiKey": "k"}
+    _shared_for(
+        _ctx(tmp_path / "on", {"enabled": True, "digest": digest, **_NO_LLM_GATES}, provider=object())
+    ).digest_provider()
+    off = {**digest, "thinking": False}
+    _shared_for(
+        _ctx(tmp_path / "off", {"enabled": True, "digest": off, **_NO_LLM_GATES}, provider=object())
+    ).digest_provider()
+
+    assert "model_overrides" not in built[0]
+    assert built[1]["model_overrides"] == {
+        "MiroThinker-2.0": {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
+    }
 
 
 def test_a_keyless_search_tool_is_not_contributed(tmp_path, monkeypatch):
@@ -1337,3 +1510,42 @@ async def test_research_option_labels_reach_the_broker_as_text(option, expected)
     assert "User answered" in result and expected in result
     assert params == original
     assert not tool._take_round_trip_grant()
+
+
+class _ReaderHeaderTransport(httpx.AsyncBaseTransport):
+    """The reader's envelope: its page time in the header, then the page."""
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        body = "Off-policy RL for LLM post-training. " * 30
+        return httpx.Response(
+            200,
+            text=f"Title: A paper\n\nPublished Time: Mon, 24 Aug 2026 20:01:50 GMT\n\nMarkdown Content:\n{body}",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("url", "month"),
+    [
+        ("https://arxiv.org/html/2602.20722v2", "2026-02"),
+        ("https://arxiv.org/abs/2604.07941", "2026-04"),
+        ("https://arxiv.org/pdf/2611.03698v1", "2026-11"),
+        ("https://huggingface.co/papers/2609.29421", "2026-09"),
+        ("https://example.com/2602.20722", None),
+    ],
+)
+async def test_a_fetched_paper_is_dated_by_its_arxiv_id_not_the_readers_page_time(monkeypatch, url, month):
+    """The reader's header gave a February paper an August date and the report took it."""
+
+    def _no_resolver(*args, **kwargs):
+        raise socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
+
+    monkeypatch.setattr(socket, "getaddrinfo", _no_resolver)
+    _patch_client(monkeypatch, _ReaderHeaderTransport())
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool().execute(url=url))
+
+    assert answer.get("first_version") == month
+    assert "Published Time:" not in answer["text"]
+    assert "not when the work was published): Mon, 24 Aug 2026" in answer["text"]

@@ -133,10 +133,54 @@ class _Shared:
         self._ask_user: DRAskUserTool | None = None
         self._hook: ResearchFlowHook | None = None
         self._installable: bool | None = None
+        self._digest: tuple["LLMProvider | None", str | None] | None = None
 
     @property
     def provider(self) -> "LLMProvider | None":
         return self._ctx.services.provider
+
+    def digest_provider(self) -> tuple["LLMProvider | None", str | None]:
+        """The provider the fetch digest calls, and the model it pins there (None: the agent's own).
+
+        With ``digest.provider`` set the digest runs on a provider of its own; without its
+        key it falls back to the agent's provider and model, because the configured model
+        is not one the agent's endpoint serves.
+        """
+        digest = self.cfg.digest
+        if not digest.provider:
+            return self.provider, None
+        if self._digest is None:
+            self._digest = self._own_digest_provider()
+        return self._digest if self._digest[0] is not None else (self.provider, None)
+
+    def _own_digest_provider(self) -> tuple["LLMProvider | None", str | None]:
+        """Built once: the fetch tool and the hook share one client, and a missing key warns once."""
+        digest = self.cfg.digest
+        if not digest.api_key or not digest.model:
+            logger.warning(
+                "research-flow: digest.provider {!r} has no key or no model; the digest runs on the agent's provider",
+                digest.provider,
+            )
+            return None, None
+        from raven.providers.litellm_provider import LiteLLMProvider
+
+        no_thinking = (
+            {}
+            if digest.thinking
+            else {
+                "model_overrides": {digest.model: {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}}
+            }
+        )
+        own = LiteLLMProvider(
+            api_key=digest.api_key,
+            api_base=digest.api_base,
+            default_model=digest.model,
+            provider_name=digest.provider,
+            # A second provider in the agent's process: exporting its key would overwrite the agent's own.
+            export_env=False,
+            **no_thinking,
+        )
+        return own, digest.model
 
     def installable(self) -> bool:
         """Whether this plugin may contribute anything at all.
@@ -239,7 +283,10 @@ class _Shared:
             cfg = self.cfg
             kwargs: dict[str, Any] = {"max_chars": cfg.fetch_max_chars}
             if cfg.digest.enabled:
-                provider = self.provider
+                provider, own_model = self.digest_provider()
+                # A digest.provider that fell back runs the agent's model: no configured
+                # digest model is one the agent's endpoint serves.
+                fell_back = bool(cfg.digest.provider) and own_model is None
                 if provider is None:
                     logger.warning(
                         "research-flow: digest is enabled but no provider was lent to the "
@@ -257,13 +304,16 @@ class _Shared:
                     def digest_knobs() -> tuple[str | None, int]:
                         slot = gear.get(current_session())
                         if slot is not None:
-                            return slot.digest_model, slot.digest_verbatim_head_chars
-                        return cfg.digest.model, cfg.digest.verbatim_head_chars
+                            return pinned(slot.digest_model), slot.digest_verbatim_head_chars
+                        return pinned(cfg.digest.model), cfg.digest.verbatim_head_chars
+
+                    def pinned(model: str | None) -> str | None:
+                        return own_model if own_model or fell_back else model
 
                     kwargs.update(
                         digest_fn=_make_digest_fn(
                             provider,
-                            cfg.digest.model,
+                            pinned(cfg.digest.model),
                             verbatim_head_chars=cfg.digest.verbatim_head_chars,
                             resolve=digest_knobs,
                         ),
@@ -339,6 +389,7 @@ class _Shared:
                 max_iterations=cfg.max_iterations or _DEFAULT_MAX_ITERATIONS,
                 context_window_tokens=cfg.context_window_tokens or 0,
                 session_gear=self.session_gear,
+                side=self.digest_provider() if cfg.digest.provider else None,
             )
         return self._hook
 

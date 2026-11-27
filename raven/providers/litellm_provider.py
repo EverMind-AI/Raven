@@ -44,6 +44,7 @@ from raven.providers.registry import (
     find_by_keywords,
     find_by_model,
 )
+from raven.providers.tool_arguments import object_arguments
 from raven.providers.tool_names import normalized_tool_name
 from raven.providers.transport_failure import (
     flag_transport_failure,
@@ -899,6 +900,7 @@ class LiteLLMProvider(LiteLLMShape):
             # backends send the raw fragment here, so this is the one locally
             # computable clue that the call was cut.
             args = tc.function.arguments
+            sent = args
             repaired = False
             if isinstance(args, str):
                 try:
@@ -906,6 +908,8 @@ class LiteLLMProvider(LiteLLMShape):
                 except Exception:
                     args = json_repair.loads(args)
                     repaired = True
+            args, parked = object_arguments(args, sent)
+            repaired = repaired or parked
 
             provider_specific_fields = getattr(tc, "provider_specific_fields", None) or None
             function_provider_specific_fields = getattr(tc.function, "provider_specific_fields", None) or None

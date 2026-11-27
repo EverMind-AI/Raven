@@ -31,14 +31,17 @@ sys.path.insert(0, str(PLUGIN_DIR))
 from research_flow.config import FlowConfig  # noqa: E402
 from research_flow.flow import ResearchFlowHook, ToolHandles, TurnFrame  # noqa: E402
 from research_flow.gates.report_shape import (  # noqa: E402
+    LIMITS_HEADINGS,
     REMINDER_CLOSE,
     REMINDER_OPEN,
     ReportShape,
     ReportShapeGate,
     render_reminder,
+    rewrite_prompt,
     strip_reminder,
 )
 from research_flow.state import SessionStore  # noqa: E402
+from research_flow.support.turn_observers import turn_observers  # noqa: E402
 
 from raven.agent.loop import TURN_BUDGETS_KEY, turn_synthesis  # noqa: E402
 from raven.agent.loop.main import AgentLoop  # noqa: E402
@@ -514,6 +517,48 @@ async def test_interrupted_turn_receives_the_report_policy(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_the_wrap_up_carries_the_products_effort_cap_and_salvage(tmp_path):
+    from raven.providers.base import LLMResponse
+
+    class Provider:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def chat_with_retry(self, **kwargs):
+            self.calls.append(kwargs)
+            return LLMResponse(
+                content="Best-supported answer, from https://example.org/a",
+                reasoning_content="weighed the evidence",
+                finish_reason="stop",
+            )
+
+    cfg = FlowConfig(enabled=True)
+    cfg.force_finalize.wrap_up_reasoning_effort = "low"
+    cfg.force_finalize.wrap_up_max_tokens = 16384
+    provider = Provider()
+    ctx = AgentHookContext(session_key="cli:t", inbound_content="who founded X?")
+    await ResearchFlowHook(cfg, provider, ToolHandles(), SessionStore(tmp_path)).before_user_inbound(ctx)
+    policy = turn_synthesis(ctx.metadata)
+    assert (policy.reasoning_effort, policy.max_tokens, policy.salvage) == ("low", 16384, None)
+
+    cfg.force_finalize.wrap_up_salvage = True
+    ctx = AgentHookContext(session_key="cli:t", inbound_content="who founded X?")
+    hook = ResearchFlowHook(cfg, provider, ToolHandles(), SessionStore(tmp_path))
+    await hook.before_user_inbound(ctx)
+    answer = await turn_synthesis(ctx.metadata).salvage(
+        [{"role": "user", "content": "who founded X?"}, {"role": "tool", "name": "web_fetch", "content": "X page"}]
+    )
+
+    assert answer == "Best-supported answer, from https://example.org/a"
+    assert "who founded X?" in provider.calls[0]["messages"][-1]["content"]
+    assert "X page" in provider.calls[0]["messages"][-1]["content"]
+    # The counters land where the turn stamp exports from, not on the loop's dict.
+    assert "force_finalize" not in ctx.metadata
+    stamped = turn_observers(hook.participant.facts)["force_finalize"]
+    assert stamped["wrap_up_hits"] == 1 and stamped["synthesized"] is True
+
+
+@pytest.mark.asyncio
 async def test_interrupted_report_policy_follows_the_structure_switch(tmp_path):
     cfg = FlowConfig(enabled=True)
     cfg.final_shape.report_structure = False
@@ -523,3 +568,123 @@ async def test_interrupted_report_policy_follows_the_structure_switch(tmp_path):
     await hook.before_user_inbound(ctx)
 
     assert turn_synthesis(ctx.metadata) is None
+
+
+# --------------------------------------------------------------------------- #
+# The report that closes with its sources                                      #
+# --------------------------------------------------------------------------- #
+
+_SOURCED = "> yes\n\n## What was found\na\n\n## Limitations\nnone\n\n## Sources\n- [A](https://a.example)\n"
+
+
+def test_a_closing_list_of_sources_is_not_a_section_out_of_place():
+    shape = ReportShape(_SOURCED, "reader", sources=True)
+    assert shape.well_formed and shape.in_order
+    # Where the contract has no such list, the same heading is one the reply should not close with.
+    assert ReportShape(_SOURCED, "reader").well_formed and not ReportShape(_SOURCED, "reader").in_order
+    late = _SOURCED + "\n## Appendix\nb\n"
+    assert not ReportShape(late, "reader", sources=True).in_order
+
+
+def test_the_sources_do_not_stand_in_for_missing_limits():
+    """The last ``##`` is the limits in any wording, except the list the contract puts after them."""
+    draft = "> yes\n\n## What was found\na\n\n## Sources\n- [A](https://a.example)\n"
+    assert ReportShape(draft, "reader", sources=True).missing == ("Limitations",)
+    assert ReportShape(draft, "reader").well_formed
+    unlisted = "> yes\n\n## What was found\na\n\n## Open questions\nb\n\n## 7. References\n- [A](https://a.example)\n"
+    shape = ReportShape(unlisted, "reader", sources=True)
+    assert shape.well_formed and shape.in_order
+
+
+def test_the_fixed_chinese_headings_are_the_limits_and_the_sources():
+    limits = LIMITS_HEADINGS["zh"]
+    draft = f"> \u7528 Vite\n\n## \u4e00\u3001\u901f\u5ea6\na\n\n## {limits}\nb\n\n## \u6765\u6e90\n- [A](https://a.example)\n"
+    shape = ReportShape(draft, "reader", sources=True)
+    assert shape.well_formed and shape.in_order and shape.annotated == ()
+    # The limits heading is found by its words, so a list before it is recorded as out of order.
+    swapped = f"> \u7528 Vite\n\n## \u4e00\u3001\u901f\u5ea6\na\n\n## \u6765\u6e90\n- [A](https://a.example)\n\n## {limits}\nb\n"
+    assert ReportShape(swapped, "reader", sources=True).well_formed
+
+
+@pytest.mark.parametrize("lang", ["en", "zh"])
+def test_the_headings_the_parse_finds_are_the_ones_the_model_is_told(lang):
+    heading = f"`## {LIMITS_HEADINGS[lang]}`"
+    assert heading in render_reminder("", "reader", sources=True)
+    assert heading in rewrite_prompt(("Limitations",), "reader", sources=True)
+    draft = f"> yes\n\n## Speed\na\n\n## 6. {LIMITS_HEADINGS[lang]}\nb\n\n## Sources\n- [A](https://a.example)\n"
+    assert ReportShape(draft, "reader", sources=True).annotated == ()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Known limitations of pip",
+        "Rate limitations",
+        "\u4e8c\u3001pip \u7684\u4e0d\u8db3",
+        "\u8bb8\u53ef\u8bc1\u9650\u5236",
+    ],
+)
+def test_a_body_heading_that_holds_a_word_for_limits_is_not_the_limits(body):
+    """With the sources, the limits are found by the fixed heading or by their place, not by a list of words."""
+    tail = "\n\n## Sources\n- [A](https://a.example)\n"
+    fixed = f"> yes\n\n## Speed\na\n\n## {body}\nb\n\n## Plan\nc\n\n## Limitations\nd" + tail
+    shape = ReportShape(fixed, "reader", sources=True)
+    assert shape.well_formed and shape.in_order and shape.annotated == ()
+    # In another wording the limits are the last section above the sources, and the wording is recorded.
+    worded = fixed.replace("## Limitations", "## What stays open")
+    shape = ReportShape(worded, "reader", sources=True)
+    assert shape.well_formed and shape.in_order and shape.annotated == ("Limitations",)
+
+
+def test_a_section_after_the_fixed_limits_heading_is_out_of_place():
+    draft = "> yes\n\n## Speed\na\n\n## Limitations\nb\n\n## Plan\nc\n\n## Sources\n- [A](https://a.example)\n"
+    shape = ReportShape(draft, "reader", sources=True)
+    assert shape.well_formed and not shape.in_order
+
+
+def test_one_heading_under_a_body_of_prose_is_the_limits_by_its_place():
+    draft = (
+        "> yes\n\nThe body, written with no heading.\n\n## What stays open\nb\n\n## Sources\n- [A](https://a.example)\n"
+    )
+    shape = ReportShape(draft, "reader", sources=True)
+    assert shape.well_formed and "Limitations" in shape.annotated
+    assert ReportShape(draft.replace("The body, written with no heading.\n\n", ""), "reader", sources=True).missing
+
+
+@pytest.mark.parametrize("heading", ["Open-source options", "Sources of error", "Limitations of the sources"])
+def test_a_last_heading_that_only_holds_the_word_is_still_the_limits(heading):
+    draft = f"> yes\n\n## Speed\na\n\n## {heading}\nb\n"
+    shape = ReportShape(draft, "reader", sources=True)
+    assert shape.well_formed and shape.in_order
+
+
+def test_the_reminder_and_the_rewrite_name_the_sources_only_for_that_report():
+    plain, sourced = render_reminder("", "reader"), render_reminder("", "reader", sources=True)
+    assert "the closing `##` section on what could not be verified" in plain and "`## Sources`" not in plain
+    assert "closing `##` section" not in sourced
+    assert sourced.index("what could not be verified") < sourced.index("`## Sources` in English")
+    assert render_reminder("", "sections", sources=True) == render_reminder("", "sections")
+    # A constraint the turn cannot meet is named in the limits, which no longer close the report.
+    asked = "list exactly 5 vendors, excluding Acme"
+    assert "name it in the closing section on what could not be verified" in render_reminder(asked, "reader")
+    assert "name it in the section on what could not be verified" in render_reminder(asked, "reader", sources=True)
+    assert "`## Sources` in English" in rewrite_prompt(("Limitations",), "reader", sources=True)
+    assert "the section on what could not be verified" in rewrite_prompt(("Limitations",), "reader", sources=True)
+    assert "`## Sources`" not in rewrite_prompt(("Limitations",), "reader")
+
+
+@pytest.mark.asyncio
+async def test_the_frame_reminds_of_the_sources_when_it_writes_the_page(tmp_path):
+    from research_flow.support.report_page import ReportPage
+
+    cfg = FlowConfig(
+        enabled=True,
+        final_shape={"report_depth": True, "report_layout": "reader"},
+        report_page={"enabled": True},
+    )
+    ctx = AgentHookContext(session_key="cli:t", inbound_content="compare Vite and webpack")
+    with_page = TurnFrame(cfg, SessionStore(tmp_path / "a"), None, page=ReportPage(cfg.report_page))
+    assert "`## Sources` in English" in (await with_page.before_user_inbound(ctx)).modified_content
+    ctx = AgentHookContext(session_key="cli:t", inbound_content="compare Vite and webpack")
+    without = TurnFrame(cfg, SessionStore(tmp_path / "b"), None)
+    assert "`## Sources`" not in (await without.before_user_inbound(ctx)).modified_content

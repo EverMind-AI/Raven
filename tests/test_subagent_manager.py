@@ -2224,6 +2224,18 @@ async def test_the_announce_says_the_user_has_not_read_the_report() -> None:
     assert "Summarize this naturally" not in text
 
 
+async def test_the_announce_asks_for_a_file_the_subagent_made_to_be_delivered() -> None:
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+
+    await mgr._announce_result("abcd1234", "Report", "write it", "page: /w/r.html", _spawn_origin(None, None), "ok")
+
+    text = submitted[0].text
+    assert "send the user that file itself rather than its path or its text" in text
+    assert text.index("[END UNTRUSTED subagent") < text.index("send the user that file itself")
+
+
 async def test_the_summary_instruction_judges_the_outcome_from_the_subagents_own_account() -> None:
     """The guard that moved out of the deleted failure tally.
 

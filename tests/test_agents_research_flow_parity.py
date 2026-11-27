@@ -289,10 +289,105 @@ PRODUCT_ONLY_FIELDS: dict[str, str] = {
         "written over the report file the turn saved. Sections as a class default, so the "
         "fork's layout is what a profile gets unless it opts in; the product ships reader"
     ),
+    "final_shape.report_style": (
+        "the reader layout's style: prose, or an outline with a title, numbered sections, "
+        "bold section conclusions and lists for parallel items. Prose as a class default, "
+        "which is the only form the fork's reader-less layout has"
+    ),
+    "verify.on_digest_provider": (
+        "the review run on the digest's own provider and model instead of the agent's, "
+        "so a reasoning agent model does not think its way past max_tokens and ship the "
+        "draft unreviewed. Off as a class default: the fork has no second provider"
+    ),
+    "verify.capture_requests": (
+        "each review request saved under the turn's working directory so two reviewer "
+        "models can be compared offline on the same input. Off as a class default"
+    ),
+    "report_page": (
+        "the delivered report written as one HTML reading page beside the reply "
+        "(support/report_page.py), with model-selected highlights the flow checks against "
+        "the report. Off as a class default; the product's base slice turns it on"
+    ),
+    "digest.provider": (
+        "the fetch digest on a provider of its own (plugin.digest_provider): a served "
+        "reasoning model thought 70 s over a page a small model digested in 9 s. Unset "
+        "keeps the fork's digest on the agent's provider"
+    ),
+    "digest.api_base": "the base URL of that provider, unset with it",
+    "digest.api_key": "the key of that provider, written by the launcher into the rendered slice only",
+    "draft_revisions": (
+        "a budget on revising a report file the turn already wrote: the reply asked for, "
+        "then the file tools withheld (gates/report_length.py). Off as a class default; "
+        "the product's base slice turns it on"
+    ),
     "plain_first": (
         "the first-reply gate: web tools withheld for the first model call, a plain "
         "answer judged or escalated to research (gates/plain_first.py). Off as a class "
         "default; the product's base slice turns it on and only the max overlay turns it off"
+    ),
+    "budget_note.close_after": (
+        "the converge warning made a deadline: that many iterations after it, web_search "
+        "and web_fetch are withheld for the rest of the turn (gates/budget_note.py). Off as "
+        "a class default; the product's high overlay sets it"
+    ),
+    "budget_note.reserve_tokens": (
+        "research closed at once, evidence rounds included, when the context leaves less than "
+        "this for the report and a revision (gates/budget_note.py). Off as a class default and "
+        "in the product; an experiment sets it beside its window"
+    ),
+    "digest.thinking": (
+        "the digest's own provider asked to answer without thinking through the chat "
+        "template's enable_thinking flag (plugin.py). On as a class default and in the "
+        "product; an arm serving a thinking model for the side calls turns it off"
+    ),
+    "verify.temperature": (
+        "the reviewer's sampling temperature, greedy before it existed (gates/verify.py). "
+        "0.0 as a class default and in the product; an arm reviewing on a thinking model "
+        "sets that model's own default"
+    ),
+    "verify.min_revision_room_tokens": (
+        "a rejection sent back only when the context leaves this much for the revision, else "
+        "the draft ships as it does once revisions are spent (gates/verify.py). Off as a class "
+        "default and in the product; an experiment sets it"
+    ),
+    "independent_views": (
+        "a contract rule asking a question on whether something is good to be researched "
+        "beyond its makers' pages, and a reviewer rubric failing a verdict that cites them "
+        "alone (prompts.py, gates/verify.py). Off as a class default and in the product; an "
+        "experiment turns it on"
+    ),
+    "final_shape.cut_rewrites": (
+        "a reply cut at the output limit asked for again, shorter and without tools, before "
+        "review (gates/cut_report.py). Off as a class default and in the product; an "
+        "experiment turns it on"
+    ),
+    "force_finalize.wrap_up_reasoning_effort": (
+        "the effort of the loop's wrap-up for a turn cut off by a budget, handed to the "
+        "loop on the turn's synthesis policy. Unset keeps the turn's own effort, as the fork has it"
+    ),
+    "force_finalize.wrap_up_max_tokens": "a cap on that wrap-up's output, unset with it",
+    "force_finalize.wrap_up_salvage": (
+        "the salvage asked for a reply when that wrap-up comes back empty, before the "
+        "loop's static apology. Off as a class default; the product's base slice turns it on"
+    ),
+    "final_shape.write_phase": (
+        "the report as a step of its own: a research turn's first draft is set aside and the "
+        "report asked for again with the tools withdrawn and the report rule repeated "
+        "(gates/write_phase.py). Off as a class default and in the product; an experiment turns it on"
+    ),
+    "final_shape.skim_floor": (
+        "the bold pass: a researched report whose paragraphs bold too few names or figures, or too "
+        "many, or a clause, has its bold chosen anew by a side call (gates/bold_pass.py). Off as a "
+        "class default and in the product; an experiment sets a floor"
+    ),
+    "final_shape.bold_on_digest_provider": (
+        "the bold pass's side call on the digest's provider and model (gates/bold_pass.py). Off as a "
+        "class default and in the product; an experiment turns it on"
+    ),
+    "final_shape.limits": (
+        "the page's report can close without its section on what could not be verified: the "
+        "rule asks for none, the shape bar requires none and the page and file drop one. On "
+        "as a class default; the product turns it off"
     ),
 }
 

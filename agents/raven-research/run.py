@@ -145,6 +145,9 @@ SEARCH_PROVIDER_SLOT = ("tools", "web", "search", "provider")
 FETCH_PROVIDER_ENV = "RESEARCH_WEB_FETCH_PROVIDER"
 FETCH_PROVIDER_SLOT = ("tools", "web", "fetch", "provider")
 
+# The fetch digest's own key, for a ``digest.provider`` the flow slice names.
+DIGEST_KEY_ENV = "RESEARCH_DIGEST_API_KEY"
+
 # The LLM key never inherits per-slot: its absence switches the whole LLM
 # block to host inheritance (see render_config), so it stays out of the
 # optional fallback loop.
@@ -465,6 +468,17 @@ def render_config(source: Path) -> Path:
         if key := vendor_key(config, vendor, host):
             render.put(flow_slice, slice_path, key)
     log(f"[run] web: search={search_vendor} fetch={fetch_vendor}")
+    # The digest's own provider, when the slice names one: its key from this product's
+    # setting, else from the provider of that name in this config or the host's, the way
+    # a vendor is configured once, centrally. Written into the rendered slice only.
+    digest = flow_slice.get("digest") if isinstance(flow_slice.get("digest"), dict) else {}
+    if (vendor := digest.get("provider")) and not digest.get("apiKey"):
+        slot = ("providers", vendor, "apiKey")
+        if key := env_value(DIGEST_KEY_ENV) or render.dig(config, slot) or render.dig(host, slot):
+            render.put(flow_slice, ("digest", "apiKey"), key)
+            log(f"[run] digest: provider={vendor} model={digest.get('model')}")
+        else:
+            log(f"[run] digest: no key for provider={vendor}; the digest runs on the agent's model")
     # Same mirror, same reason as the web keys: the fork's assembly was CALLED
     # with the window the loop had resolved, so both observers that divide by it
     # quoted the model the turn actually ran on. A plugin factory sees its own

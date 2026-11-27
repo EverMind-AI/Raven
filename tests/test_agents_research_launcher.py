@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from raven.config import product_render as render
+
 #: The vendored twin's visible tool face -- its config disables everything
 #: else its fork registers. The B side must show exactly this face: trunk
 #: grew tools the fork never had, and every one of them must be disabled by
@@ -69,6 +71,8 @@ def grounded(launcher, tmp_path, monkeypatch):
     monkeypatch.setenv("RESEARCH_SERPER_API_KEY", "serper-key")
     monkeypatch.delenv("SERPER_API_KEY", raising=False)
     monkeypatch.delenv("RESEARCH_JINA_API_KEY", raising=False)
+    # An operator's own .env beside the launcher is not this test's settings.
+    monkeypatch.setattr(launcher, "env_value", lambda name: render.env_value(name, env_file=tmp_path / ".env"))
     return launcher
 
 
@@ -106,6 +110,27 @@ def test_the_render_merges_secrets_and_pins_the_workspace(grounded, tmp_path):
         tmp_path / "home" / "subagent_sessions" / "raven-research-ng" / "acp"
     )
     assert rendered.parent == tmp_path / "state"
+
+
+def test_a_digest_provider_gets_its_key_in_the_rendered_slice_only(grounded, tmp_path, monkeypatch):
+    source = json.loads((RUN_PY.parent / "config.json").read_text())
+    flow = source["plugins"]["config"]["research-flow"]
+    flow["digest"] = {**flow.get("digest", {}), "provider": "deepseek", "model": "deepseek/deepseek-v4-flash"}
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps(source))
+
+    monkeypatch.setenv("RESEARCH_DIGEST_API_KEY", "dk-own")
+    digest = json.loads(grounded.render_config(config).read_text())["plugins"]["config"]["research-flow"]["digest"]
+    assert digest["apiKey"] == "dk-own" and digest["provider"] == "deepseek"
+    assert "apiKey" not in json.loads(config.read_text())["plugins"]["config"]["research-flow"]["digest"]
+
+    # No key of its own: the provider of that name in the host config lends one.
+    monkeypatch.delenv("RESEARCH_DIGEST_API_KEY")
+    host = tmp_path / "home" / "config.json"
+    host.parent.mkdir(parents=True, exist_ok=True)
+    host.write_text(json.dumps({"providers": {"deepseek": {"apiKey": "dk-host"}}}))
+    digest = json.loads(grounded.render_config(config).read_text())["plugins"]["config"]["research-flow"]["digest"]
+    assert digest["apiKey"] == "dk-host"
 
 
 def test_the_render_boards_the_flow_plugin_and_the_modes(grounded, tmp_path):
@@ -274,9 +299,27 @@ TWIN_DRFLOW_PRODUCT_ONLY = {
         "false plain answer and on 35 settled ones with 29 accepted; the fork has no such "
         "gate and its schema would refuse the key"
     ),
+    "reportPage": (
+        "the delivered report is also written as one HTML reading page, with highlights "
+        "a model selects and the flow keeps only when the report holds their text. The "
+        "reply the fork's arm measured is unchanged but for the line that names the file; "
+        "the fork has no such page and its schema would refuse the key"
+    ),
+    "draftRevisions": (
+        "a turn that keeps revising a report file it already wrote is told when an edit "
+        "dropped a heading, asked for the reply after eight revising iterations and loses "
+        "the file tools after twelve. The fork's arm never revised a file for that long; "
+        "the fork has no such budget and its schema would refuse the key"
+    ),
 }
 
 TWIN_DRFLOW_DIVERGED = {
+    "forceFinalize": (
+        "the trunk product's wrap-up for a turn cut off by the iteration cap runs at low "
+        "effort under a 16384-token cap, with a salvage when it still comes back empty. "
+        "At the turn's high effort one wrap-up spent all 32768 tokens of its room "
+        "reasoning and shipped the loop's static apology. The fork keeps the inherited form"
+    ),
     "sufficiency": (
         "the trunk product raised the judge's budget from 30s/15s to 60s/30s. Every "
         "attempt on a measured batch stalled past 15s and the gate returned no verdict "
@@ -299,7 +342,8 @@ TWIN_DRFLOW_DIVERGED = {
         "is a shape defect, not a depth setting, and it belongs to no tier. Measured at 0 "
         "bounces over 15 turns, so it costs the baseline nothing. The fork ran it off. "
         "It also ships reportLayout=reader, the report in the form a reader receives, "
-        "which the fork's schema does not have"
+        "which the fork's schema does not have, and closes that report with its sources and "
+        "no limits section (limits off), a knob the fork's schema does not have either"
     ),
     "version": (
         "the trunk product's flow now carries the numeric-discipline rule in its deep "
@@ -439,11 +483,16 @@ def test_the_shipped_label_moves_when_the_shipped_prompt_does():
         report_format_override=shape["reportFormatOverride"],
         report_depth=shape["reportDepth"],
         report_layout=shape["reportLayout"],
+        report_page=shipped["reportPage"]["enabled"],
+        report_style=shape.get("reportStyle", "prose"),
     )[1]
     digest = hashlib.sha256(" ".join(segment.split()).encode("utf-8")).hexdigest()[:16]
 
-    assert shipped["version"] == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader"
-    assert digest == "86337de7a030f8aa", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
+    assert (
+        shipped["version"]
+        == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window-close-skim-chrono"
+    )
+    assert digest == "40d88845ec2c63d9", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
 
 
 def test_every_retirement_this_product_declares_names_a_label_it_can_load():

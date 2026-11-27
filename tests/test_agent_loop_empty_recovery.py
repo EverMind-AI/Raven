@@ -32,6 +32,7 @@ from raven.agent.loop._shared import _MAX_ITER_STATIC_FALLBACK
 from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
 from raven.agent.loop.recovery import (
     EMPTY_REPLY_FAILURE,
+    LOOP_REDIRECT_NOTE,
     MAX_CONTINUATIONS,
     NETWORK_CUT_CONTINUATION,
     OUTPUT_LIMIT_CONTINUATION,
@@ -379,6 +380,25 @@ _DECIDE_TABLE = [
     _row("thinking-prefills", _K.THINKING_ONLY, _A.PREFILL, next_rung="high"),
     _row("thinking-prefills-twice", _K.THINKING_ONLY, _A.PREFILL, state=_state(prefills=1), next_rung="high"),
     _row("thinking-steps-down", _K.THINKING_ONLY, _A.STEP_DOWN, state=_state(prefills=2), **_ROOM),
+    # A thought the stream stopped as a loop is dropped, never re-fed: a prefill continues the loop.
+    _row("thinking-loop-redirects", _K.THINKING_ONLY, _A.REDIRECT, looping=True, **_ROOM),
+    _row(
+        "thinking-loop-again-steps-down",
+        _K.THINKING_ONLY,
+        _A.STEP_DOWN,
+        state=_state(redirects=1),
+        looping=True,
+        **_ROOM,
+    ),
+    _row("thinking-loop-again-fails", _K.THINKING_ONLY, _A.FAIL, state=_state(redirects=1), looping=True),
+    _row(
+        "thinking-loop-on-fallback-moves-on",
+        _K.THINKING_ONLY,
+        _A.FALLBACK,
+        state=_state(fallbacks_used=1),
+        looping=True,
+        **_ROOM,
+    ),
     _row("thinking-no-prefill-steps-down", _K.THINKING_ONLY, _A.STEP_DOWN, prefill_supported=False, next_rung="high"),
     _row(
         "thinking-no-prefill-budget-steps-down",
@@ -1650,6 +1670,37 @@ class _Sink:
             self._timeline.append(("notice", detail))
 
 
+def _thought_chunk(text):
+    delta = SimpleNamespace(content=None, tool_calls=None, reasoning_content=text)
+    return SimpleNamespace(choices=[SimpleNamespace(delta=delta, finish_reason=None)], usage=None)
+
+
+@pytest.mark.asyncio
+async def test_a_looping_thought_is_dropped_and_the_step_asked_again_with_a_note(workspace, monkeypatch):
+    """Measured on one turn: a thought repeating one line ran to the 32768-token ceiling four times, twice
+    re-fed and continued. The stream stops it, and the loop asks the step again without it."""
+    loop = "".join(f'Need maybe mention "section {i}" from shattered.io. Good.\n' for i in range(1600))
+    looping = _Stream(
+        [*(_thought_chunk(loop[i : i + 200]) for i in range(0, len(loop), 200)), _chunk(finish_reason="length")],
+        received_finish_reason="length",
+    )
+    calls = _served(monkeypatch, [looping, _finished_stream("the answer")])
+    _recorded_sleeps(monkeypatch)
+    sink = _Sink()
+
+    final, _used, _messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta
+    )
+
+    assert final == "the answer" and outcome.status == "completed"
+    assert next(looping._chunks, None) is not None, "the looping stream was read to its end"
+    assert len(calls) == 2
+    placeholder, note = calls[1]["messages"][-2:]
+    assert (placeholder["role"], placeholder["content"]) == ("assistant", "(empty)")
+    assert (note["role"], note["content"]) == ("user", LOOP_REDIRECT_NOTE)
+    assert "shattered.io" not in str(calls[1]["messages"]), "the looping thought was carried into the re-ask"
+
+
 def _streamed(calls: list[dict]) -> list[bool]:
     """Which of the adapter's calls asked for a stream."""
     return [bool(call.get("stream")) for call in calls]
@@ -1682,6 +1733,85 @@ async def test_the_first_resend_of_an_empty_streamed_reply_goes_out_unstreamed(w
     assert final == "the answer" and outcome.status == "completed"
     assert timeline == [("step", None), ("step", None), ("thought", "hmm"), ("delta", "the answer")]
     assert messages[-1]["content"] == "the answer"
+
+
+class _HoldsDrafts(AgentHook):
+    """Declares it may send a response back, so the loop holds drafts; never does."""
+
+    rolls_back_iterations = True
+
+    @property
+    def name(self) -> str:
+        return "holding_probe"
+
+
+class _Search(Tool):
+    name = "web_search"
+    description = "search"
+    parameters = {"type": "object", "properties": {"query": {"type": "string"}}}
+
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    async def execute(self, **kwargs):
+        self.queries.append(kwargs["query"])
+        return "results"
+
+
+@pytest.mark.asyncio
+async def test_an_unstreamed_resend_that_writes_its_call_as_text_shows_its_words_once(workspace, monkeypatch):
+    """The unstreamed resend reaches a held draft only once the whole reply is in, so the words
+    around a call written as text go to the reader once, with the thought left out."""
+    block = (
+        "<use_mcp_tool>\n<server_name>s</server_name>\n<tool_name>web_search</tool_name>\n"
+        '<arguments>\n{"query": "q"}\n</arguments>\n</use_mcp_tool>'
+    )
+    _served(
+        monkeypatch,
+        [
+            _empty_finish(),
+            _reply("<think>secret plan</think>\nSearching first.\n" + block),
+            _finished_stream("the answer"),
+        ],
+    )
+    _recorded_sleeps(monkeypatch)
+    agent = _litellm_agent(workspace, hooks=[_HoldsDrafts()])
+    search = _Search()
+    agent.tools.register(search)
+    sink = _Sink()
+
+    final, _used, _messages, _outcome = await agent._run_agent_loop(_seed(), on_token_delta=sink.delta)
+
+    assert search.queries == ["q"], "the block was never read as a call, so this proves nothing"
+    shown = "".join(sink.text)
+    assert shown.count("Searching first.") == 1, shown
+    assert "secret plan" not in shown and "use_mcp_tool" not in shown
+    assert final == "the answer"
+
+
+class _ReplacesHeld(_HoldsDrafts):
+    """Ends the turn on a reply of its own in place of the one the model wrote."""
+
+    async def after_iteration(self, ctx):
+        from raven.agent.hook import HookDecision
+
+        return HookDecision(short_circuit_result="the **answer**")
+
+
+@pytest.mark.asyncio
+async def test_a_reply_a_hook_replaced_reaches_the_reader_as_replaced(workspace, monkeypatch):
+    """A streamed turn sends no closing text, so the held draft is all the reader gets: it carries
+    the reply the turn keeps, not the one the hook replaced."""
+    _served(monkeypatch, [_finished_stream("the answer")])
+    _recorded_sleeps(monkeypatch)
+    sink = _Sink()
+
+    final, _used, messages, _outcome = await _litellm_agent(workspace, hooks=[_ReplacesHeld()])._run_agent_loop(
+        _seed(), on_token_delta=sink.delta
+    )
+
+    assert final == "the **answer**" and messages[-1]["content"] == "the **answer**"
+    assert "".join(sink.text) == "the **answer**"
 
 
 @pytest.mark.asyncio

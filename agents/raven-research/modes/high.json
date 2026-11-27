@@ -7,7 +7,8 @@
   "drFlow": {
     "maxIterations": 60,
     "budgetNote": {
-      "warnRatio": 0.8
+      "warnRatio": 0.8,
+      "closeAfter": 6
     },
     "sufficiency": {
       "enabled": false

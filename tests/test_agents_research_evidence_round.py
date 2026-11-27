@@ -312,6 +312,19 @@ def test_spin_breaker_still_fires_outside_a_round():
     assert er.spin_passes == 0
 
 
+@pytest.mark.parametrize("prompt", [_REVISION_PROMPT, _EVIDENCE_ROUND_PROMPT])
+def test_the_bounce_prompt_keeps_the_review_out_of_the_answer(prompt):
+    # The revision ships as the report; a model that answered the reviewer put its
+    # rebuttal and a table of objections at the top of the reader's page.
+    text = prompt.format(feedback="1. The $135 target is unsupported.")
+    rule = text.index("The reader never sees this review")
+    assert rule < text.index("Reviewer feedback:")
+    assert "without mentioning the reviewer, the review, or what you changed" in text
+    # The notes before the round's searches stream to the reader as well.
+    assert "the short notes before your searches as well as the answer" in text
+    assert "none of them may mention the review or what was questioned" in text
+
+
 @pytest.mark.parametrize(
     ("configured", "expected"),
     [(False, _REVISION_PROMPT), (True, _EVIDENCE_ROUND_PROMPT)],

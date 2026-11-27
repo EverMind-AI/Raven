@@ -52,12 +52,14 @@ THIN_PAGE_CHARS = 400
 REQUIRED_SECTIONS = ("Answer", "Findings", "Limitations")
 
 #: The reader layout's limits heading: the last ``##`` section, in English or in Chinese
-#: ("limitations", "restrictions", "shortcomings", and three forms of "could not be
-#: verified"); in any other wording, the last ``##`` with a section above it. The
-#: flow's ``report_shape`` matcher, kept in sync by eye for the reason
+#: ("limitations", "restrictions", "shortcomings", three forms of "could not be
+#: verified"), or the Chinese heading the contract fixes for a report that closes with
+#: its sources; in any other wording, the last ``##`` with a section above it. The flow's
+#: ``report_shape`` words and its fixed heading, kept in sync by eye for the reason
 #: ``THIN_PAGE_CHARS`` is.
 _READER_LIMITS_RE = re.compile(
-    "limitation|\u5c40\u9650|\u9650\u5236|\u4e0d\u8db3|\u672a\u80fd\u6838\u5b9e|\u672a\u6838\u5b9e|\u65e0\u6cd5\u6838\u5b9e",
+    "limitation|\u5c40\u9650|\u9650\u5236|\u4e0d\u8db3|\u672a\u80fd\u6838\u5b9e|\u672a\u6838\u5b9e|\u65e0\u6cd5\u6838\u5b9e"
+    "|\u672a\u6838\u9a8c\u9879",
     re.I,
 )
 

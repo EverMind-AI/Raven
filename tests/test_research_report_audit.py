@@ -1131,10 +1131,13 @@ def test_a_cell_of_nothing_but_urls_is_still_exempt():
 def test_the_reader_limits_matcher_is_the_flows_own():
     """One heading vocabulary on both sides of the report: a limits heading the gate
     ships and the audit cannot find is a report that passes in the product and fails
-    its grading. Pinned here because nothing else held the two copies equal."""
-    from research_flow.gates.report_shape import _SECTION_RE
+    its grading. Pinned here because nothing else held the two copies equal. The audit
+    reads a report of either layout, so it also holds the Chinese heading the contract
+    fixes for a report that closes with its sources; the gate's words hold the English one."""
+    from research_flow.gates.report_shape import _SECTION_RE, LIMITS_HEADINGS
 
     from scripts.research_report_audit import _READER_LIMITS_RE
 
     flow = {term.removeprefix("(?<![a-z])") for term in _SECTION_RE["Limitations"].pattern.split("|")}
-    assert set(_READER_LIMITS_RE.pattern.split("|")) == flow
+    assert set(_READER_LIMITS_RE.pattern.split("|")) == flow | {LIMITS_HEADINGS["zh"]}
+    assert _READER_LIMITS_RE.search(LIMITS_HEADINGS["en"])

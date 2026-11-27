@@ -47,7 +47,9 @@ _FLOOR_PROMPT = (
     "sites before an answer ships. Continue the research rather than restarting it: "
     "search for and open further primary sources on the claims the draft already makes, "
     "preferring sites not yet opened, then produce the final answer with the new "
-    "evidence folded in."
+    "evidence folded in. The reader sees every line you write, the short notes before "
+    "your searches included, and never this request: do not mention it, the page count "
+    "or the number of sites."
 )
 
 

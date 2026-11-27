@@ -16,16 +16,23 @@ unparseable output must never silence the turn — the draft passes.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
+import re
 import time
+from pathlib import Path
 
 from raven.contracts.loop_hooks import HookDecision
+from raven.i18n import zh_lexicon
 from raven.security.trust import wrap_untrusted
+from raven.utils.tokens import estimate_message_tokens
 from research_flow.gates.base import Gate, GateCtx
 from research_flow.support._verdict import coerce_bool, parse_bool_verdict
 from research_flow.support.answer_text import closing_tag_bar, visible_answer
+from research_flow.support.budget import usage_tokens
 from research_flow.support.evidence_round import EvidenceRound
-from research_flow.support.harness_text import harness_body_kind, is_elided_tool_output
+from research_flow.support.harness_text import REVIEW_TALK_PREFIX, harness_body_kind, is_elided_tool_output
 from research_flow.support.ledger import ledger_append
 from research_flow.support.turn_task import task_for
 
@@ -133,6 +140,15 @@ _NUMERIC_RUBRIC = (
     "measurement and not an estimate."
 )
 
+_INDEPENDENT_VIEWS_RUBRIC = (
+    " Where the task asks whether something is good, which option to choose, or how it "
+    "is received, a verdict on that - mature, reliable, well regarded, recommended, "
+    "widely used - that the draft rests only on pages by the thing's own makers (its "
+    "site, docs, repository, blog or announcements) is a decisive claim absent from the "
+    "evidence: name it in unsupported_claims. A draft that says plainly it found no "
+    "independent view is not failed for that."
+)
+
 _STRICT_REJECT_ONLY = (
     " Reject ONLY when the draft fails to answer the task, or a decisive "
     "claim is contradicted by or absent from the evidence - and name the "
@@ -178,10 +194,25 @@ def _refuses_forced_choice(response) -> bool:
     )
 
 
+# The revision is what the reader gets, and the reader never saw the review. Asked
+# in a user turn, a model answered the reviewer instead: a revised report opened
+# with "The reviewer's first objection is not supported..." and a table of the
+# objections and their fixes, and that text shipped as the report. The notes a
+# model writes before its searches stream to the reader too, and after 2 of 4
+# bounces in one batch they announced which claims had been questioned.
+_READER_NEVER_SEES_REVIEW = (
+    "The reader never sees this review, but sees every line you write from here on, the "
+    "short notes before your searches as well as the answer: none of them may mention the "
+    "review or what was questioned. Write the corrected answer for them as if it "
+    "were the first one, without mentioning the reviewer, the review, or what you changed. "
+    "Write it out in full as your reply: the draft is the reply above, not a file - edit a "
+    "file only if you saved the report to one earlier in this turn."
+)
+
 _REVISION_PROMPT = (
     "A reviewer rejected the draft above. Fix exactly the listed issues and "
     "produce the corrected final answer. Do not restart the research; reuse "
-    "the evidence already gathered.\n\nReviewer feedback:\n{feedback}"
+    "the evidence already gathered. " + _READER_NEVER_SEES_REVIEW + "\n\nReviewer feedback:\n{feedback}"
 )
 
 # The prohibition above is correct only when the draft is wrong about evidence it
@@ -198,8 +229,51 @@ _EVIDENCE_ROUND_PROMPT = (
     "results beyond the first few are available to you in this round. Do not "
     "restart the research, and do not re-open questions the reviewer did not "
     "raise. Once the gap is closed - or once it is clear it cannot be - produce "
-    "the corrected final answer.\n\nReviewer feedback:\n{feedback}"
+    "the corrected final answer. " + _READER_NEVER_SEES_REVIEW + "\n\nReviewer feedback:\n{feedback}"
 )
+
+
+# The bounce prompts ask for this, and measured on replays of one real bounce the ask
+# cut it from 4 of 12 revisions to 1 of 12 without ending it. Checked on a revision,
+# and on the report the write step asked for: that one follows a draft set aside, and
+# shipped "the first draft had these errors" on 2 of 51 reports. With no review yet,
+# only the draft phrases are read there - "the previous version" names a product's
+# last release as often. A marker the task itself uses is the subject's word - a
+# report on peer review or code review - not talk about this one, and a web address
+# is no sentence at all, so neither trips the check.
+_DRAFT_TALK_EN = (
+    "earlier draft",
+    "previous draft",
+    "original draft",
+    "first draft",
+    "draft above",
+)
+_REVIEW_TALK_EN = ("reviewer", "the review") + _DRAFT_TALK_EN
+_REVIEW_TALK_MARKERS = _REVIEW_TALK_EN + zh_lexicon.REVIEW_TALK_MARKERS
+_DRAFT_TALK_MARKERS = _DRAFT_TALK_EN + zh_lexicon.DRAFT_TALK_MARKERS
+_REVIEW_TALK_MAX_LINES = 8
+_ADDRESS_RE = re.compile(r"(?:https?://|www\.)\S+")
+_REVIEW_TALK_PROMPT = (
+    REVIEW_TALK_PREFIX + " The answer above still talks about a review or an earlier draft, and the "
+    "reader has seen neither. Write the same answer again for the reader: drop every section, "
+    "sentence or aside that says what was corrected, what was objected to, or how this version "
+    "differs from another, and state the corrected facts plainly in their place. Change nothing "
+    "else and do not search again. A quoted line that is about the subject itself - peer review "
+    "of a paper, say - stays as it is.\n\nPassages:\n{passages}"
+)
+
+
+def review_talk_lines(text: str, task: str = "", *, drafts_only: bool = False) -> list[str]:
+    """The lines of an answer that speak about the review, or only an earlier draft, rather than to the reader."""
+    asked = task.lower()
+    pool = _DRAFT_TALK_MARKERS if drafts_only else _REVIEW_TALK_MARKERS
+    markers = [marker for marker in pool if marker not in asked]
+    hits = []
+    for line in text.splitlines():
+        low = _ADDRESS_RE.sub(" ", line.lower())
+        if any(marker in low for marker in markers):
+            hits.append(line.strip()[:240])
+    return hits[:_REVIEW_TALK_MAX_LINES]
 
 
 class DraftReviewerGate(Gate):
@@ -218,14 +292,22 @@ class DraftReviewerGate(Gate):
         evidence_item_chars: int = 2000,
         max_tokens: int = 8192,
         reasoning_effort: str | None = None,
+        temperature: float = 0.0,
         constraint_rubric: bool = False,
         strict_reject_only: bool = False,
         fail_open_on_elided_evidence: bool = True,
         evidence_round: "EvidenceRound | None" = None,
         closing_tag_required: bool = False,
+        capture_requests: bool = False,
+        independent_views: bool = False,
+        context_window_tokens: int = 0,
+        min_revision_room_tokens: int = 0,
     ) -> None:
         self._provider = provider
+        self._context_window_tokens = context_window_tokens
+        self._min_revision_room_tokens = min_revision_room_tokens
         self._model = model
+        self._capture_requests = capture_requests
         self._timeout_seconds = timeout_seconds
         self._attempt_timeout_seconds = attempt_timeout_seconds
         self._attempt_http_timeout_seconds = attempt_http_timeout_seconds
@@ -244,6 +326,7 @@ class DraftReviewerGate(Gate):
         self._evidence_item_chars = evidence_item_chars
         self._max_tokens = max_tokens
         self._reasoning_effort = reasoning_effort
+        self._temperature = temperature
         self._verdict_tool_choice: dict | str = _VERDICT_TOOL_CHOICE
         self._strict_reject_only = strict_reject_only
         self._fail_open_on_elided_evidence = fail_open_on_elided_evidence
@@ -275,6 +358,8 @@ class DraftReviewerGate(Gate):
         # After the reject-only carve-out it narrows, and before the elision one so
         # that stays the last word. Its own text says the carve-out cannot reach it.
         self._reviewer_system += _NUMERIC_RUBRIC
+        if independent_views:
+            self._reviewer_system += _INDEPENDENT_VIEWS_RUBRIC
         self._reviewer_system += _ELISION_RUBRIC
 
     @property
@@ -363,6 +448,32 @@ class DraftReviewerGate(Gate):
             "verify_gate",
             {"revisions": 0, "reviews": 0, "fail_open": 0, "passes": 0, "rejects": 0},
         )
+        written = bool((ctx.metadata.get("write_phase") or {}).get("asked"))
+        if (state["revisions"] or written) and not state.get("review_talk_bounces"):
+            talk = review_talk_lines(draft, task_for(ctx), drafts_only=not state["revisions"])
+            if talk:
+                state["review_talk_bounces"] = 1
+                self._record(state, "review_talk", draft=draft, reviewed=False)
+                logger.warning(
+                    "verify-gate: %s talks about the review or a draft in %d line(s); asking for a clean copy",
+                    "revision" if state["revisions"] else "written report",
+                    len(talk),
+                )
+                passages = "\n".join(f"- {line}" for line in talk)
+                return HookDecision(
+                    rollback=True,
+                    # Synthetic: the re-sample reads them, the persisted turn does not, so the
+                    # draft that talked about the review never becomes an example to follow.
+                    rollback_inject=[
+                        {"role": "assistant", "content": draft, "_recovery_synthetic": True},
+                        {
+                            "role": "user",
+                            "content": _REVIEW_TALK_PROMPT.format(passages=passages),
+                            "_recovery_synthetic": True,
+                        },
+                    ],
+                    notes=["verify_gate: answer talks about the review or a draft; asked for a clean copy"],
+                )
         if state["revisions"] >= self._max_revisions:
             state["accepted_after_revision"] = True
             # dr@3.0. One counter was doing two jobs: capping how often the turn may be
@@ -446,14 +557,27 @@ class DraftReviewerGate(Gate):
             self._record(state, "degraded_no_claim", verdict=verdict, draft=draft)
             return HookDecision(notes=["verify_gate: reject degraded to pass (no named claim)"])
 
+        feedback = self._format_feedback(verdict)
+        # The context held is the draft's call plus the bounce that would follow it.
+        room = self._room_after(ctx, _EVIDENCE_ROUND_PROMPT.format(feedback=feedback))
+        if room is not None and room < self._min_revision_room_tokens:
+            state["rejected_no_room"] = state.get("rejected_no_room", 0) + 1
+            self._record(state, "reject_no_room", verdict=verdict, draft=draft)
+            logger.warning(
+                "verify-gate: draft rejected, but ~%d context tokens are left for a revision (< %d); shipping it",
+                room,
+                self._min_revision_room_tokens,
+            )
+            return HookDecision(notes=["verify_gate: rejected, no room left for a revision; accepting"])
         state["rejects"] += 1
         state["revisions"] += 1
         self._record(state, "reject", verdict=verdict, draft=draft)
-        feedback = self._format_feedback(verdict)
         # The round is opened before the bounce, not after the model asks for it:
         # the tool has to be deep by the time the re-sample issues its first search,
-        # and there is no seam between the re-sample and that call.
-        evidence_round = self._evidence_round is not None
+        # and there is no seam between the re-sample and that call. Research the budget
+        # note closed on a full context stays closed, so no round is offered.
+        full = bool((ctx.metadata.get("budget_note") or {}).get("full"))
+        evidence_round = self._evidence_round is not None and not full
         if evidence_round:
             self._evidence_round.open()
             state["evidence_rounds"] = self._evidence_round.opened
@@ -474,6 +598,13 @@ class DraftReviewerGate(Gate):
             ],
             notes=[f"verify_gate: rejected, revision {state['revisions']}/{self._max_revisions}"],
         )
+
+    def _room_after(self, ctx: GateCtx, prompt: str) -> int | None:
+        """Context tokens a revision would be left, or None when unmeasured or not asked."""
+        used = usage_tokens(ctx.response)
+        if not (self._min_revision_room_tokens and self._context_window_tokens and used):
+            return None
+        return self._context_window_tokens - used - estimate_message_tokens({"role": "user", "content": prompt})
 
     async def _review(self, ctx: GateCtx, draft: str) -> dict | None:
         task = task_for(ctx)
@@ -514,6 +645,8 @@ class DraftReviewerGate(Gate):
         # conditional is what keeps the unset knob byte-identical to before it
         # existed.
         effort_kwargs = {"reasoning_effort": self._reasoning_effort} if self._reasoning_effort is not None else {}
+        if self._capture_requests:
+            self._capture(user)
         # ``timeout_seconds`` is the budget, ``attempt_timeout_seconds`` the slice a
         # single call may take before it is cancelled and retried on a fresh call.
         # The shipped modes set the two equal - one uninterrupted attempt - because
@@ -539,7 +672,7 @@ class DraftReviewerGate(Gate):
                         tools=[_VERDICT_TOOL],
                         tool_choice=self._verdict_tool_choice,
                         max_tokens=self._max_tokens,
-                        temperature=0.0,
+                        temperature=self._temperature,
                         **effort_kwargs,
                     ),
                     timeout=min(self._attempt_timeout_seconds, remaining),
@@ -612,6 +745,32 @@ class DraftReviewerGate(Gate):
             return self._fail_open(ctx, "no_content")
         verdict = self._parse_verdict(text, upstream)
         return verdict if verdict is not None else self._fail_open(ctx, "unparsed")
+
+    def _capture(self, user: str) -> None:
+        """Save this review's request beside the turn's work, for an offline comparison of reviewers."""
+        from raven.agent import workdir
+
+        bound = workdir.current()
+        if bound is None:
+            return
+        folder = Path(bound) / ".review-requests"
+        request = {
+            "ts": time.time(),
+            "model": self._effective_model(),
+            "system": self._reviewer_system,
+            "user": user,
+            "tools": [_VERDICT_TOOL],
+            "max_tokens": self._max_tokens,
+        }
+        try:
+            # Owner-only: the request carries the evidence the turn read, local files included.
+            folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+            path = folder / f"review-{int(request['ts'] * 1000)}.json"
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(request, ensure_ascii=False))
+        except OSError as exc:
+            logger.warning("verify-gate: could not save the review request (%s)", exc)
 
     @staticmethod
     def _fail_open(ctx: GateCtx, reason: str) -> None:

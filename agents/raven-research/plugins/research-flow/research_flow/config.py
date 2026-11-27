@@ -83,6 +83,20 @@ class DigestConfig(_Base):
     threshold_chars: int = 8000
     timeout_seconds: float = 120.0
     verbatim_head_chars: int = 800
+    # A provider of its own for the digest (a LiteLLM provider name, e.g. "deepseek"),
+    # with ``model`` naming a model it serves. Unset, the digest runs on the agent's
+    # provider. A reasoning model that thinks at length on every page makes each fetch
+    # wait on it: one served model took 70 s on a page a small model digested in 9 s.
+    # The key is a secret: the launcher writes it into the rendered slice, never here.
+    provider: str | None = None
+    api_base: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
+    # False asks the digest's own provider to answer without thinking, through the
+    # chat template's ``enable_thinking`` flag; a served model whose template has no
+    # such flag ignores it. It covers every call on that provider: the digest, and the
+    # review and the bold pass when they are placed on it. A served thinking model took
+    # 117 s and 16k tokens of thought to give no bold pick, and 4 s without thinking.
+    thinking: bool = True
 
 
 class VerifyConfig(_Base):
@@ -90,10 +104,22 @@ class VerifyConfig(_Base):
 
     enabled: bool = True
     model: str | None = None
+    # Review on the digest's own provider and model (``digest.provider``) instead of the
+    # agent's. A reasoning agent model reviewing at length ran into ``max_tokens`` on 7 of
+    # 18 comparison runs and shipped those drafts unreviewed. Without a digest provider the
+    # review stays on the agent's.
+    on_digest_provider: bool = False
+    # Save each review request (the draft and the evidence the reviewer reads) under the
+    # turn's working directory, in ``.review-requests/``, so two reviewer models can be
+    # compared offline on the same input. Off: nothing is written.
+    capture_requests: bool = False
     timeout_seconds: float = 360.0
     attempt_timeout_seconds: float = 120.0
     attempt_http_timeout_seconds: float | None = None
     reasoning_effort: str | None = None
+    # The reviewer's sampling temperature. A thinking model decoding greedily thought
+    # past 16k tokens on a review it finished in 66 s at its own default of 1.0.
+    temperature: float = 0.0
     max_revisions: int = 1
     review_final_draft: bool = False
     max_tokens: int = 8192
@@ -103,6 +129,10 @@ class VerifyConfig(_Base):
     evidence_round: bool = False
     evidence_round_searches: int = 6
     evidence_round_depth: int = 50
+    # A rejection is sent back only when the context leaves at least this many tokens
+    # for the revision; with less, the draft ships as it is, the way it does once the
+    # revisions are spent. 0 sends it back whatever is left.
+    min_revision_room_tokens: int = 0
 
 
 class BudgetNoteConfig(_Base):
@@ -110,6 +140,13 @@ class BudgetNoteConfig(_Base):
 
     enabled: bool = True
     warn_ratio: float = 0.8
+    # Iterations after the warning before web_search and web_fetch are withdrawn for
+    # the rest of the turn; None keeps the warning advisory.
+    close_after: int | None = None
+    # Context tokens kept for the report and one revision: once the context leaves
+    # less, the web tools are withdrawn at once and no evidence round reopens them.
+    # None never closes on context. An absolute count, so it is set beside the window.
+    reserve_tokens: int | None = None
 
 
 class ForceFinalizeConfig(_Base):
@@ -125,6 +162,15 @@ class ForceFinalizeConfig(_Base):
     evidence_items: int = 8
     evidence_item_chars: int = 2000
     reasoning_excerpt_chars: int = 8000
+    # The loop's wrap-up for a turn cut off by a budget (the iteration cap, the wall
+    # clock): its reasoning effort and a cap on its output, None keeping the turn's own.
+    # At the turn's high effort one product run's wrap-up spent all 32768 tokens of its
+    # room reasoning over a 110k-token transcript and shipped the loop's static apology.
+    wrap_up_reasoning_effort: str | None = None
+    wrap_up_max_tokens: int | None = None
+    # When the wrap-up still comes back empty, salvage an answer from the evidence
+    # before the static apology.
+    wrap_up_salvage: bool = False
 
 
 class SpinBreakerConfig(_Base):
@@ -247,14 +293,77 @@ class FinalShapeConfig(_Base):
     # section - and the reviewed reply is also written over the markdown report file
     # the turn wrote, so the chat reply and the file are one text.
     report_layout: Literal["sections", "reader"] = "sections"
+    # The reader layout's style. "prose": sections of paragraphs, lists and tables only for
+    # side-by-side items. "outline": the same prose and tables, plus a `#` title, numbered
+    # sections and subsections, a conclusion opening each section, bold on the names
+    # and figures a skimming reader looks for, and lists for parallel items.
+    report_style: Literal["prose", "outline"] = "prose"
     report_reminder: bool = True
     report_bounce: bool = False
     process_appendix: bool = True
+    # The report as a step of its own: the first draft a research turn writes is set
+    # aside, and the model writes the report again with the tools withdrawn and the
+    # report rule repeated after the research (``WritePhaseGate``).
+    write_phase: bool = False
+    # How often a turn asks again, shorter and without tools, for a reply cut off at the
+    # output limit (``CutReportGate``); past that, the cut reply ships. 0 never asks.
+    cut_rewrites: int = 0
+    # The bold pass, last in the chain (``BoldPassGate``): when fewer than this share of a
+    # researched report body's paragraphs bold a name, a figure or a few words, or one
+    # bolds past the cap, or a bold is a clause, a side call chooses the bold anew and
+    # the report ships with it, its text unchanged. 0 turns the pass off.
+    skim_floor: float = 0.0
+    # The bold pass's side call on the digest's provider and model, when one is configured.
+    bold_on_digest_provider: bool = False
+    # The reader layout's closing section on what could not be verified. Off, the report
+    # under the page has no such section: the rule does not ask for it, the shape bar does
+    # not require it, and one the model writes anyway is left out of the file and the page.
+    limits: bool = True
 
     @property
     def effective_layout(self) -> str:
         """The layout the prompt renders: the reader form exists only for the deep clause."""
         return self.report_layout if self.report_depth else "sections"
+
+
+class DraftRevisionsConfig(_Base):
+    """A budget on revising a report file the turn already wrote (``ReportLengthNote``).
+
+    Counted in iterations that changed such a file. At ``note_after`` the model is asked
+    to send the reply; at ``stop_after`` the file-writing tools are withheld for the rest
+    of the turn. Measured under the reader layout only, where the length note runs.
+    """
+
+    enabled: bool = False
+    note_after: int = 8
+    stop_after: int = 12
+
+
+class ReportPageConfig(_Base):
+    """The report's reading page: the delivered report as one HTML file.
+
+    Written only under the reader layout, for a reply that reads as a report. The reply
+    and the conversation stay markdown; the page is a second form of the same text.
+    """
+
+    enabled: bool = False
+    # Key figures, key findings and a timeline above the body. A model selects them and
+    # the flow keeps only text the report holds, so the page never words a claim itself.
+    highlights: bool = False
+    highlights_model: str | None = None
+    # Room for a reasoning model's thinking before its answer: at 2048 one real call spent
+    # the whole budget thinking and returned nothing, and the page shipped without highlights.
+    highlights_max_tokens: int = 8192
+    highlights_reasoning_effort: str | None = "low"
+    highlights_timeout_seconds: float = 60.0
+    # Select the highlights on the digest's own provider and model, as ``verify`` can.
+    highlights_on_digest_provider: bool = False
+    # The page then is the one report file the turn leaves: the markdown report file it
+    # was written from is removed, and the reply names the page where it named that file.
+    remove_markdown: bool = False
+    # The limits section (``## Limitations`` / its Chinese heading) on the page. Off, the
+    # page leaves it out and the report file and the reply still hold it.
+    show_limits: bool = True
 
 
 class ConversationConfig(_Base):
@@ -428,6 +537,56 @@ PRODUCT_SUPERSEDED_PROFILES: dict[str, str] = {
     # identity dropped the measured-guidance block, whose short-run and one-answer
     # numbers came from a short-answer benchmark rather than from reports.
     "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader",
+    # 2026-11-19: the flow writes the report's HTML reading page, and the reader clause
+    # tells the model so: it writes no HTML file of the report itself. The clause is what
+    # every shipped run renders, and each report reply now ends with the line that names
+    # the page, so the label moves. Under the same label the report closes with its list
+    # of sources after the limits, which is the page's source list, and a paragraph has
+    # a length limit.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page",
+    # 2026-11-25: a turn that keeps revising a report file it already wrote is told
+    # when an edit dropped a heading, asked for the reply after eight revising
+    # iterations and loses the file tools after twelve; the length clause takes a count
+    # within a twentieth of the bound as met. A report the turn used to keep editing to
+    # the iteration cap now ends earlier, so the label moves.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts",
+    # 2026-11-26: the length clause calls a body inside the task's bound done - no
+    # lengthening for depth, no trimming for the count - and keeps the report from
+    # stating its own length or source count unasked; the length line says whether the
+    # body meets a bound it can read from the task. Fewer revising iterations, so the
+    # label moves.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length",
+    # 2026-11-26: the report clause sets the reply's shape over the identity's short form,
+    # asks the answer for its deciding numbers, and the late-turn nudges ask for the
+    # required shape rather than the answer-first short form, so the label moves.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape",
+    # 2026-11-26: the reader body's argument starts from where things stand, no section
+    # restates the answer, and forecasts of one quantity go in one table, so the label moves.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc",
+    # 2026-11-26: the reader clause asks for the whole subject the question names, each
+    # part researched or named as left out, and for plain standard prose in the question's
+    # language, so the label moves.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope",
+    # 2026-11-26: the product ships the outline style; the reader clause dates sources by
+    # when the work first appeared and puts a question's time span in its queries, and
+    # the fetch tool labels a reader's page time and reads an arXiv ID's month, so the
+    # label moves.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window",
+    # 2026-11-26: in the high mode the converge warning is a deadline - six iterations
+    # after it the search and fetch tools are withdrawn for the turn - and a turn cut
+    # off by a budget wraps up at low effort under a token cap, with a salvage when the
+    # wrap-up comes back empty. The outline style keeps principles only - a conclusion
+    # opening each section, an overview table first when the question surveys several
+    # methods or works, a table, list or prose as the content has that form, bold a
+    # skimming reader can follow - in place of its rulebook and template, and the page's
+    # report drops its limits section and its highlights. A turn that used to
+    # search to the iteration cap now writes earlier, and the report clause changed, so
+    # the label moves.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window-close-skim",
+    # 2026-11-27: the outline style opens a question about how an event came about or
+    # unfolded on its dated chronology, as it opens a survey on an overview table. The
+    # report clause changed, so the label moves.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window-close-skim": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-page-drafts-length-shape-arc-scope-window-close-skim-chrono",
     # The interim label this branch's 2026-09-07 batches ran under before it rebased onto
     # the cite-rank clause and the dr@3.7 rung; never shipped, retired so those bench
     # configs still load.
@@ -560,6 +719,11 @@ class FlowConfig(_Base):
     prompt_section_override: str | None = None
     identity_override: str | None = None
     measured_guidance: bool = True
+    # A question on whether something is good, which to choose or how it is received is
+    # researched beyond its makers' own pages: a contract rule asks for independent views,
+    # opened and kept apart in the report, and the reviewer fails a verdict on it that
+    # cites the makers alone. Off: neither is said.
+    independent_views: bool = False
     fetch_max_chars: int = 14_000
     search: SearchConfig = Field(default_factory=SearchConfig)
     digest: DigestConfig = Field(default_factory=DigestConfig)
@@ -573,6 +737,8 @@ class FlowConfig(_Base):
     evidence_floor: EvidenceFloorConfig = Field(default_factory=EvidenceFloorConfig)
     plain_first: PlainFirstConfig = Field(default_factory=PlainFirstConfig)
     final_shape: FinalShapeConfig = Field(default_factory=FinalShapeConfig)
+    report_page: ReportPageConfig = Field(default_factory=ReportPageConfig)
+    draft_revisions: DraftRevisionsConfig = Field(default_factory=DraftRevisionsConfig)
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     ask_user: AskUserConfig = Field(default_factory=AskUserConfig)
 
@@ -701,6 +867,7 @@ __all__ = [
     "BudgetNoteConfig",
     "ConversationConfig",
     "DigestConfig",
+    "DraftRevisionsConfig",
     "EvidenceFloorConfig",
     "FetchFloorConfig",
     "FetchGateConfig",
@@ -708,6 +875,7 @@ __all__ = [
     "FlowConfig",
     "ForceFinalizeConfig",
     "PlainFirstConfig",
+    "ReportPageConfig",
     "SearchConfig",
     "SearchSaturationConfig",
     "SpinBreakerConfig",
