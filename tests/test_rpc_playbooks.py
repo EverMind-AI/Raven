@@ -2206,7 +2206,7 @@ def test_the_rpc_creation_budget_is_the_conversational_tool_own() -> None:
     The RPC budget is read from ``CreatePlaybookTool.timeout_seconds`` rather
     than copied, and this is the pin that keeps it so: a constant written
     again here would drift the moment either entry is reconsidered, and the
-    budget is the only bound creation has (issue #427).
+    budget is the only bound creation has.
     """
     from raven.agent.tools.create_playbook import CreatePlaybookTool
 
