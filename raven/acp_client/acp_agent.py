@@ -788,6 +788,11 @@ class _TurnCollector:
         says it counts the whole turn; the ``usage_update`` then carries only the
         window and the cost. Otherwise the update, where an earlier agent was seen
         to send its counts.
+
+        The raw ``result`` counts exist only for the dialect that opens its
+        session with ``emitRawSDKMessages``, so they reach every run of that
+        adapter -- settling or not, since the raw frames arrive on every turn --
+        and no run of any other agent.
         """
         counts_the_turn = self._dialect.prompt_usage_counts_the_turn(self._agent_version)
         raw = self.settle.usage_counts()
@@ -2332,6 +2337,17 @@ class AcpAgentBackend:
         settle = collector.settle
         collector.prompt_answered()
         if not settle.reporting:
+            # Settling needs an idle boundary, and an adapter that reported no
+            # session state this run gives none: the answered run ends here, as
+            # before. The pinned adapter sends `running` before it answers, so
+            # this warning is what makes a change to that frame order visible.
+            if collector._dialect.session_open_meta() is not None:
+                logger.warning(
+                    "acp agent {!r}: session {} answered with no session state frame, "
+                    "so its background work is not tracked",
+                    self.name,
+                    session_id,
+                )
             return None
         answered_at = time.monotonic()
         next_alive = answered_at

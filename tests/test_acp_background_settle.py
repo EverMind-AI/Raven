@@ -516,9 +516,21 @@ async def test_unwoken_task_end_returns_after_the_bound(tmp_path, monkeypatch):
 
 
 async def test_no_state_message_returns_on_the_answer(tmp_path):
+    """With no state frame the run ends on its answer, and says so.
+
+    Settling needs an idle boundary, and an adapter that sends none leaves the
+    run un-settled. The pinned adapter reports `running` before it answers, so
+    the warning is what makes a future frame-order change visible.
+    """
     started = time.monotonic()
-    assert await _go(_scenario("settle-no-state", "no_state"), tmp_path) == "pong"
+    logs: list[str] = []
+    sink = logger.add(lambda message: logs.append(str(message)), level="WARNING")
+    try:
+        assert await _go(_scenario("settle-no-state", "no_state"), tmp_path) == "pong"
+    finally:
+        logger.remove(sink)
     assert time.monotonic() - started < 2
+    assert any("settle-no-state" in line and "no session state frame" in line for line in logs)
 
 
 async def test_ceiling_returns_with_a_notice(tmp_path, monkeypatch):
@@ -681,19 +693,26 @@ async def test_cancel_during_settle_books_the_usage_spent_so_far(tmp_path, monke
 
 
 async def test_quiet_background_work_stamps_the_run_alive(tmp_path, monkeypatch):
+    """A quiet background command leaves the wire silent, so the run needs its own heartbeat.
+
+    Every frame stamps the run alive as it arrives; the settle is what stamps it
+    while no frame does. The probe counts the stamps that stand apart from the
+    adapter's burst rather than the caller's name, so renaming or wrapping the
+    settle loop keeps measuring the same thing.
+    """
     monkeypatch.setattr(background_settle, "ALIVE_EVERY_S", 0.2)
     monkeypatch.setattr(background_settle, "SETTLE_CEILING_S", 1.0)
     stamps: list[float] = []
     note_alive = activity.note_alive
 
     def spy(run: Any) -> None:
-        if sys._getframe(1).f_code.co_name == "_settle":
-            stamps.append(time.monotonic())
+        stamps.append(time.monotonic())
         note_alive(run)
 
     monkeypatch.setattr(activity, "note_alive", spy)
     await _go(_scenario("settle-alive", "forever"), tmp_path)
-    assert len(stamps) >= 3
+    spaced = [b - a for a, b in zip(stamps, stamps[1:]) if b - a >= background_settle.ALIVE_EVERY_S / 2]
+    assert len(spaced) >= 3
 
 
 async def test_another_agent_returns_on_the_answer(tmp_path):
