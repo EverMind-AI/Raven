@@ -8,16 +8,20 @@ fail later somewhere that reads like a bug in the ingest.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import socket
 import threading
+import time
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import httpcore
 import httpx
 import pytest
+from httpcore._backends.auto import AutoBackend
 
 from raven.security.network import judge_url_target as _real_judge
 from raven.security.network import validate_url_target as _real_validate
@@ -944,7 +948,11 @@ async def test_a_redirect_to_a_non_http_scheme_is_refused(fetch_routed) -> None:
 # A MockTransport never resolves anything, so it cannot see this defect at all:
 # the window is between the judge's resolution and the one the client does when
 # it connects. These tests use a real client, a resolver that answers public to
-# the judge and loopback to a connection, and record the TCP target.
+# the judge and loopback to a connection, and record the address the network
+# backend is asked to connect to. The seam is httpcore's ``connect_tcp`` rather
+# than ``socket.socket.connect``: it sits above the Proactor/selector split, so
+# the same recorder sees the connection on Windows, where the Proactor loop
+# connects through ``ConnectEx`` and never calls ``socket.connect``.
 # ---------------------------------------------------------------------------
 
 _PUBLIC_ANSWER = "93.184.216.34"
@@ -982,11 +990,11 @@ async def test_the_first_hop_connects_to_the_address_the_judge_saw(rebinding_dns
     public = rebinding_dns
     attempts: list[tuple] = []
 
-    def recording_connect(self, address):
-        attempts.append(address)
-        raise ConnectionRefusedError(111, "connection refused")
+    async def recording_connect(_backend, host, port, **_kwargs):
+        attempts.append((host, port))
+        raise httpcore.ConnectError("connection refused")
 
-    monkeypatch.setattr(socket.socket, "connect", recording_connect)
+    monkeypatch.setattr(AutoBackend, "connect_tcp", recording_connect)
 
     body = await _run(PptFetchTool(tmp_path), url="https://rebind.test/start")
 
@@ -1029,15 +1037,15 @@ async def test_every_redirect_hop_connects_to_the_address_its_judge_saw(
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     attempts: list[tuple] = []
-    real_connect = socket.socket.connect
+    real_connect = AutoBackend.connect_tcp
 
-    def recording_connect(self, address):
-        if address[1] != 80:
-            return real_connect(self, address)
-        attempts.append(address)
-        return real_connect(self, ("127.0.0.1", local_port))
+    async def recording_connect(backend, host, port, **kwargs):
+        if port != 80:
+            return await real_connect(backend, host, port, **kwargs)
+        attempts.append((host, port))
+        return await real_connect(backend, "127.0.0.1", local_port, **kwargs)
 
-    monkeypatch.setattr(socket.socket, "connect", recording_connect)
+    monkeypatch.setattr(AutoBackend, "connect_tcp", recording_connect)
     try:
         body = await _run(PptFetchTool(tmp_path), url="http://rebind.test/start")
     finally:
@@ -1065,3 +1073,56 @@ async def test_a_pinned_hop_still_answers_as_the_name_it_was_given(fetch_routed)
     assert request.url.host == _PUBLIC_ANSWER, "the URL carries the address the judge saw"
     assert request.headers["host"] == "public.example", "Host keeps the site's name"
     assert request.extensions["sni_hostname"] == "public.example", "SNI keeps the site's name"
+
+
+# ---------------------------------------------------------------------------
+# The judge resolves synchronously, so it runs off the event loop.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_hop_judge_does_not_block_the_event_loop(fetch, monkeypatch) -> None:
+    """A slow resolver must not freeze the turns this process is serving.
+
+    ``socket.getaddrinfo`` is synchronous and can hold for its timeout. Counting
+    the ticks a sibling coroutine gets while the judge is inside that call is the
+    difference between running it in a worker thread and blocking the loop with
+    it: a blocked loop lets the ticker run zero times while the judge is in
+    flight, however long the judge takes.
+    """
+    judging = threading.Event()
+    ticks_while_judging = 0
+    tool = fetch(_png())
+
+    def slow_judge(_url):
+        judging.set()
+        time.sleep(0.2)
+        judging.clear()
+        return True, "", ()
+
+    monkeypatch.setattr("raven.security.network.judge_url_target", slow_judge)
+    monkeypatch.setattr("raven.security.network.judge_resolved_url", slow_judge)
+
+    async def ticker() -> None:
+        nonlocal ticks_while_judging
+        while True:
+            if judging.is_set():
+                ticks_while_judging += 1
+            await asyncio.sleep(0.01)
+
+    task = asyncio.create_task(ticker())
+    await asyncio.sleep(0)
+    try:
+        body = await _run(tool, url="https://example.com/figure")
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert body["ok"] is True, body
+    assert ticks_while_judging > 1, (
+        "the event loop must keep running while the judge resolves; "
+        f"a sibling coroutine got only {ticks_while_judging} turns"
+    )

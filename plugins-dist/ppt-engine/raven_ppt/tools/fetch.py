@@ -393,6 +393,11 @@ class PptFetchTool(Tool):
         against the URL it came from so the hop it names is an absolute URL the
         judge can read. The chain is bounded because it has to end.
 
+        The first hop is judged once more than the others because `_fetch_one`
+        has already called `validate_url_target` on it; that verdict is thrown
+        away, while this loop needs the addresses it was made on to pin the
+        connection.
+
         Each hop connects to the address its judge resolved, because judging one
         answer and connecting to a second one is the window rebinding uses: a name
         that answers public to the check and loopback to the client reaches the
@@ -400,6 +405,9 @@ class PptFetchTool(Tool):
         handed to `_pin_request`, so the connection target is one of them while
         Host and SNI still carry the site's name.
         """
+        # `_pin_request` is private in core on purpose: this plugin ships from the
+        # same tree, so it follows the helper's shape rather than asking core to
+        # publish a streaming-aware variant that would be the same function.
         from raven.security.network import _pin_request, judge_resolved_url, judge_url_target
 
         async with httpx.AsyncClient(
@@ -411,7 +419,11 @@ class PptFetchTool(Tool):
         ) as client:
             current = url
             for hop in range(MAX_REDIRECTS + 1):
-                allowed, refusal, addresses = judge_url_target(current) if hop == 0 else judge_resolved_url(current)
+                # Off the loop: the judge resolves through the synchronous
+                # `socket.getaddrinfo`, which can hold for seconds on a slow
+                # resolver while one process serves every session's turn.
+                judge = judge_url_target if hop == 0 else judge_resolved_url
+                allowed, refusal, addresses = await asyncio.to_thread(judge, current)
                 if not allowed:
                     raise ValueError(f"that URL cannot be fetched: {refusal}")
                 target, pinned = _pin_request(current, addresses)
