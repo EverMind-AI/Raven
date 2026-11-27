@@ -75,7 +75,8 @@ def test_what_fails_the_check(paragraphs, fails):
 def test_the_spans_are_the_units_in_place():
     report = _report(f"{_LINE}.\ncontinued here.", f"- {_LINE}, first.\n  wrapped.\n- {_LINE}, second.")
     units = [report[a:b] for a, b in body_spans(report)]
-    assert units == [f"{_LINE}.\ncontinued here.", f"- {_LINE}, first.\n  wrapped.", f"- {_LINE}, second."]
+    # An item is its text, less the marker: no span may be set on the marker.
+    assert units == [f"{_LINE}.\ncontinued here.", f"{_LINE}, first.\n  wrapped.", f"{_LINE}, second."]
     fenced = _report("```\n## Not a heading\n" + _LINE + "\n```", _LINE + ".")
     assert [fenced[a:b] for a, b in body_spans(fenced)] == [_LINE + "."]
 
@@ -223,3 +224,49 @@ def test_off_by_default_and_last_in_the_chain_on_the_side_asked_for(tmp_path):
     cfg.final_shape.bold_on_digest_provider = True
     gates = _chain(tmp_path, cfg, side=(digest, "deepseek/flash"))
     assert gates[-1]._provider is digest and gates[-1]._model == "deepseek/flash"
+
+
+_PAD = " This sentence pads the paragraph past the counted minimum length for sure."
+
+
+def _bolded_paragraph(paragraph: str, picks: list[str]) -> tuple[str, dict[str, int]]:
+    bolded, counters = apply_bold(_report(paragraph), {1: picks})
+    return bolded.split("## 1. Methods\n\n")[1].split("\n")[0], counters
+
+
+@pytest.mark.parametrize(
+    ("paragraph", "picks", "expected"),
+    [
+        ("1. The model reached 1% error on the split." + _PAD, ["1"], "1. The model reached **1**% error"),
+        ("We saw 100% recall, 10% overhead on the run." + _PAD, ["10"], "We saw 100% recall, **10**% overhead"),
+        ("The MAIN finding on AI holds across seeds." + _PAD, ["AI"], "The MAIN finding on **AI** holds"),
+        ("It scored 5.5% where the old one scored 5%." + _PAD, ["5"], "It scored 5.5% where the old one scored **5**%"),
+    ],
+)
+def test_a_span_is_set_only_where_it_stands_on_its_own(paragraph, picks, expected):
+    """A bare find put ``**1**.`` on a list marker, ``**10**0%`` in a figure and ``M**AI**N`` in a word."""
+    line, counters = _bolded_paragraph(paragraph, picks)
+    assert line.startswith(expected) and counters["set"] == 1
+    assert unbold(line) == paragraph
+
+
+def test_a_span_inside_emphasis_is_dropped_rather_than_set():
+    """``***foo** bar*`` would parse as other markup than either the bold or the italic."""
+    paragraph = "The *foo bar* method beats the baseline handily." + _PAD
+    line, counters = _bolded_paragraph(paragraph, ["foo"])
+    assert line == paragraph and counters == {"set": 0, "dropped": 1}
+
+
+def test_double_asterisks_in_code_are_not_bold():
+    paragraph = "Use `foo(**a)` and `bar(**b)` to merge two dicts into one." + _PAD
+    assert unbold(paragraph) == paragraph
+    assert check_bold(_report(paragraph)).long == 0
+    line, _ = _bolded_paragraph(paragraph, ["dicts"])
+    assert "`foo(**a)` and `bar(**b)`" in line and "**dicts**" in line
+
+
+def test_a_tilde_fence_and_a_table_after_a_paragraph_are_not_body():
+    fenced = _report("~~~\n" + _LINE + " **a whole bold sentence that is a clause.**\n~~~", _LINE + ".")
+    assert [fenced[a:b] for a, b in body_spans(fenced)] == [_LINE + "."]
+    tabled = _report(_LINE + ".\n| a | b |\n|---|---|\n| **x** | y |")
+    assert [tabled[a:b] for a, b in body_spans(tabled)] == [_LINE + "."]

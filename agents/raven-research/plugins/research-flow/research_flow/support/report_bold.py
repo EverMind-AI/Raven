@@ -43,7 +43,7 @@ _MAX_BODY_CHARS = 60000
 _SENTENCE_END = tuple(".!?;:\u3002\uff01\uff1f\uff1b\uff1a")
 _HEADING_RE = re.compile(r"^##(?!#)([^\n]*)$", re.M)
 _BLOCK_RE = re.compile(r"(?:^[^\n]*\S[^\n]*(?:\n|\Z))+", re.M)
-_FENCE_RE = re.compile(r"^```.*?^```[^\n]*$", re.M | re.S)
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?^ {0,3}\1[`~]*[ \t]*$", re.M | re.S)
 _LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _URL_RE = re.compile(r"https?://\S+")
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
@@ -81,11 +81,18 @@ class BoldCheck:
         return self.held < floor * self.total or self.dense > 0 or self.long > 0
 
 
+def _bold_marks(text: str) -> list[re.Match[str]]:
+    """The bold in ``text``, where ``**`` inside inline code, a URL or a link's target is not markup."""
+    masked = _UNTOUCHABLE_RE.sub(lambda m: "\0" * len(m.group()), text)
+    return list(_BOLD_RE.finditer(masked))
+
+
 def check_bold(report: str) -> BoldCheck:
     held = dense = long = 0
     spans = body_spans(report)
     for start, end in spans:
-        bolds = _BOLD_RE.findall(report[start:end])
+        text = report[start:end]
+        bolds = [text[m.start(1) : m.end(1)] for m in _bold_marks(text)]
         fitting = sum(map(fits, bolds))
         held += fitting > 0
         dense += fitting > _DENSE
@@ -133,28 +140,38 @@ def body_spans(report: str) -> list[tuple[int, int]]:
 
 
 def _units(report: str, start: int, end: int) -> list[tuple[int, int]]:
-    """A prose block as one unit, a list as one per item; tables, quotes and headings as none."""
-    text = report[start:end]
-    lead = len(text) - len(text.lstrip())
-    body = text.strip()
-    if not body or body.startswith(("#", "|", ">")):
-        return []
-    if not _ITEM_RE.match(body):
-        return [(start + lead, start + lead + len(body))]
-    items: list[list[int]] = []
-    offset = start
-    for line in text.splitlines(keepends=True):
-        stripped = line.rstrip("\n")
-        if stripped.strip() and (_ITEM_RE.match(stripped) or not items):
-            items.append([offset, offset + len(stripped)])
-        elif stripped.strip():
-            items[-1][1] = offset + len(stripped)
+    """Prose lines as one unit and a list as one per item, less its marker; table, quote
+    and heading lines as none, and they end the unit before them.
+
+    The marker stays out so no span is set on it: ``1`` picked in ``1. ...`` would
+    turn the item into ``**1**. ...``, which is no longer a list.
+    """
+    units: list[list[int]] = []
+    offset, open_unit = start, False
+    for line in report[start:end].splitlines(keepends=True):
+        stripped = line.rstrip("\n").rstrip()
+        body = stripped.lstrip()
+        if not body or body.startswith(("#", "|", ">")):
+            open_unit = False
+        elif marker := _ITEM_RE.match(stripped):
+            units.append([offset + marker.end(), offset + len(stripped)])
+            open_unit = True
+        elif open_unit:
+            units[-1][1] = offset + len(stripped)
+        else:
+            units.append([offset + len(stripped) - len(body), offset + len(stripped)])
+            open_unit = True
         offset += len(line)
-    return [(a, b) for a, b in items]
+    return [(a, b) for a, b in units if b > a]
 
 
 def unbold(text: str) -> str:
-    return _BOLD_RE.sub(r"\1", text)
+    out, last = [], 0
+    for m in _bold_marks(text):
+        out += [text[last : m.start()], text[m.start(1) : m.end(1)]]
+        last = m.end()
+    out.append(text[last:])
+    return "".join(out)
 
 
 def apply_bold(report: str, picks: dict[int, list[str]]) -> tuple[str, dict[str, int]]:
@@ -197,10 +214,30 @@ def _set(plain: str, spans: list[str]) -> tuple[str, int, int]:
     return "".join(out), len(taken), lost
 
 
+def _word(char: str) -> bool:
+    return char.isascii() and (char.isalnum() or char == "_")
+
+
+def _bounded(plain: str, at: int, span: str) -> bool:
+    """Whether ``span`` at ``at`` stands on its own: not part of a longer word or number
+    (``AI`` in ``MAIN``, ``10`` in ``100%``), and not against emphasis, where setting it
+    would leave ``***`` a parser reads as other markup."""
+    before = plain[at - 1] if at else ""
+    after = plain[at + len(span)] if at + len(span) < len(plain) else ""
+    if "*" in (before, after):
+        return False
+    if _word(span[0]) and _word(before) or _word(span[-1]) and _word(after):
+        return False
+    # A digit run continued by a decimal or grouping mark: ``5`` in ``5.5%``, ``2`` in ``1,2``.
+    if span[-1].isdigit() and after in ".," and plain[at + len(span) + 1 : at + len(span) + 2].isdigit():
+        return False
+    return not (span[0].isdigit() and before in ".," and at >= 2 and plain[at - 2].isdigit())
+
+
 def _find(plain: str, span: str, avoid: list[tuple[int, int]]) -> int | None:
     at = plain.find(span)
     while at >= 0:
-        if not any(a < at + len(span) and at < b for a, b in avoid):
+        if _bounded(plain, at, span) and not any(a < at + len(span) and at < b for a, b in avoid):
             return at
         at = plain.find(span, at + 1)
     return None
