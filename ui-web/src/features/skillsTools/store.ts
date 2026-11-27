@@ -133,12 +133,6 @@ export async function refresh(): Promise<void> {
   return loading
 }
 
-export function syncSnap(snap: SettingsSnapshot): void {
-  const cur = get()
-  if (!cur.loaded || sameSnap(cur.snap, snap)) return
-  set({ snap, epoch: cur.epoch + 1 })
-}
-
 let refreshTimer: ReturnType<typeof setTimeout> | null = null
 export const REFRESH_SOON_MS = 300
 

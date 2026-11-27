@@ -8601,22 +8601,6 @@
       "en": "Model settings",
       "zh": "模型配置"
     },
-    "gui.settings.nav.skills": {
-      "en": "Skills",
-      "zh": "技能"
-    },
-    "gui.settings.nav.tools": {
-      "en": "Tools",
-      "zh": "工具"
-    },
-    "gui.settings.nav.mcp": {
-      "en": "MCP",
-      "zh": "MCP"
-    },
-    "gui.settings.nav.plugins": {
-      "en": "Plugins",
-      "zh": "插件"
-    },
     "gui.settings.nav.channels": {
       "en": "Channels",
       "zh": "渠道"
@@ -9485,105 +9469,13 @@
       "en": "Above this model's {n}",
       "zh": "超过该模型的 {n}"
     },
-    "gui.settings.skills.search": {
-      "en": "Search skills",
-      "zh": "搜索技能"
-    },
-    "gui.settings.skills.add": {
-      "en": "Add",
-      "zh": "新增"
-    },
-    "gui.settings.skills.add_prompt": {
-      "en": "Help me find a skill on Skill Hub and install it. My requirements are as follows:",
-      "zh": "帮我在 Skill Hub 找一个技能并安装，我的要求如下："
-    },
-    "gui.settings.skills.hub_card": {
-      "en": "Skill Hub",
-      "zh": "Skill Hub"
-    },
-    "gui.settings.skills.hub_title": {
-      "en": "Use 110k+ skills from EverMind Skill Hub",
-      "zh": "使用 EverMind Skill Hub 的 11 万+ 技能"
-    },
-    "gui.settings.skills.hub_sub": {
-      "en": "While on, Raven sends text from your session to the Skill Hub when it looks for a skill.",
-      "zh": "开启时，Raven 查找技能会把会话中的文字发送到 Skill Hub。"
-    },
-    "gui.settings.skills.builtin": {
-      "en": "Built-in",
-      "zh": "内置"
-    },
-    "gui.settings.skills.workspace": {
-      "en": "Workspace",
-      "zh": "工作区"
-    },
-    "gui.settings.skills.on_of": {
-      "en": "{on} of {total} on",
-      "zh": "开 {on} / {total}"
-    },
-    "gui.settings.skills.none": {
-      "en": "No matching skill",
-      "zh": "没有匹配的技能"
-    },
-    "gui.settings.skills.always": {
-      "en": "Injected every turn",
-      "zh": "每轮注入"
-    },
-    "gui.settings.skills.uninstall": {
-      "en": "Uninstall",
-      "zh": "卸载"
-    },
-    "gui.settings.skills.uninstall_title": {
-      "en": "Uninstall {name}?",
-      "zh": "卸载 {name}？"
-    },
-    "gui.settings.skills.uninstall_body": {
-      "en": "Removes the whole directory {path}.",
-      "zh": "会删除 {path} 整个目录。"
-    },
-    "gui.settings.skills.open_file": {
-      "en": "Open {file}",
-      "zh": "打开 {file}"
-    },
     "gui.settings.skills.saved_no_refresh": {
       "en": "Saved, but the skill list could not be refreshed - {detail}",
       "zh": "已保存，但技能列表刷新失败：{detail}"
     },
-    "gui.settings.skills.safety": {
-      "en": "Safety {n}",
-      "zh": "安全分 {n}"
-    },
-    "gui.settings.skills.trig_use": {
-      "en": "Installed in a session",
-      "zh": "会话中安装"
-    },
-    "gui.settings.skills.trig_auto": {
-      "en": "Installed automatically",
-      "zh": "自动安装"
-    },
-    "gui.settings.skills.trig_rpc": {
-      "en": "Installed from a client",
-      "zh": "客户端安装"
-    },
-    "gui.settings.tools.counter": {
-      "en": "On {on} / {total}",
-      "zh": "开 {on} / 共 {total}"
-    },
-    "gui.settings.tools.setup": {
-      "en": "Needs setup",
-      "zh": "待配置"
-    },
     "gui.settings.tools.borrowed_key": {
       "en": "{name} API key is already set.",
       "zh": "{name} API key 已设置。"
-    },
-    "gui.settings.tools.builtin_locked": {
-      "en": "This tool is built in and cannot be switched here.",
-      "zh": "该工具为内置，无法在此手动开关。"
-    },
-    "gui.settings.tools.model": {
-      "en": "Model",
-      "zh": "模型"
     },
     "gui.settings.tools.vendor": {
       "en": "Vendor",
@@ -9592,22 +9484,6 @@
     "gui.settings.tools.search_vendor": {
       "en": "Search service",
       "zh": "搜索服务"
-    },
-    "gui.settings.tools.ppt_image_missing": {
-      "en": "Deck generation cannot use this search API's pictures and no Serper key is configured, so it cannot run.",
-      "zh": "当前搜索 API 的图片结果无法用于 PPT 制作，且未配置 Serper Key，无法启用 PPT 制作引擎。"
-    },
-    "gui.settings.tools.ppt_image_fallback": {
-      "en": "Deck generation cannot use this search API's pictures. It will use {name} instead.",
-      "zh": "当前搜索 API 的图片结果无法用于 PPT 制作，将改用 {name}。"
-    },
-    "gui.settings.tools.ppt_image_no_key": {
-      "en": "Deck generation has no picture search key it can use. Set the {name} key here to enable it.",
-      "zh": "PPT 制作引擎没有可用的搜图 Key，在此设置 {name} Key 即可启用。"
-    },
-    "gui.settings.tools.ppt_image_no_key_or_serper": {
-      "en": "Deck generation has no picture search key it can use. Set the {name} key here, or a Serper key, to enable it.",
-      "zh": "PPT 制作引擎没有可用的搜图 Key，在此设置 {name} Key 或 Serper Key 即可启用。"
     },
     "gui.settings.tools.fetch_vendor": {
       "en": "Fetch service",
@@ -9620,42 +9496,6 @@
     "gui.settings.tools.key_first": {
       "en": "Enter the key first",
       "zh": "先填入 Key"
-    },
-    "gui.settings.tools.grp_file": {
-      "en": "Files",
-      "zh": "文件"
-    },
-    "gui.settings.tools.grp_knowledge": {
-      "en": "Knowledge bases",
-      "zh": "知识库"
-    },
-    "gui.settings.tools.grp_run": {
-      "en": "Execution",
-      "zh": "执行"
-    },
-    "gui.settings.tools.grp_net": {
-      "en": "Web",
-      "zh": "网络"
-    },
-    "gui.settings.tools.grp_generate": {
-      "en": "Generation",
-      "zh": "生成"
-    },
-    "gui.settings.tools.grp_collab": {
-      "en": "Collaboration",
-      "zh": "协作"
-    },
-    "gui.settings.tools.grp_skills": {
-      "en": "Skills and playbooks",
-      "zh": "技能与剧本"
-    },
-    "gui.settings.tools.grp_memory": {
-      "en": "Memory",
-      "zh": "记忆"
-    },
-    "gui.settings.tools.grp_search": {
-      "en": "Meta tools",
-      "zh": "元工具"
     },
     "gui.settings.setup.web_search": {
       "en": "Web search",
@@ -9680,162 +9520,6 @@
     "gui.settings.setup.fetch_keyless_hint": {
       "en": "You can read pages without a key - adding one gets you higher rate limits.",
       "zh": "不填密钥也能抓取网页，填上之后不容易被限流"
-    },
-    "gui.settings.mcp.counter": {
-      "en": "Connected {on} / {total}",
-      "zh": "已连接 {on} / 共 {total}"
-    },
-    "gui.settings.mcp.none": {
-      "en": "No MCP server configured",
-      "zh": "还没有配置 MCP 服务"
-    },
-    "gui.settings.mcp.none_sub": {
-      "en": "An MCP server hands Raven tools and data from outside.",
-      "zh": "MCP 服务能给 Raven 接上外部的工具和数据。"
-    },
-    "gui.settings.mcp.add": {
-      "en": "Add",
-      "zh": "新增"
-    },
-    "gui.settings.mcp.add_prompt": {
-      "en": "Help me connect an MCP server. My requirements are as follows:",
-      "zh": "帮我接入一个 MCP 服务，我的要求如下："
-    },
-    "gui.settings.mcp.add_hint": {
-      "en": "A server the catalogue does not list goes into tools.mcpServers in {path} by hand.",
-      "zh": "目录里没有的服务，要手改配置文件 {path} 的 tools.mcpServers。"
-    },
-    "gui.settings.mcp.connected": {
-      "en": "Connected",
-      "zh": "已连接"
-    },
-    "gui.settings.mcp.connecting": {
-      "en": "Connecting",
-      "zh": "连接中"
-    },
-    "gui.settings.mcp.setup": {
-      "en": "Needs setup",
-      "zh": "待配置"
-    },
-    "gui.settings.mcp.failed": {
-      "en": "Connection failed",
-      "zh": "连接失败"
-    },
-    "gui.settings.mcp.retry": {
-      "en": "Reconnect",
-      "zh": "重新连接"
-    },
-    "gui.settings.mcp.auth_browser": {
-      "en": "Authorize in browser",
-      "zh": "在浏览器中授权"
-    },
-    "gui.settings.mcp.authorized": {
-      "en": "Authorized",
-      "zh": "已授权"
-    },
-    "gui.settings.mcp.reauth": {
-      "en": "Re-authorize",
-      "zh": "重新授权"
-    },
-    "gui.settings.mcp.revoke": {
-      "en": "Revoke",
-      "zh": "撤销"
-    },
-    "gui.settings.mcp.api_key": {
-      "en": "API key",
-      "zh": "API key"
-    },
-    "gui.settings.mcp.key_first": {
-      "en": "Enter the key first",
-      "zh": "先填入 Key"
-    },
-    "gui.settings.mcp.no_credential": {
-      "en": "This server takes no credential",
-      "zh": "这个服务不需要凭据"
-    },
-    "gui.settings.mcp.no_fields": {
-      "en": "The catalogue names no credential field for this server",
-      "zh": "目录里没有登记这个服务要填什么凭据"
-    },
-    "gui.settings.mcp.address": {
-      "en": "Address",
-      "zh": "连接"
-    },
-    "gui.settings.mcp.tools": {
-      "en": "Tools",
-      "zh": "工具"
-    },
-    "gui.settings.mcp.tools_n": {
-      "en": "{n}",
-      "zh": "{n} 个"
-    },
-    "gui.settings.plugins.counter": {
-      "en": "{n} packages",
-      "zh": "共 {n} 个插件包"
-    },
-    "gui.settings.plugins.add_hint": {
-      "en": "Packages are read from agentPlugins.packages in {path}.",
-      "zh": "插件包从配置文件 {path} 的 agentPlugins.packages 读取。"
-    },
-    "gui.settings.plugins.none": {
-      "en": "No Agent Plugin package found",
-      "zh": "还没有 Agent 插件包"
-    },
-    "gui.settings.plugins.none_sub": {
-      "en": "Packages that follow the Agent Plugins format bring skills and MCP servers. List a package's folder in agentPlugins.packages to see it here.",
-      "zh": "这里列出遵循 Agent Plugins 协议的插件包，它们可以带来技能和 MCP 服务。把包所在的目录写进 agentPlugins.packages，就能在这里看到。"
-    },
-    "gui.settings.plugins.problem": {
-      "en": "Has problems",
-      "zh": "有问题"
-    },
-    "gui.settings.plugins.unimported": {
-      "en": "Skills not imported",
-      "zh": "技能未导入"
-    },
-    "gui.settings.plugins.mcp_switch": {
-      "en": "Start its MCP servers",
-      "zh": "启动它的 MCP 服务"
-    },
-    "gui.settings.plugins.mcp_switch_sub": {
-      "en": "Applies after Raven restarts.",
-      "zh": "重启 Raven 后生效。"
-    },
-    "gui.settings.plugins.source": {
-      "en": "Source",
-      "zh": "来源"
-    },
-    "gui.settings.plugins.skills": {
-      "en": "Skills",
-      "zh": "技能"
-    },
-    "gui.settings.plugins.skills_in": {
-      "en": "{n}, imported",
-      "zh": "{n} 个，已导入"
-    },
-    "gui.settings.plugins.skills_out": {
-      "en": "{n}, not imported",
-      "zh": "{n} 个，未导入"
-    },
-    "gui.settings.plugins.server": {
-      "en": "MCP server",
-      "zh": "MCP 服务"
-    },
-    "gui.settings.plugins.server_off": {
-      "en": "not started",
-      "zh": "未启动"
-    },
-    "gui.settings.plugins.server_idle": {
-      "en": "not connected yet",
-      "zh": "尚未连接"
-    },
-    "gui.settings.plugins.import_hint": {
-      "en": "To use its skills, run this on the Raven host:",
-      "zh": "想用它的技能，在 Raven 所在的机器上运行："
-    },
-    "gui.settings.plugins.path_problems": {
-      "en": "Paths that hold no usable package",
-      "zh": "这些路径里没有可用的插件包"
     },
     "gui.model.pick_search": {
       "en": "Search or type a model ID",

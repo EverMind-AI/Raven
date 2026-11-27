@@ -195,6 +195,7 @@ function PictureCallout({ selected }: { selected: string }): JSX.Element | null 
 async function applyRole(r: Role, model: string, provider: string, typed: boolean, kind?: Kind): Promise<SettingsSnapshot | void> {
   const src = store.source()
   if (typed) await src.addModel(provider, model, statedTags(kind ?? 'text'))
+  if (r.keys) { await src.set(r.keys[0], model); return src.set(r.keys[1], provider) }
   if (r.everos) return src.everosSet(r.everos, model, provider)
   if (r.media) {
     await src.set(`tools.media.${r.media}`, mediaSelection(store.get().snap.raw, r.media, model, provider))
@@ -205,6 +206,7 @@ async function applyRole(r: Role, model: string, provider: string, typed: boolea
 
 async function clearRole(r: Role): Promise<SettingsSnapshot | void> {
   const src = store.source()
+  if (r.keys) { await src.set(r.keys[0], null); return src.set(r.keys[1], null) }
   if (r.everos) return src.everosSet(r.everos, null)
   if (r.media) {
     await src.set(`tools.media.${r.media}`, mediaSelection(store.get().snap.raw, r.media, ''))
@@ -541,7 +543,9 @@ const mcpBusyKey = (name: string): string => `mcp:${name}`
 function McpKeyField({ m, field }: { m: McpSnapshot; field: AuthField }): JSX.Element {
   const [value, setValue] = useState('')
   const label = field.label || t('gui.skillsTools.mcp.api_key')
+  const busy = useSyncExternalStore(store.subscribe, () => store.isBusy(mcpBusyKey(m.name)))
   const save = (): void => {
+    if (busy) return
     const v = value.trim()
     if (!v) {
       store.refuse(t('gui.skillsTools.mcp.key_first'))
@@ -551,6 +555,7 @@ function McpKeyField({ m, field }: { m: McpSnapshot; field: AuthField }): JSX.El
       .then((ok) => { if (ok) setValue('') })
   }
   const clear = (): void => {
+    if (busy) return
     void store.run(mcpBusyKey(m.name), () => store.source().configureServer(m.name, { [field.key]: '' }))
   }
   return (
@@ -564,15 +569,16 @@ function McpKeyField({ m, field }: { m: McpSnapshot; field: AuthField }): JSX.El
           className="skillsTools-din"
           value={value}
           aria-label={label}
+          disabled={busy}
           placeholder={m.credentialed ? t('gui.skillsTools.key_set_ph') : t('gui.skillsTools.key_ph')}
           onChange={(e) => setValue(e.currentTarget.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') save() }}
         />
-        <button type="button" className="skillsTools-btn skillsTools-btn-primary" onClick={save}>
+        <button type="button" className="skillsTools-btn skillsTools-btn-primary" disabled={busy} onClick={save}>
           {m.credentialed ? t('gui.skillsTools.update') : t('gui.save')}
         </button>
         {m.credentialed ? (
-          <button type="button" className="skillsTools-btn skillsTools-btn-ghost" onClick={clear}>
+          <button type="button" className="skillsTools-btn skillsTools-btn-ghost" disabled={busy} onClick={clear}>
             {t('gui.skillsTools.clear')}
           </button>
         ) : null}

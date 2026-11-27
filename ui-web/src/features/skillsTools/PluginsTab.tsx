@@ -7,7 +7,7 @@ import { Alert02Icon, ArrowRight01Icon, PuzzleIcon } from '@hugeicons/core-free-
 import { Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import { importCommand, pkgChip, pluginTone } from './helpers'
-import { CopyCmd, EmptyBox, IconTile, Pill, StatusDot, Switch, WaitView } from './Parts'
+import { CardName, CopyCmd, EmptyBox, IconTile, Pill, StatusDot, Switch, WaitView } from './Parts'
 import * as store from './store'
 
 import type { AgentPluginRow } from './types'
@@ -47,16 +47,7 @@ function PluginCard({ p }: { p: AgentPluginRow }): JSX.Element {
   return (
     <div
       className="skillsTools-tray-card"
-      role="button"
-      tabIndex={0}
       onClick={open}
-      onKeyDown={(e) => {
-        if (e.target !== e.currentTarget) return
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          open()
-        }
-      }}
     >
       <div className="skillsTools-tray-body">
         <div className="skillsTools-ctop">
@@ -64,7 +55,7 @@ function PluginCard({ p }: { p: AgentPluginRow }): JSX.Element {
             <Icon icon={PuzzleIcon} size={17} />
           </IconTile>
           <div className="skillsTools-cmeta">
-            <div className="skillsTools-cname mono">{p.name}</div>
+            <CardName name={p.name} mono onOpen={open} />
             <div className="skillsTools-ctags">
               <Pill tone="mono">{p.version}</Pill>
               {chip ? <Pill tone={chip.pillTone}>{chip.label}</Pill> : <Pill tone="ok">{t('gui.skillsTools.plugins.healthy')}</Pill>}

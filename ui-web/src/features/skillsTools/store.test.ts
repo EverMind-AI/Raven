@@ -9,7 +9,7 @@ import { resetSources, setSources } from '../../state/sources'
 import { pkgList, snap } from '../../test/settingsHarness'
 import * as store from './store'
 
-import type { SettingsSnapshot, SkillsToolsSource } from './types'
+import type { SkillsToolsSource } from './types'
 
 const PAGE_SHELL =
   '<div class="app"></div>'
@@ -58,21 +58,6 @@ describe('skillsTools store', () => {
 
     store.setTab('mcp')
     expect(store.get().tab).toBe('mcp')
-  })
-
-  it('syncSnap updates snapshot only when values change', async () => {
-    const first = snap()
-    setSources({ skillsTools: sourceOf({ load: async () => first }) })
-    await store.refresh()
-    const epoch0 = store.get().epoch
-
-    store.syncSnap(first)
-    expect(store.get().epoch).toBe(epoch0)
-
-    const next: SettingsSnapshot = snap({ model: 'claude-sonnet-4-5' })
-    store.syncSnap(next)
-    expect(store.get().epoch).toBe(epoch0 + 1)
-    expect(store.get().snap.model).toBe('claude-sonnet-4-5')
   })
 
   it('coalesces refreshSoon bursts only while the Skills & Tools page is open', async () => {

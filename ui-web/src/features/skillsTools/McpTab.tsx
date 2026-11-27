@@ -7,7 +7,7 @@ import { ArrowRight01Icon, Plug02Icon, PlusSignIcon } from '@hugeicons/core-free
 import { Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import { mcpChip, mcpTone } from './helpers'
-import { EmptyBox, IconTile, Pill, StatusDot, Switch } from './Parts'
+import { CardName, EmptyBox, IconTile, Pill, StatusDot, Switch } from './Parts'
 import * as store from './store'
 
 import type { McpSnapshot } from './types'
@@ -76,16 +76,7 @@ function McpCard({ m, onFlip }: { m: McpSnapshot; onFlip(on: boolean): void }): 
   return (
     <div
       className={cardCls}
-      role="button"
-      tabIndex={0}
       onClick={open}
-      onKeyDown={(e) => {
-        if (e.target !== e.currentTarget) return
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          open()
-        }
-      }}
     >
       <div className="skillsTools-tray-body">
         <div className="skillsTools-ctop">
@@ -93,7 +84,7 @@ function McpCard({ m, onFlip }: { m: McpSnapshot; onFlip(on: boolean): void }): 
             <Icon icon={Plug02Icon} size={15} />
           </IconTile>
           <div className="skillsTools-cmeta">
-            <div className="skillsTools-cname mono">{m.name}</div>
+            <CardName name={m.name} mono onOpen={open} />
             <div className="skillsTools-ctags">
               <Pill tone="mono">{m.transport.toUpperCase()}</Pill>
               <Pill tone="neutral">{t('gui.skillsTools.mcp.tools_n', { n: m.tool_count })}</Pill>

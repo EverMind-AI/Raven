@@ -8,7 +8,7 @@ import {
   Search01Icon,
   Tick01Icon,
 } from '@hugeicons/core-free-icons'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
@@ -135,13 +135,46 @@ export function KeyLink({ url }: { url?: string | null }): JSX.Element | null {
   )
 }
 
+/* The name on a card, as the control that opens the card.
+ *
+ * The card itself is not a button: a role="button" flattens its descendants,
+ * and the switch beside the name is a control of its own -- a screen reader
+ * would meet a plain label where the switch should be. The name carries the
+ * click and the keyboard, and the card keeps the pointer affordance. */
+export function CardName({ name, mono = false, onOpen }: {
+  name: string
+  mono?: boolean
+  onOpen(): void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      className={mono ? 'skillsTools-cname mono' : 'skillsTools-cname'}
+      onClick={(e) => {
+        e.stopPropagation()
+        onOpen()
+      }}
+    >
+      {name}
+    </button>
+  )
+}
+
 export function CopyCmd({ command }: { command: string }): JSX.Element {
   const [done, setDone] = useState(false)
+  /* The tick that un-ticks the button: cleared when the card goes away, so a
+     copy in a modal the reader has already closed does not set state on a
+     component that is no longer there. */
+  const [timer, setTimer] = useState<number | null>(null)
+  useEffect(() => () => {
+    if (timer !== null) window.clearTimeout(timer)
+  }, [timer])
   const trigger = (e: React.MouseEvent): void => {
     e.stopPropagation()
     copy(command, t('gui.skillsTools.copied'))
     setDone(true)
-    window.setTimeout(() => setDone(false), 1600)
+    if (timer !== null) window.clearTimeout(timer)
+    setTimer(window.setTimeout(() => setDone(false), 1600))
   }
   return (
     <div className="skillsTools-cmdbox" onClick={(e) => e.stopPropagation()}>

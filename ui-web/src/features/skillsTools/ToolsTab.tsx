@@ -16,7 +16,7 @@ import { Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import { ROLES, TOOL_ROLE_OF, disabledTools, roleValue } from '../../lib/modelRoles'
 import { CONFIGURABLE_TOOLS, TOOL_GROUPS, blocker, hasPanel, isBuiltin, toolTone } from './helpers'
-import { FixedSwitch, IconTile, SearchBox, StatusDot, Switch } from './Parts'
+import { CardName, FixedSwitch, IconTile, SearchBox, StatusDot, Switch } from './Parts'
 import { FETCH_KEYLESS, SEARCH_KEYLESS, WEB_VENDOR_LABEL, webVendor } from './source'
 import * as store from './store'
 
@@ -102,23 +102,14 @@ function ConfigurableCard({ row, isOn, blk, snap, onFlip }: {
       className="skillsTools-cfg-card"
       data-needs={needs ? 'true' : undefined}
       data-off={!isOn ? 'true' : undefined}
-      role="button"
-      tabIndex={0}
       onClick={open}
-      onKeyDown={(e) => {
-        if (e.target !== e.currentTarget) return
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          open()
-        }
-      }}
     >
       <div className="skillsTools-ctop">
         <IconTile tone={toolTone(row.id)} size="sm">
           <ToolGlyph id={row.id} />
         </IconTile>
         <div className="skillsTools-cmeta">
-          <div className="skillsTools-cname mono">{row.id}</div>
+          <CardName name={row.id} mono onOpen={open} />
         </div>
         <Switch on={isOn} label={row.id} stop onChange={onFlip} />
       </div>

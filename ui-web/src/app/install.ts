@@ -163,9 +163,12 @@ export function installSources(): void {
   sources.banner = bannerSource
   sources.settings = settingsSource
   sources.skillsTools = skillsToolsSource
-  /* Keep Skills & Tools in sync when the reader edits providers or models inside Settings. */
+  /* Keep Skills & Tools in sync when the reader edits providers or models inside
+     Settings. The page re-reads the config rather than taking the dialog's
+     snapshot: the two hold copies taken at different moments, and handing the
+     older one over would undo a change the page had already made. */
   settingsStore.subscribe(() => {
-    if (page.get() === 'skillsToolsPage') skillsToolsStore.syncSnap(settingsStore.get().snap)
+    if (page.get() === 'skillsToolsPage') skillsToolsStore.refreshSoon()
   })
   sources.tier = tierSource
   sources.effort = effortSource

@@ -13,7 +13,7 @@ import {
 import { Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import { skillTone } from './helpers'
-import { EmptyBox, IconTile, Pill, SearchBox, StatusDot, Switch } from './Parts'
+import { CardName, EmptyBox, IconTile, Pill, SearchBox, StatusDot, Switch } from './Parts'
 import * as store from './store'
 
 import type { SkillRow, SkillScopeFilter } from './types'
@@ -33,16 +33,7 @@ function SkillCard({ row }: { row: SkillRow }): JSX.Element {
   return (
     <div
       className={cardCls}
-      role="button"
-      tabIndex={0}
       onClick={open}
-      onKeyDown={(e) => {
-        if (e.target !== e.currentTarget) return
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          open()
-        }
-      }}
     >
       <div className="skillsTools-tray-body">
         <div className="skillsTools-ctop">
@@ -50,7 +41,7 @@ function SkillCard({ row }: { row: SkillRow }): JSX.Element {
             <Icon icon={AiContentGenerator01Icon} size={15} />
           </IconTile>
           <div className="skillsTools-cmeta">
-            <div className="skillsTools-cname mono">{row.name}</div>
+            <CardName name={row.name} mono onOpen={open} />
             <div className="skillsTools-ctags">
               {row.hub ? <Pill tone="hub">{t('gui.skillsTools.skills.hub_tag')}</Pill> : null}
               {row.always ? <Pill tone="neutral">{t('gui.skillsTools.skills.always')}</Pill> : null}
