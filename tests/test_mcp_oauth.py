@@ -353,6 +353,32 @@ async def test_a_relayed_background_flow_keeps_its_exemption():
     assert (result.code, result.state) == ("c", "relay-1")
 
 
+async def test_a_cancelled_wait_leaves_no_pending_entry_behind():
+    """Cancellation pops the pending entry, the way the timeout paths already do.
+
+    The connect watchdog kills a wedged attempt, and a caller can give up on a
+    parked one; both cancel the task sitting in ``callback``. No branch of the
+    wait caught that, so the entry stayed in ``_PENDING`` forever: the server
+    kept reporting parked, ``pending_url`` kept serving its dead link, and a
+    late browser arrival read "already completed" off a cancelled future
+    instead of the stale page.
+    """
+    events: list[tuple[str, dict]] = []
+    flow = _Flow("srv-cancel", lambda ev, p: events.append((ev, p)))
+    await flow.redirect("https://as.example/authorize?client_id=cid&state=cancel-1&code_challenge=x")
+
+    waiter = asyncio.create_task(flow.callback())
+    await asyncio.sleep(0)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    assert mcp_oauth._PENDING.get("cancel-1") is None
+    matched, html = resolve_callback({"state": "cancel-1", "code": "late-code"})
+    assert not matched and "stale" in html
+    assert "srv-cancel" not in auth_wait_servers()
+
+
 async def test_two_providers_do_not_race_a_rotating_refresh_token(monkeypatch, tmp_path):
     """The failure this coordination exists for, end to end.
 

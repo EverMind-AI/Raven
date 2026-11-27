@@ -673,6 +673,16 @@ class _Flow:
         except OAuthWaitTimeoutError as e:
             self._emit("oauth.done", {"server": self._server, "ok": False, "error": str(e)})
             raise
+        finally:
+            # A wait that ends by cancellation -- the connect watchdog killing
+            # a wedged attempt, a caller giving up on a parked one -- runs no
+            # branch above, and the entry would sit in _PENDING forever: the
+            # server keeps reporting parked, its dead link keeps being served,
+            # and a late browser arrival reads "already completed" off a
+            # cancelled future. Pop it unless a newer flow has replaced it.
+            entry = _PENDING.get(state)
+            if entry is not None and entry.future is fut:
+                _PENDING.pop(state, None)
         self._emit("oauth.done", {"server": self._server, "ok": True})
         from mcp.shared.auth import AuthorizationCodeResult
 
