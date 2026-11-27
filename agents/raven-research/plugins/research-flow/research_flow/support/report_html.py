@@ -114,10 +114,12 @@ _FIGURE_WIDER = 13
 #: A bold lead longer than this is a paragraph in bold, not a name or a lead sentence.
 _NAME_CHARS = 80
 #: A paragraph that opens with a bold subsection number - "(1)" in Chinese parentheses with a
-#: Chinese numeral, "(1)", "1.1" - is that subsection's heading written as a bold lead.
+#: Chinese numeral, "(1)", "1.1" - is that subsection's heading written as a bold lead. A "1.1"
+#: is a number only with a closing point after it or a name past a space: "2.40x", "1.2%" and
+#: "1.5 s" are figures.
 _SUBHEAD_LEAD_RE = re.compile(
     r"\*\*(?P<name>(?:\uff08[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341]{1,3}\uff09"
-    r"|\([0-9]{1,2}\)|[0-9]{1,2}\.[0-9]{1,2}\.?)[^*\n]{1,78}?)\*\*"
+    r"|\([0-9]{1,2}\)|[0-9]{1,2}\.[0-9]{1,2}(?:\.|(?=[ \t]+(?:[A-Z]|[^\x00-\x7f]))))[^*\n]{1,78}?)\*\*"
     r"[ \t]*(?:[:\uff1a][ \t]*)?(?P<rest>.*)\Z",
     re.DOTALL,
 )
@@ -283,7 +285,7 @@ tr:target>td{background:var(--brand-tint)}
 .terms dt{margin:0 0 2px;font-weight:600;color:var(--ink)}
 .terms dd{margin:0}
 .terms dd>:last-child,.steps>li>:last-child,.stages>li>:last-child,.note>:last-child,.card>:last-child{margin-bottom:0}
-.steps{list-style:none;margin:0 0 16px;padding:0}
+.steps{list-style:none;margin:0 0 16px;padding:0;counter-reset:step}
 .steps>li{position:relative;margin:0;padding:14px 0 14px 44px;border-top:1px solid var(--hair);
 counter-increment:step}
 .steps>li:first-child{padding-top:0;border-top:0}

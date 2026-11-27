@@ -1795,6 +1795,26 @@ def test_a_bold_subsection_number_opening_a_paragraph_is_read_as_that_subheading
     assert "<strong>Outlook.</strong>" in body
 
 
+def test_a_paragraph_opening_with_a_bold_decimal_figure_is_not_a_subheading():
+    figures = "**2.40x** faster than the baseline.\n\n**1.2% gain** was observed.\n\n**1.5 s** to start.\n"
+    numbered = "**1.1 Background** The setting.\n\n**1.2. Method** Next part.\n\n**2.1 \u80cc\u666f** The text.\n"
+    body = render_page("> The answer.\n\n## Speed\n\n" + figures + "\n" + numbered).split("<main>", 1)[1]
+    assert re.findall(r"<h3>(.*?)</h3>", body) == ["1.1 Background", "1.2. Method", "2.1 \u80cc\u666f"]
+    for figure in ("2.40x", "1.2% gain", "1.5 s"):
+        assert f"<strong>{figure}</strong>" in body
+
+
+def test_every_list_of_points_numbers_from_one():
+    """Points set from named paragraphs open a list of their own; the stylesheet must
+    reset the counter there, or they go on from the last list's number."""
+    first = "1. **Rates.** Real yields fell.\n2. **Gold.** The ratio narrowed.\n3. **Industry.** Solar grew.\n"
+    then = "**Rates.** Real yields fell.\n\n**Gold.** The ratio narrowed.\n\n**Industry.** Solar demand grew.\n"
+    page = render_page("> The answer.\n\n## Drivers\n\n" + first + "\n## More\n\n" + then)
+    assert page.count('<ol class="steps"') == 2
+    rule = re.search(r"\.steps\{[^}]*\}", page).group(0)
+    assert "counter-reset:step" in rule
+
+
 def test_three_paragraphs_opening_with_names_are_numbered_points_and_two_stay_terms():
     three = "**Rates.** Real yields fell.\n\n**Gold.** The ratio narrowed.\n\n**Industry.** Solar demand grew.\n"
     page = render_page("> The answer.\n\n## Drivers\n\n" + three)
