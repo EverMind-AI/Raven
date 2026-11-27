@@ -27,6 +27,26 @@ _CONNECTED_FUNCTIONS = frozenset(
         ("action", "participant", "salvage"),
     }
 )
+_GENERATION_PARAMETERS = (
+    ("memory", "systemPrompt"),
+    ("memory", "stopWhen"),
+    ("capability", "tools"),
+    ("action", "checks"),
+    ("action", "checksImpl"),
+)
+"""The parameter switches the generation surface reads.
+
+Hand-written, so it can drift from the call sites that read them: the
+check that a switch is declared is only as good as this list. A test reads
+the query sites out of the source and holds the two equal.
+"""
+_GENERATION_FUNCTIONS = (
+    ("memory", "participant", "intake"),
+    ("planning", "participant", "advise"),
+    ("action", "participant", "judge"),
+    ("action", "participant", "salvage"),
+)
+"""The participant function switches the generation surface reads."""
 _CACHE_KEY: tuple[Path, int, int] | None = None
 _CACHE_ROOT: dict[str, Any] | None = None
 
@@ -91,7 +111,7 @@ def _root() -> dict[str, Any]:
             return _CACHE_ROOT
         document = json.loads(_PATH.read_text(encoding="utf-8"))
         root = document["harnessGeneration"]
-    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
         raise RuntimeError(f"invalid harness generation capability file: {exc}") from exc
     if not isinstance(root, dict):
         raise RuntimeError("invalid harness generation capability file: harnessGeneration must be an object")
@@ -99,6 +119,19 @@ def _root() -> dict[str, Any]:
     _CACHE_KEY = cache_key
     _CACHE_ROOT = root
     return root
+
+
+def validate() -> None:
+    """Load the catalogue and run its checks, raising what the loader raises.
+
+    For the caller that wants to know once, up front, whether generation can
+    run at all: a broken file surfaces as the ``RuntimeError`` the loader
+    names rather than inside whichever query a turn happens to make first.
+    """
+    for module, name in _GENERATION_PARAMETERS:
+        parameter_enabled(module, name)
+    for module, kind, name in _GENERATION_FUNCTIONS:
+        function_enabled(module, kind, name)
 
 
 def parameter_enabled(module: ModuleName, name: str) -> bool:
@@ -121,4 +154,4 @@ def function_enabled(module: ModuleName, kind: FunctionKind, name: str) -> bool:
     return _entry_enabled(entry, f"{module}.functions.{kind}.{name}")
 
 
-__all__ = ["function_enabled", "parameter_enabled"]
+__all__ = ["function_enabled", "parameter_enabled", "validate"]

@@ -10,6 +10,8 @@ itself.
 
 from __future__ import annotations
 
+import pytest
+
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.contracts.llm_provider import LLMResponse
@@ -474,6 +476,76 @@ def test_a_runtime_that_cannot_build_leaves_the_feature_off(tmp_path, monkeypatc
     assert loop._playbooks is None
     assert not loop.tools.has("load_playbook") and not loop.tools.has("create_playbook")
     assert loop.dag_tools() == [loop.tools.get("run_subagent_dag")], "only the registered one is left"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b"{", id="not-json"),
+        pytest.param(b'{"harnessGeneration": {"memory": "\xff\xfe"}}', id="not-text"),
+    ],
+)
+async def test_a_broken_capability_catalogue_latches_generation_off(tmp_path, monkeypatch, body) -> None:
+    """A broken catalogue is a setup fault, said once at build as an error --
+    not a warning repaid by a resolution failure on every turn the install
+    stays broken. A catalogue that is not text at all is a broken catalogue:
+    the agent still starts, and the fault is still a named one."""
+    from types import SimpleNamespace
+
+    from loguru import logger
+
+    from raven.agent import harness_capabilities
+    from raven.config.schema import PlaybookConfig
+
+    bad = tmp_path / "harness_generation.json"
+    bad.write_bytes(body)
+    monkeypatch.setattr(harness_capabilities, "_PATH", bad)
+
+    said: list[str] = []
+    sink = logger.add(lambda message: said.append(message.record["message"]), level="ERROR")
+    try:
+        provider = _Provider()
+        loop = AgentLoop(
+            provider=provider,
+            workspace=tmp_path,
+            model="fake/default",
+            engine=EngineWiring(playbook_config=PlaybookConfig(enabled=True, agentHarness="generate")),
+        )
+    finally:
+        logger.remove(sink)
+
+    assert loop._harness_generation_broken
+    assert loop._playbooks is not None, "the catalogue gates generation, not the library runtime"
+    assert sum("capability catalogue" in line for line in said) == 1, "named once, as an error, at startup"
+
+    resolution = await loop._resolve_playbook_turn(
+        _req("organize this task", conversation="web:abc"),
+        "web:abc",
+        SimpleNamespace(provider=provider, model="fake/default"),
+    )
+    assert not resolution.active and provider.calls == 0, "a turn never re-pays the failure"
+
+
+def test_a_broken_capability_catalogue_leaves_a_library_install_alone(tmp_path, monkeypatch) -> None:
+    """Generation reads the catalogue; loading a stored playbook does not. An
+    install whose mode is not ``generate`` keeps its runtime even with a broken
+    file: the catalogue gates what a model may emit, not what the library runs."""
+    from raven.agent import harness_capabilities
+    from raven.config.schema import PlaybookConfig
+
+    bad = tmp_path / "harness_generation.json"
+    bad.write_text("{", encoding="utf-8")
+    monkeypatch.setattr(harness_capabilities, "_PATH", bad)
+
+    loop = AgentLoop(
+        provider=_Provider(),
+        workspace=tmp_path,
+        model="fake/default",
+        engine=EngineWiring(playbook_config=PlaybookConfig(enabled=True)),
+    )
+
+    assert loop._playbooks is not None
+    assert not loop._harness_generation_broken
 
 
 def test_both_graph_tools_are_handed_the_answer_route_predicate(tmp_path):

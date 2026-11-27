@@ -652,6 +652,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self.router = router
         self._playbooks = None
         self._playbook_config = playbook_config
+        self._harness_generation_broken = False
         self.enable_personalization = False  # Set via configure_personalization()
         self._running = False
         self._mcp_servers = mcp_servers or {}
