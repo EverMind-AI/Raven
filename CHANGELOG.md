@@ -103,12 +103,21 @@ All notable changes to Raven are documented here.
   Label `...-arc-scope-window-close-skim`. An opt-in write step
   (`finalShape.writePhase`, off by default) sets a research turn's first draft
   aside and asks for the report again with the tools withdrawn and the report
-  rule repeated after the research; with `finalShape.skimFloor` set, a report
-  too few of whose paragraphs bold a name or a figure is asked once more, for its
-  bold alone. The reading page takes a report's own list
+  rule repeated after the research. With `finalShape.skimFloor` set, a bold
+  pass reads the researched report every other gate let through: when too few of
+  its paragraphs bold a name or a figure, or one bolds more than six, or a bold
+  is a clause, a side call (on the digest's provider with
+  `finalShape.boldOnDigestProvider`) names at most three spans a paragraph and
+  the report ships with them in place of its own bold, its text unchanged. A
+  reply a hook replaces now reaches a streaming reader as replaced, not as the
+  draft it replaced. The reading page takes a report's own list
   of sources as the list when, under its sources heading, half of the entries
   carry a link, so a list that cites a few papers by arXiv number alone is no
-  longer shown twice.
+  longer shown twice. The report the write step asks for is checked for talk
+  about its set-aside draft the way a revision is checked for talk about the
+  review, reading the draft phrases only. The process appendix names a cited
+  arXiv address whose paper was opened at another revision as that, rather
+  than as a link nothing opened, and names a page cited in two spellings once.
 - Raven-Research can run its draft review (`verify.onDigestProvider`) and its
   page highlights (`reportPage.highlightsOnDigestProvider`) on the fetch digest's
   own provider and model instead of the agent's, so a reasoning agent model no

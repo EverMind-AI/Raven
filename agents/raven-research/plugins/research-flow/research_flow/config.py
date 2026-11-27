@@ -288,10 +288,13 @@ class FinalShapeConfig(_Base):
     # aside, and the model writes the report again with the tools withdrawn and the
     # report rule repeated after the research (``WritePhaseGate``).
     write_phase: bool = False
-    # The write step's bold check: when fewer than this share of the report body's
-    # paragraphs bold a name, a figure or a few words - a whole sentence does not count -
-    # the report is asked once for its bold alone. 0 turns the check off.
+    # The bold pass, last in the chain (``BoldPassGate``): when fewer than this share of a
+    # researched report body's paragraphs bold a name, a figure or a few words, or one
+    # bolds past the cap, or a bold is a clause, a side call chooses the bold anew and
+    # the report ships with it, its text unchanged. 0 turns the pass off.
     skim_floor: float = 0.0
+    # The bold pass's side call on the digest's provider and model, when one is configured.
+    bold_on_digest_provider: bool = False
     # The reader layout's closing section on what could not be verified. Off, the report
     # under the page has no such section: the rule does not ask for it, the shape bar does
     # not require it, and one the model writes anyway is left out of the file and the page.

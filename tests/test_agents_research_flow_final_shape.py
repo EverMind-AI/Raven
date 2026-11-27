@@ -67,7 +67,9 @@ def test_both_knobs_default_on():
     # launch convention the label is a batch's concern, not this knob's.
     # ``write_phase`` is off because it spends a second long generation on every
     # research turn, for a report shape not yet measured against the draft it replaces.
-    off_by_design = {"report_bounce", "report_depth", "write_phase"}
+    # ``bold_on_digest_provider`` is off because it only says where the bold pass's side
+    # call runs, and the pass itself is off until a floor is set.
+    off_by_design = {"report_bounce", "report_depth", "write_phase", "bold_on_digest_provider"}
     bools = {
         n: getattr(FinalShapeConfig(), n) for n, f in FinalShapeConfig.model_fields.items() if f.annotation is bool
     }

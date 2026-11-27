@@ -106,6 +106,42 @@ async def test_a_first_draft_is_never_checked():
 
 
 @pytest.mark.asyncio
+async def test_the_report_the_write_step_asked_for_is_checked_for_draft_talk():
+    # It follows a draft set aside, and shipped "the first draft had these errors"
+    # with no review in between.
+    provider = _Passer()
+    gate = DraftReviewerGate(provider, max_revisions=1)
+    leak = f"{zh_lexicon.DRAFT_TALK_MARKERS[1]}: Task Arithmetic is ICLR 2023, not NeurIPS 2022."
+    ctx = _ctx(f"> Merging works.\n\n{leak}\n", revisions=0)
+    ctx.metadata["write_phase"] = {"asked": True}
+
+    decision = await gate.after_iteration(ctx)
+
+    assert decision.rollback is True and f"- {leak}" in decision.rollback_inject[1]["content"]
+    assert provider.calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "line",
+    [
+        "The reviewer's first objection does not hold.",
+        f"SWE-bench doubled over the {zh_lexicon.REVIEW_TALK_MARKERS[4]}.",
+    ],
+    ids=["review_words", "previous_release"],
+)
+async def test_the_written_report_reads_only_the_draft_phrases(line):
+    # No review has happened yet, and "the previous version" names a product's last release.
+    provider = _Passer()
+    ctx = _ctx(f"> Revenue grew 40%.\n\n{line}\n", revisions=0)
+    ctx.metadata["write_phase"] = {"asked": True}
+
+    decision = await DraftReviewerGate(provider, max_revisions=1).after_iteration(ctx)
+
+    assert decision.rollback is False and provider.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_a_revision_past_the_budget_is_still_cleaned(tmp_path):
     ledger_mod.set_ledger_dir(tmp_path)
     ledger = Path(ledger_mod.open_product_ledger("l"))

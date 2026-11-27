@@ -51,6 +51,7 @@ from research_flow.gates.ask_user import (
     turn_brief,
 )
 from research_flow.gates.base import Gate, GateCtx
+from research_flow.gates.bold_pass import BoldPassGate
 from research_flow.gates.budget_note import BudgetNoteObserver
 from research_flow.gates.conversation import (
     ConversationGate,
@@ -858,9 +859,7 @@ def build_chain(
     if cfg.final_shape.write_phase and cfg.final_shape.report_structure:
         # After the floor, whose bounce means the research is not over; before the
         # reviewer, which reads the report the write step produces, not the draft it sets aside.
-        writer: Gate = WritePhaseGate(
-            write_brief(cfg), closing_tag_required=cfg.think_closing_tag_required, skim_floor=cfg.final_shape.skim_floor
-        )
+        writer: Gate = WritePhaseGate(write_brief(cfg), closing_tag_required=cfg.think_closing_tag_required)
         if ask_user_on:
             writer = ClarifyExemptHook(writer, layout)
         observers.append(writer)
@@ -940,6 +939,23 @@ def build_chain(
                 tool=tools.ask_user,
             )
         )
+
+    # Last: it reads the report every other gate let through, and nothing after it can
+    # send that report back.
+    if cfg.final_shape.skim_floor > 0:
+        bold_on, bold_model = _on_side(provider, None, cfg.final_shape.bold_on_digest_provider, side)
+        if bold_on is None:
+            _skip("bold pass")
+        else:
+            bolder: Gate = BoldPassGate(
+                bold_on,
+                model=bold_model,
+                floor=cfg.final_shape.skim_floor,
+                closing_tag_required=cfg.think_closing_tag_required,
+            )
+            if ask_user_on:
+                bolder = ClarifyExemptHook(bolder, layout)
+            observers.append(bolder)
 
     # First, never wrapped: it sets the research flag every GatedHook predicate
     # reads, and its ``after_send`` must see the outbound before the chain ends.

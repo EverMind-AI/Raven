@@ -223,20 +223,23 @@ _EVIDENCE_ROUND_PROMPT = (
 
 
 # The bounce prompts ask for this, and measured on replays of one real bounce the ask
-# cut it from 4 of 12 revisions to 1 of 12 without ending it. Checked only on a
-# revision: a first draft has no review to talk about. A marker the task itself uses
-# is the subject's word - a report on peer review or code review - not talk about this
-# one, and a web address is no sentence at all, so neither trips the check.
-_REVIEW_TALK_EN = (
-    "reviewer",
-    "the review",
+# cut it from 4 of 12 revisions to 1 of 12 without ending it. Checked on a revision,
+# and on the report the write step asked for: that one follows a draft set aside, and
+# shipped "the first draft had these errors" on 2 of 51 reports. With no review yet,
+# only the draft phrases are read there - "the previous version" names a product's
+# last release as often. A marker the task itself uses is the subject's word - a
+# report on peer review or code review - not talk about this one, and a web address
+# is no sentence at all, so neither trips the check.
+_DRAFT_TALK_EN = (
     "earlier draft",
     "previous draft",
     "original draft",
     "first draft",
     "draft above",
 )
+_REVIEW_TALK_EN = ("reviewer", "the review") + _DRAFT_TALK_EN
 _REVIEW_TALK_MARKERS = _REVIEW_TALK_EN + zh_lexicon.REVIEW_TALK_MARKERS
+_DRAFT_TALK_MARKERS = _DRAFT_TALK_EN + zh_lexicon.DRAFT_TALK_MARKERS
 _REVIEW_TALK_MAX_LINES = 8
 _ADDRESS_RE = re.compile(r"(?:https?://|www\.)\S+")
 _REVIEW_TALK_PROMPT = (
@@ -249,10 +252,11 @@ _REVIEW_TALK_PROMPT = (
 )
 
 
-def review_talk_lines(text: str, task: str = "") -> list[str]:
-    """The lines of an answer that speak about the review rather than to the reader."""
+def review_talk_lines(text: str, task: str = "", *, drafts_only: bool = False) -> list[str]:
+    """The lines of an answer that speak about the review, or only an earlier draft, rather than to the reader."""
     asked = task.lower()
-    markers = [marker for marker in _REVIEW_TALK_MARKERS if marker not in asked]
+    pool = _DRAFT_TALK_MARKERS if drafts_only else _REVIEW_TALK_MARKERS
+    markers = [marker for marker in pool if marker not in asked]
     hits = []
     for line in text.splitlines():
         low = _ADDRESS_RE.sub(" ", line.lower())
@@ -424,13 +428,16 @@ class DraftReviewerGate(Gate):
             "verify_gate",
             {"revisions": 0, "reviews": 0, "fail_open": 0, "passes": 0, "rejects": 0},
         )
-        if state["revisions"] and not state.get("review_talk_bounces"):
-            talk = review_talk_lines(draft, task_for(ctx))
+        written = bool((ctx.metadata.get("write_phase") or {}).get("asked"))
+        if (state["revisions"] or written) and not state.get("review_talk_bounces"):
+            talk = review_talk_lines(draft, task_for(ctx), drafts_only=not state["revisions"])
             if talk:
                 state["review_talk_bounces"] = 1
                 self._record(state, "review_talk", draft=draft, reviewed=False)
                 logger.warning(
-                    "verify-gate: revision talks about the review in %d line(s); asking for a clean copy", len(talk)
+                    "verify-gate: %s talks about the review or a draft in %d line(s); asking for a clean copy",
+                    "revision" if state["revisions"] else "written report",
+                    len(talk),
                 )
                 passages = "\n".join(f"- {line}" for line in talk)
                 return HookDecision(
@@ -445,7 +452,7 @@ class DraftReviewerGate(Gate):
                             "_recovery_synthetic": True,
                         },
                     ],
-                    notes=["verify_gate: revision talks about the review; asked for a clean copy"],
+                    notes=["verify_gate: answer talks about the review or a draft; asked for a clean copy"],
                 )
         if state["revisions"] >= self._max_revisions:
             state["accepted_after_revision"] = True

@@ -254,15 +254,9 @@ SAYS_WHAT_IS_REQUIRED: tuple[str, ...] = (
 """Words a Chinese document uses when it is saying what has to be true, counted
 to tell a specification from a changelog (`raven.stint.bootstrap`)."""
 
-REVIEW_TALK_MARKERS: tuple[str, ...] = (
-    "审稿",  # shen gao: "review (of a manuscript)"
-    "评审意见",  # ping shen yi jian: "review comments"
-    "审阅意见",  # shen yue yi jian: "review comments"
-    "逐条回应",  # zhu tiao hui ying: "point-by-point reply"
+DRAFT_TALK_MARKERS: tuple[str, ...] = (
     "原稿",  # yuan gao: "the original draft"
     "初稿",  # chu gao: "the first draft"
-    "上一版",  # shang yi ban: "the previous version"
-    "前一版",  # qian yi ban: "the previous version"
     "此前稿",  # ci qian gao: "the earlier draft"
     "此处更正",  # ci chu geng zheng: "corrected here"
     "修订说明",  # xiu ding shuo ming: "revision notes"
@@ -272,5 +266,18 @@ REVIEW_TALK_MARKERS: tuple[str, ...] = (
     "本次修正",  # ben ci xiu zheng: "this correction"
     "本次校正",  # ben ci jiao zheng: "this correction"
 )
+"""Phrases a Chinese research answer uses when it talks about an earlier draft of
+itself, or its corrections, instead of to the reader (`research_flow.gates.verify`)."""
+
+REVIEW_TALK_MARKERS: tuple[str, ...] = (
+    "审稿",  # shen gao: "review (of a manuscript)"
+    "评审意见",  # ping shen yi jian: "review comments"
+    "审阅意见",  # shen yue yi jian: "review comments"
+    "逐条回应",  # zhu tiao hui ying: "point-by-point reply"
+    "上一版",  # shang yi ban: "the previous version"
+    "前一版",  # qian yi ban: "the previous version"
+) + DRAFT_TALK_MARKERS
 """Phrases a revised Chinese research answer uses when it talks about the review
-or an earlier draft instead of to the reader (`research_flow.gates.verify`)."""
+or an earlier draft instead of to the reader (`research_flow.gates.verify`): the
+draft phrases plus the review's own, and two that also name a product's previous
+release and so are read only on a revision."""

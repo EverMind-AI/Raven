@@ -114,14 +114,6 @@ def test_research_from_an_earlier_turn_does_not_count():
     assert not asyncio.run(gate.after_iteration(ctx)).rollback
 
 
-_LINE = "Averaging the weights of several fine-tuned models lifts accuracy at no inference cost"
-
-
-def _report(*paragraphs: str) -> str:
-    body = "\n\n".join(paragraphs)
-    return f"# Merging\n\n> **Model Soups** wins.\n\n## 1. Methods\n\n{body}\n\n## Sources\n- **A page**: https://a.example/x\n"
-
-
 def test_a_round_the_budget_closed_is_still_the_research_end():
     """The budget note runs first and strips the web tools; the write step still asks for the report."""
     chain = CompositeHook([BudgetNoteObserver(max_iterations=60, close_after=6), WritePhaseGate(BRIEF)])
@@ -130,54 +122,6 @@ def test_a_round_the_budget_closed_is_still_the_research_end():
     assert before.modified_tools == []
     after = asyncio.run(chain.after_iteration(_ctx(meta, response=_Response(DRAFT))))
     assert after.rollback and meta["write_phase"]["asked"]
-
-
-def test_the_skim_count_reads_names_and_figures_not_sentences_or_sources():
-    named = f"{_LINE}, as **Model Soups** shows with **81.03%** top-1 ([paper](https://arxiv.org/abs/2203.05482))."
-    sentence = f"**{_LINE}.** It needs no extra pass."
-    assert write_phase.skim_count(_report(named, sentence, _LINE, "Too short to count.")) == (1, 3)
-    listed = f"- {_LINE}, as **DARE** does.\n- {_LINE}, plainly.\n\n| a | b |\n|--|--|\n| **x** | y |"
-    assert write_phase.skim_count(_report(listed)) == (1, 2)
-    # Only the closing section is the list of sources: one on data sources mid-body is body.
-    data = _report(_LINE + ".").replace("## 1. Methods", "## 1. Data sources")
-    assert write_phase.skim_count(data) == (0, 1)
-
-
-def test_a_paragraph_bolded_past_the_cap_is_counted_as_dense():
-    crowded = _LINE + ", " + ", ".join(f"**{n}%**" for n in range(7)) + "."
-    assert write_phase.skim_dense(_report(crowded, f"{_LINE}, as **DARE** shows.")) == 1
-    assert "none carries more\nthan four or five" in prompts.skim_brief(1, 2)
-
-
-def test_a_report_short_of_bold_is_handed_back_once_for_its_bold_alone():
-    gate, meta = WritePhaseGate(BRIEF, skim_floor=0.4), {}
-    _step(gate, meta, _Response(DRAFT))
-    plain = _report(*[_LINE + "."] * 4)
-    _, after = _step(gate, meta, _Response(plain))
-    assert after.rollback
-    report, ask = after.rollback_inject
-    assert report == {"role": "assistant", "content": plain.strip(), "_recovery_synthetic": True}
-    assert ask == {"role": "user", "content": prompts.skim_brief(4, 4), "_recovery_synthetic": True}
-    assert "4 of the 4 paragraphs" in ask["content"] and "do not mention it" in ask["content"]
-    assert meta["write_phase"]["skim_held"] == 0 and meta["write_phase"]["skim_total"] == 4
-
-    # The revision is written with the tools still withdrawn, and ships whatever its bold.
-    revised = _report(*[f"{_LINE}, as **DARE** shows."] * 4)
-    before, after = _step(gate, meta, _Response(revised))
-    assert before.modified_tools == [] and not after.rollback
-    record = meta["write_phase"]
-    assert record["skim_chars"] == len(revised) and record["skim_held_after"] == 4 and record["skim_dense_after"] == 0
-    before, _ = _step(gate, meta, _Response(DRAFT))
-    assert before.modified_tools is None
-
-
-@pytest.mark.parametrize("floor, bolded", [(0.4, 2), (0.0, 0)])
-def test_a_bolded_report_or_an_unset_floor_passes(floor, bolded):
-    gate, meta = WritePhaseGate(BRIEF, skim_floor=floor), {}
-    _step(gate, meta, _Response(DRAFT))
-    paragraphs = [f"{_LINE}, as **DARE** shows."] * bolded + [_LINE + "."] * (4 - bolded)
-    _, after = _step(gate, meta, _Response(_report(*paragraphs)))
-    assert not after.rollback and not meta["write_phase"].get("skim_asked")
 
 
 def test_the_brief_is_the_report_rule_of_the_system_prompt_numbered_as_there():
@@ -222,10 +166,6 @@ def test_off_by_default_and_on_after_the_floor_before_the_reviewer(tmp_path):
     kinds, gates = _chain(tmp_path, cfg)
     assert kinds.index(EvidenceFloorGate) < kinds.index(WritePhaseGate) < kinds.index(DraftReviewerGate)
     assert gates[kinds.index(WritePhaseGate)]._brief == prompts.write_brief(cfg)
-    assert gates[kinds.index(WritePhaseGate)]._skim_floor == 0.0
-    cfg.final_shape.skim_floor = 0.4
-    kinds, gates = _chain(tmp_path, cfg)
-    assert gates[kinds.index(WritePhaseGate)]._skim_floor == 0.4
 
 
 class _Provider:

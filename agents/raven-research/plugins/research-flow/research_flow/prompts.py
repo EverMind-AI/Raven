@@ -886,28 +886,10 @@ _WRITE_BRIEF_HEAD = """[Research is closed: the tools are withdrawn for this rep
 reply now, from the evidence gathered above, as one complete report. Rule {n} of
 your instructions sets its shape in full; it is repeated here so that you write
 to it. The reader sees the report and never this request: do not mention it.
+Nor has the reader seen an earlier draft or your notes: where the research showed
+a fact you held to be wrong, state the right one plainly, never that it was corrected.
 
 """
-
-
-# The write step's second look (``finalShape.skimFloor``): a report whose body gives a
-# skimming reader too little to hold on to is asked once for its bold alone.
-_SKIM_BRIEF = """[The report above is complete; this asks for its bold alone.] A reader who
-skims reads the headings and the bold. In {short} of the {total} paragraphs of
-its body nothing is bold or the bold is a whole sentence. Reply with the same
-report, word for word, changing only its bold: in each paragraph and list item,
-bold the names a reader scans for - each method, model, work, product,
-benchmark or organization the paragraph is about, where it first appears in
-it - its deciding figures, and at most one verdict of a few words; bold the
-name, the figure or the few words alone, and unbold every whole sentence. A
-paragraph with nothing a reader scans for stays plain, and none carries more
-than four or five: the figures that decide its point, not every number in it.
-The reader sees the report and never this request: do not mention it."""
-
-
-def skim_brief(short: int, total: int) -> str:
-    """The request for a written report's bold alone, ``short`` of its ``total`` paragraphs lacking it."""
-    return _SKIM_BRIEF.format(short=short, total=total)
 
 
 def write_brief(cfg: "FlowConfig") -> str:

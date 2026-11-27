@@ -345,9 +345,13 @@ PRODUCT_ONLY_FIELDS: dict[str, str] = {
         "(gates/write_phase.py). Off as a class default and in the product; an experiment turns it on"
     ),
     "final_shape.skim_floor": (
-        "the write step's bold check: a report too few of whose paragraphs bold a name, a figure "
-        "or a few words is asked once for its bold alone (gates/write_phase.py). Off as a class "
-        "default and in the product; an experiment sets a floor"
+        "the bold pass: a researched report whose paragraphs bold too few names or figures, or too "
+        "many, or a clause, has its bold chosen anew by a side call (gates/bold_pass.py). Off as a "
+        "class default and in the product; an experiment sets a floor"
+    ),
+    "final_shape.bold_on_digest_provider": (
+        "the bold pass's side call on the digest's provider and model (gates/bold_pass.py). Off as a "
+        "class default and in the product; an experiment turns it on"
     ),
     "final_shape.limits": (
         "the page's report can close without its section on what could not be verified: the "
