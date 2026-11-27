@@ -9,7 +9,17 @@ from raven.channels.contract import Capabilities, ChannelSpec
 def _make(config):
     from raven.channels.adapters.matrix.channel import MatrixChannel
 
-    return MatrixChannel(config)
+    channel = MatrixChannel(config)
+    from nio.crypto import ENCRYPTION_ENABLED
+
+    # matrix-nio only raises for this once the client is built in start(), and
+    # as an ImportWarning, which the missing-dependency probe cannot see.
+    if channel.config.e2ee_enabled and not ENCRYPTION_ENABLED:
+        raise ImportError(
+            "end-to-end encryption is on but matrix-nio[e2e] is not installed; "
+            "install it, or set e2eeEnabled to false to send unencrypted"
+        )
+    return channel
 
 
 SPEC = ChannelSpec(

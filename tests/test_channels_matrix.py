@@ -8,11 +8,16 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from typer.testing import CliRunner
 
 pytest.importorskip("nio")
 
 from raven.channels.adapters.matrix import content
 from raven.channels.adapters.matrix.channel import MatrixChannel
+from raven.cli.channel_commands import channels_app
+from raven.cli.doctor_commands import DoctorReport, FeaturesInfo, PathsInfo, _render_human_output
+from raven.config.schema import Config
+from raven.gateway.manager import missing_dependency_reasons
 from raven.providers.transcription import TranscriptionResult
 
 
@@ -326,3 +331,46 @@ async def test_on_media_labels_a_transcription_diagnosis_as_unavailable(monkeypa
     published = ch.intake.publish.await_args.kwargs
     assert published["content"] == "[transcription unavailable: no key]"
     assert published["media"] == ["/m/a.ogg"]
+
+
+def _matrix_config(monkeypatch, **cargo):
+    cargo = {"accessToken": "syt_fake", "userId": "@raven:matrix.org", **cargo}
+    monkeypatch.setattr("raven.config.loader.channel_cargo_slice", lambda name: dict(cargo))
+    return Config.model_validate({"channels": {"matrix": {"enabled": True, "allowFrom": ["*"]}}})
+
+
+def test_probe_reports_e2ee_without_crypto_backend(monkeypatch):
+    monkeypatch.setattr("nio.crypto.ENCRYPTION_ENABLED", False)
+
+    reasons = missing_dependency_reasons(_matrix_config(monkeypatch))
+
+    assert "matrix-nio[e2e]" in reasons["matrix"]
+
+
+@pytest.mark.parametrize(("backend", "e2ee"), [(True, True), (False, False)])
+def test_probe_is_quiet_when_matrix_can_start(monkeypatch, backend, e2ee):
+    monkeypatch.setattr("nio.crypto.ENCRYPTION_ENABLED", backend)
+
+    assert missing_dependency_reasons(_matrix_config(monkeypatch, e2eeEnabled=e2ee)) == {}
+
+
+def test_channels_status_names_the_e2ee_remedy(monkeypatch):
+    monkeypatch.setattr("nio.crypto.ENCRYPTION_ENABLED", False)
+    config = _matrix_config(monkeypatch)
+    monkeypatch.setattr("raven.config.loader.load_config", lambda: config)
+
+    result = CliRunner().invoke(channels_app, ["status"])
+
+    assert "SDK missing" in result.output
+    assert "matrix-nio[e2e]" in result.output
+
+
+def test_doctor_prints_the_missing_dependency_reason(capsys):
+    reason = "install matrix-nio[e2e]"
+    features = FeaturesInfo(channels_missing_deps=["matrix"], channels_missing_dep_reasons={"matrix": reason})
+
+    paths = PathsInfo(config_path="config.json", config_exists=True, config_valid=True)
+
+    _render_human_output(DoctorReport(config_loaded=True, paths=paths, features=features))
+
+    assert f"matrix: {reason}" in capsys.readouterr().out

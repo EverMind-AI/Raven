@@ -143,9 +143,8 @@ Discord 不可用的自托管或隐私敏感部署。
 于 homeserver。
 
 端到端加密默认开启（`e2eeEnabled: true`），而它开箱并不能用：该 extra 装的是不带 `e2e`
-extra 的 matrix-nio，因此没有 `python-olm`，`MatrixChannel.start()` 会抛出
-`ImportWarning: Encryption is enabled in the client configuration but dependencies
-for E2E encryption aren't installed`。请先自行安装 `matrix-nio[e2e]` 再启用该渠道，
+extra 的 matrix-nio，因此没有 `python-olm`。此时 gateway 会按缺少依赖停用该渠道，
+`raven channels status` 与 `raven doctor` 也会报告。请先自行安装 `matrix-nio[e2e]` 再启用该渠道，
 或把 `e2eeEnabled` 设为 `false`。即使装了 olm，也只有设置了 `deviceId` 时才会加载加密
 存储；没有它，重启可能重放近期消息。关闭 E2EE 是有意的配置变更——它会让消息正文与附件在
 传输中可被他人读取，而 access token 无论开关与否都会到达 homeserver。

@@ -175,10 +175,10 @@ the account must already exist on the homeserver.
 
 End-to-end encryption is on by default (`e2eeEnabled: true`), and it does
 not work out of the box: the extra installs matrix-nio without its `e2e`
-extra, so `python-olm` is absent, and `MatrixChannel.start()` then raises
-`ImportWarning: Encryption is enabled in the client configuration but
-dependencies for E2E encryption aren't installed`. Install `matrix-nio[e2e]`
-yourself before enabling the channel, or set `e2eeEnabled: false`. Even with
+extra, so `python-olm` is absent. The gateway then disables the channel as
+missing a dependency, and `raven channels status` and `raven doctor` report
+it. Install `matrix-nio[e2e]` yourself before enabling the channel, or set
+`e2eeEnabled: false`. Even with
 olm installed, the crypto store loads only when `deviceId` is set; without
 it a restart may replay recent messages. Turning E2EE off is a deliberate
 config change — it exposes message bodies and attachments to anyone who can
