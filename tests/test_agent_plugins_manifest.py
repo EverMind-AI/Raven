@@ -3,7 +3,10 @@
 The vendored schema at ``schemas/agent-plugins/1.0.0/plugin.schema.json`` is
 an unmodified snapshot of the official one, so it is the yardstick: this
 file asks the official validator and ``read_manifest`` the same question
-about the same documents and compares the answers.
+about the same documents and compares the answers. The same corpus also
+pins the present-value contract: a value the document presents survives
+the read unchanged, an empty string stays an empty string, and a field the
+author omitted stays unset.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from raven.agent_plugins.manifest import (
     AGENT_PLUGINS_SCHEMA_URL,
     MANIFEST_FILENAME,
     SUPPORTED_SCHEMA_URLS,
+    AgentPluginManifest,
     AgentPluginManifestError,
     read_manifest,
 )
@@ -50,6 +54,7 @@ class _Case(NamedTuple):
     document: Any
     official_accepts: bool
     ours_accepts: bool
+    expected: tuple[tuple[str, Any], ...] = ()
 
 
 _CASES = (
@@ -202,14 +207,83 @@ _CASES = (
         False,
         False,
     ),
+    _Case(
+        "empty version",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "version": ""},
+        True,
+        True,
+        (("version", ""),),
+    ),
+    _Case(
+        "empty description",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "description": ""},
+        True,
+        True,
+        (("description", ""),),
+    ),
+    _Case(
+        "empty homepage",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "homepage": ""},
+        True,
+        True,
+        (("homepage", ""),),
+    ),
+    _Case(
+        "empty repository",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "repository": ""},
+        True,
+        True,
+        (("repository", ""),),
+    ),
+    _Case(
+        "empty license",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "license": ""},
+        True,
+        True,
+        (("license", ""),),
+    ),
+    _Case(
+        "empty author object",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "author": {}},
+        True,
+        True,
+        (("author.name", None), ("author.email", None), ("author.url", None)),
+    ),
+    _Case(
+        "empty author name",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "author": {"name": ""}},
+        True,
+        True,
+        (("author.name", ""),),
+    ),
+    _Case(
+        "empty author email",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "author": {"email": ""}},
+        True,
+        True,
+        (("author.email", ""),),
+    ),
+    _Case(
+        "empty author url",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "author": {"url": ""}},
+        True,
+        True,
+        (("author.url", ""),),
+    ),
+    _Case(
+        "null extensions",
+        {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "extensions": None},
+        False,
+        True,
+    ),
 )
 
-_DIVERGENT = frozenset({"unknown top-level field", "extensions is not an object"})
-"""The two cases the specification lets through where the schema refuses.
+_DIVERGENT = frozenset({"unknown top-level field", "extensions is not an object", "null extensions"})
+"""The three cases the specification lets through where the schema refuses.
 
-An unknown top-level field and a non-object ``extensions`` field are
-reported and ignored, so the rest of the manifest still loads. Every other
-case answers the schema the same way.
+An unknown top-level field and a non-object ``extensions`` field -- which
+includes an explicit ``null`` -- are reported and ignored, so the rest of
+the manifest still loads. Every other case answers the schema the same way.
 """
 
 
@@ -270,7 +344,7 @@ def test_the_only_departures_from_the_official_schema_are_the_documented_ones(
     tmp_path: Path,
     official_validator: Draft202012Validator,
 ) -> None:
-    """A corpus-wide statement: the two sides differ on exactly the two
+    """A corpus-wide statement: the two sides differ on exactly the three
     cases the specification lets through, and on nothing else."""
     differences = {
         case.label
@@ -278,6 +352,70 @@ def test_the_only_departures_from_the_official_schema_are_the_documented_ones(
         if official_validator.is_valid(case.document) != _ours_accepts(case.document, tmp_path)
     }
     assert differences == set(_DIVERGENT)
+
+
+_EXPECTED_VALUES = tuple(case for case in _CASES if case.expected)
+
+
+def _has_present_empty_value(value: Any) -> bool:
+    if isinstance(value, str):
+        return value == ""
+    if isinstance(value, dict):
+        return not value or any(_has_present_empty_value(item) for item in value.values())
+    if isinstance(value, list):
+        return not value or any(_has_present_empty_value(item) for item in value)
+    return False
+
+
+def test_every_loading_document_with_a_present_empty_value_declares_expected_values() -> None:
+    """A document with a present empty value must pin that the value survives.
+
+    ``_EXPECTED_VALUES`` selects its cases by the presence of ``case.expected``,
+    so a dropped map would silently shorten the value half of the corpus
+    while the acceptance half stayed green. "Empty" covers an empty string,
+    an empty object and an empty list alike: ``{"author": {}}`` carries no
+    empty string yet still pins three absent sub-values.
+    """
+    unpinned = [
+        case.label
+        for case in _CASES
+        if case.ours_accepts and _has_present_empty_value(case.document) and not case.expected
+    ]
+    assert not unpinned, f"cases with a present empty value but no expected map: {unpinned}"
+
+
+def _value_at(manifest: AgentPluginManifest, path: str, label: str) -> Any:
+    """Walk a dotted path into the manifest.
+
+    The separator is ``.``, so a key that itself contains a dot -- a namespace
+    under ``extensions`` such as ``com.acme.custom`` -- cannot be named by a
+    path here. The corpus has no such entry: should an expected value ever sit
+    under one, ``_has_present_empty_value`` would flag it while this walk could
+    not address it, and the path syntax has to change (an escaped separator or
+    a tuple path) rather than the walk be bent.
+    """
+    value: Any = manifest
+    walked: list[str] = []
+    for part in path.split("."):
+        assert value is not None, f"{label}: {path} walks through {'.'.join(walked) or 'the manifest'}, which is None"
+        value = getattr(value, part)
+        walked.append(part)
+    return value
+
+
+@pytest.mark.parametrize("case", _EXPECTED_VALUES, ids=[case.label for case in _EXPECTED_VALUES])
+def test_read_manifest_keeps_present_values_and_leaves_absent_ones_unset(case: _Case, tmp_path: Path) -> None:
+    """A value the document presents survives the read unchanged.
+
+    The parity test above settles only whether a document loads. A loader
+    that turned ``""`` into ``None`` would accept the same documents while
+    losing the difference between a field the author wrote empty and one
+    the author omitted. A field the author omitted stays ``None`` rather
+    than becoming an empty string.
+    """
+    manifest, _ = read_manifest(_manifest_file(tmp_path, case.document))
+    for path, expected in case.expected:
+        assert _value_at(manifest, path, case.label) == expected, path
 
 
 # ---------------------------------------------------------------------------
@@ -341,11 +479,12 @@ def test_an_unknown_top_level_field_loads_and_is_reported(tmp_path: Path) -> Non
     assert "futureField" in notes[0]
 
 
-def test_a_non_object_extensions_field_loads_and_is_reported(tmp_path: Path) -> None:
+@pytest.mark.parametrize("extensions", [["a"], None], ids=["list", "null"])
+def test_a_non_object_extensions_field_loads_and_is_reported(tmp_path: Path, extensions: Any) -> None:
     manifest, notes = read_manifest(
         _manifest_file(
             tmp_path,
-            {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "extensions": ["a"]},
+            {"$schema": AGENT_PLUGINS_SCHEMA_URL, "name": "acme", "extensions": extensions},
         )
     )
     assert manifest.name == "acme"
