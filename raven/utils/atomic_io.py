@@ -63,15 +63,15 @@ def read_text_with_retry(path: Path) -> str:
     retry loop around it would only delay the caller's own handling.
     """
     delay = _REPLACE_BACKOFF
-    for attempt in range(_REPLACE_ATTEMPTS):
+    for _ in range(_REPLACE_ATTEMPTS - 1):
         try:
             return path.read_text(encoding="utf-8")
         except PermissionError:
-            if attempt + 1 == _REPLACE_ATTEMPTS:
-                raise
             time.sleep(delay)
             delay *= 2
-    raise AssertionError("unreachable: the loop returns or raises on every pass")
+    # The last attempt stands bare, so a PermissionError it still sees is
+    # raised as itself rather than swallowed by the loop.
+    return path.read_text(encoding="utf-8")
 
 
 @contextmanager
