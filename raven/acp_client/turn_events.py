@@ -67,6 +67,26 @@ class TurnEvents:
         # frame for replays), not a steer, and must not become a user row.
         self.prompt = (prompt or "").strip()
         self.events: list[dict[str, Any]] = []
+        self._break_pending = False
+
+    def mark_break(self) -> None:
+        self._break_pending = True
+
+    def _has_open_message(self) -> bool:
+        for ev in reversed(self.events):
+            kind = ev.get("t")
+            if kind in ("call", "user", "break"):
+                return False
+            if kind in ("say", "thought"):
+                return True
+        return False
+
+    def _flush_break(self, at: str | None) -> None:
+        if not self._break_pending:
+            return
+        self._break_pending = False
+        if self._has_open_message():
+            self.events.append({"t": "break", "at": at})
 
     @property
     def calls(self) -> list[ToolCall]:
@@ -79,6 +99,7 @@ class TurnEvents:
             texts = content_texts(update.get("content"))
             said = "".join(texts)
             if said:
+                self._flush_break(at)
                 # Merged with the previous burst only when nothing came between:
                 # a `call` event in between is exactly what makes this a new
                 # burst, and the boundary is what puts each one on the step it
@@ -91,11 +112,14 @@ class TurnEvents:
         if kind in USER_UPDATES:
             said = "".join(content_texts(update.get("content")))
             if said and said.strip() != self.prompt:
+                self._break_pending = False
                 self.events.append({"t": "user", "text": said, "at": at})
                 return Applied(steered=True)
             return Applied()
         if kind in THOUGHT_UPDATES:
             chunks = content_texts(update.get("content"))
+            if chunks:
+                self._flush_break(at)
             for c in chunks:
                 if self.events and self.events[-1].get("t") == "thought":
                     self.events[-1]["text"] += c
@@ -103,6 +127,7 @@ class TurnEvents:
                     self.events.append({"t": "thought", "text": c, "at": at})
             return Applied(texts=chunks)
         if kind == "tool_call":
+            self._break_pending = False
             call = self.dialect.call(update)
             if call.id and any(e.get("t") == "call" and e.get("id") == call.id for e in self.events):
                 # A second opening frame for a call already announced. The spec
@@ -133,7 +158,10 @@ class TurnEvents:
                 self._backfill_subject(str(update.get("toolCallId") or ""), update)
             return Applied()
         if kind == "plan":
-            return Applied(opened_plan=self._plan(update, at))
+            opened = self._plan(update, at)
+            if opened:
+                self._break_pending = False
+            return Applied(opened_plan=opened)
         return Applied()
 
     def permission(self, params: dict[str, Any]) -> str:

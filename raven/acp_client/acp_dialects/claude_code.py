@@ -37,6 +37,7 @@ from raven.acp_client.acp_dialects.base import (
     fold_pairs,
     paired_by_name,
 )
+from raven.acp_client.background_settle import RAW_MESSAGE_FILTER
 
 # A fence the adapter added, not one the tool's own output contained: it wraps
 # the whole payload, so an inner fence (a result that really is markdown) never
@@ -71,6 +72,14 @@ class ClaudeCodeDialect(AcpDialect):
     # `oldText: null`, whether or not the file existed, so the block cannot say
     # it was new.
     missing_old_text_is_creation = False
+
+    def session_open_meta(self) -> dict[str, Any] | None:
+        """Ask the adapter for the raw SDK messages that say when background work ends.
+
+        Sent on new, load and resume alike: the adapter reads it at the open, so a
+        reopened session that omitted it would go quiet about its own work.
+        """
+        return {"claudeCode": {"emitRawSDKMessages": [dict(entry) for entry in RAW_MESSAGE_FILTER]}}
 
     def tool_name(self, update: dict[str, Any]) -> str:
         named = _dict(_dict(update.get("_meta")).get("claudeCode")).get("toolName")

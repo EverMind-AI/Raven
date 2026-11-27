@@ -185,6 +185,14 @@ class AcpDialect:
     adapter that does not overrides this, and the run's file record then has to
     tell a creation from a rewrite some other way."""
 
+    def session_open_meta(self) -> dict[str, Any] | None:
+        """The ``_meta`` to send on every session open, or ``None`` for none.
+
+        An adapter that only talks about its own work when asked is asked here,
+        once, in the one place every route into a session passes through.
+        """
+        return None
+
     def prompt_usage_counts_the_turn(self, version: str | None) -> bool:
         """Whether the prompt response's ``usage`` counts the whole turn, for the adapter at ``version``.
 

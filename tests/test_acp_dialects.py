@@ -15,6 +15,7 @@ import json
 import pytest
 
 from raven.acp_client.acp_dialects import AcpDialect, ClaudeCodeDialect, CodexDialect, dialect_for
+from raven.acp_client.background_settle import RAW_MESSAGE_FILTER
 
 
 def test_the_dialect_is_chosen_from_the_agents_own_handshake() -> None:
@@ -838,3 +839,18 @@ def test_claude_code_does_not_fold_a_custom_box_the_schema_requires() -> None:
     merged = ClaudeCodeDialect().pair_fields(fields(schema))
     assert [f.name for f in merged] == ["backend", "backend_custom"]
     assert [f.custom_name for f in merged] == [None, None]
+
+
+def test_only_claude_code_opts_into_raw_sdk_messages():
+    assert ClaudeCodeDialect().session_open_meta() == {"claudeCode": {"emitRawSDKMessages": RAW_MESSAGE_FILTER}}
+    assert AcpDialect().session_open_meta() is None
+    assert CodexDialect().session_open_meta() is None
+
+
+def test_the_opt_in_is_a_copy_a_caller_cannot_use_to_change_the_filter():
+    meta = ClaudeCodeDialect().session_open_meta()
+    meta["claudeCode"]["emitRawSDKMessages"][0]["type"] = "other"
+    meta["claudeCode"]["emitRawSDKMessages"].pop()
+    assert ClaudeCodeDialect().session_open_meta() == {"claudeCode": {"emitRawSDKMessages": RAW_MESSAGE_FILTER}}
+    assert RAW_MESSAGE_FILTER[0]["type"] == "system"
+    assert len(RAW_MESSAGE_FILTER) == 4

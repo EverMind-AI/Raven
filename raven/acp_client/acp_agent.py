@@ -39,9 +39,10 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.acp_client import remote, remote_runs
+from raven.acp_client import background_settle, remote, remote_runs
 from raven.acp_client.acp_dialects import AcpDialect, ToolCall, agent_version, dialect_for
 from raven.acp_client.ask_user import AskUserResponder, clarify_responder
+from raven.acp_client.background_settle import RAW_MESSAGE_METHOD, BackgroundSettle, wake_marker
 from raven.acp_client.capabilities import (
     CapabilitySnapshot,
     read_session_current_mode,
@@ -393,6 +394,7 @@ class _TurnCollector:
         track_files: bool = True,
         agent_version: str | None = None,
         steps: LiveSteps | None = None,
+        agent: str = "",
     ) -> None:
         # The reply's cap, renewed for every message rather than spent across
         # the turn: the reply is one message, and narration spending a shared
@@ -447,6 +449,38 @@ class _TurnCollector:
         self.usage: dict[str, Any] = {}
         self.events = self._turn.events
         self.answer_at: str | None = None
+        self._agent = agent
+        self.settle = BackgroundSettle(self._is_monitor_call)
+        self.settle_changed = asyncio.Event()
+
+    def _is_monitor_call(self, call_id: str) -> bool:
+        return any(
+            event.get("t") == "call" and event.get("id") == call_id and event["call"].name == "Monitor"
+            for event in self.events
+        )
+
+    def prompt_answered(self) -> None:
+        if self.settle.answered:
+            return
+        self.settle.prompt_answered()
+        # A wake queued behind the prompted turn can run with no `idle` between
+        # them, so nothing else would end the answered message.
+        self._tool_ran = True
+        self._turn.mark_break()
+
+    def _raw_message(self, params: dict[str, Any]) -> None:
+        message = params.get("message")
+        wake = self.settle.apply(message, time.monotonic())
+        if self.settle.answered and isinstance(message, dict) and message.get("type") == "result":
+            # Wake turns queued back to back share one `running` and get no
+            # marker of their own; each one's text is still its own message.
+            self._tool_ran = True
+            self._turn.mark_break()
+        if wake is not None:
+            self.events.append({"t": "user", "text": wake_marker(self._agent, wake), "at": self._now()})
+            self._tool_ran = True
+            activity.set_transcript(self._run, self.messages(in_flight=True))
+        self.settle_changed.set()
 
     @staticmethod
     def _now() -> str:
@@ -501,6 +535,9 @@ class _TurnCollector:
         # the kinds it renders; a `usage_update` or a permission request would
         # otherwise leave the stall watcher reading a run that never moved.
         activity.note_alive(self._run)
+        if method == RAW_MESSAGE_METHOD:
+            self._raw_message(params)
+            return
         if method == PERMISSION_METHOD:
             call_id = self._turn.permission(params)
             if self.steps is not None:
@@ -753,8 +790,16 @@ class _TurnCollector:
         says it counts the whole turn; the ``usage_update`` then carries only the
         window and the cost. Otherwise the update, where an earlier agent was seen
         to send its counts.
+
+        The raw ``result`` counts exist only for the dialect that opens its
+        session with ``emitRawSDKMessages``, so they reach every run of that
+        adapter -- settling or not, since the raw frames arrive on every turn --
+        and no run of any other agent.
         """
         counts_the_turn = self._dialect.prompt_usage_counts_the_turn(self._agent_version)
+        raw = self.settle.usage_counts()
+        if raw is not None:
+            return raw
         if counts_the_turn and isinstance(answered, dict) and answered:
             return answered
         return self.usage
@@ -819,7 +864,7 @@ class _TurnCollector:
         """
         said: list[str] = []
         for ev in reversed(self.events):
-            if ev["t"] in ("call", "user"):
+            if ev["t"] in ("call", "user", "break"):
                 break
             if ev["t"] == "say":
                 said.append(ev["text"])
@@ -915,6 +960,8 @@ class _TurnCollector:
                 events.append(turn_rows.thought(ev["text"], at=at))
             elif kind == "user":
                 events.append(turn_rows.user(ev["text"], at=at))
+            elif kind == "break":
+                events.append(turn_rows.message_break(at=at))
             elif kind == "call":
                 acp_call: ToolCall = ev["call"]
                 events.append(
@@ -1865,6 +1912,8 @@ class AcpAgentBackend:
                     mode=mode,
                     session_model=session_model,
                     session_effort=session_effort,
+                    session_meta=dialect_for(connection.initialize).session_open_meta(),
+                    in_flight=connection.holds_a_session,
                 )
                 if journal is not None:
                     # Inside the marked range on purpose, so the per-call copy of the
@@ -1915,6 +1964,7 @@ class AcpAgentBackend:
                     track_files=launched is None,
                     agent_version=agent_version(connection.initialize),
                     steps=LiveSteps(span, prompt=task),
+                    agent=self.name,
                 )
                 # Built here, in the turn's context, for the reason `_TurnCollector`
                 # documents: the read loop's ContextVars predate this run, and the
@@ -1977,6 +2027,9 @@ class AcpAgentBackend:
                         if tracker is not None:
                             tracker.prompt_sent(request_id)
 
+                    deadline_s = _prompt_deadline(self.timeout)
+                    prompt_sent_at = time.monotonic()
+                    settle_notice: str | None = None
                     try:
                         result = await client.request(
                             "session/prompt",
@@ -1994,17 +2047,53 @@ class AcpAgentBackend:
                                     *(attachment_blocks(media, root=_uploads_root()) if launched is None else ()),
                                 ],
                             },
-                            timeout=_prompt_deadline(self.timeout),
+                            timeout=deadline_s,
                             cancel_session=session_id,
                             sent=heard_sent,
+                            answered=collector.prompt_answered,
                         )
                         answered = True
+                        # Inside this `try`, so a cancel while the background work
+                        # runs takes the cancel arm below: it keeps the first
+                        # turn's binding, the frames and the steps of the answered
+                        # prompt, all of which the agent did produce.
+                        settle_notice = await self._settle(
+                            client=client,
+                            session_id=session_id,
+                            collector=collector,
+                            prompt_sent_at=prompt_sent_at,
+                            deadline_s=deadline_s,
+                            on_machine=launched is not None,
+                        )
                     except asyncio.CancelledError:
                         if tracker is not None and remote.leaving():
                             # This process is stopping: the turn goes on under
                             # the machine's daemon, and the manager reads this
                             # dispatch as left, not cancelled.
                             remote_runs.mark_left(task_id)
+                        if answered:
+                            # The cancel landed in the Background Settle: the
+                            # prompt answered and the wake turns ran, and what they
+                            # spent is booked here, since the normal path that
+                            # books it is not reached. Before the session record
+                            # can be forgotten below: the booking reads its model.
+                            try:
+                                await self._book_usage(
+                                    collector,
+                                    result.get("usage") if isinstance(result, dict) else None,
+                                    client=client,
+                                    initialize=connection.initialize,
+                                    session_id=session_id,
+                                    resumed=resumed,
+                                    session_key=session_key,
+                                    task_id=task_id,
+                                )
+                            except Exception:  # noqa: BLE001 - the cancel is what this path raises
+                                logger.debug(
+                                    "acp agent {!r}: booking a cancelled settle's usage failed",
+                                    self.name,
+                                    exc_info=True,
+                                )
                         # An UNSETTLED cancel means the turn outlived its cancel
                         # budget, so it is still running on the agent while this lock
                         # is about to be released -- prompting the same session again
@@ -2212,7 +2301,7 @@ class AcpAgentBackend:
                     await self._write_steps(span, collector, started)
 
                 reply = await self._finished(collector.reply, stop_reason=stop_reason, span=span, sink=on_delta)
-                notes = [self._resume_lost.pop((skey, handle), None), self._mcp_note(grant, lent)]
+                notes = [self._resume_lost.pop((skey, handle), None), self._mcp_note(grant, lent), settle_notice]
                 if launched is not None:
                     # Where to find what it made: the caller's workspace line names
                     # this computer, and what it wrote is there, by address --
@@ -2230,6 +2319,105 @@ class AcpAgentBackend:
                         await on_delta(notice)
                     reply += notice
                 return reply
+
+    async def _settle(
+        self,
+        *,
+        client: Any,
+        session_id: str,
+        collector: _TurnCollector,
+        prompt_sent_at: float,
+        deadline_s: float | None,
+        on_machine: bool,
+    ) -> str | None:
+        """Wait, after the prompt answered, for the background work its turn left running.
+
+        The Background Settle: ``None`` once the work has ended, or at once for
+        an agent whose stream never reported a session state this run; else the
+        closing notice of a run that stopped waiting first -- at the ceiling,
+        at the deadline, or with the connection gone. Either way the run then
+        returns the reply it has: the agent did answer, and failing the run
+        would throw that answer away.
+        """
+        settle = collector.settle
+        collector.prompt_answered()
+        if not settle.reporting:
+            # Settling needs an idle boundary, and an adapter that reported no
+            # session state this run gives none: the answered run ends here, as
+            # before. The pinned adapter sends `running` before it answers, so
+            # this warning is what makes a change to that frame order visible.
+            if collector._dialect.session_open_meta() is not None:
+                logger.warning(
+                    "acp agent {!r}: session {} answered with no session state frame, "
+                    "so its background work is not tracked",
+                    self.name,
+                    session_id,
+                )
+            return None
+        answered_at = time.monotonic()
+        next_alive = answered_at
+        why = "cancelled"
+        logger.info(
+            "acp agent {!r}: session {} settling, background work running: {}",
+            self.name,
+            session_id,
+            settle.running_tasks(),
+        )
+        try:
+            while True:
+                now = time.monotonic()
+                if settle.done(now):
+                    why = "done"
+                    return None
+                if client.closed or not client.alive:
+                    why = "connection"
+                    return f"the connection to {self.name} closed before its background work ended"
+                tasks = "; ".join(settle.running_tasks())
+                left = answered_at + background_settle.SETTLE_CEILING_S - now
+                later = "Anything it reports later arrives as its own report"
+                if left <= 0:
+                    why = "ceiling"
+                    minutes = int(background_settle.SETTLE_CEILING_S // 60)
+                    if tasks:
+                        return f"{self.name} still had background work running after {minutes} min: {tasks}. {later}"
+                    return f"{self.name} was still working after {minutes} min. {later}"
+                if deadline_s is not None:
+                    deadline_left = prompt_sent_at + deadline_s - now
+                    if deadline_left <= 0:
+                        why = "deadline"
+                        if tasks:
+                            return f"{self.name} still had background work running at its deadline: {tasks}. {later}"
+                        return f"{self.name} was still working at its deadline. {later}"
+                    left = min(left, deadline_left)
+                wait = min(1.0, left)
+                if tasks:
+                    # A background command can print nothing for a long time;
+                    # without a stamp the DAG would read the quiet as a stall.
+                    if now >= next_alive:
+                        activity.note_alive(collector._run)
+                        next_alive = now + background_settle.ALIVE_EVERY_S
+                    wait = min(wait, next_alive - now)
+                try:
+                    await asyncio.wait_for(collector.settle_changed.wait(), timeout=wait)
+                except TimeoutError:
+                    pass
+                collector.settle_changed.clear()
+        except asyncio.CancelledError:
+            # A turn that is running or waiting on an action has work to cancel,
+            # and a run on a machine this process is leaving goes on there, as on
+            # the prompt path.
+            if settle.state in ("running", "requires_action") and not (on_machine and remote.leaving()):
+                try:
+                    await client.notify("session/cancel", {"sessionId": session_id})
+                except Exception:  # noqa: BLE001 - the cancel being raised is what matters
+                    logger.debug("acp agent {!r}: session/cancel during the settle failed", self.name, exc_info=True)
+            raise
+        except Exception as exc:  # noqa: BLE001 - the prompt answered; its reply must not be lost
+            why = "error"
+            logger.warning("acp agent {!r}: session {} settle failed: {}", self.name, session_id, exc)
+            return None
+        finally:
+            logger.info("acp agent {!r}: session {} settle ended: {}", self.name, session_id, why)
 
     async def _on_machine(self, handle: str) -> _OnMachine:
         """This dispatch's place on its machine, or a connection error that says why not.
@@ -2466,6 +2654,8 @@ class AcpAgentBackend:
         mode: str | None = None,
         session_model: str | None = None,
         session_effort: str | None = None,
+        session_meta: dict[str, Any] | None = None,
+        in_flight: Callable[[], bool] | None = None,
     ) -> tuple[str, bool]:
         """The session to prompt, and whether it continues an earlier one."""
 
@@ -2478,7 +2668,7 @@ class AcpAgentBackend:
             try:
                 return await client.request(method, params, timeout=budget)
             except AcpTimeoutError:
-                if getattr(client, "prompting", False):
+                if getattr(client, "prompting", False) or (in_flight is not None and in_flight()):
                     raise AcpBusyError(
                         f"acp agent {self.name!r}: {method} waited {budget:.0f}s behind a turn "
                         f"already running on this agent's one connection. The agent is busy, not "
@@ -2505,6 +2695,8 @@ class AcpAgentBackend:
             known = await self._registry.lookup(skey, self.name, handle, kind="acp")
             if known is not None:
                 reopen = {"sessionId": known, "cwd": cwd, "mcpServers": mcp_servers}
+                if session_meta is not None:
+                    reopen["_meta"] = session_meta
                 try:
                     if self._snapshot is not None and self._snapshot.can_load:
                         # `session/load` is not a getter: the agent answers it by
@@ -2580,7 +2772,10 @@ class AcpAgentBackend:
                     # pruned, so the binding is kept and the caller is told.
                     raise
 
-        result = await request_or_busy("session/new", {"cwd": cwd, "mcpServers": mcp_servers})
+        opened = {"cwd": cwd, "mcpServers": mcp_servers}
+        if session_meta is not None:
+            opened["_meta"] = session_meta
+        result = await request_or_busy("session/new", opened)
         self._relearn_menus(result)
         session_id = (result or {}).get("sessionId") if isinstance(result, dict) else None
         if not isinstance(session_id, str) or not session_id:

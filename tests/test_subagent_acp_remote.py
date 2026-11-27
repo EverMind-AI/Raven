@@ -26,7 +26,9 @@ import pytest
 from loguru import logger
 
 from raven.acp_client import remote, remote_runs
+from raven.acp_client.acp_agent import AcpAgentBackend
 from raven.acp_client.capabilities import snapshot_fingerprint, verify_agent
+from raven.acp_client.client import AcpClient
 from raven.acp_client.pool import close_pool, get_pool
 from raven.acp_client.protocol import AcpConnectionError
 from raven.agent.subagent import probe, resume_remote
@@ -801,6 +803,51 @@ async def test_a_stop_that_lands_under_a_pick_up_leaves_the_run_for_the_start_af
     (said,) = manager.announced
     assert said["status"] == "ok" and said["result"].split("\n\n[raven]")[0] == "pong"
     assert remote_runs.pending() == [] and _agent_pid() == agent
+
+
+async def test_a_stop_during_the_background_settle_leaves_the_turn_running_on_the_machine(box, tmp_path, monkeypatch):
+    """The prompt answered and the run waits on the background work its turn started when this computer stops:
+    the turn goes on with the machine's daemon, so no ``session/cancel`` is sent and the record stays."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    collectors: list[Any] = []
+    settle = AcpAgentBackend._settle
+
+    async def entered(self: AcpAgentBackend, **kwargs: Any) -> str | None:
+        collectors.append(kwargs["collector"])
+        return await settle(self, **kwargs)
+
+    monkeypatch.setattr(AcpAgentBackend, "_settle", entered)
+    notified: list[str] = []
+    notify = AcpClient.notify
+
+    async def spy(self: AcpClient, method: str, params: dict[str, Any] | None = None) -> None:
+        notified.append(method)
+        await notify(self, method, params)
+
+    monkeypatch.setattr(AcpClient, "notify", spy)
+    env = {"ACP_STUB_SETTLE": "forever", "ACP_STUB_AGENT_NAME": "@agentclientprotocol/claude-agent-acp"}
+    backend = build_third_party_backend(remote_config(mode="settle", env=env))
+    turn = asyncio.ensure_future(
+        backend.run("go", task_id="t1", workspace=tmp_path, executor=None, session_key="tui:s1")
+    )
+    deadline = time.monotonic() + 20
+    while not (collectors and collectors[0].settle.state == "running" and collectors[0].settle.answered):
+        assert time.monotonic() < deadline and not turn.done(), "the run never reached its settle"
+        await asyncio.sleep(0.05)
+
+    remote.leave_agents_running()
+    try:
+        turn.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+        assert remote_runs.was_left("t1"), "the manager would read this dispatch as left, not cancelled"
+        assert [run.task_id for run in remote_runs.pending()] == ["t1"], "the record is the next start's"
+        assert "session/cancel" not in notified
+        (connection,) = get_pool().connections("stub@box")
+        assert "stub: session/cancel" not in connection.client.stderr_tail()
+    finally:
+        # Staying again, so the fixture's pool close ends this agent instead of leaving it to the daemon.
+        remote.staying()
 
 
 async def test_a_cancel_while_the_acp_launch_answer_waits_ends_the_agent_too(box, tmp_path, monkeypatch):

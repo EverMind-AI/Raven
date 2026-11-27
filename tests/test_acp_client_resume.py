@@ -10,7 +10,7 @@ import pytest
 
 from raven.acp_client import remote
 from raven.acp_client.client import AcpClient
-from raven.acp_client.protocol import AcpConnectionError, AcpTimeoutError
+from raven.acp_client.protocol import AcpConnectionError, AcpRemoteError, AcpTimeoutError
 
 
 class _Pipe:
@@ -104,6 +104,50 @@ async def test_request_ids_go_on_from_where_the_other_process_left_them(pipe):
     endpoint.says({"jsonrpc": "2.0", "id": 41, "result": {}})
 
     assert await asked == {} and gone_out == [41] and endpoint.written[0]["id"] == 41
+
+
+async def test_answered_is_heard_before_the_frames_read_after_the_answer():
+    endpoint = _Pipe()
+    order: list[str] = []
+
+    async def heard(method: str, params: dict[str, Any]) -> None:
+        order.append(method)
+
+    client = AcpClient.over(endpoint, name="burst", on_notification=heard)
+    try:
+        asked = asyncio.ensure_future(
+            client.request("session/prompt", {"sessionId": "s1"}, timeout=5, answered=lambda: order.append("answered"))
+        )
+        await asyncio.sleep(0.01)
+        endpoint.says({"jsonrpc": "2.0", "id": 1, "result": {"stopReason": "end_turn"}})
+        endpoint.says({"jsonrpc": "2.0", "method": "after", "params": {}})
+
+        assert await asked == {"stopReason": "end_turn"}
+        await asyncio.sleep(0.01)
+        assert order == ["answered", "after"]
+    finally:
+        await client.close()
+
+
+async def test_a_failing_answered_hook_neither_loses_the_answer_nor_stops_the_read_loop(pipe):
+    endpoint, client = pipe
+    hooked: list[str] = []
+
+    def broken() -> None:
+        hooked.append("called")
+        raise RuntimeError("hook broke")
+
+    asked = asyncio.ensure_future(client.request("ping", {}, timeout=5, answered=broken))
+    await asyncio.sleep(0.01)
+    endpoint.says({"jsonrpc": "2.0", "id": 1, "result": {"n": 1}})
+    assert await asked == {"n": 1} and hooked == ["called"]
+
+    refused = asyncio.ensure_future(client.request("ping", {}, timeout=5, answered=broken))
+    await asyncio.sleep(0.01)
+    endpoint.says({"jsonrpc": "2.0", "id": 2, "error": {"code": -1, "message": "no"}})
+    with pytest.raises(AcpRemoteError):
+        await refused
+    assert hooked == ["called"], "an error answer is not an answer"
 
 
 async def test_a_cancelled_prompt_is_not_cancelled_on_the_agent_while_this_process_is_leaving(pipe):

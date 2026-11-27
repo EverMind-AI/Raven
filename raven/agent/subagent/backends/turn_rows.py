@@ -42,6 +42,11 @@ def result(*, id: str, text: str, ok: bool, at: str | None = None) -> dict[str, 
     return {"t": "result", "id": id, "text": text, "ok": ok, "at": at}
 
 
+def message_break(at: str | None = None) -> dict[str, Any]:
+    """Boundary between consecutive assistant turns with no call or user row in between."""
+    return {"t": "break", "at": at}
+
+
 def rows(
     events: list[dict[str, Any]],
     *,
@@ -59,6 +64,21 @@ def rows(
     pending: list[str] = []
     pending_at: str | None = None
     narration: list[str] = []
+
+    def flush_assistant() -> None:
+        nonlocal pending, pending_at, narration
+        if not narration and not pending:
+            return
+        said: dict[str, Any] = {"role": "assistant", "content": "".join(narration).strip()}
+        if pending:
+            said["reasoning_content"] = "".join(pending)
+        if pending_at:
+            said["timestamp"] = pending_at
+        msgs.append(said)
+        narration = []
+        pending = []
+        pending_at = None
+
     for ev in events:
         kind = ev.get("t")
         if kind == "say":
@@ -87,21 +107,14 @@ def rows(
                 pending_at = None
             narration = []
             msgs.append(entry)
+        elif kind == "break":
+            flush_assistant()
         elif kind == "user":
             # Flush what the agent had said and thought so far into a row of
             # its own first, or that text rides the next call and is drawn
             # after the words it was answering -- the conversation reads inside
             # out. Then the person's words, in the position they were said.
-            if narration or pending:
-                said: dict[str, Any] = {"role": "assistant", "content": "".join(narration).strip()}
-                if pending:
-                    said["reasoning_content"] = "".join(pending)
-                if pending_at:
-                    said["timestamp"] = pending_at
-                msgs.append(said)
-                narration = []
-                pending = []
-                pending_at = None
+            flush_assistant()
             # Marked, because a reader cannot otherwise tell it from the prompt
             # that opened a turn: both are user rows, and only this one landed
             # inside a turn already running.
@@ -132,4 +145,4 @@ def rows(
     return msgs
 
 
-__all__ = ["call", "result", "rows", "say", "thought", "user"]
+__all__ = ["call", "message_break", "result", "rows", "say", "thought", "user"]
