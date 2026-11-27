@@ -26,8 +26,14 @@ if TYPE_CHECKING:
 class CreatePlaybookTool(Tool):
     """Generate a playbook from a workflow description and store it for review."""
 
-    # Generation is a few LLM calls (draft plus repair rounds).
-    timeout_seconds = 180.0
+    # Generation is a draft plus repair rounds, each a chain of LLM calls: a
+    # clean generation measured 338s on a hosted provider, so
+    # 180s cut most runs off before the draft landed. 660s is the same
+    # ceiling the shell tool uses for one call chain -- a clean run plus a
+    # repair round fits, and a wedged provider still cannot hold a turn
+    # open indefinitely. The RPC creation entry reads this same constant
+    # (`_generation_budget_s`), so both entries move together.
+    timeout_seconds = 660.0
 
     def __init__(
         self,

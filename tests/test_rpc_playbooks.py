@@ -2198,3 +2198,16 @@ class TestTheMethodSurface:
             "playbooks.stints.resume",
             "playbooks.stints.stop",
         ]
+
+
+def test_the_rpc_creation_budget_is_the_conversational_tool_own() -> None:
+    """The two creation entries may not disagree about how long generation takes.
+
+    The RPC budget is read from ``CreatePlaybookTool.timeout_seconds`` rather
+    than copied, and this is the pin that keeps it so: a constant written
+    again here would drift the moment either entry is reconsidered, and the
+    budget is the only bound creation has.
+    """
+    from raven.agent.tools.create_playbook import CreatePlaybookTool
+
+    assert mod._generation_budget_s() == float(CreatePlaybookTool.timeout_seconds)
