@@ -1459,6 +1459,38 @@ async def test_a_scan_channel_with_no_pairing_report_is_still_waiting(config_fil
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("row", "expected_state"),
+    [
+        (
+            {"name": "feishu", "enabled": True, "running": True, "connected": False, "qr_login": False, "fields": []},
+            "running, not connected yet",
+        ),
+        (
+            {"name": "weixin", "enabled": True, "running": True, "qr_login": True, "fields": []},
+            "running, not connected yet",
+        ),
+        (
+            {"name": "feishu", "enabled": True, "running": True, "connected": True, "qr_login": False, "fields": []},
+            "connected",
+        ),
+        (
+            {"name": "feishu", "enabled": True, "running": False, "connected": False, "qr_login": False, "fields": []},
+            "enabled, not running (the gateway starts it within a few seconds, or it failed)",
+        ),
+    ],
+)
+async def test_describe_distinguishes_three_valued_connected_state(config_file, row, expected_state):
+    """`connected` True/False/absent stays distinct across scan, non-scan, and non-running rows."""
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"channels.status": {"gateway_running": True, "channels": [row]}}))
+
+    described = json.loads(await _run(tool, action="describe", path=f"channels.{row['name']}"))
+
+    assert described["state"] == expected_state
+
+
+@pytest.mark.asyncio
 async def test_a_channel_with_no_fields_at_all_is_not_called_a_scan_channel(config_file):
     """An absent field list is not a QR-login declaration.
 
