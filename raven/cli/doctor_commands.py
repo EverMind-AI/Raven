@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from raven import __logo__
 from raven.cli._helpers import print_probe_troubleshooting
@@ -69,6 +70,7 @@ class RoutingInfo:
 class FeaturesInfo:
     channels_enabled: list[str] = field(default_factory=list)
     channels_missing_deps: list[str] = field(default_factory=list)
+    channels_missing_dep_reasons: dict[str, str] = field(default_factory=dict)
     skill_forge_enabled: bool = False
     # The global config, which is the file this command reads. A conversation
     # can override the mode for its own turns; that override is not here.
@@ -649,11 +651,14 @@ def _gather_static_checks() -> DoctorReport:
     except Exception:
         skill_forge_on = False
 
-    from raven.gateway.manager import missing_dependency_channels
+    from raven.gateway.manager import missing_dependency_reasons
+
+    missing_deps = missing_dependency_reasons(config)
 
     report.features = FeaturesInfo(
         channels_enabled=enabled,
-        channels_missing_deps=missing_dependency_channels(config),
+        channels_missing_deps=list(missing_deps),
+        channels_missing_dep_reasons=missing_deps,
         skill_forge_enabled=skill_forge_on,
         permission_mode=config.permissions.mode,
         sandbox_backend=config.tools.sandbox.backend,
@@ -951,6 +956,8 @@ def _render_human_output(report: DoctorReport) -> None:
 
             names = ", ".join(features.channels_missing_deps)
             console.print(f"               [yellow]⚠ SDK missing: {names}[/yellow]  [dim]{missing_dep_hint()}[/dim]")
+            for name, reason in features.channels_missing_dep_reasons.items():
+                console.print(f"               {name}: {escape(reason)}", soft_wrap=True)
         sf_label = "enabled" if features.skill_forge_enabled else "[dim]disabled[/dim]"
         console.print(f"  Skill forge: {sf_label}")
         _render_permission_and_sandbox(features)

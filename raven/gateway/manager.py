@@ -51,7 +51,12 @@ def missing_dep_hint() -> str:
 
 
 def missing_dependency_channels(config: Config) -> list[str]:
-    """Enabled channels whose SDK is not installed, in registry order.
+    """Enabled channels whose SDK is not installed, in registry order."""
+    return list(missing_dependency_reasons(config))
+
+
+def missing_dependency_reasons(config: Config) -> dict[str, str]:
+    """Why each enabled channel's SDK import fails, keyed in registry order.
 
     Runs the same probe as :meth:`ChannelManager._init_channels` -- build via
     the spec factory, catch ImportError -- so a channel reported here is
@@ -64,7 +69,7 @@ def missing_dependency_channels(config: Config) -> list[str]:
     from raven.channels.registry import discover_specs
     from raven.config.admission import dispense_channel_config
 
-    missing: list[str] = []
+    missing: dict[str, str] = {}
     for modname, spec in discover_specs().items():
         section = getattr(config.channels, modname, None)
         if not section or not getattr(section, "enabled", False):
@@ -74,8 +79,8 @@ def missing_dependency_channels(config: Config) -> list[str]:
             # reads declared cargo fails before its SDK import, and the swallow
             # below would mask the missing dependency this probe exists to see.
             spec.factory(dispense_channel_config(spec, section, channel=modname))
-        except ImportError:
-            missing.append(modname)
+        except ImportError as e:
+            missing[modname] = str(e)
         except Exception:
             continue
     return missing
