@@ -95,3 +95,34 @@ def test_a_row_without_a_directory_is_no_record(tmp_path: Path) -> None:
     path = tmp_path / "claude.json"
     path.write_text(json.dumps({"version": 1, "sessions": {"acp-1": {"mirasimKey": "sess-1", "usedAtMs": 1}}}))
     assert BindingStore(path).get("acp-1") is None
+
+
+def test_a_read_that_lands_in_the_writer_swap_window_is_retried_and_still_answers(tmp_path: Path, monkeypatch) -> None:
+    """A read rides out the writer's os.replace window with retries, not a lock.
+
+    A poll can open the store file while the writer is mid-replace; on
+    Windows that open raises PermissionError instead of showing either
+    file -- the failure that turned the Windows ACP stdio shard red. The
+    read retries that one error and answers from the settled file; taking
+    the write side's exclusive lock instead would stall the very writer
+    the poll was asking about, a full second per collision there.
+    """
+    import pathlib
+
+    path = tmp_path / "claude.json"
+    store = BindingStore(path)
+    store.put(Binding(session_id="acp-1", cwd="/w", mirasim_key="sess-1"))
+
+    real_read = pathlib.Path.read_text
+    windows_open_errors = []
+
+    def flaky_open(self, *args, **kwargs):
+        if self == path and len(windows_open_errors) < 2:
+            windows_open_errors.append(self)
+            raise PermissionError(13, "Permission denied")
+        return real_read(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", flaky_open)
+    found = store.get("acp-1")
+    assert found is not None and found.cwd == "/w"
+    assert len(windows_open_errors) == 2

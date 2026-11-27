@@ -53,6 +53,27 @@ def _replace_with_retry(
             delay *= 2
 
 
+def read_text_with_retry(path: Path) -> str:
+    """Read ``path`` as UTF-8, retrying the transient failures of a swap.
+
+    A reader that runs beside ``atomic_replace`` can land its open inside the
+    writer's ``os.replace`` window; on Windows that open fails with
+    ``PermissionError`` instead of showing either the old or the new file.
+    ``FileNotFoundError`` is not retried -- absence is an answer, and a
+    retry loop around it would only delay the caller's own handling.
+    """
+    delay = _REPLACE_BACKOFF
+    for _ in range(_REPLACE_ATTEMPTS - 1):
+        try:
+            return path.read_text(encoding="utf-8")
+        except PermissionError:
+            time.sleep(delay)
+            delay *= 2
+    # The last attempt stands bare, so a PermissionError it still sees is
+    # raised as itself rather than swallowed by the loop.
+    return path.read_text(encoding="utf-8")
+
+
 @contextmanager
 def _locked(path: Path) -> Iterator[None]:
     # Reentrant within a thread: a helper called from inside write_transaction

@@ -39,7 +39,7 @@ from typing import Any
 from loguru import logger
 
 from raven.home import raven_home
-from raven.utils.atomic_io import atomic_update
+from raven.utils.atomic_io import atomic_update, read_text_with_retry
 
 STORE_VERSION = 1
 RETENTION_DAYS = 90
@@ -116,7 +116,13 @@ class BindingStore:
 
     def _live(self) -> dict[str, Binding]:
         try:
-            raw = self.path.read_text(encoding="utf-8")
+            # A bare read with retries rather than the write side's lock: the
+            # lock is held exclusively, so on Windows a colliding open waits a
+            # full second per attempt and the poll that reads this store
+            # stalls the writer it was asking about. Retrying the read alone
+            # rides out the writer's os.replace window, which is the failure
+            # that raises PermissionError there.
+            raw = read_text_with_retry(self.path)
         except FileNotFoundError:
             return {}
         horizon = _now_ms() - _RETENTION_MS
