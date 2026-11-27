@@ -357,30 +357,43 @@ def test_the_only_departures_from_the_official_schema_are_the_documented_ones(
 _EXPECTED_VALUES = tuple(case for case in _CASES if case.expected)
 
 
-def _has_empty_string(value: Any) -> bool:
+def _has_present_empty_value(value: Any) -> bool:
     if isinstance(value, str):
         return value == ""
     if isinstance(value, dict):
-        return any(_has_empty_string(item) for item in value.values())
+        return not value or any(_has_present_empty_value(item) for item in value.values())
     if isinstance(value, list):
-        return any(_has_empty_string(item) for item in value)
+        return not value or any(_has_present_empty_value(item) for item in value)
     return False
 
 
-def test_every_loading_document_with_an_empty_string_declares_expected_values() -> None:
+def test_every_loading_document_with_a_present_empty_value_declares_expected_values() -> None:
     """A document with a present empty value must pin that the value survives.
 
     ``_EXPECTED_VALUES`` selects its cases by the presence of ``case.expected``,
     so a dropped map would silently shorten the value half of the corpus
-    while the acceptance half stayed green.
+    while the acceptance half stayed green. "Empty" covers an empty string,
+    an empty object and an empty list alike: ``{"author": {}}`` carries no
+    empty string yet still pins three absent sub-values.
     """
     unpinned = [
-        case.label for case in _CASES if case.ours_accepts and _has_empty_string(case.document) and not case.expected
+        case.label
+        for case in _CASES
+        if case.ours_accepts and _has_present_empty_value(case.document) and not case.expected
     ]
-    assert not unpinned, f"cases with an empty string but no expected map: {unpinned}"
+    assert not unpinned, f"cases with a present empty value but no expected map: {unpinned}"
 
 
 def _value_at(manifest: AgentPluginManifest, path: str, label: str) -> Any:
+    """Walk a dotted path into the manifest.
+
+    The separator is ``.``, so a key that itself contains a dot -- a namespace
+    under ``extensions`` such as ``com.acme.custom`` -- cannot be named by a
+    path here. The corpus has no such entry: should an expected value ever sit
+    under one, ``_has_present_empty_value`` would flag it while this walk could
+    not address it, and the path syntax has to change (an escaped separator or
+    a tuple path) rather than the walk be bent.
+    """
     value: Any = manifest
     walked: list[str] = []
     for part in path.split("."):
