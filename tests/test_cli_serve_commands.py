@@ -1887,9 +1887,11 @@ class TestTheChosenSurface:
     def test_a_blank_workspace_suggests_an_absolute_usable_directory(
         self, home: Path, monkeypatch, capsys, workspace: str
     ) -> None:
-        """A blank workspace leaves the agent home relative, and a suggestion
-        derived straight from it was relative too ("raven-tmp", "   -tmp"):
-        not the absolute directory the refusal promises, and not one
+        """A workspace that stays relative after expansion -- blank, which is
+        the current directory, as much as an explicit relative path -- leaves
+        the agent home relative, and a suggestion derived straight from the
+        relative value was relative too ("raven-tmp", "   -tmp"): not the
+        absolute directory the refusal promises, and not one
         ``validate_override`` accepts as a working directory. Resolving the
         home first makes the suggestion absolute and acceptable for the same
         configured home."""
@@ -1921,9 +1923,10 @@ class TestTheChosenSurface:
     def test_a_directory_the_refusal_names_can_itself_start_serve(self, home: Path, monkeypatch, capsys) -> None:
         """The suggestion has to be a real place to start from, not just a
         plausible string: changing into it makes the same check pass on the
-        same config. A blank workspace is excluded here because that config
-        re-derives the agent home from wherever it runs, so no directory can
-        satisfy it -- the blank case is pinned above instead."""
+        same config. A workspace that stays relative after expansion is excluded
+        here -- blank included -- because that config re-derives the agent home
+        from wherever it runs, so no directory can satisfy it; the blank case is
+        pinned above instead."""
         home.mkdir(parents=True, exist_ok=True)
         monkeypatch.chdir(home.parent)
 
