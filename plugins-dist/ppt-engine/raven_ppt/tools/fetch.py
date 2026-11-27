@@ -36,11 +36,13 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from types import ModuleType
 from typing import Any
+from urllib.parse import urljoin
 
 import httpx
 from loguru import logger
 
 from raven.contracts.tool import Tool
+from raven.security.network import DEFAULT_MAX_REDIRECTS
 from raven.utils import cairo
 from raven_ppt.contracts import Project
 from raven_ppt.services.ingest import sources
@@ -49,6 +51,8 @@ from raven_ppt.tools import _return
 
 MAX_BYTES = 32 * 1024 * 1024
 TIMEOUT_S = 60.0
+MAX_REDIRECTS = DEFAULT_MAX_REDIRECTS
+_REDIRECT_CODES = (301, 302, 303, 307, 308)
 
 
 def _user_agent() -> str:
@@ -382,27 +386,72 @@ class PptFetchTool(Tool):
         Checked twice: the declared length first, so an oversized file costs
         nothing, and then the bytes as they arrive, because a server may not
         declare one.
+
+        The redirect chain is followed here rather than by the client, because a
+        client that follows redirects itself checks the address it was given and
+        none of the ones it is sent to: a public URL answering `302 Location:
+        http://169.254.169.254/` had the metadata body returned and ingested. Each
+        hop is judged before it is requested, and a relative Location is resolved
+        against the URL it came from so the hop it names is an absolute URL the
+        judge can read. The chain is bounded because it has to end.
+
+        The first hop is judged once more than the others because `_fetch_one`
+        has already called `validate_url_target` on it; that verdict is used to
+        refuse the fetch, but it discards the addresses, and this loop needs them
+        to pin the connection.
+
+        Each hop connects to the address its judge resolved, because judging one
+        answer and connecting to a second one is the window rebinding uses: a name
+        that answers public to the check and loopback to the client reaches the
+        inside while the verdict says it is public. The judge's addresses are
+        handed to `_pin_request`, so the connection target is one of them while
+        Host and SNI still carry the site's name.
         """
+        # `_pin_request` is underscore-private in core, not a published API. This
+        # plugin is first-party and ships from the same tree at the same version,
+        # so it calls the helper directly and accepts the private coupling. The
+        # coupling is this caller's choice; core does not promise the name lasts.
+        from raven.security.network import _pin_request, judge_resolved_url, judge_url_target
+
         async with httpx.AsyncClient(
             proxy=self.proxy,
-            follow_redirects=True,
+            follow_redirects=False,
             timeout=TIMEOUT_S,
             trust_env=False,
             headers={"User-Agent": USER_AGENT},
         ) as client:
-            async with client.stream("GET", url) as response:
-                response.raise_for_status()
-                declared = response.headers.get("content-length")
-                if declared and declared.isdigit() and int(declared) > MAX_BYTES:
-                    raise ValueError(f"that source is {int(declared) // 1_048_576}MB; the limit is 32MB")
-                chunks: list[bytes] = []
-                total = 0
-                async for chunk in response.aiter_bytes():
-                    total += len(chunk)
-                    if total > MAX_BYTES:
-                        raise ValueError("that source is larger than the 32MB limit")
-                    chunks.append(chunk)
-        return b"".join(chunks)
+            current = url
+            for hop in range(MAX_REDIRECTS + 1):
+                # Off the loop: the judge resolves through the synchronous
+                # `socket.getaddrinfo`, which can hold for seconds on a slow
+                # resolver while one process serves every session's turn.
+                judge = judge_url_target if hop == 0 else judge_resolved_url
+                allowed, refusal, addresses = await asyncio.to_thread(judge, current)
+                if not allowed:
+                    raise ValueError(f"that URL cannot be fetched: {refusal}")
+                target, pinned = _pin_request(current, addresses)
+                async with client.stream("GET", target, **pinned) as response:
+                    if response.status_code in _REDIRECT_CODES:
+                        location = response.headers.get("location") or ""
+                        if not location:
+                            raise ValueError(
+                                f"that URL cannot be fetched: the redirect from {current} carried no location"
+                            )
+                        current = urljoin(current, location)
+                        continue
+                    response.raise_for_status()
+                    declared = response.headers.get("content-length")
+                    if declared and declared.isdigit() and int(declared) > MAX_BYTES:
+                        raise ValueError(f"that source is {int(declared) // 1_048_576}MB; the limit is 32MB")
+                    chunks: list[bytes] = []
+                    total = 0
+                    async for chunk in response.aiter_bytes():
+                        total += len(chunk)
+                        if total > MAX_BYTES:
+                            raise ValueError("that source is larger than the 32MB limit")
+                        chunks.append(chunk)
+                    return b"".join(chunks)
+            raise ValueError(f"that URL redirected more than {MAX_REDIRECTS} times")
 
 
 def _sniff(payload: bytes) -> tuple[bytes, str, str]:
