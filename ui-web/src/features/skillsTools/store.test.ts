@@ -9,7 +9,7 @@ import { resetSources, setSources } from '../../state/sources'
 import { pkgList, snap } from '../../test/settingsHarness'
 import * as store from './store'
 
-import type { SkillsToolsSource } from './types'
+import type { SettingsSnapshot, SkillsToolsSource } from './types'
 
 const PAGE_SHELL =
   '<div class="app"></div>'
