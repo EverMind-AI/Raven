@@ -20,6 +20,8 @@ from typing import Any
 
 from raven.context_engine.segments.render import RUNTIME_CONTEXT_TAG
 from raven.utils.image_store import expand_images
+from raven.utils.wire import WIRE_AFTER_FIELD as WIRE_AFTER_FIELD
+from raven.utils.wire import WIRE_CONTENT_FIELD as WIRE_CONTENT_FIELD
 
 RUNTIME_CONTEXT_KEY = "_runtime_context"
 """Set on the envelope the assembler built, holding the lines it opened with.
@@ -31,22 +33,6 @@ allowlist of keys). ``_save_turn`` pops it, so it never reaches the session.
 RUNTIME_CONTEXT_FIELD = "runtime_context"
 """The same lines as the session entry stores them, beside the user's words."""
 
-WIRE_CONTENT_FIELD = "wire_content"
-"""The body a user or tool row was sent with, when the display content differs.
-
-``content`` keeps what a reader sees (the user's words, the filed image note);
-this keeps the body the model received (an attachment note, a hook rewrite, the
-live withdrawn-picture note, a tool body the save cap would shorten). The
-history projection replays it instead of ``content``.
-"""
-
-WIRE_AFTER_FIELD = "wire_after"
-"""Provider-safe rows a recovery appended after a kept row.
-
-The empty placeholder, the nudge, the continuation: the model was shown them,
-but they are scaffolding and never become display rows. They ride the kept row
-they followed and the history projection inserts them back in place.
-"""
 
 PROVIDER_MESSAGE_KEYS = frozenset(
     {

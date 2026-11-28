@@ -701,3 +701,37 @@ def test_recovery_scaffolding_replays_after_the_row_it_followed(tmp_path):
     assert [r["content"] for r in rows[0]["wire_after"]] == ["(empty)", "nudge"]
     replayed = HistoryTrimmer.history_from_ids(session.messages, list(range(len(session.messages))))
     assert [m["content"] for m in replayed] == ["result", "(empty)", "nudge", "done"]
+
+
+def test_a_list_shaped_question_round_trips_through_the_replay(tmp_path):
+    """The words and the runtime block are filed apart and replayed as blocks.
+
+    A block-shaped question must come back block-shaped: the display row keeps
+    the blocks the user's words were filed as, the runtime block is filed beside
+    them, and the projection puts it back in front -- the same list the turn was
+    sent, not a string the two were flattened into.
+    """
+    from raven.agent.context import ContextBuilder
+    from raven.context_engine.history_trimmer import HistoryTrimmer
+
+    loop = _loop(tmp_path, _ScriptedProvider([_text("unused")]))
+    session = loop.sessions.get_or_create("cli:c")
+    tag = ContextBuilder._RUNTIME_CONTEXT_TAG
+    lines = f"{tag}\nCurrent Time: now"
+    question = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": lines},
+            {"type": "text", "text": "what is this?"},
+        ],
+        "_runtime_context": lines,
+    }
+
+    loop._save_turn(session, [question], 0, inbound_original="what is this?")
+    loop.sessions.save(session)
+    rows = _filed(loop.sessions.session_path("cli:c"))
+
+    assert rows[0]["content"] == [{"type": "text", "text": "what is this?"}]
+    assert rows[0]["runtime_context"] == lines
+    [replayed] = HistoryTrimmer.history_from_ids(rows, [0])
+    assert replayed["content"] == question["content"]

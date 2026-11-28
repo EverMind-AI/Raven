@@ -17,6 +17,7 @@ import tiktoken
 
 from raven.utils.image_store import image_tokens
 from raven.utils.images import estimate_content_part_tokens
+from raven.utils.wire import WIRE_AFTER_FIELD, WIRE_CONTENT_FIELD
 
 # A cl100k regex piece cannot cross a newline followed by non-whitespace.
 # These boundaries preserve full-prompt tokenization, unlike message boundaries.
@@ -179,7 +180,7 @@ def estimate_prompt_tokens(
 
 def estimate_message_tokens(message: dict[str, Any]) -> int:
     """Estimate prompt tokens contributed by one persisted message."""
-    wire = message.get("wire_content")
+    wire = message.get(WIRE_CONTENT_FIELD)
     content = message.get("content") if wire is None else wire
     parts: list[str] = []
     extra_tokens = image_tokens(message)
@@ -215,7 +216,7 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
     if message.get("thinking_blocks"):
         parts.append(json.dumps(message["thinking_blocks"], ensure_ascii=False))
 
-    wire_after = message.get("wire_after")
+    wire_after = message.get(WIRE_AFTER_FIELD)
     wire_tokens = 0
     if isinstance(wire_after, list):
         wire_tokens = sum(estimate_message_tokens(row) for row in wire_after if isinstance(row, dict))
