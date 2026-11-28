@@ -407,7 +407,9 @@ def _wire_content_for_row(role: str, content: Any) -> Any:
 
     The runtime block and the scratch are not part of it; both have their own
     replay fields. Pictures are archived, so the wire form stores the same
-    placeholders the display form does and ``_image_refs`` restores them.
+    placeholders the display form does and ``_image_refs`` restores them. A
+    string tool body gets none: the only rewrite this save makes to it is the
+    cap, and the capped form is what the row files.
     """
     from raven.utils.image_store import capture_images
 
@@ -416,7 +418,11 @@ def _wire_content_for_row(role: str, content: Any) -> Any:
     if role == "tool":
         if isinstance(content, list):
             return capture_images(content)[0]
-        return content
+        # A string body is filed as the save cap bounds it. That cap is the
+        # fallback for content no model call bounded, so the bounded form is
+        # the record: keeping the whole body beside it stores the result twice
+        # and replays bytes the cap removed.
+        return None
     return None
 
 
@@ -4781,13 +4787,13 @@ class TurnPathMixin:
             stored = already_filed.get(row_id)
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
+            # This row was filed in the user's words before a hook's view was
+            # stripped. Preparing it again must strip the same view, not file
+            # the memo or the reminder over what the user sent. It is restored
+            # below, after the sent form is read: the row is prepared from the
+            # live one (as on the opening write, where nothing is restored
+            # yet), so the wire form it keeps is the body the model received.
             restored = inbound_filed.get(row_id) if stored is not None and inbound_filed else None
-            if restored is not None:
-                # This row was filed in the user's words before a hook's view
-                # was stripped. Preparing it again must strip the same view,
-                # not file the memo or the reminder over what the user sent.
-                content = entry["content"] = restored
-                entry.pop(ATTACHMENT_NOTES_KEY, None)
             if role not in ("tool", "user") and isinstance(content, list):
                 # The two paths below archive a picture's bytes; a row of any
                 # other role keeps no refs, so it gets the placeholder-only
@@ -4940,6 +4946,12 @@ class TurnPathMixin:
                     # rewrite a multimodal question as text and lose the
                     # placeholder.
                     inbound_filed[row_id] = entry.get("content")
+            if restored is not None:
+                # Back to the display form now that the sent form is read: the
+                # wire body above is the live row's, so restoring first would
+                # leave nothing for it to be read from on a string inbound.
+                entry["content"] = restored
+                entry.pop(ATTACHMENT_NOTES_KEY, None)
             _file_wire_content(entry, wire_content)
             if role == "user" and runtime_lines and not carries_runtime_context(entry.get("content"), runtime_lines):
                 # Filed beside the user's words, which ``content`` keeps alone, so

@@ -261,6 +261,19 @@ class TestATurn:
         assert HistoryTrimmer.structural_errors(segment.history) == []
         assert not (tmp_path / "memory").exists()
 
+    async def test_history_kept_counts_the_rows_shipped_not_the_ids(self, tmp_path: Path) -> None:
+        """A kept row that replays scaffolding ships more rows than it has ids.
+
+        The count says what the model was sent, so it follows the shipped list.
+        """
+        session = _session(2)
+        session[0]["wire_after"] = [{"role": "user", "content": "nudge"}]
+        segment = await _builder(tmp_path).build(_ctx(session, scoped=False))
+
+        assert segment.meta["compaction_action"] == "unscoped"
+        assert len(segment.history) == len(session) + 1
+        assert segment.meta["history_kept"] == len(segment.history)
+
     async def test_a_model_switch_reaches_its_trimmer(self, tmp_path: Path) -> None:
         builder = _builder(tmp_path)
         builder.set_context_window(4_096)

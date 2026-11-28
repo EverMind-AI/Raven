@@ -414,6 +414,21 @@ class TestKeepWithin:
         for edge in (ranges.compact.start, ranges.compact.stop):
             assert edge in (0, len(ledger)) or ledger.entries[edge].role == "user"
 
+    def test_a_kept_row_replays_its_scaffolding_into_more_than_one_row(self) -> None:
+        """``project`` is one message per kept row only when no row carries any.
+
+        A row the model was shown scaffolding after replays it in place, so the
+        result can hold more messages than the indices it was asked for.
+        """
+        messages = _conversation(10)
+        kept = [0, 1, 2, 3]
+        messages[0]["wire_after"] = [{"role": "user", "content": "nudge"}]
+
+        projected = project(messages, kept)
+
+        assert len(projected) == len(kept) + 1
+        assert [message.get("content") for message in projected[:2]] == [messages[0]["content"], "nudge"]
+
 
 # ---------------------------------------------------------------------------
 # A session that reuses tool-call ids

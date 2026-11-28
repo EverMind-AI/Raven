@@ -201,7 +201,13 @@ def _as_ranges(indices: "set[int] | frozenset[int]") -> tuple[range, ...]:
 
 
 def project(messages: list[dict[str, Any]], kept: "tuple[int, ...] | list[int]") -> list[dict[str, Any]]:
-    """The kept indices as a provider-safe, adjacency-closed message list."""
+    """The kept indices as a provider-safe, adjacency-closed message list.
+
+    Not one message per kept index: a kept row that carries scaffolding the
+    model was shown (``wire_after``) replays it in place, so the result can
+    hold more messages than ``kept``. Callers that pair messages with indices
+    by position use :meth:`HistoryTrimmer.history_from_ids_with_sources`.
+    """
     return HistoryTrimmer.history_from_ids(messages, HistoryTrimmer.canonical_ids(messages, list(kept)))
 
 

@@ -17,7 +17,7 @@ from raven.agent.hook import AgentHook, HookDecision
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
 from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
-from raven.spine import ChatType, Origin, Source, TurnRequest
+from raven.spine import ChatType, Media, Origin, Source, TurnRequest
 
 
 class _ScriptedProvider:
@@ -633,6 +633,92 @@ def test_an_attachment_note_is_replayed_as_sent(tmp_path):
     assert rows[0]["wire_content"] == sent
     [replayed] = HistoryTrimmer.history_from_ids(rows, [0])
     assert replayed["content"] == f"{lines}\n\n{sent}"
+
+
+@pytest.mark.asyncio
+async def test_a_hook_rewrite_survives_the_closing_write(tmp_path):
+    """A whole turn files the memo, not only the opening write.
+
+    The opening write files the sent form; the closing write prepares the same
+    row again from the live one, where the hook's view is what the model was
+    sent. Restoring the user's words first left nothing to read the sent form
+    from on a string inbound, and the closing write dropped it.
+    """
+
+    from raven.context_engine.history_trimmer import HistoryTrimmer
+
+    class Rewrite(AgentHook):
+        async def before_user_inbound(self, ctx):
+            return HookDecision(modified_content="a memo the hook added\n\nhi")
+
+    seen: list[dict] = []
+    holder: dict[str, Path] = {}
+
+    class Watch(AgentHook):
+        async def before_iteration(self, ctx):
+            path = holder.get("path")
+            if path is not None and path.exists():
+                seen.extend(row for row in _filed(path) if row.get("role") == "user")
+            return HookDecision()
+
+    loop = _loop(tmp_path, _ScriptedProvider([_text("the answer")]), [Rewrite(), Watch()])
+    holder["path"] = loop.sessions.session_path("cli:c")
+    await loop._process_message(_req())
+
+    sent = "a memo the hook added\n\nhi"
+    assert seen and all(row.get("wire_content") == sent for row in seen), "the opening write did not file the sent form"
+    rows = _filed(holder["path"])
+    [row] = [r for r in rows if r.get("role") == "user"]
+    assert row["content"] == "hi", "the display form left the user's words"
+    assert row["wire_content"] == sent, "the closing write dropped the sent form"
+    [replayed] = [m for m in HistoryTrimmer.history_from_ids(rows, list(range(len(rows)))) if m["role"] == "user"]
+    assert replayed["content"].endswith(sent), "the memo did not survive the replay"
+
+
+@pytest.mark.asyncio
+async def test_an_attachment_note_survives_the_closing_write(tmp_path):
+    """The closing write keeps the note the opening one filed for the same turn."""
+    from raven.context_engine.history_trimmer import HistoryTrimmer
+
+    notes = tmp_path / "notes.txt"
+    notes.write_text("the attached file\n", encoding="utf-8")
+    req = TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="cli", chat_id="c", sender_id="u", chat_type=ChatType.DM),
+        text="summarize this",
+        media=(Media(path=str(notes), mime="text/plain", kind="file"),),
+    )
+
+    loop = _loop(tmp_path, _ScriptedProvider([_text("the answer")]))
+    await loop._process_message(req)
+
+    sent = f"summarize this\n\n[Attachment: notes.txt (path: {notes})]"
+    rows = _filed(loop.sessions.session_path("cli:c"))
+    [row] = [r for r in rows if r.get("role") == "user"]
+    assert row["content"] == "summarize this"
+    assert row["wire_content"] == sent, "the closing write dropped the attachment note"
+    [replayed] = [m for m in HistoryTrimmer.history_from_ids(rows, list(range(len(rows)))) if m["role"] == "user"]
+    assert replayed["content"].endswith(sent)
+
+
+def test_a_capped_tool_body_is_filed_once(tmp_path):
+    """The cap is the record; the whole body beside it stored the result twice
+    and handed a later replay what the cap removed."""
+    from raven.context_engine.history_trimmer import HistoryTrimmer
+
+    loop = _loop(tmp_path, _ScriptedProvider([_text("unused")]))
+    loop._TOOL_RESULT_MAX_CHARS = 40
+    session = loop.sessions.get_or_create("cli:c")
+    body = "x" * 4_000
+
+    loop._save_turn(session, [{"role": "tool", "tool_call_id": "c1", "name": "t", "content": body}], 0)
+    loop.sessions.save(session)
+
+    [row] = [r for r in _filed(loop.sessions.session_path("cli:c")) if r.get("role") == "tool"]
+    assert len(row["content"]) < len(body)
+    assert "wire_content" not in row, "the whole body was filed beside the capped one"
+    [replayed] = HistoryTrimmer.history_from_ids(session.messages, [0])
+    assert replayed["content"] == row["content"]
 
 
 def test_a_withdrawn_note_keeps_the_sent_wording_for_replay(tmp_path):
