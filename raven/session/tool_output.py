@@ -20,6 +20,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -228,28 +229,234 @@ def _visible_body(preview: str, direction: str) -> str:
     return f"{preview}{TOOL_RESULT_TRUNCATION_MARKER}"
 
 
+_TOKEN_QUERY = 0x0008
+_TOKEN_USER = 1
+_SDDL_REVISION_1 = 1
+_SE_FILE_OBJECT = 1
+_DACL_SECURITY_INFORMATION = 0x4
+_PROTECTED_DACL_SECURITY_INFORMATION = 0x80000000
+_GENERIC_WRITE = 0x40000000
+_CREATE_NEW = 1
+_FILE_ATTRIBUTE_NORMAL = 0x80
+_ERROR_ALREADY_EXISTS = 183
+
+
+@cache
+def _win32_owner_security() -> tuple[Any, Any, Any, Any, Any]:  # pragma: no cover - WinDLL does not load off Windows
+    """Win32 handles and a cached protected owner-only security descriptor.
+
+    Cached once per process so ctypes does not register a fresh pointer type per
+    tool-output write and the converted descriptor buffer stays alive.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    class _SidAndAttributes(ctypes.Structure):
+        _fields_ = [("Sid", ctypes.c_void_p), ("Attributes", wintypes.DWORD)]
+
+    class _TokenUser(ctypes.Structure):
+        _fields_ = [("User", _SidAndAttributes)]
+
+    class _SecurityAttributes(ctypes.Structure):
+        _fields_ = [
+            ("nLength", wintypes.DWORD),
+            ("lpSecurityDescriptor", ctypes.c_void_p),
+            ("bInheritHandle", wintypes.BOOL),
+        ]
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    kernel32.GetCurrentProcess.argtypes = []
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    kernel32.OpenProcessToken.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+    kernel32.CreateDirectoryW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(_SecurityAttributes)]
+    kernel32.CreateDirectoryW.restype = wintypes.BOOL
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(_SecurityAttributes),
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+
+    advapi32.GetTokenInformation.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.GetTokenInformation.restype = wintypes.BOOL
+    advapi32.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
+    advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+    advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(wintypes.ULONG),
+    ]
+    advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
+    advapi32.GetSecurityDescriptorDacl.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.BOOL),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(wintypes.BOOL),
+    ]
+    advapi32.GetSecurityDescriptorDacl.restype = wintypes.BOOL
+    advapi32.SetNamedSecurityInfoW.argtypes = [
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    ]
+    advapi32.SetNamedSecurityInfoW.restype = wintypes.DWORD
+
+    token = wintypes.HANDLE()
+    if not kernel32.OpenProcessToken(kernel32.GetCurrentProcess(), _TOKEN_QUERY, ctypes.byref(token)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    sid_str_ptr = wintypes.LPWSTR()
+    try:
+        needed = wintypes.DWORD(0)
+        if not advapi32.GetTokenInformation(token, _TOKEN_USER, None, 0, ctypes.byref(needed)) and not needed.value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        token_buf = ctypes.create_string_buffer(needed.value)
+        if not advapi32.GetTokenInformation(token, _TOKEN_USER, token_buf, needed.value, ctypes.byref(needed)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        token_user = ctypes.cast(token_buf, ctypes.POINTER(_TokenUser)).contents
+        if not advapi32.ConvertSidToStringSidW(token_user.User.Sid, ctypes.byref(sid_str_ptr)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        sid_str = sid_str_ptr.value
+    finally:
+        if sid_str_ptr.value is not None:
+            kernel32.LocalFree(ctypes.cast(sid_str_ptr, ctypes.c_void_p))
+        kernel32.CloseHandle(token)
+
+    if not sid_str:
+        raise OSError("could not resolve current Windows user SID")
+    descriptor = ctypes.c_void_p()
+    # Include (OI)(CI) so tightening an existing directory also updates
+    # inherited ACEs on pre-existing child files rather than stripping them to
+    # an empty DACL.
+    sddl = f"D:P(A;OICI;FA;;;{sid_str})"
+    if not advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        sddl, _SDDL_REVISION_1, ctypes.byref(descriptor), None
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+    dacl_present = wintypes.BOOL(False)
+    dacl_ptr = ctypes.c_void_p()
+    dacl_defaulted = wintypes.BOOL(False)
+    if (
+        not advapi32.GetSecurityDescriptorDacl(
+            descriptor, ctypes.byref(dacl_present), ctypes.byref(dacl_ptr), ctypes.byref(dacl_defaulted)
+        )
+        or not dacl_present.value
+        or not dacl_ptr.value
+    ):
+        raise OSError("owner-only security descriptor is missing a DACL")
+    return advapi32, kernel32, _SecurityAttributes, descriptor, dacl_ptr
+
+
+def _mkdir_owner_only_windows(directory: Path) -> None:  # pragma: no cover - WinDLL does not load off Windows
+    """Create ``directory`` with a protected owner-only DACL when it does not exist."""
+    import ctypes
+
+    directory.parent.mkdir(parents=True, exist_ok=True)
+    _, kernel32, security_attributes, descriptor, _ = _win32_owner_security()
+    attributes = security_attributes(ctypes.sizeof(security_attributes), descriptor.value, False)
+    if not kernel32.CreateDirectoryW(str(directory), ctypes.byref(attributes)):
+        err = ctypes.get_last_error()
+        if err != _ERROR_ALREADY_EXISTS:
+            raise ctypes.WinError(err)
+
+
+def _protect_owner_only_windows(path: Path) -> None:  # pragma: no cover - WinDLL does not load off Windows
+    """Tighten an existing directory's DACL to protected owner-only access."""
+    import ctypes
+
+    advapi32, _, _, _, dacl_ptr = _win32_owner_security()
+    rc = advapi32.SetNamedSecurityInfoW(
+        str(path),
+        _SE_FILE_OBJECT,
+        _DACL_SECURITY_INFORMATION | _PROTECTED_DACL_SECURITY_INFORMATION,
+        None,
+        None,
+        dacl_ptr,
+        None,
+    )
+    if rc:
+        raise ctypes.WinError(rc)
+
+
+def _create_owner_only_windows(path: Path) -> int:  # pragma: no cover - WinDLL does not load off Windows
+    """Create a new file at ``path`` holding a protected owner-only DACL from creation."""
+    import ctypes
+    import msvcrt
+
+    _, kernel32, security_attributes, descriptor, _ = _win32_owner_security()
+    attributes = security_attributes(ctypes.sizeof(security_attributes), descriptor.value, False)
+    handle = kernel32.CreateFileW(
+        str(path), _GENERIC_WRITE, 0, ctypes.byref(attributes), _CREATE_NEW, _FILE_ATTRIBUTE_NORMAL, None
+    )
+    if handle is None or handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return msvcrt.open_osfhandle(handle, os.O_WRONLY)
+    except BaseException:
+        kernel32.CloseHandle(handle)
+        raise
+
+
 def _file_full_output(workspace: Path, body: str, *, now: datetime | None) -> Path | None:
     directory = tool_output_dir(workspace)
     try:
-        # A pre-existing tool-output symlink would make mkdir, chmod, open and
-        # prune all act on its target. Refuse it, and re-check containment after
-        # mkdir so a path that escaped through any other link is refused too.
-        if directory.is_symlink():
-            raise OSError(f"refusing symlinked tool-output directory: {directory}")
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # A pre-existing tool-output symlink or junction would make mkdir,
+        # chmod, open and prune all act on its target. Refuse it, and re-check
+        # containment after mkdir so a path that escaped through any other link
+        # is refused too. is_symlink() is False for a junction, so it needs its
+        # own test: only a junction passes the containment check while still
+        # redirecting the directory.
+        if directory.is_symlink() or directory.is_junction():
+            raise OSError(f"refusing a link as the tool-output directory: {directory}")
+        is_windows = os.name == "nt"
+        if is_windows:
+            _mkdir_owner_only_windows(directory)
+        else:
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         root = workspace.resolve()
-        if directory.is_symlink() or not directory.resolve().is_relative_to(root):
-            raise OSError(f"tool-output directory escapes the workspace: {directory}")
+        if directory.is_symlink() or directory.is_junction() or not directory.resolve().is_relative_to(root):
+            raise OSError(f"tool-output directory escapes the workspace or is a link: {directory}")
         try:
-            directory.chmod(0o700)
-        except OSError:
-            pass
+            if is_windows:
+                _protect_owner_only_windows(directory)
+            else:
+                directory.chmod(0o700)
+        except OSError as exc:
+            if is_windows:
+                logger.warning(
+                    "Could not tighten the tool-output directory {} to owner-only; it keeps its wider ACL: {}",
+                    directory,
+                    exc,
+                )
         path = directory / f"{TOOL_OUTPUT_PREFIX}{uuid.uuid4().hex}.txt"
-        # O_EXCL refuses an existing path (including a symlink), and the mode is
-        # applied at creation: there is no window where the file is wider than
-        # owner-only on POSIX, which a create-then-chmod would leave. Windows
-        # inherits the workspace directory's ACL.
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        # O_EXCL / CREATE_NEW refuses an existing path (including a symlink),
+        # and the mode / protected owner-only DACL is applied at creation:
+        # there is no window where the file is wider than owner-only.
+        if is_windows:
+            descriptor = _create_owner_only_windows(path)
+        else:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         # newline="" keeps the body's own line endings; text mode on Windows
         # would turn every \n into \r\n and double an existing \r\n.
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:

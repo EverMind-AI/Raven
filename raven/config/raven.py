@@ -517,8 +517,8 @@ class ContextConfig(_Base):
     marker and any trusted note after it.
 
     When the cut fires, the full body is written to
-    ``<workspace>/tool-output/tool_<id>.txt`` (owner-only on POSIX; Windows
-    inherits the workspace directory's ACL; pruned once it is seven days old).
+    ``<workspace>/tool-output/tool_<id>.txt`` (owner-only on POSIX and on
+    Windows via a protected owner-only DACL; pruned once it is seven days old).
     The model-visible content becomes a bounded preview
     followed by a trusted hint naming that file. The preview is what the
     session files and replays; the file is a retrieval aid, not part of the
