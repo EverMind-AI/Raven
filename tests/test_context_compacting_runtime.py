@@ -261,6 +261,19 @@ class TestATurn:
         assert HistoryTrimmer.structural_errors(segment.history) == []
         assert not (tmp_path / "memory").exists()
 
+    async def test_history_kept_counts_the_rows_shipped_not_the_ids(self, tmp_path: Path) -> None:
+        """A kept row that replays scaffolding ships more rows than it has ids.
+
+        The count says what the model was sent, so it follows the shipped list.
+        """
+        session = _session(2)
+        session[0]["wire_after"] = [{"role": "user", "content": "nudge"}]
+        segment = await _builder(tmp_path).build(_ctx(session, scoped=False))
+
+        assert segment.meta["compaction_action"] == "unscoped"
+        assert len(segment.history) == len(session) + 1
+        assert segment.meta["history_kept"] == len(segment.history)
+
     async def test_a_model_switch_reaches_its_trimmer(self, tmp_path: Path) -> None:
         builder = _builder(tmp_path)
         builder.set_context_window(4_096)
@@ -1371,3 +1384,145 @@ def test_the_summary_gate_uses_the_summary_model(tmp_path: Path, monkeypatch) ->
 
     assert builder._summary_gates() == (False, True)
     assert seen == ["blind-summary"]
+
+
+# ---------------------------------------------------------------------------
+# A recovery row: replay keeps the scaffolding, bookkeeping keeps one per id
+# ---------------------------------------------------------------------------
+
+
+def _recovered(exchanges: int, *, pinned: bool = False, ahead_of: int | None = None) -> list[dict]:
+    """``_session`` with the scaffolding a recovery appended riding one row.
+
+    ``ahead_of`` adds a second recovery turn on that id, for the boundary flag:
+    the cut this fixture's window produces lands just after it.
+    """
+    messages = _session(exchanges, pinned=pinned)
+    messages[0]["wire_after"] = [
+        {"role": "assistant", "content": "(empty)"},
+        {"role": "user", "content": "continue"},
+    ]
+    if ahead_of is not None:
+        messages[ahead_of]["wire_after"] = [
+            {"role": "assistant", "content": "(empty) at cut"},
+            {"role": "user", "content": "continue at cut"},
+        ]
+    return messages
+
+
+class TestRecoveryScaffolding:
+    """A kept row with ``wire_after`` replays rows that are not ids of their own.
+
+    The scaffolding has to reach the provider in place, so the history is not
+    one row per id -- but pinned marks, the checkpoint position, the key list
+    and the boundary flag are all decided by id, and every one of them has to
+    keep seeing one unit per id.
+    """
+
+    async def test_the_scaffolding_ships_after_the_row_it_rode(self, tmp_path: Path) -> None:
+        session = _recovered(4)
+        segment = await _builder(tmp_path).build(_ctx(session))
+        assert [m["content"] for m in segment.history[:4]] == [
+            session[0]["content"],
+            "(empty)",
+            "continue",
+            session[1]["content"],
+        ]
+
+    async def test_the_pinned_exchange_keeps_its_marks(self, tmp_path: Path) -> None:
+        segment = await _builder(tmp_path, config=_fold_only()).build(_ctx(_recovered(80, pinned=True)))
+        assert [m["role"] for m in segment.history if m.get(HISTORY_PINNED_KEY)] == ["assistant", "tool"]
+
+    def test_the_summary_input_names_every_row(self, tmp_path: Path) -> None:
+        from raven.context_engine.history.compacting.ledger import MessageLedger
+        from raven.context_engine.history.compacting.writer import session_message_key
+
+        session = _recovered(4)
+        builder = _builder(tmp_path, config=_config(summary=ContextSummaryConfig(mode="eager")))
+        prefix = AssembledPrefix(
+            system_prefix="system prompt",
+            user_message={"role": "user", "content": "what now"},
+            tool_defs=[],
+        )
+        keys, fresh = builder._summary_input(
+            prefix, session, MessageLedger(session), None, None, frozenset(), through=1
+        )
+
+        assert len(keys) == len(fresh) == 5
+        assert [m["content"] for m in fresh[1:]] == [
+            session[0]["content"],
+            "(empty)",
+            "continue",
+            session[1]["content"],
+        ]
+        assert keys[1:4] == (session_message_key(0), session_message_key(0), session_message_key(0))
+        assert keys[4] == session_message_key(1)
+
+    def test_the_key_list_has_one_entry_per_shipped_row(self) -> None:
+        from raven.context_engine.history.compacting.writer import SYSTEM_KEY, USER_KEY, session_message_key
+        from raven.context_engine.history_trimmer import TrimOutcome
+
+        session = _recovered(1)
+        ids = list(range(len(session)))
+        history, sources = HistoryTrimmer.history_from_ids_with_sources(session, ids)
+        outcome = TrimOutcome(
+            history=history,
+            included_ids=ids,
+            estimated_tokens=0,
+            max_prompt_tokens=1,
+            source="stub",
+            row_sources=sources,
+        )
+
+        assert CompactingHistoryBuilder._keys(outcome, None, 0) == (
+            SYSTEM_KEY,
+            session_message_key(0),
+            session_message_key(0),
+            session_message_key(0),
+            session_message_key(1),
+            USER_KEY,
+        )
+
+    async def test_the_checkpoint_lands_after_the_whole_scaffolded_head(self, tmp_path: Path) -> None:
+        session = _recovered(80)
+        segment = await _builder(tmp_path, config=_fold_only()).build(_ctx(session))
+
+        at = next(i for i, m in enumerate(segment.history) if m.get(HISTORY_CHECKPOINT_KEY))
+        assert at == 4
+        assert segment.history[at - 1]["content"] == session[1]["content"]
+
+    def test_checkpoint_position_counts_rows_not_ids(self) -> None:
+        from raven.context_engine.history.compacting.runtime import _checkpoint_position
+
+        assert _checkpoint_position([1, 2, 3], [0, 0, 0, 1, 2], 2, {"role": "user", "content": "fold"}) == 3
+
+    def test_the_boundary_flag_lands_on_the_last_row_before_the_cut(self) -> None:
+        from raven.context_engine.history.compacting.runtime import _flag_compaction_boundary
+
+        history = [
+            {"role": "user", "content": "q0"},
+            {"role": "assistant", "content": "(empty)"},
+            {"role": "user", "content": "a0"},
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"},
+        ]
+        flagged = _flag_compaction_boundary(
+            history,
+            included=[5, 6, 7, 8],
+            sources=[0, 1, 1, 2, 3],
+            cut=7,
+            checkpoint_at=None,
+        )
+
+        assert [i for i, m in enumerate(flagged) if m.get(COMPACTION_BOUNDARY_KEY)] == [2]
+        assert flagged[2]["content"] == "a0"
+
+    async def test_the_boundary_flag_lands_on_the_scaffold_at_the_cut(self, tmp_path: Path) -> None:
+        """The flag marks the last row the next summary replays; when the cut
+        row's predecessor carries scaffolding, that is the scaffold's last row."""
+        config = ContextConfig(cache=ContextCacheConfig(compaction_breakpoint=True))
+        session = _recovered(TestTheSummaryBreakpointFlag.PAST_TARGET, ahead_of=27)
+        segment = await _builder(tmp_path, config=config).build(_ctx(session))
+
+        [flagged] = [i for i, m in enumerate(segment.history) if m.get(COMPACTION_BOUNDARY_KEY)]
+        assert segment.history[flagged]["content"] == "continue at cut"

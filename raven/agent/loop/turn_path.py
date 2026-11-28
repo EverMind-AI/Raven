@@ -351,6 +351,47 @@ def _content_digest(content: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _row_digest(entry: dict[str, Any]) -> str:
+    """The display and replay forms a row was filed with.
+
+    A row can change only in its wire form -- a withdrawn picture's note is
+    rewritten in place -- so the digest covers both, and the rewrite reaches
+    the file instead of stopping at a matching display body.
+    """
+    from raven.context_engine.runtime_context import WIRE_AFTER_FIELD, WIRE_CONTENT_FIELD
+
+    return _content_digest([entry.get("content"), entry.get(WIRE_CONTENT_FIELD), entry.get(WIRE_AFTER_FIELD)])
+
+
+def _attach_wire_after(messages: list[dict[str, Any]]) -> None:
+    """Attach recovery scaffolding to the kept row it followed, for replay only.
+
+    The model was shown the placeholder and the nudge; the next turn has to
+    see them again. They never become display rows: ``history_from_ids``
+    inserts them after the row they followed.
+    """
+    from raven.context_engine.runtime_context import WIRE_AFTER_FIELD, provider_row
+
+    previous: dict[str, Any] | None = None
+    after: dict[int, list[dict[str, Any]]] = {}
+    for message in messages:
+        if message.get("_recovery_synthetic"):
+            if previous is not None:
+                row = provider_row(message)
+                if row.get("role"):
+                    after.setdefault(id(previous), []).append(row)
+            continue
+        if message.get("role") == "assistant" and not message.get("content") and not message.get("tool_calls"):
+            continue
+        if message.get(ATTACHED_IMAGE_KEY):
+            continue
+        previous = message
+    for message in messages:
+        rows = after.get(id(message))
+        if rows:
+            message[WIRE_AFTER_FIELD] = rows
+
+
 def _is_runtime_context_block(part: Any) -> bool:
     """Whether a content block is the runtime-context prefix assembly prepended."""
     return (
@@ -359,6 +400,40 @@ def _is_runtime_context_block(part: Any) -> bool:
         and isinstance(part.get("text"), str)
         and part["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG)
     )
+
+
+def _wire_content_for_row(role: str, content: Any) -> Any:
+    """The body a user or tool row was sent with, before the save rewrites it.
+
+    The runtime block and the scratch are not part of it; both have their own
+    replay fields. Pictures are archived, so the wire form stores the same
+    placeholders the display form does and ``_image_refs`` restores them. A
+    string tool body gets none: the only rewrite this save makes to it is the
+    cap, and the capped form is what the row files.
+    """
+    from raven.utils.image_store import capture_images
+
+    if role == "user" and isinstance(content, list):
+        return capture_images([part for part in content if not _is_runtime_context_block(part)])[0]
+    if role == "tool":
+        if isinstance(content, list):
+            return capture_images(content)[0]
+        # A string body is filed as the save cap bounds it. That cap is the
+        # fallback for content no model call bounded, so the bounded form is
+        # the record: keeping the whole body beside it stores the result twice
+        # and replays bytes the cap removed.
+        return None
+    return None
+
+
+def _file_wire_content(entry: dict[str, Any], wire_content: Any) -> None:
+    """File the sent body beside the display one, or clear it when they agree."""
+    from raven.context_engine.runtime_context import WIRE_CONTENT_FIELD
+
+    if wire_content is not None and wire_content != entry.get("content"):
+        entry[WIRE_CONTENT_FIELD] = wire_content
+    else:
+        entry.pop(WIRE_CONTENT_FIELD, None)
 
 
 def _archive_tool_images(entry: dict[str, Any], content: Any) -> Any:
@@ -3234,6 +3309,9 @@ class TurnPathMixin:
                 error_full = None
                 no_output = False
 
+        # The scaffolding leaves the display rows here; what the model saw rides
+        # the kept row it followed, so replay can put it back in place.
+        _attach_wire_after(messages)
         if any(any(m.get(k) for k in _TURN_TRANSIENT_KEYS) for m in messages):
             messages = [m for m in messages if not any(m.get(k) for k in _TURN_TRANSIENT_KEYS)]
 
@@ -4687,6 +4765,7 @@ class TurnPathMixin:
         # after its marker would outlive the take-back as an orphan.
         if final and not _taken_back_whole(messages, skip):
             _file_unanswered(messages)
+        _attach_wire_after(messages)
         written_ids: list[str] = []
         already_filed, batch = _filing_batch(session, messages, skip)
         filed_contents = getattr(session, "_filed_contents", None)
@@ -4708,13 +4787,13 @@ class TurnPathMixin:
             stored = already_filed.get(row_id)
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
+            # This row was filed in the user's words before a hook's view was
+            # stripped. Preparing it again must strip the same view, not file
+            # the memo or the reminder over what the user sent. It is restored
+            # below, after the sent form is read: the row is prepared from the
+            # live one (as on the opening write, where nothing is restored
+            # yet), so the wire form it keeps is the body the model received.
             restored = inbound_filed.get(row_id) if stored is not None and inbound_filed else None
-            if restored is not None:
-                # This row was filed in the user's words before a hook's view
-                # was stripped. Preparing it again must strip the same view,
-                # not file the memo or the reminder over what the user sent.
-                content = entry["content"] = restored
-                entry.pop(ATTACHMENT_NOTES_KEY, None)
             if role not in ("tool", "user") and isinstance(content, list):
                 # The two paths below archive a picture's bytes; a row of any
                 # other role keeps no refs, so it gets the placeholder-only
@@ -4798,6 +4877,10 @@ class TurnPathMixin:
                 entry["metadata"] = tool_metadata
             # Provenance of pictures is turn-only; the pictures are filed below.
             entry.pop(IMAGE_SOURCES_KEY, None)
+            # The body the model was sent, before the save rewrites the display
+            # form. The runtime block is not part of it; the replay joins that
+            # back from its own field.
+            wire_content: Any = _wire_content_for_row(role, content)
             # A withdrawn picture's note is filed without this turn's reasons: on
             # the tool-result transport the message outlives the turn, and a
             # resumed session would otherwise replay "this turn's pictures outgrew
@@ -4834,6 +4917,7 @@ class TurnPathMixin:
                     parts = content.split("\n\n", 1)
                     if len(parts) > 1 and parts[1].strip():
                         entry["content"] = parts[1]
+                        wire_content = parts[1]
                     else:
                         continue
                 files_the_inbound = inbound_rewrite_pending
@@ -4862,6 +4946,13 @@ class TurnPathMixin:
                     # rewrite a multimodal question as text and lose the
                     # placeholder.
                     inbound_filed[row_id] = entry.get("content")
+            if restored is not None:
+                # Back to the display form now that the sent form is read: the
+                # wire body above is the live row's, so restoring first would
+                # leave nothing for it to be read from on a string inbound.
+                entry["content"] = restored
+                entry.pop(ATTACHMENT_NOTES_KEY, None)
+            _file_wire_content(entry, wire_content)
             if role == "user" and runtime_lines and not carries_runtime_context(entry.get("content"), runtime_lines):
                 # Filed beside the user's words, which ``content`` keeps alone, so
                 # the history projection replays the block this turn sent. Lines
@@ -4874,7 +4965,7 @@ class TurnPathMixin:
             entry.setdefault("timestamp", self._now_fn().isoformat())
             session.record(entry)
             if filed_contents is not None:
-                filed_contents[row_id] = _content_digest(entry.get("content"))
+                filed_contents[row_id] = _row_digest(entry)
             if entry.get("_row_id"):
                 written_ids.append(str(entry["_row_id"]))
         session.updated_at = self._now_fn()
@@ -4890,7 +4981,7 @@ class TurnPathMixin:
         next save. False when the content is unchanged or the stored copy is no
         longer in this session.
         """
-        digest = _content_digest(entry.get("content"))
+        digest = _row_digest(entry)
         filed = getattr(session, "_filed_contents", None)
         if filed is None or filed.get(row_id) == digest:
             return False

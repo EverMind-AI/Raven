@@ -20,6 +20,8 @@ from typing import Any
 
 from raven.context_engine.segments.render import RUNTIME_CONTEXT_TAG
 from raven.utils.image_store import expand_images
+from raven.utils.wire import WIRE_AFTER_FIELD as WIRE_AFTER_FIELD
+from raven.utils.wire import WIRE_CONTENT_FIELD as WIRE_CONTENT_FIELD
 
 RUNTIME_CONTEXT_KEY = "_runtime_context"
 """Set on the envelope the assembler built, holding the lines it opened with.
@@ -30,6 +32,25 @@ allowlist of keys). ``_save_turn`` pops it, so it never reaches the session.
 
 RUNTIME_CONTEXT_FIELD = "runtime_context"
 """The same lines as the session entry stores them, beside the user's words."""
+
+
+PROVIDER_MESSAGE_KEYS = frozenset(
+    {
+        "role",
+        "content",
+        "tool_calls",
+        "tool_call_id",
+        "name",
+        "reasoning_content",
+        "thinking_blocks",
+    }
+)
+"""The keys a provider payload keeps; the wire rows are already this shape."""
+
+
+def provider_row(message: dict[str, Any]) -> dict[str, Any]:
+    """``message`` reduced to the keys a provider payload carries."""
+    return {key: value for key, value in message.items() if key in PROVIDER_MESSAGE_KEYS}
 
 
 def with_runtime_context(lines: str, content: Any) -> Any:
@@ -65,15 +86,17 @@ def replayed_content(
     can_see_images: bool = True,
     tool_images_ok: bool = True,
 ) -> Any:
-    """The content ``message`` was sent with, as far as its filed lines go.
+    """The content ``message`` was sent with, as far as its filed forms go.
 
-    A user entry filed before the field existed, and every other entry, comes
-    back as it is. Archived pictures are expanded only when the receiving model
-    and transport can take them, which is the same verdict the live assembly
-    applied to the message they came from.
+    A wire form filed beside the display content wins when present; an entry
+    filed before the field existed, and every other entry, comes back as its
+    display content. Archived pictures are expanded only when the receiving
+    model and transport can take them, which is the same verdict the live
+    assembly applied to the message they came from.
     """
+    wire = message.get(WIRE_CONTENT_FIELD)
     content = expand_images(
-        message.get("content"),
+        message.get("content") if wire is None else wire,
         message,
         can_see_images=can_see_images,
         tool_images_ok=tool_images_ok,

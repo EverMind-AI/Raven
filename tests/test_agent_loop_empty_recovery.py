@@ -823,9 +823,12 @@ async def test_an_empty_reply_after_tools_is_nudged_once_with_hermes_words(works
     assert (placeholder["role"], placeholder["content"]) == ("assistant", "(empty)")
     assert (nudge["role"], nudge["content"]) == ("user", POST_TOOL_NUDGE)
     assert nudge["content"].startswith("You just executed tool calls but returned an empty response.")
-    # Scaffolding: neither of the two reaches the stored session.
+    # Scaffolding: neither of the two becomes a display row, but both ride the
+    # kept row they followed so the next turn replays them in place.
     stored = agent.sessions.get_or_create("s1").messages
     assert not any(m.get("content") in (POST_TOOL_NUDGE, "(empty)") or m.get("_recovery_synthetic") for m in stored)
+    wire = [row for m in stored for row in m.get("wire_after", [])]
+    assert [row["content"] for row in wire] == ["(empty)", POST_TOOL_NUDGE]
 
 
 @pytest.mark.asyncio
@@ -2388,6 +2391,8 @@ async def test_a_stream_that_died_mid_answer_is_continued_and_stitched(workspace
     stored = agent.sessions.get_or_create("s1").messages
     assert [m["content"] for m in stored if m["role"] == "assistant"] == ["The answer is 42."]
     assert not any(m.get("_recovery_synthetic") or m.get("content") == NETWORK_CUT_CONTINUATION for m in stored)
+    wire = [row for m in stored for row in m.get("wire_after", [])]
+    assert [row["content"] for row in wire] == [first.strip(), NETWORK_CUT_CONTINUATION]
 
 
 @pytest.mark.asyncio

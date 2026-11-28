@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from raven.context_engine.runtime_context import replayed_content
+from raven.context_engine.runtime_context import PROVIDER_MESSAGE_KEYS, WIRE_AFTER_FIELD, replayed_content
 from raven.contracts.llm_provider import LLMProvider
 from raven.providers.binding import ModelBinding, active_window, resolve
 from raven.providers.capabilities import replay_gates
@@ -36,15 +36,7 @@ from raven.utils.tokens import estimate_prompt_tokens_chain, reuse_prompt_tokeni
 # the dict reaches the LLM. reasoning_content / thinking_blocks must survive
 # so multi-turn reasoning contracts (e.g. DeepSeek thinking mode) hold; the
 # provider gate strips thinking_blocks for non-Anthropic targets downstream.
-_ALLOWED_KEYS = {
-    "role",
-    "content",
-    "tool_calls",
-    "tool_call_id",
-    "name",
-    "reasoning_content",
-    "thinking_blocks",
-}
+_ALLOWED_KEYS = set(PROVIDER_MESSAGE_KEYS)
 
 STORED_MID_TURN_KEY = "mid_turn"
 """The mark the session write leaves on an arrival the reader typed mid-turn.
@@ -105,6 +97,20 @@ class TrimOutcome:
     max_prompt_tokens: int
     source: str
     warnings: list[str] = field(default_factory=list)
+    row_sources: list[int] = field(default_factory=list)
+    """For each row of ``history``, the index in ``included_ids`` it came from.
+
+    A row replayed from an id's ``wire_after`` scaffolding names the row it rode,
+    so id-based bookkeeping stays one-to-one with what it accounts for while the
+    shipped history keeps every row the model was sent.
+    """
+
+    @property
+    def rows_aligned(self) -> bool:
+        """Whether every row of ``history`` names a row of ``included_ids``."""
+        return len(self.row_sources) == len(self.history) and all(
+            0 <= position < len(self.included_ids) for position in self.row_sources
+        )
 
     @property
     def ok(self) -> bool:
@@ -184,9 +190,35 @@ class HistoryTrimmer:
 
         An arrival the reader typed mid-turn keeps its mark, so the call seam
         folds the run into the one message the turn was sent with.
+
+        The result is not one row per id: a row carrying scaffolding the model
+        was shown (``wire_after``) replays it in place, so one id can project
+        more rows than itself. Callers that pair rows with ids by position use
+        :meth:`history_from_ids_with_sources`.
+        """
+        return HistoryTrimmer.history_from_ids_with_sources(
+            messages,
+            ids,
+            can_see_images=can_see_images,
+            tool_images_ok=tool_images_ok,
+        )[0]
+
+    @staticmethod
+    def history_from_ids_with_sources(
+        messages: list[dict[str, Any]],
+        ids: list[int],
+        *,
+        can_see_images: bool = True,
+        tool_images_ok: bool = True,
+    ) -> tuple[list[dict[str, Any]], list[int]]:
+        """``history_from_ids``, with the index in ``ids`` each row came from.
+
+        A ``wire_after`` row names the row it rode, so accounting that works by
+        id still sees each id once however many rows it replayed.
         """
         history: list[dict[str, Any]] = []
-        for mid in ids:
+        row_sources: list[int] = []
+        for position, mid in enumerate(ids):
             clean = {k: v for k, v in messages[mid].items() if k in _ALLOWED_KEYS}
             if clean.get("role"):
                 if "content" in clean:
@@ -198,7 +230,12 @@ class HistoryTrimmer:
                 if messages[mid].get(STORED_MID_TURN_KEY):
                     clean[STORED_MID_TURN_KEY] = True
                 history.append(clean)
-        return history
+                row_sources.append(position)
+                for extra in messages[mid].get(WIRE_AFTER_FIELD) or ():
+                    if isinstance(extra, dict) and extra.get("role"):
+                        history.append({key: value for key, value in extra.items() if key in _ALLOWED_KEYS})
+                        row_sources.append(position)
+        return history, row_sources
 
     @staticmethod
     def tool_group(
@@ -367,7 +404,7 @@ class HistoryTrimmer:
         """
         canon = self.canonical_ids(session_messages, ids)
         can_see_images, tool_images_ok = replay_gates(self.provider, self.model)
-        history = self.history_from_ids(
+        history, row_sources = self.history_from_ids_with_sources(
             session_messages,
             canon,
             can_see_images=can_see_images,
@@ -396,7 +433,7 @@ class HistoryTrimmer:
             for mid in sorted(set(remaining) - set(reclosed)):
                 warnings.append(f"dropped message {mid}: nothing before the first remaining user message is kept")
             trimmed_ids = reclosed
-            history = self.history_from_ids(
+            history, row_sources = self.history_from_ids_with_sources(
                 session_messages,
                 trimmed_ids,
                 can_see_images=can_see_images,
@@ -418,7 +455,7 @@ class HistoryTrimmer:
             trimmed_ids = [mid for mid in trimmed_ids if mid not in offenders]
             for mid in sorted(offenders):
                 warnings.append(f"dropped message {mid}: its tool call or result is not in the selection")
-            history = self.history_from_ids(
+            history, row_sources = self.history_from_ids_with_sources(
                 session_messages,
                 trimmed_ids,
                 can_see_images=can_see_images,
@@ -440,6 +477,7 @@ class HistoryTrimmer:
             max_prompt_tokens=max_prompt,
             source=source,
             warnings=warnings,
+            row_sources=row_sources,
         )
 
 

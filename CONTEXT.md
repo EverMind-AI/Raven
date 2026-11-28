@@ -1748,6 +1748,20 @@ line, and a compaction that takes the blocks out has them told again; an overflo
 which trims the history after the question was built, puts what it took back into the
 question's block.
 
+**Wire Content** (`context_engine/runtime_context.py`, fields `wire_content` / `wire_after`):
+The form a row was sent in, filed beside the display form when the two differ. `content`
+keeps what a reader sees (the user's words, the filed picture note); `wire_content` keeps
+the body the model received (an attachment note, a hook rewrite, the live wording of a
+withdrawn-picture note, a tool body the save cap would shorten). `wire_after` keeps the
+scaffolding a recovery appended after a kept row (the empty placeholder, the nudge, the
+continuation), so `HistoryTrimmer.history_from_ids` replays it in place without filing it
+as a display row; the token estimator counts both fields. The provider payload never
+carries either field directly: the history projection puts the wire form back into
+`content`.
+_Avoid_: folding the wire form into `content` — readers would show assembly prose or
+recovery scaffolding as the user's words, and the replay would lose the bytes the model
+was sent.
+
 **Source Ref** (`utils/refs.py`, `session/refs.py`):
 A `[[ref store/scope#lo-hi]]` token naming verbatim entries of an append-only
 store; for the session log the scope is the Session Revision's

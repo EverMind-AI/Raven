@@ -367,7 +367,7 @@ class CompactingHistoryBuilder:
             memo.warned = True
 
         anchor = min(selection.dropped) if written is not None else _anchor(checkpoint)
-        estimate_at = _checkpoint_position(selection.kept, anchor, checkpoint_message)
+        estimate_at = _checkpoint_position(selection.kept, None, anchor, checkpoint_message)
         _messages, outcome = self.trimmer.trim(
             session_messages=session,
             ids=list(selection.kept),
@@ -383,7 +383,7 @@ class CompactingHistoryBuilder:
                 prefix.user_message,
             ],
         )
-        checkpoint_at = _checkpoint_position(outcome.included_ids, anchor, checkpoint_message)
+        checkpoint_at = _checkpoint_position(outcome.included_ids, outcome.row_sources, anchor, checkpoint_message)
         if written is not None:
             # Retirement is what a checkpoint buys: these messages are spoken
             # for, so later turns select around them instead of removing them
@@ -442,6 +442,7 @@ class CompactingHistoryBuilder:
             history = _flag_compaction_boundary(
                 history,
                 included=outcome.included_ids,
+                sources=outcome.row_sources,
                 cut=cut,
                 checkpoint_at=checkpoint_at if checkpoint_message is not None else None,
             )
@@ -840,18 +841,18 @@ class CompactingHistoryBuilder:
         end = ledger.align_forward(through + 1, self.cfg.boundary)
         ordinals = [index for index in range(end) if index not in retired]
         can_see_images, tool_images_ok = self._summary_gates()
-        messages = HistoryTrimmer.history_from_ids(
+        messages, sources = HistoryTrimmer.history_from_ids_with_sources(
             session,
             ordinals,
             can_see_images=can_see_images,
             tool_images_ok=tool_images_ok,
         )
-        if len(messages) != len(ordinals):
+        if len(set(sources)) != len(ordinals):
             return ((), ())
-        keys: list[MessageKey] = [session_message_key(index) for index in ordinals]
+        keys: list[MessageKey] = [session_message_key(ordinals[source]) for source in sources]
         if previous is not None and previous_message is not None and retired:
             first_retired = min(retired)
-            at = sum(1 for index in ordinals if index < first_retired)
+            at = sum(1 for source in sources if ordinals[source] < first_retired)
             keys = _splice(keys, checkpoint_key(previous.checkpoint_id), at)
             messages = _splice(messages, previous_message, at)
         leading = [{"role": "system", "content": prefix.system_prefix}, *messages]
@@ -869,13 +870,17 @@ class CompactingHistoryBuilder:
     ) -> tuple[MessageKey, ...]:
         """What each message of the list this turn produced stands for.
 
+        One key per shipped row, so a row replayed from an id's scaffolding
+        names the row it rode: the keys stay positionally aligned with the
+        history even when one id produced several rows.
+
         Empty when the history and the ids it was projected from do not line up,
         which is the honest answer: an unaligned key list would make the next
         compaction reuse one message's bytes under another message's name.
         """
-        if len(outcome.history) != len(outcome.included_ids):
+        if not outcome.rows_aligned:
             return ()
-        keys: list[MessageKey] = [session_message_key(index) for index in outcome.included_ids]
+        keys: list[MessageKey] = [session_message_key(outcome.included_ids[source]) for source in outcome.row_sources]
         if checkpoint is not None:
             keys = _splice(keys, checkpoint_key(checkpoint.checkpoint_id), checkpoint_at)
         return (SYSTEM_KEY, *keys, USER_KEY)
@@ -888,9 +893,11 @@ class CompactingHistoryBuilder:
         pinned: frozenset[int],
     ) -> list[dict[str, Any]]:
         """The history as it ships: private keys on what the loop must not touch."""
-        aligned = len(outcome.history) == len(outcome.included_ids)
+        aligned = outcome.rows_aligned
         history = [
-            {**message, HISTORY_PINNED_KEY: True} if aligned and outcome.included_ids[pos] in pinned else message
+            {**message, HISTORY_PINNED_KEY: True}
+            if aligned and outcome.included_ids[outcome.row_sources[pos]] in pinned
+            else message
             for pos, message in enumerate(outcome.history)
         ]
         if checkpoint_message is None:
@@ -958,7 +965,7 @@ class CompactingHistoryBuilder:
                 "path": SEGMENT_PATH,
                 "compaction_action": "unscoped",
                 HISTORY_COMPACTED_META: len(outcome.included_ids) < len(session),
-                "history_kept": len(outcome.included_ids),
+                "history_kept": len(outcome.history),
                 "history_total": len(session),
                 "history_tokens": outcome.estimated_tokens,
                 "budget_trimmed": len(outcome.warnings),
@@ -988,7 +995,7 @@ class CompactingHistoryBuilder:
             "trigger_tokens": plan.trigger_tokens,
             "target_tokens": plan.target_tokens,
             "headroom_clamped": plan.headroom_clamped,
-            "history_kept": len(outcome.included_ids),
+            "history_kept": len(outcome.history),
             "history_total": total,
             "history_tokens": outcome.estimated_tokens,
             "pruned_messages": pruned.pruned_count,
@@ -1051,6 +1058,7 @@ def _anchor(checkpoint: CompactionCheckpoint | None) -> int | None:
 
 def _checkpoint_position(
     included: Sequence[int],
+    sources: Sequence[int] | None,
     anchor: int | None,
     checkpoint_message: dict[str, Any] | None,
 ) -> int:
@@ -1063,10 +1071,17 @@ def _checkpoint_position(
     Counted from the checkpoint's own first retired ordinal, which every
     later turn reads back unchanged, so the checkpoint lands in the same
     place relative to the messages around it on every turn.
+
+    ``sources`` is :meth:`HistoryTrimmer.history_from_ids_with_sources`'
+    provenance list: the position of each shipped row, which is larger than the
+    count of ids whenever a row replayed scaffolding. ``None`` is the estimate
+    path, which has no history yet and counts ids.
     """
     if checkpoint_message is None or anchor is None:
         return 0
-    return sum(1 for index in included if index < anchor)
+    if sources is None:
+        return sum(1 for index in included if index < anchor)
+    return sum(1 for source in sources if included[source] < anchor)
 
 
 # The loop's own marks on user messages that are not the reader's question. The
@@ -1121,6 +1136,7 @@ def _flag_compaction_boundary(
     history: list[dict[str, Any]],
     *,
     included: Sequence[int],
+    sources: Sequence[int],
     cut: int,
     checkpoint_at: int | None,
 ) -> list[dict[str, Any]]:
@@ -1139,8 +1155,12 @@ def _flag_compaction_boundary(
     Only the position moves through the checkpoint splice: the checkpoint sits
     where the messages it replaced used to be, so an entry after it shifts by
     one.
+
+    The position is a position in ``history``, so it counts shipped rows rather
+    than ids: ``sources`` names the id each row came from, and a row replayed
+    from an id's scaffolding counts where the row it rode does.
     """
-    carried = sum(1 for index in included if index < cut)
+    carried = sum(1 for source in sources if included[source] < cut)
     if carried <= 0:
         return history
     position = carried - 1
