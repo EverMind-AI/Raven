@@ -6077,6 +6077,10 @@
       "en": "What it is good at",
       "zh": "擅长什么"
     },
+    "gui.agent.good_at_hint": {
+      "en": "Raven reads this when it decides what to hand {agent}.",
+      "zh": "Raven 会读这句话，来决定把什么活交给 {agent}。"
+    },
     "gui.agent.copy": {
       "en": "Copy",
       "zh": "复制"
@@ -6108,10 +6112,6 @@
     "gui.agent.probe_raw": {
       "en": "What the check found",
       "zh": "检查结果"
-    },
-    "gui.agent.hd_missing_by": {
-      "en": "Not installed · {by}",
-      "zh": "本机未安装 · {by}"
     },
     "gui.agent.fix_sign_in": {
       "en": "Run the command below to sign in, then press {button}.",
@@ -6348,6 +6348,14 @@
     "gui.agent.st_test_bad": {
       "en": "Test failed",
       "zh": "测试没通过"
+    },
+    "gui.agent.st_off": {
+      "en": "Not connected",
+      "zh": "未接入"
+    },
+    "gui.agent.st_tested_ago": {
+      "en": "Last test passed {ago}",
+      "zh": "上次测试通过，{ago}"
     },
     "gui.agent.why_sign_in": {
       "en": "Needs sign-in",
@@ -6616,6 +6624,10 @@
     "gui.agent.effort_default": {
       "en": "The agent's default",
       "zh": "用它自己的默认"
+    },
+    "gui.agent.effort_default_short": {
+      "en": "Default",
+      "zh": "默认"
     },
     "gui.agent.model_no_provider": {
       "en": "Connect a provider first",

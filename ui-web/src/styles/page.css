@@ -4962,6 +4962,21 @@ details[open] summary { margin-bottom: 8px; }
 .detail[data-owner="connections"] .dpanel { width: min(520px, calc(100vw - 32px)); height: min(500px, 78vh); }
 .detail[data-owner="extAgents"] .body,
 .detail[data-owner="connections"] .body { padding: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* The settings-list sheets are the exception -- an agent's own, and the
+   family picker: a connected agent is a status strip and three settings, and
+   the fixed box left half of itself empty under them. They take their
+   content's height, up to the ceiling every sheet has, and what grows past
+   that scrolls in the body. */
+.detail[data-owner="extAgents"] .dpanel:has(.extAgents-sheet-list) { height: auto; }
+/* A panel whose content changed glides to its new height (lib/glide.ts pins
+   the old one and sets the new; GLIDE_MS there is this duration). Scrollbars
+   stay hidden while it moves: a growing card is briefly shorter than what it
+   holds, and a classic scrollbar would flash in and narrow the text. */
+@media (prefers-reduced-motion: no-preference) {
+  .detail .dpanel[data-glide] { transition: transform .3s cubic-bezier(.22, .61, .36, 1), height .24s cubic-bezier(.22, .61, .36, 1); }
+  .detail .dpanel[data-glide] * { scrollbar-width: none; }
+  .detail .dpanel[data-glide] *::-webkit-scrollbar { display: none; }
+}
 .detail[data-owner="skillsTools"] .dpanel { width: min(560px, calc(100vw - 32px)); max-height: min(82vh, 720px); }
 .detail[data-owner="skillsTools"][data-fill="true"] .dpanel { width: min(680px, calc(100vw - 32px)); height: min(80vh, 740px); }
 .detail[data-owner="skillsTools"] .body { padding: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; }

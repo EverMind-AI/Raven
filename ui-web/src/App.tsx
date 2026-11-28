@@ -48,7 +48,7 @@
  * after #noJs instead of between the two.
  */
 import { LayoutAlignLeftIcon } from '@hugeicons/core-free-icons'
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
 import { ChatTop } from './chrome/ChatTop'
@@ -63,6 +63,7 @@ import { UpgradeShade } from './chrome/UpgradeShade'
 import { WsPane } from './chrome/WsPane'
 import { Icon } from './components/Icon'
 import { t } from './i18n/t'
+import { glide } from './lib/glide'
 import * as confirm from './state/confirm'
 import * as detail from './state/detail'
 import * as lang from './state/lang'
@@ -139,6 +140,36 @@ function DetailPanel(): JSX.Element {
   const s = useSyncExternalStore(detail.subscribe, detail.get)
   useSyncExternalStore(lang.subscribe, lang.get)
   useScrim('detail', detail.close)
+  const panel = useRef<HTMLDivElement>(null)
+  const body = useRef<HTMLDivElement>(null)
+  /* The agents' settings-list sheets are as tall as their content, and it
+     moves while it is read -- a test fails and a note arrives, a description
+     grows a line, a member the family picker connected leaves its list -- so
+     the panel glides to the new height (lib/glide.ts). The agents owner only:
+     its machine sheets are fixed boxes and never change height, and the other
+     owners' cards are ones nobody has asked to move. A fresh open, or another
+     owner's card, starts at its own height; another sheet opened over this
+     one glides like any other change. */
+  useEffect(() => {
+    if (!panel.current || !body.current) return
+    const g = glide(panel.current, body.current, () => {
+      const d = detail.get()
+      return d.open && d.owner === 'extAgents'
+    })
+    /* Settled on an open, not on a close: a connect in the family picker
+       drops its row and then closes the drawer, and settling there cut the
+       glide the dropped row had started into a jump at the top of the fade. */
+    let seen = detail.get()
+    const off = detail.subscribe(() => {
+      const d = detail.get()
+      if (d.gen !== seen.gen || (d.open && !seen.open) || d.owner !== seen.owner) g.settle()
+      seen = d
+    })
+    return () => {
+      off()
+      g.stop()
+    }
+  }, [])
   return (
     <aside
       className="detail"
@@ -149,14 +180,14 @@ function DetailPanel(): JSX.Element {
       aria-modal="true"
       aria-label={lang.attr('gui.cap_detail')}
     >
-      <div className="dpanel">
+      <div className="dpanel" ref={panel}>
         <header>
           <b id="dTitle">{s.title ?? '—'}</b>
           <button className="dx" id="dClose" aria-label={t('gui.close')} onClick={() => detail.close()}>
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </header>
-        <div className="body" id="dBody" />
+        <div className="body" id="dBody" ref={body} />
       </div>
     </aside>
   )

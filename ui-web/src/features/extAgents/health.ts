@@ -100,7 +100,7 @@ export type Tone = 'busy' | 'bad' | 'warn' | 'good' | 'none'
 export interface Health {
   tone: Tone
   /* The verdict in the reader's language: the dot's accessible name, and the
-     sheet's line wherever the sheet has no fuller block for it. Empty for
+     sheet's strip where a failure has no note to carry it. Empty for
      `none`, which has nothing to say. */
   label: string
   /* Which fact made a `bad`: a write the server refused, or the last test. */
