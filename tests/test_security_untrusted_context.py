@@ -1198,6 +1198,8 @@ def test_the_home_directories_outside_the_exemption_still_lose_their_tokens() ->
 def test_the_bridge_token_line_is_the_line_the_pass_breaks() -> None:
     """The bridge build pays for staying outside the exemption with one line.
 
+    Namely one line of its own source: ``node_modules`` sits in the same tree
+    and loses values too, so the cost is not a property of the whole directory.
     ``src/index.ts`` reads the bridge token from the environment. ``named-secret``
     sees the ``TOKEN =`` label and a value past its floor, so a read of the
     installed bridge hands the model a broken line: the replacement stops before
@@ -1211,6 +1213,31 @@ def test_the_bridge_token_line_is_the_line_the_pass_breaks() -> None:
     assert redact(line) == "const TOKEN = [redacted])", redact(line)
     shown = scrub_tool_output({"path": str(raven_home() / "bridge" / "src" / "index.ts")}, line + "\n")
     assert shown == "const TOKEN = [redacted])\n", shown
+
+
+def test_the_shipped_bridge_source_holds_the_line_the_pass_breaks() -> None:
+    """The broken line is read back from the shipped ``src/index.ts``.
+
+    Restating the line here would keep passing after a rename in the real file,
+    which is the drift this test is for: the docstring would go false with CI
+    still green. The compiled statement is checked as a literal because
+    ``dist/`` is built at install time, not committed; ``tsc`` keeps optional
+    chaining at the ES2022 target, so only the semicolon differs.
+    """
+    from raven.config.held_secrets import scrub_tool_output
+    from raven.home import raven_home
+    from raven.security.redact import redact
+
+    source = Path(__file__).resolve().parents[1] / "bridge" / "src" / "index.ts"
+    statement = "const TOKEN = process.env.BRIDGE_TOKEN?.trim()"
+    text = source.read_text(encoding="utf-8")
+    assert statement in text, f"{source} no longer holds {statement!r}"
+    line = next(candidate for candidate in text.splitlines() if candidate.strip() == statement)
+    assert redact(line) == "const TOKEN = [redacted])", redact(line)
+    shown = scrub_tool_output({"path": str(raven_home() / "bridge" / "src" / "index.ts")}, line + "\n")
+    assert shown == "const TOKEN = [redacted])\n", shown
+    compiled = statement + ";"
+    assert redact(compiled) == "const TOKEN = [redacted]);", redact(compiled)
 
 
 def test_ravens_own_plugin_and_agent_source_is_not_redacted_while_its_tokens_still_are() -> None:
