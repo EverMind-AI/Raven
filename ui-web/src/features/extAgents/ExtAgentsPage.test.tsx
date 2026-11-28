@@ -1161,6 +1161,65 @@ describe('the sheet', () => {
     expect(ledOf('failed')).toBe('extAgents-led extAgents-led-bad')
   })
 
+  /* A press in the strip is answered by a note that takes the strip's place,
+     so the button the keyboard was on is unmounted. The reader would be left
+     on the document exactly when the note asks for Retry. */
+  it('moves the keyboard to the note when a refused press replaces the strip', async () => {
+    install([row({ name: 'off_one', enabled: false })], { refuse: () => 'it did not answer a test message' })
+    await mount()
+    await openSheet('off_one')
+    const go = sheet()!.querySelector<HTMLButtonElement>('.extAgents-act button')!
+    expect(go.textContent).toBe('gui.agent.connect')
+    go.focus()
+    expect(document.activeElement).toBe(go)
+    await click(go)
+    expect(sheet()!.querySelector('.extAgents-note')).not.toBeNull()
+    const retry = sheet()!.querySelector<HTMLButtonElement>('.extAgents-note .extAgents-act button')!
+    expect(retry.textContent).toBe('gui.retry')
+    expect(document.activeElement).toBe(retry)
+  })
+
+  /* A test runs through `run`, not the per-row `joining` map, and its note
+     comes from the row rather than a stored refusal -- the same replacement,
+     one marker over. */
+  it('moves the keyboard to the note when a failed test replaces the strip', async () => {
+    const r = row({ name: 'claude_code' })
+    install([r], {
+      act: async (op, rr) => {
+        if (op === 'test') {
+          rr.last_test_ok = false
+          rr.last_test_at_ms = Date.now()
+          rr.last_test_detail = 'it returned nothing'
+        }
+        return [r]
+      },
+    })
+    await mount()
+    await openSheet('claude_code')
+    const test = sheet()!.querySelector<HTMLButtonElement>('.extAgents-act button')!
+    expect(test.textContent).toBe('gui.agent.test_label')
+    test.focus()
+    await click(test)
+    expect(sheet()!.querySelector('.extAgents-note')).not.toBeNull()
+    const again = sheet()!.querySelector<HTMLButtonElement>('.extAgents-note .extAgents-act button')!
+    expect(again.textContent).toBe('gui.agent.test_again')
+    expect(document.activeElement).toBe(again)
+  })
+
+  /* Opening on a note is not a replacement: the sheet was mounted with it and
+     took no focus away, so it must not take any now. */
+  it('leaves focus alone when the sheet opens on a note that was already there', async () => {
+    install([row({ name: 'failed', last_test_ok: false, last_test_at_ms: 1, last_test_detail: 'it returned nothing' })])
+    await mount()
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    outside.focus()
+    await openSheet('failed')
+    expect(sheet()!.querySelector('.extAgents-note')).not.toBeNull()
+    expect(document.activeElement).toBe(outside)
+    outside.remove()
+  })
+
   it('runs a test from its action bar, says so while it runs, and offers to stop it', async () => {
     let release: () => void = () => {}
     const gate = new Promise<void>((resolve) => {

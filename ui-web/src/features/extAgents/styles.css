@@ -406,7 +406,16 @@
 /* The presses ride inside the strip, not in a bar under the sheet. */
 .extAgents-sheet-agent .extAgents-stat .extAgents-act,
 .extAgents-sheet-agent .extAgents-note .extAgents-act { padding: 0; border-top: 0; flex-wrap: wrap; }
-.extAgents-sheet-agent .extAgents-note .extAgents-act { justify-content: flex-start; margin-top: 12px; }
+/* The note scrolls with the body, and a long one -- fix steps, a raw sentence
+   -- would carry its own press out of view. The row rides the body's foot
+   while the note runs past it, so Retry stays pressable without scrolling to
+   the end; it is painted like the note so lines passing under it do not read
+   through. */
+.extAgents-sheet-agent .extAgents-note .extAgents-act {
+  justify-content: flex-start;
+  position: sticky; bottom: 0; margin-top: 0; padding-top: 12px;
+  background: inherit;
+}
 .extAgents-sheet-agent .extAgents-act .mini:not(.go):not(:disabled) { background: var(--paper); }
 .extAgents-sheet-agent .extAgents-note { border-radius: 12px; }
 /* The note's title leads with the state's dot, as the strip it stands in for does. */

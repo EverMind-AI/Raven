@@ -82,6 +82,22 @@ describe('glide', () => {
     g.stop()
   })
 
+  /* A resize mid-glide moves where the panel will land, because the content
+     reflows at the new width. Last change's target is then not the height to
+     start the next one from, or that one jumps on its first frame. */
+  it('starts the next glide from the height a resize left, not the one it was aiming for', async () => {
+    const g = glide(panel, content, () => live)
+    await grow(420)
+    expect(panel.style.height).toBe('420px')
+    natural = 500
+    window.dispatchEvent(new Event('resize'))
+    ended()
+    await grow(500)
+    expect(panel.dataset.glide).toBeUndefined()
+    expect(panel.style.height).toBe('')
+    g.stop()
+  })
+
   it('does not move a panel that is not live, nor one the change left the same height', async () => {
     const g = glide(panel, content, () => live)
     live = false
@@ -91,6 +107,19 @@ describe('glide', () => {
     await grow(420.4)
     expect(panel.style.height).toBe('')
     expect(panel.dataset.glide).toBeUndefined()
+    g.stop()
+  })
+
+  /* The observer is installed for the shared panel, not for this owner's card:
+     every other owner's card mutates it too, and reading its layout to prove
+     this card is not the one shown is work no reader asked for. */
+  it('does not lay the panel out for a mutation while it is not the live card', async () => {
+    live = false
+    const g = glide(panel, content, () => live)
+    reads = []
+    await grow(420)
+    expect(reads).toEqual([])
+    expect(panel.style.height).toBe('')
     g.stop()
   })
 

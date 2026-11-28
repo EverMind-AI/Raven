@@ -24,7 +24,7 @@ import type { Shown, Tone } from './health'
 import type { GridEntry, Section } from './source'
 import type { ExtAgentsState } from './store'
 import type { ExtAgentRow, Remedy } from './types'
-import type { JSX } from 'react'
+import type { JSX, RefObject } from 'react'
 import './styles.css'
 
 /* The agents this machine can hand work to, drawn to the Agent Hub prototype.
@@ -675,9 +675,11 @@ function Note({
   warn,
   ask,
   actions,
-}: NoteSpec & { actions?: JSX.Element | null }): JSX.Element {
+  rootRef,
+  onPress,
+}: NoteSpec & { actions?: JSX.Element | null; rootRef?: RefObject<HTMLDivElement | null>; onPress?: () => void }): JSX.Element {
   return (
-    <div className={warn ? 'extAgents-note extAgents-note-warn' : 'extAgents-note'}>
+    <div ref={rootRef} className={warn ? 'extAgents-note extAgents-note-warn' : 'extAgents-note'}>
       <div className="extAgents-note-h">
         <div className="extAgents-note-t">
           {title}
@@ -713,7 +715,7 @@ function Note({
       ) : (
         <pre className="extAgents-note-said">{raw}</pre>
       )}
-      {actions ? <div className="extAgents-act">{actions}</div> : null}
+      {actions ? <div className="extAgents-act" onClickCapture={onPress}>{actions}</div> : null}
     </div>
   )
 }
@@ -735,14 +737,43 @@ function StatusStrip({
   s,
   note,
   actions,
+  press,
 }: {
   row: ExtAgentRow
   shown: Shown
   s: ExtAgentsState
   note: NoteSpec | null
   actions: JSX.Element | null
+  press: RefObject<string | null>
 }): JSX.Element {
-  if (note) return <Note {...note} actions={actions} />
+  const noteRef = useRef<HTMLDivElement>(null)
+  /* A test runs through `run`, not the per-row `joining` map, so both marks of
+     a write in flight count. A re-check starts none: it is a read. */
+  const busy = s.joining[row.name] !== undefined || s.testing.includes(row.name)
+  const mark = (): void => {
+    press.current = row.name
+  }
+  useEffect(() => {
+    /* A note answers a press in the strip and stands where it stood, and the
+       sheet remounts around it, so the button the keyboard was on is gone.
+       Hand focus to the note's own press -- unless the reader has since put it
+       somewhere else, and never on an opening sheet, which had the note before
+       it had a reader. The note can arrive a render before the write lets go of
+       the row, while that press is still held disabled; the intent waits for
+       the write to end. One that lands without a note leaves no intent behind. */
+    if (press.current !== row.name) return
+    if (busy) return
+    if (note === null) {
+      press.current = null
+      return
+    }
+    press.current = null
+    const active = document.activeElement
+    if (active !== null && active !== document.body && document.documentElement.contains(active)) return
+    const main = noteRef.current?.querySelector<HTMLButtonElement>('.extAgents-act button')
+    if (main && !main.disabled) main.focus()
+  }, [busy, note, press, row.name, s])
+  if (note) return <Note {...note} actions={actions} onPress={mark} rootRef={noteRef} />
   const say = sayOf(row, shown, s)
   /* `ledClass` draws no dot for `none`; the strip still wants one, in grey. */
   const led = say.tone === 'none' ? 'extAgents-led extAgents-led-none' : ledClass(say.tone)
@@ -755,7 +786,7 @@ function StatusStrip({
           {say.when ? <span className="extAgents-say-when">{say.when}</span> : null}
         </span>
       </div>
-      {actions ? <div className="extAgents-act">{actions}</div> : null}
+      {actions ? <div className="extAgents-act" onClickCapture={mark}>{actions}</div> : null}
     </div>
   )
 }
@@ -789,7 +820,7 @@ function sayOf(row: ExtAgentRow, shown: Shown, s: ExtAgentsState): { tone: Tone;
    on a row of its own, the one press that takes it off the roster. Every
    change lands as it is made, so there is no Save. The shared drawer's own
    close control floats at the top right; the head leaves it room. */
-function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Element {
+function AgentSheet({ row, s, press }: { row: ExtAgentRow; s: ExtAgentsState; press: RefObject<string | null> }): JSX.Element {
   const dHost = store.detailHost()
   const ms = useSyncExternalStore(machines.subscribe, machines.get)
   const keyRef = useRef<HTMLInputElement>(null)
@@ -907,7 +938,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
   }
 
   const by = byOf(row)
-  const strip = <StatusStrip actions={actions} note={note} row={row} s={lineState} shown={shownOf(row, lineState)} />
+  const strip = <StatusStrip actions={actions} note={note} press={press} row={row} s={lineState} shown={shownOf(row, lineState)} />
   return createPortal(
     <div className="extAgents-sheet extAgents-sheet-list extAgents-sheet-agent" aria-label={row.name} role="document">
       <div className="extAgents-head">
@@ -1185,6 +1216,13 @@ export function ExtAgentsApp(): JSX.Element {
     void machines.load()
   }, [])
   const [tab, setTab] = useState<Tab>('all')
+  /* The row whose status press is being answered: the sheet remounts per
+     epoch, so the intent has to live above it to reach the note. It belongs to
+     the sheet that was open when the press was made, not to the next one. */
+  const press = useRef<string | null>(null)
+  useEffect(() => {
+    press.current = null
+  }, [s.sheet])
   /* Folded, then ordered -- not the other way round: a family takes the
      position of its first member, so the sort has to have decided where that
      is. `ordered` is stable, so within a tab the server's own order survives. */
@@ -1220,7 +1258,7 @@ export function ExtAgentsApp(): JSX.Element {
       ) : machineRow ? (
         <MachineSheet key={`${machineRow.id}:${s.epoch}`} ms={ms} row={machineRow} />
       ) : sheetRow ? (
-        <AgentSheet key={`${s.sheet}:${s.epoch}`} row={sheetRow} s={s} />
+        <AgentSheet key={`${s.sheet}:${s.epoch}`} press={press} row={sheetRow} s={s} />
       ) : null}
       {s.picking ? <FamilyPicker family={s.picking} key={s.picking} s={s} /> : null}
     </>

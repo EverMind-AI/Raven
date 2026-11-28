@@ -30,6 +30,7 @@ export function glide(panel: HTMLElement, content: HTMLElement, live: () => bool
   const still = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-reduced-motion: reduce)') : null
   let last = panel.offsetHeight
   let quiet = false
+  let stale = false
   let timer: number | undefined
   let frame: number | undefined
 
@@ -45,8 +46,18 @@ export function glide(panel: HTMLElement, content: HTMLElement, live: () => bool
   }
 
   const changed = (): void => {
+    /* The observer covers the whole body whatever card it holds, so a mutation
+       while this card is not the one shown is no reason to read the panel's
+       layout. The first change after it is back starts from the height the
+       panel then has, since `last` is older than whatever was drawn. */
+    if (!live()) {
+      stale = true
+      if (panel.style.height !== '' || panel.dataset.glide !== undefined) land()
+      return
+    }
     const pinned = panel.style.height !== ''
-    const from = pinned ? panel.offsetHeight : last
+    const from = pinned || stale ? panel.offsetHeight : last
+    stale = false
     const to = natural()
     last = to
     if (quiet || !live() || still?.matches || Math.abs(to - from) < 1) {
@@ -65,9 +76,12 @@ export function glide(panel: HTMLElement, content: HTMLElement, live: () => bool
     if (e.target === panel && e.propertyName === 'height') land()
   }
   /* A window resize moves the panel's ceiling, not its content: the next glide
-     starts from the height the panel has now. */
+     starts from the height the panel has now. Mid-glide the panel is pinned at
+     a height the resize may have made stale, and the height it lands on is
+     only known once the pin is gone, so that one is read on the next change. */
   const resized = (): void => {
     if (panel.style.height === '') last = panel.offsetHeight
+    else stale = true
   }
 
   const watch = new MutationObserver(changed)
@@ -84,6 +98,7 @@ export function glide(panel: HTMLElement, content: HTMLElement, live: () => bool
         frame = undefined
         quiet = false
         last = natural()
+        stale = false
       })
     },
     stop(): void {
