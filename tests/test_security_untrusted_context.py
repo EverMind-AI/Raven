@@ -1167,10 +1167,10 @@ def test_the_home_directories_outside_the_exemption_still_lose_their_tokens() ->
     from raven.home import raven_home
 
     own = raven_home()
-    # The build output of the WhatsApp bridge is not exempt. Its ``private
+    # The build output of the WhatsApp bridge is not exempt. The ``private
     # token: string`` annotation is six characters past the label, below the
-    # table's eight-character floor, so it survives; a credential-shaped value
-    # in the same tree still loses its value.
+    # named-secret rule's eight-character floor, so it survives; a
+    # credential-shaped value in the same tree still loses its value.
     bridge_source = "class Bridge {\n  constructor(private token: string) {}\n}\n"
     shown = scrub_tool_output({"path": str(own / "bridge" / "src" / "server.ts")}, bridge_source)
     assert shown == bridge_source, shown
@@ -1193,6 +1193,24 @@ def test_the_home_directories_outside_the_exemption_still_lose_their_tokens() ->
     shown = scrub_tool_output({"path": str(oauth_dir() / "minimax_global.json")}, tokens)
     assert "mmx_FAKEACCESS0123456789abcdef" not in shown and "mmx_FAKEREFRESH0123456789abcdef" not in shown, shown
     assert '"access": "[redacted]"' in shown and '"refresh": "[redacted]"' in shown, shown
+
+
+def test_the_bridge_token_line_is_the_line_the_pass_breaks() -> None:
+    """The bridge build pays for staying outside the exemption with one line.
+
+    ``src/index.ts`` reads the bridge token from the environment. ``named-secret``
+    sees the ``TOKEN =`` label and a value past its floor, so a read of the
+    installed bridge hands the model a broken line: the replacement stops before
+    the call's closing paren, which is left dangling.
+    """
+    from raven.config.held_secrets import scrub_tool_output
+    from raven.home import raven_home
+    from raven.security.redact import redact
+
+    line = "const TOKEN = process.env.BRIDGE_TOKEN?.trim()"
+    assert redact(line) == "const TOKEN = [redacted])", redact(line)
+    shown = scrub_tool_output({"path": str(raven_home() / "bridge" / "src" / "index.ts")}, line + "\n")
+    assert shown == "const TOKEN = [redacted])\n", shown
 
 
 def test_ravens_own_plugin_and_agent_source_is_not_redacted_while_its_tokens_still_are() -> None:
