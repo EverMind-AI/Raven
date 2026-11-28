@@ -49,6 +49,7 @@ from raven.agent import turn_report
 from raven.agent.tools import background_exec
 from raven.config import load_config
 from raven.config.schema import DEFAULT_MAX_BACKGROUND_HOLD_SECONDS
+from raven.home import is_subagent_process
 from raven.providers.usage import reported_cost
 from raven.security import redact
 from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT
@@ -375,7 +376,10 @@ class AcpMethods:
         # menu without a second round trip. Absent rather than empty when there
         # is nothing to offer -- an empty list is a menu that opens onto nothing.
         try:
-            options = await self._config_options(session.session_key)
+            # A sub-agent has no picker to fill, and building all provider
+            # catalogues here stalls session/new past the host's timeout.
+            full_menu = not is_subagent_process()
+            options = await self._config_options(session.session_key, include_providers=full_menu)
         except asyncio.CancelledError:
             if not self._translator.closing:
                 raise
@@ -384,6 +388,10 @@ class AcpMethods:
             options = []
         if options:
             result["configOptions"] = options
+            if not full_menu:
+                # One-model stub, not the agent's menu: say so, so a capability probe
+                # does not store it over a measured one.
+                result["_meta"] = {"raven": {protocol.MENU_UNREAD_META: True}}
         return self._with_modes(result, session.session_id)
 
     async def _session_load(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -739,16 +747,17 @@ class AcpMethods:
             await set_model(self._call, session_id=session.session_key, value=params.get("value"))
         except ValueError as exc:
             raise AcpMethodError(protocol.INVALID_PARAMS, str(exc), {"field": "value"}) from exc
-        return {"configOptions": await self._config_options(session.session_key)}
+        options = await self._config_options(session.session_key, include_providers=not is_subagent_process())
+        return {"configOptions": options}
 
-    async def _config_options(self, session_key: str) -> list[dict[str, Any]]:
+    async def _config_options(self, session_key: str, *, include_providers: bool = True) -> list[dict[str, Any]]:
         """Every configuration option this agent exposes, currently one.
 
         Asked for one session: the model option's current value is that
         session's, so the answer to a switch shows the switch rather than the
         configured default the whole process starts on.
         """
-        option = await model_option(self._call, session_id=session_key)
+        option = await model_option(self._call, session_id=session_key, include_providers=include_providers)
         return [] if option is None else [option]
 
     async def _session_prompt(self, params: dict[str, Any]) -> dict[str, Any]:
