@@ -576,3 +576,30 @@ class TestAtomicReadRetry:
         assert out == "before"
         assert calls["n"] == 2
         assert path.read_text(encoding="utf-8") == "before+after"
+
+    def test_atomic_read_text_does_not_wait_on_exclusive_lock(self, tmp_path: Path, monkeypatch):
+        """Readers must not acquire the exclusive write lock (which stalls ~1s on Windows)."""
+        import raven.utils.atomic_io as atomic_io
+
+        path = tmp_path / "store.json"
+        path.write_text('{"snapshot": 1}', encoding="utf-8")
+
+        def fail_if_locked(_path):
+            raise AssertionError("atomic_read_text must not acquire exclusive file_lock")
+
+        monkeypatch.setattr(atomic_io, "file_lock", fail_if_locked)
+        assert atomic_read_text(path) == '{"snapshot": 1}'
+
+    def test_locked_normalizes_path_case_for_reentrancy(self, tmp_path: Path):
+        """Mixed-case spellings of the same store path share the in-thread _held key."""
+        import raven.utils.atomic_io as atomic_io
+
+        upper_path = tmp_path / "STORE.JSON"
+        mixed_path = tmp_path / "store.json"
+        expected_key = os.path.normcase(os.path.abspath(upper_path.parent / ".lock" / (upper_path.name + ".lock")))
+        with atomic_io._locked(upper_path):
+            held = getattr(atomic_io._held, "paths", set())
+            assert expected_key in held
+            if os.path.normcase("A") == os.path.normcase("a"):
+                mixed_key = os.path.normcase(os.path.abspath(mixed_path.parent / ".lock" / (mixed_path.name + ".lock")))
+                assert mixed_key in held

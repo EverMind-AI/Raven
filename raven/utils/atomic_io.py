@@ -97,7 +97,7 @@ def _locked(path: Path) -> Iterator[None]:
     _held.paths = held
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.parent / ".lock" / (path.name + ".lock")
-    key = os.path.abspath(lock_path)
+    key = os.path.normcase(os.path.abspath(lock_path))
     if key in held:
         yield
         return
@@ -389,12 +389,13 @@ def back_up_file(target: Path, raw: bytes) -> Path:
 
 
 def atomic_read_text(path: Path, *, encoding: str = "utf-8") -> str | None:
-    """Read ``path`` under its advisory lock, retrying transient sharing violations.
+    """Read ``path``, retrying transient Windows sharing violations.
 
-    Returns ``None`` when ``path`` does not exist.
+    Writers publish via atomic temp-file replacement, so reads do not acquire
+    the exclusive cross-process lock and rely on ``_read_text_with_retry`` for
+    transient replace contention. Returns ``None`` when ``path`` does not exist.
     """
-    with _locked(path):
-        return _read_text_with_retry(path, encoding=encoding)
+    return _read_text_with_retry(path, encoding=encoding)
 
 
 def atomic_update(
