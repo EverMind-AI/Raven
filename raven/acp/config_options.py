@@ -57,7 +57,9 @@ MAX_MODELS_PER_PROVIDER = 40
 Call = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
-async def model_option(call: Call, *, session_id: str | None = None) -> dict[str, Any] | None:
+async def model_option(
+    call: Call, *, session_id: str | None = None, include_providers: bool = True
+) -> dict[str, Any] | None:
     """The ``SessionConfigOption`` for the model, or ``None`` if there is none.
 
     ``None`` rather than an empty selector when no provider is configured: an
@@ -69,9 +71,16 @@ async def model_option(call: Call, *, session_id: str | None = None) -> dict[str
     as its current value; asked without a session the catalogue answers with
     the configured default, which is right until the session's first switch
     and wrong from then on.
+
+    ``include_providers=False`` skips building every provider's catalogue (slow,
+    and some fetch over the network): the option then holds only the current
+    model, which is all a client with no picker, such as a sub-agent, needs.
     """
+    params: dict[str, Any] = {"session_id": session_id} if session_id else {}
+    if not include_providers:
+        params["include_providers"] = False
     try:
-        options = await call("model.options", {"session_id": session_id} if session_id else {})
+        options = await call("model.options", params)
     except Exception as exc:
         # A missing or failing model surface is not a reason to fail the
         # handshake or the session it was asked during.

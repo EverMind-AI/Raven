@@ -1105,6 +1105,65 @@ class TestConfigOptions:
         assert options[0]["category"] == "model"
         validate_def("NewSessionResponse", response["result"])
 
+    async def test_a_subagent_session_skips_the_provider_catalogue(self, rig, monkeypatch):
+        """Building every provider's rows stalls session/new past the host's
+        timeout, and a sub-agent has no picker to fill."""
+        monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+        rig.stack.model_options = {"model": "opus-5", "provider": "anthropic", "providers": []}
+        await rig.handshake()
+        response = await rig.call("session/new", {"cwd": str(rig.tmp_path / "p"), "mcpServers": []})
+
+        assert rig.stack.params_for("model.options")["include_providers"] is False
+        option = response["result"]["configOptions"][0]
+        assert option["currentValue"] == "anthropic/opus-5"
+        validate_def("NewSessionResponse", response["result"])
+
+    async def test_a_subagent_stub_is_marked_unread_and_holds_the_current_group(self, rig, monkeypatch):
+        monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+        rig.stack.model_options = {"model": "opus-5", "provider": "anthropic", "providers": []}
+        await rig.handshake()
+        result = (await rig.call("session/new", {"cwd": str(rig.tmp_path / "p"), "mcpServers": []}))["result"]
+
+        groups = result["configOptions"][0]["options"]
+        assert [g["group"] for g in groups] == ["current"]
+        assert result["_meta"]["raven"]["modelMenuUnread"] is True
+
+    async def test_a_subagent_with_no_provider_keeps_the_bare_model(self, rig, monkeypatch):
+        monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+        rig.stack.model_options = {"model": "custom-model", "provider": "", "providers": []}
+        await rig.handshake()
+        result = (await rig.call("session/new", {"cwd": str(rig.tmp_path / "p"), "mcpServers": []}))["result"]
+
+        assert result["configOptions"][0]["currentValue"] == "custom-model"
+
+    async def test_a_subagent_with_no_model_gets_no_options_and_no_marker(self, rig, monkeypatch):
+        monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+        rig.stack.model_options = {"model": "", "provider": "anthropic", "providers": []}
+        await rig.handshake()
+        result = (await rig.call("session/new", {"cwd": str(rig.tmp_path / "p"), "mcpServers": []}))["result"]
+
+        assert "configOptions" not in result
+        assert "_meta" not in result
+
+    async def test_a_subagent_set_config_option_skips_the_catalogue(self, rig, monkeypatch):
+        monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+        await rig.handshake()
+        session_id = await rig.new_session()
+        await rig.call(
+            "session/set_config_option",
+            {"sessionId": session_id, "configId": "model", "type": "string", "value": "anthropic/opus-5"},
+        )
+
+        calls = [p for n, p in rig.stack.calls if n == "model.options"]
+        assert calls and all(p.get("include_providers") is False for p in calls)
+
+    async def test_an_interactive_session_still_asks_for_the_catalogue(self, rig, monkeypatch):
+        monkeypatch.delenv("RAVEN_SUBAGENT", raising=False)
+        await rig.handshake()
+        await rig.call("session/new", {"cwd": str(rig.tmp_path / "p"), "mcpServers": []})
+
+        assert "include_providers" not in rig.stack.params_for("model.options")
+
     async def test_no_configured_provider_means_no_key_at_all(self, rig):
         """Absent rather than empty: an empty list is a menu that opens onto
         nothing."""
