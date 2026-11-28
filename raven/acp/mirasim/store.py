@@ -39,7 +39,7 @@ from typing import Any
 from loguru import logger
 
 from raven.home import raven_home
-from raven.utils.atomic_io import atomic_update
+from raven.utils.atomic_io import atomic_read_text, atomic_update
 
 STORE_VERSION = 1
 RETENTION_DAYS = 90
@@ -115,9 +115,8 @@ class BindingStore:
         return {binding.mirasim_key: sid for sid, binding in self._live().items() if binding.mirasim_key}
 
     def _live(self) -> dict[str, Binding]:
-        try:
-            raw = self.path.read_text(encoding="utf-8")
-        except FileNotFoundError:
+        raw = atomic_read_text(self.path)
+        if raw is None:
             return {}
         horizon = _now_ms() - _RETENTION_MS
         live: dict[str, Binding] = {}

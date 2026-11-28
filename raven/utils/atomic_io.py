@@ -22,16 +22,43 @@ from raven.utils.portable_lock import file_lock
 T = TypeVar("T")
 
 _held = threading.local()
+_thread_locks_guard = threading.Lock()
+_thread_locks: dict[str, threading.RLock] = {}
+
+
+def _thread_lock_for(key: str) -> threading.RLock:
+    with _thread_locks_guard:
+        lock = _thread_locks.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _thread_locks[key] = lock
+        return lock
+
 
 #: A reader on Windows holds the target open without delete sharing, so the
 #: replacement fails at its temp-file open or at ``os.replace`` with a sharing
 #: violation (WinError 32/5). A scanner can also hold the new ``.tmp`` itself,
 #: so the retry's ``O_EXCL`` create fails with ``FileExistsError`` until the
-#: handle is released. The hold is normally brief; retry the whole replacement
-#: instead of losing the write. The bound is deliberately small; callers that
-#: must not block an event loop should reach the helper through a thread.
+#: handle is released. Conversely, an unlocked or scanner-contended read during
+#: ``os.replace`` on Windows can raise ``PermissionError`` (errno 13). The hold
+#: is normally brief; retry instead of losing the read/write. The bound is
+#: deliberately small; callers that must not block an event loop should reach
+#: the helpers through a thread.
 _REPLACE_ATTEMPTS = 5
 _REPLACE_BACKOFF = 0.05
+
+
+def _retry_sharing(action: Callable[[], T], *, retry_errors: tuple[type[BaseException], ...]) -> T:
+    delay = _REPLACE_BACKOFF
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            return action()
+        except retry_errors:
+            if attempt + 1 == _REPLACE_ATTEMPTS:
+                raise
+            time.sleep(delay)
+            delay *= 2
+    raise AssertionError("unreachable: attempt loop always returns or raises")
 
 
 def _replace_with_retry(
@@ -41,16 +68,20 @@ def _replace_with_retry(
     newline: str | None = None,
     like: Path | None = None,
 ) -> None:
-    delay = _REPLACE_BACKOFF
-    for attempt in range(_REPLACE_ATTEMPTS):
+    _retry_sharing(
+        lambda: _replace_unlocked(path, data, create_mode=create_mode, newline=newline, like=like),
+        retry_errors=(PermissionError, FileExistsError),
+    )
+
+
+def _read_text_with_retry(path: Path, *, encoding: str = "utf-8") -> str | None:
+    def _attempt() -> str | None:
         try:
-            _replace_unlocked(path, data, create_mode=create_mode, newline=newline, like=like)
-            return
-        except (PermissionError, FileExistsError):
-            if attempt + 1 == _REPLACE_ATTEMPTS:
-                raise
-            time.sleep(delay)
-            delay *= 2
+            return path.read_text(encoding=encoding)
+        except FileNotFoundError:
+            return None
+
+    return _retry_sharing(_attempt, retry_errors=(PermissionError,))
 
 
 @contextmanager
@@ -60,20 +91,23 @@ def _locked(path: Path) -> Iterator[None]:
     # LOCK_EX on another fd of the same file blocks even within one process.
     # Tracked per-thread, so holders must not await while inside (an
     # interleaving task on this thread would be treated as the holder).
+    # Same-process threads serialize on a per-path RLock first because Windows
+    # msvcrt.locking raises EDEADLK (Errno 36) across same-process handles.
     held: set[str] = getattr(_held, "paths", None) or set()
     _held.paths = held
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.parent / ".lock" / (path.name + ".lock")
-    key = str(lock_path)
+    key = os.path.normcase(os.path.abspath(lock_path))
     if key in held:
         yield
         return
-    with file_lock(lock_path):
-        held.add(key)
-        try:
-            yield
-        finally:
-            held.discard(key)
+    with _thread_lock_for(key):
+        with file_lock(lock_path):
+            held.add(key)
+            try:
+                yield
+            finally:
+                held.discard(key)
 
 
 @contextmanager
@@ -354,6 +388,16 @@ def back_up_file(target: Path, raw: bytes) -> Path:
     raise AssertionError("unreachable: itertools.count does not end")
 
 
+def atomic_read_text(path: Path, *, encoding: str = "utf-8") -> str | None:
+    """Read ``path``, retrying transient Windows sharing violations.
+
+    Writers publish via atomic temp-file replacement, so reads do not acquire
+    the exclusive cross-process lock and rely on ``_read_text_with_retry`` for
+    transient replace contention. Returns ``None`` when ``path`` does not exist.
+    """
+    return _read_text_with_retry(path, encoding=encoding)
+
+
 def atomic_update(
     path: Path,
     update: Callable[[str | None], tuple[str | None, T]],
@@ -368,10 +412,7 @@ def atomic_update(
     which a chmod afterwards can only narrow once the bytes are already there.
     """
     with _locked(path):
-        try:
-            current = path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            current = None
+        current = _read_text_with_retry(path)
         replacement, result = update(current)
         if replacement is not None:
             _replace_with_retry(path, replacement, create_mode=mode)

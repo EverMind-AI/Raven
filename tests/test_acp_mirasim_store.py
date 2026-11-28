@@ -95,3 +95,27 @@ def test_a_row_without_a_directory_is_no_record(tmp_path: Path) -> None:
     path = tmp_path / "claude.json"
     path.write_text(json.dumps({"version": 1, "sessions": {"acp-1": {"mirasimKey": "sess-1", "usedAtMs": 1}}}))
     assert BindingStore(path).get("acp-1") is None
+
+
+def test_binding_store_get_retries_transient_permission_error(tmp_path: Path, monkeypatch) -> None:
+    import raven.utils.atomic_io as atomic_io
+
+    path = tmp_path / "claude.json"
+    store = BindingStore(path)
+    store.put(Binding(session_id="acp-1", cwd="/w", mirasim_key="sess-1"))
+    calls = {"n": 0}
+    real_read_text = Path.read_text
+
+    def flaky(self: Path, *args, **kwargs):
+        if self == path:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise PermissionError(13, "Access is denied", str(self))
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", flaky)
+    monkeypatch.setattr(atomic_io, "_REPLACE_BACKOFF", 0.001)
+
+    found = store.get("acp-1")
+    assert found is not None and found.mirasim_key == "sess-1"
+    assert calls["n"] == 3
