@@ -1514,9 +1514,9 @@ def _migrate_retired_deep_research(data: dict[str, Any], *, notify: bool = False
 # to the preset's own, so a pin bumped without retiring the one before it here
 # fails there instead of stranding every row configured on that one.
 _SHIM_COMMANDS: dict[str, str] = {
-    "claude_code": "npx -y @agentclientprotocol/claude-agent-acp@0.108.0",
-    "codex": "npx -y @agentclientprotocol/codex-acp@2.7.0",
-    "pi": "npx -y pi-acp@0.0.34",
+    "claude_code": "npx -y @agentclientprotocol/claude-agent-acp@0.113.0",
+    "codex": "npx -y @agentclientprotocol/codex-acp@2.12.1",
+    "pi": "npx -y pi-acp@0.0.35",
 }
 
 # The stock commands each floor retired, by preset key -- each for a pin whose
@@ -1563,10 +1563,14 @@ class AgentFloor(NamedTuple):
 # Spelled out for the reason ``_SHIM_COMMANDS`` is, and held to the preset's own
 # executable and upgrade by tests/test_config_loader.py.
 _SHIM_COMMAND_NEEDS: dict[str, AgentFloor] = {
-    # 0.0.34 asks pi for its model's thinking levels as a session opens, an RPC pi
-    # answers from 0.81.0; an older pi refuses it by name (measured 2026-10-23 on
-    # pi 0.80.10), and no session opens.
-    "npx -y pi-acp@0.0.34": AgentFloor(
+    # The build asks pi for its model's thinking levels as a session opens, an
+    # RPC pi answers from 0.81.0; an older pi refuses it by name (measured
+    # 2026-10-23 on pi 0.80.10), and no session opens. 0.0.35 keeps the ask
+    # 0.0.34 made (read from its dist 2026-11-28), so the floor carries over.
+    # Keyed by the command that ships now: rows still on 0.0.34 move under no
+    # floor of theirs (no retirement entry carries them), and keep the pin
+    # their owner left them on.
+    "npx -y pi-acp@0.0.35": AgentFloor(
         "pi", "@earendil-works/pi-coding-agent", (0, 81, 0), "npm install -g @earendil-works/pi-coding-agent@latest"
     ),
 }

@@ -149,8 +149,8 @@ from raven.utils.commands import command_quote, resolve_subagent_command
 # configured only through the config migration that carries the previous stock
 # command forward (``_RETIRED_SHIM_COMMANDS`` in raven/config/loader.py), since
 # ``subagents.add`` copies this string into the row.
-_CLAUDE_ACP = "npx -y @agentclientprotocol/claude-agent-acp@0.108.0"
-_CODEX_ACP = "npx -y @agentclientprotocol/codex-acp@2.7.0"
+_CLAUDE_ACP = "npx -y @agentclientprotocol/claude-agent-acp@0.113.0"
+_CODEX_ACP = "npx -y @agentclientprotocol/codex-acp@2.12.1"
 
 SHIM_LAUNCHED_PRESETS = frozenset({"claude_code", "codex"}) | ACP_REGISTRY_SHIM_PRESETS | MIRASIM_SHIM_PRESETS
 """Presets whose command starts an ACP shim rather than naming a local agent.
@@ -190,15 +190,17 @@ puts its own CLI on no PATH -- so ``_probe_acp`` asks
 launcher under Mirasim's home, instead. The
 other two shims bring their agent along -- ``codex-acp`` ships it as its own binary, and ``claude-agent-acp``
 runs the CLI its ``@anthropic-ai/claude-agent-sdk`` pin carries as a
-per-platform optional dependency (read from the 0.66.0, 0.79.0, 0.81.1, 0.94.0
-and 0.108.0 packages on 2026-09-20/21/23, 2026-10-23 and 2026-11-18), so a ``claude`` on PATH is neither needed nor the
+per-platform optional dependency (read from the 0.66.0, 0.79.0, 0.81.1, 0.94.0,
+0.108.0 and 0.113.0 packages on 2026-09-20/21/23, 2026-10-23, 2026-11-18 and
+2026-11-28), so a ``claude`` on PATH is neither needed nor the
 one that answers -- and what either wants is a login, not an install. The pin is
 also what decides which Claude models the row can reach: 0.66.0 bundled CLI
 2.1.220, which refuses a model newer than it knows ("version 2.1.251 or newer is
 required"), so an account whose Claude settings name a recent model could not
 connect at all, and its menu offers ``claude-fable-5[1m]`` where 0.79.0 and
 0.81.1 offer ``claude-fable-5-1[1m]``; 0.79.0 bundles 2.1.274, 0.81.1
-bundles 2.1.280, 0.94.0 bundles 2.1.303, and 0.108.0 bundles 2.1.326, past
+bundles 2.1.280, 0.94.0 bundles 2.1.303, 0.108.0 bundles 2.1.326 and 0.113.0
+bundles 2.1.331 (read 2026-11-28), past
 2.1.284 and 2.1.293, the first CLIs that name Sonnet 5.5 and Haiku 5.5
 (Claude Code's changelog); 0.108.0 also moves the Fable aliases (measured
 2026-11-18): ``fable`` now means Fable 5.2, and Fable 5.1 is ``claude-fable-5-1``
@@ -211,7 +213,7 @@ way, because ``codex-acp`` builds the model choices from its bundled codex's
 which the model list Codex serves leaves out gpt-6.1-sol (measured 2026-10-16);
 2.7.0 bundles 0.166.0 (read 2026-11-18), the first build at the client version
 below which the catalogue leaves out gpt-6.2 (measured 2026-11-18: 8 models at
-0.164.0, 10 at 0.166.0).
+0.164.0, 10 at 0.166.0); and 2.12.1 bundles 0.172.0 (read 2026-11-28).
 """
 
 
